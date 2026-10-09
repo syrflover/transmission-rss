@@ -569,6 +569,11 @@ pub async fn follow_move(
 }
 
 #[cfg(test)]
+pub(crate) mod fixture;
+#[cfg(test)]
+mod scan_tests;
+
+#[cfg(test)]
 mod tests {
     use std::sync::mpsc;
 

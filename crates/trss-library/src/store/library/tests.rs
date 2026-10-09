@@ -95,6 +95,34 @@ async fn the_first_scan_leaves_times_unknown_and_a_later_one_stamps_only_what_is
         .unwrap();
     let again = store.works(&folder.id).await.unwrap();
     assert_eq!(again, works);
+
+    // A file that comes later is dated by its own scan; the times already
+    // there stay as they were.
+    store
+        .record_scan(
+            &folder.id,
+            Ok(scan(vec![
+                work(
+                    "A",
+                    vec![
+                        video(1, "01", "A S01E01.mkv"),
+                        video(1, "02", "A S01E02.mkv"),
+                        video(1, "03", "A S01E03.mkv"),
+                    ],
+                ),
+                work("B", vec![video(1, "01", "B S01E01.mkv")]),
+            ])),
+            400,
+        )
+        .await
+        .unwrap();
+    let later = store.works(&folder.id).await.unwrap();
+    let files = later[0].files();
+    assert_eq!(files["Season 01/A S01E01.mkv"].added_at, None);
+    assert_eq!(files["Season 01/A S01E02.mkv"].added_at, Some(200));
+    assert_eq!(files["Season 01/A S01E03.mkv"].added_at, Some(400));
+    assert_eq!(later[0].first_seen_at, None);
+    assert_eq!(later[1].first_seen_at, Some(200));
 }
 
 #[tokio::test]
@@ -629,6 +657,88 @@ async fn following_a_move_keeps_the_id_and_a_merge_keeps_the_destinations() {
     // Both seasons now belong to the kept work.
     assert_eq!(after[0].seasons, [1, 2]);
     assert_eq!(after[0].episodes.len(), 2);
+
+    // The next reading of the destination finds the same works: one row for
+    // the merged work, not two, under the same IDs.
+    store
+        .record_scan(
+            &to.id,
+            Ok(scan(vec![
+                work(
+                    "Both",
+                    vec![
+                        video(1, "01", "B S01E01.mkv"),
+                        video(2, "01", "B S02E01.mkv"),
+                    ],
+                ),
+                work("Moved", vec![video(1, "01", "M S01E01.mkv")]),
+            ])),
+            200,
+        )
+        .await
+        .unwrap();
+    let read = store.works(&to.id).await.unwrap();
+    let ids: Vec<_> = read
+        .iter()
+        .map(|w| (w.dir_name.as_str(), w.id.as_str()))
+        .collect();
+    assert_eq!(
+        ids,
+        [("Both", both_to.as_str()), ("Moved", moved_id.as_str())]
+    );
+    assert_eq!(read[0].episodes.len(), 2);
+    assert!(read.iter().all(|w| !w.missing));
+}
+
+#[tokio::test]
+async fn a_work_folder_moved_to_another_watch_folder_unfollowed_is_a_new_work_and_the_old_one_is_missing(
+) {
+    let store = store();
+    let (from, _) = store
+        .add_folder(
+            "/from".into(),
+            scan(vec![work("Solo", vec![video(1, "01", "S S01E01.mkv")])]),
+            100,
+            &[],
+        )
+        .await
+        .unwrap();
+    let (to, _) = store
+        .add_folder(
+            "/to".into(),
+            scan(vec![work("Other", vec![video(1, "01", "O S01E01.mkv")])]),
+            100,
+            std::slice::from_ref(&from),
+        )
+        .await
+        .unwrap();
+    let solo = store.works(&from.id).await.unwrap().remove(0);
+
+    // Moved by hand: nothing told the library, so the next readings show the
+    // folder gone from one place and new in the other.
+    store
+        .record_scan(&from.id, Ok(scan(vec![])), 200)
+        .await
+        .unwrap();
+    store
+        .record_scan(
+            &to.id,
+            Ok(scan(vec![
+                work("Other", vec![video(1, "01", "O S01E01.mkv")]),
+                work("Solo", vec![video(1, "01", "S S01E01.mkv")]),
+            ])),
+            200,
+        )
+        .await
+        .unwrap();
+
+    let old = store.works(&from.id).await.unwrap().remove(0);
+    assert_eq!(old.id, solo.id);
+    assert!(old.missing);
+    let new = find(&store.works(&to.id).await.unwrap(), "Solo").clone();
+    assert_ne!(new.id, solo.id);
+    assert!(!new.missing);
+    assert_eq!(new.first_seen_at, Some(200));
 }
 
 #[tokio::test]

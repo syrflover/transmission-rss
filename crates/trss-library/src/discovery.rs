@@ -967,6 +967,23 @@ mod tests {
         fs::write(path, "x").unwrap();
     }
 
+    /// Every path below `root` (folders included), sorted.
+    fn tree_of(root: &Path) -> Vec<PathBuf> {
+        fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
+            for entry in fs::read_dir(dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    walk(&path, out);
+                }
+                out.push(path);
+            }
+        }
+        let mut out = Vec::new();
+        walk(root, &mut out);
+        out.sort();
+        out
+    }
+
     fn work<'a>(scan: &'a Scan, name: &str) -> &'a ScannedWork {
         scan.works
             .iter()
@@ -988,7 +1005,11 @@ mod tests {
         ] {
             touch(dir.path(), file);
         }
+        let before = tree_of(dir.path());
         let scan = scan(dir.path()).unwrap();
+        // Reading a folder writes nothing into it.
+        assert_eq!(tree_of(dir.path()), before);
+        assert!(!dir.path().join("Lycoris Recoil/.trss").exists());
         assert_eq!(scan.works.len(), 1);
         let work = work(&scan, "Lycoris Recoil");
         assert_eq!(work.seasons, BTreeSet::from([1, 2]));
@@ -1052,6 +1073,7 @@ mod tests {
             "W/Season 01/W S01E01.nfo",
             "W/notes.txt",
             "W/.trss/subs/W S01E01.ass",
+            "W/Season 01/.trss/cache.mkv",
             "W/Season 01/.hidden S01E09.mkv",
             ".Hidden/Season 01/H S01E01.mkv",
             "@eaDir/Season 01/E S01E01.mkv",
@@ -1089,6 +1111,24 @@ mod tests {
                 ("loose.part", Reason::Partial),
             ]
         );
+    }
+
+    #[test]
+    fn a_reason_is_stored_by_its_code_and_found_again_by_it() {
+        // The codes are what the library table stores and the web shows.
+        let codes = [
+            (Reason::SeasonMismatch, "season_mismatch"),
+            (Reason::OutsideSeason, "outside_season"),
+            (Reason::InSubfolder, "in_subfolder"),
+            (Reason::Partial, "partial"),
+            (Reason::NoEpisode, "no_episode"),
+            (Reason::InvalidName, "invalid_name"),
+        ];
+        for (reason, code) in codes {
+            assert_eq!(reason.code(), code);
+            assert_eq!(Reason::from_code(code), Some(reason));
+        }
+        assert_eq!(Reason::from_code("nope"), None);
     }
 
     #[test]
