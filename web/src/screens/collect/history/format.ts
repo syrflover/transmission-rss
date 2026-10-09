@@ -1,4 +1,4 @@
-const WEEKDAYS = ["일", "월", "화", "수", "목", "금", "토"];
+import { WEEKDAYS_SHORT } from "@/lib/weekday";
 
 /** A stable key for the local calendar day of a time. */
 export function dayKey(millis: number): string {
@@ -10,7 +10,7 @@ export function dayKey(millis: number): string {
 export function dayHeading(millis: number, now: number = Date.now()): string {
   const d = new Date(millis);
   const year = d.getFullYear() === new Date(now).getFullYear() ? "" : `${d.getFullYear()}년 `;
-  return `${year}${d.getMonth() + 1}월 ${d.getDate()}일 (${WEEKDAYS[d.getDay()]})`;
+  return `${year}${d.getMonth() + 1}월 ${d.getDate()}일 (${WEEKDAYS_SHORT[d.getDay()]})`;
 }
 
 /** `13:40`, under a date heading. */

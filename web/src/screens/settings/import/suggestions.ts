@@ -1,3 +1,5 @@
+import { WEEKDAYS_SHORT } from "@/lib/weekday";
+
 import type { ChannelView, Decision, PickRequest, RuleView, SuggestionKind } from "./types";
 
 /**
@@ -72,12 +74,10 @@ export function caseCounts(channel: ChannelView): Record<SuggestionKind, number>
   return counts;
 }
 
-const WEEKDAYS = ["일", "월", "화", "수", "목", "금", "토"];
-
-/** Where an anime sits in the week: `수 22:30`, `기타`, `신작`. */
+/** Where an anime sits in the week: `수요일 22:30`, `기타`, `신작`; `?요일` for a day outside the week. */
 export function weekLabel(week: number, airTime: string | null): string {
   if (week === 7) return "기타";
   if (week === 8) return "신작";
-  const day = `${WEEKDAYS[week] ?? "?"}요일`;
+  const day = `${WEEKDAYS_SHORT[week] ?? "?"}요일`;
   return airTime ? `${day} ${airTime}` : day;
 }

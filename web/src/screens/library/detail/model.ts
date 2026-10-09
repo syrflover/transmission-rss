@@ -1,3 +1,5 @@
+import { WEEKDAYS_SHORT } from "@/lib/weekday";
+
 import type { FuzzyDate, SeasonInfo, WorkEpisode, WorkSeason } from "../api";
 
 /**
@@ -103,7 +105,7 @@ export function episodesText(count: number | null): string {
 /** The air day of an episode (`7월 2일 (토)`, with the year when it is not this year's). */
 export function airDay(at: number, now: Date = new Date()): string {
   const d = new Date(at);
-  const weekday = ["일", "월", "화", "수", "목", "금", "토"][d.getDay()];
+  const weekday = WEEKDAYS_SHORT[d.getDay()];
   const year = d.getFullYear() === now.getFullYear() ? "" : `${d.getFullYear()}년 `;
   return `${year}${d.getMonth() + 1}월 ${d.getDate()}일 (${weekday})`;
 }

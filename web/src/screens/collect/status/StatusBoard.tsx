@@ -4,13 +4,13 @@ import { Link } from "react-router-dom";
 import { useCached } from "@/lib/cached";
 import { when } from "@/lib/time";
 import { cn } from "@/lib/utils";
+import { WEEKDAYS_SHORT } from "@/lib/weekday";
 
 import { KEYS } from "../cache";
 import { channelName } from "../rules/api";
 import { loadBoard, STALLED, STALLED_SHORT, type Board } from "./api";
 
 const POLL_MS = 30_000;
-const WEEKDAY = ["일", "월", "화", "수", "목", "금", "토"];
 /** The history filter the `실패·중복` link opens. */
 export const PROBLEMS_HREF = "/collect/history?result=add_failed,version_unknown,duplicate";
 
@@ -42,7 +42,7 @@ export function useBoard(): Load {
 
 function weekday(date: string): string {
   const [y, m, d] = date.split("-").map(Number);
-  return WEEKDAY[new Date(y, m - 1, d).getDay()];
+  return WEEKDAYS_SHORT[new Date(y, m - 1, d).getDay()];
 }
 
 function Cell({ label, children }: { label: string; children: ReactNode }) {

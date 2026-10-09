@@ -1,8 +1,9 @@
+import { WEEKDAYS_LONG, WEEKDAYS_SHORT } from "@/lib/weekday";
+
 import type { Anime, SubscriptionBrief } from "./api";
 
 /** The tabs of the schedule: Sunday to Saturday, `기타` and `신작`, as Anissia groups them. */
-export const WEEK_TABS = ["일", "월", "화", "수", "목", "금", "토", "기타", "신작"] as const;
-const LONG_DAYS = ["일요일", "월요일", "화요일", "수요일", "목요일", "금요일", "토요일"];
+export const WEEK_TABS: readonly string[] = [...WEEKDAYS_SHORT, "기타", "신작"];
 
 export const WEEK_OTHER = 7;
 export const WEEK_UPCOMING = 8;
@@ -29,7 +30,7 @@ export function startDate(date: string | null, now: Date = new Date()): string |
 /** Where the anime sits in the week: `수요일 22:30`, `기타`, `신작`. */
 export function airing(anime: Pick<Anime, "week" | "air_time">): string {
   if (anime.week >= 0 && anime.week <= 6) {
-    return anime.air_time ? `${LONG_DAYS[anime.week]} ${anime.air_time}` : LONG_DAYS[anime.week];
+    return anime.air_time ? `${WEEKDAYS_LONG[anime.week]} ${anime.air_time}` : WEEKDAYS_LONG[anime.week];
   }
   return anime.week === WEEK_OTHER ? "기타" : "신작";
 }

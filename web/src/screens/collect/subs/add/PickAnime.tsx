@@ -6,6 +6,7 @@ import { Label } from "@/components/ui/label";
 import { useCached } from "@/lib/cached";
 import { ago } from "@/lib/time";
 import { cn } from "@/lib/utils";
+import { WEEKDAYS_LONG } from "@/lib/weekday";
 
 import { KEYS } from "../../cache";
 import { btnNeutral, hintClass, inputClass, labelClass } from "../../channels/styles";
@@ -13,7 +14,7 @@ import { fetchSchedule, type Schedule, type ScheduleEntry } from "../api";
 import { startDate, WEEK_OTHER, WEEK_TABS, WEEK_UPCOMING } from "../format";
 import { optionClass } from "./draft";
 
-const WEEK_NAMES = ["일요일", "월요일", "화요일", "수요일", "목요일", "금요일", "토요일", "기타", "신작"];
+const WEEK_NAMES = [...WEEKDAYS_LONG, "기타", "신작"];
 
 /** The time of day, or the start date for the weeks that have no weekday. */
 function when(entry: ScheduleEntry): string {

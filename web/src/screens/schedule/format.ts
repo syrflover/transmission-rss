@@ -1,9 +1,9 @@
+import { weekdayLongFromMonday } from "@/lib/weekday";
+
 import type { Quarter } from "./api";
 
-const WEEKDAYS = ["월요일", "화요일", "수요일", "목요일", "금요일", "토요일", "일요일"];
-
-/** The name of a weekday counted from Monday (0). */
-export const weekdayName = (weekday: number) => WEEKDAYS[weekday] ?? "";
+/** The name of a weekday counted from Monday (0); nothing for a number outside 0–6. */
+export const weekdayName = (weekday: number) => weekdayLongFromMonday(weekday) ?? "";
 
 /** "9월 30일" for `2026-09-30`. */
 export function monthDay(date: string): string {
