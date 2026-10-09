@@ -429,6 +429,87 @@ async fn the_missing_and_not_found_releases_are_also_told_as_runs() {
     assert_eq!(result["not_found_ranges"], json!(["7", "10"]));
 }
 
+/// The range the person types is labelled by the server with the folder
+/// episodes the rule's conversion gives it, and the finished search tells the
+/// same label for its own range.
+#[tokio::test]
+async fn the_range_is_labelled_by_the_server_while_typed_and_again_in_the_result() {
+    let s = Setup::new(Options {
+        directory: "Show/Season 02",
+        episode: -12,
+        ..Options::show()
+    })
+    .await;
+    let uri = format!("/api/rules/{}/past-search/range", s.rule_id);
+    let (status, label) = s
+        .call("POST", &uri, Some(json!({ "from": 13, "to": 24 })))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{label}");
+    assert_eq!(label, json!({ "from": 13, "to": 24, "label": "S02E01–12" }));
+    let (_, one) = s
+        .call("POST", &uri, Some(json!({ "from": 14, "to": 14 })))
+        .await;
+    assert_eq!(one["label"], "S02E02");
+
+    s.nyaa
+        .set_releases(&[episode("SubsPlease", "Show", 13, "")]);
+    let poll = s.search("[SubsPlease] Show 1080p", 13, 24).await;
+    assert_eq!(poll["state"], "done", "{poll}");
+    assert_eq!(poll["result"]["range_label"], "S02E01–12");
+}
+
+/// A rule whose folder has no season is labelled by its episodes alone.
+#[tokio::test]
+async fn a_range_of_a_rule_with_no_season_folder_is_labelled_by_its_episodes() {
+    let s = Setup::new(Options {
+        directory: "Show",
+        ..Options::show()
+    })
+    .await;
+    let (status, label) = s
+        .call(
+            "POST",
+            &format!("/api/rules/{}/past-search/range", s.rule_id),
+            Some(json!({ "from": 1, "to": 12 })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{label}");
+    assert_eq!(label["label"], "1–12화");
+}
+
+/// The range route refuses what the search refuses, and a rule that is not there is not found.
+#[tokio::test]
+async fn the_range_route_refuses_a_range_the_search_would_and_an_unknown_rule_is_not_found() {
+    let s = Setup::new(Options::show()).await;
+    let uri = format!("/api/rules/{}/past-search/range", s.rule_id);
+    for body in [
+        json!({ "from": 0, "to": 5 }),
+        json!({ "from": 5, "to": 0 }),
+        json!({ "from": 6, "to": 5 }),
+    ] {
+        let (status, answer) = s.call("POST", &uri, Some(body.clone())).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}: {answer}");
+        assert_eq!(answer["error"], "invalid");
+    }
+    // A body that lacks a field, holds a negative number or an unknown field is no request.
+    for body in [
+        json!({ "from": 1 }),
+        json!({ "from": -1, "to": 5 }),
+        json!({ "from": 1, "to": 5, "offset": 3 }),
+    ] {
+        let (status, answer) = s.call("POST", &uri, Some(body.clone())).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}: {answer}");
+    }
+    let (status, _) = s
+        .call(
+            "POST",
+            "/api/rules/nope/past-search/range",
+            Some(json!({ "from": 1, "to": 5 })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
 /// Row 4: a video of unknown version whose CRC32 differs from the result's.
 #[tokio::test]
 async fn row_4_a_video_of_unknown_version_with_another_crc_makes_the_result_unknown_and_unselected()

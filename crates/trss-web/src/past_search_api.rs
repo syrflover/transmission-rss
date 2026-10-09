@@ -7,6 +7,7 @@
 //! | `POST /rules/{id}/past-search`     | `202` `{ "search_id": … }` once the search runs      |
 //! | `GET /past-searches/{search_id}`   | `200` [`Poll`]: running, failed or done with the preview |
 //! | `DELETE /past-searches/{search_id}`| `204`; the search ends and its results are forgotten |
+//! | `POST /rules/{id}/past-search/range` | `200` [`RangeLabel`]: the folder episodes of a typed range |
 //!
 //! `POST` takes `{ "query": <search words>, "from": <release>, "to": <release> }`.
 //! The search reads the tracker's search RSS (never its HTML), up to a minute
@@ -20,6 +21,15 @@
 //! often it is polled, and when the web restarts: the screen then says the
 //! search is gone and the person searches again.
 //!
+//! `POST /rules/{id}/past-search/range` takes `{ "from": 1, "to": 12 }` while the
+//! person types the range and answers `{ "from": 1, "to": 12, "label":
+//! "S02E01–12" }`: the folder episodes of those releases under the rule's
+//! conversion ([`trss_collect::episode_offset::range_label`]), `1–12화` when the
+//! rule's folder has no season. It answers `400` for a range the search
+//! would refuse (`from` below 1, or above `to`) and `404` for a rule that is
+//! not there. A finished search's result carries the same label for its own
+//! range as `range_label`.
+//!
 //! A finished search's `missing` and `not_found` are the release numbers in
 //! ascending order; `missing_ranges` and `not_found_ranges` are the same as
 //! runs of consecutive ones (`["4–6", "9"]`) for the sentence that names them.
@@ -29,14 +39,14 @@ use std::path::Path as FsPath;
 use axum::{
     extract::{rejection::JsonRejection, Path, State},
     http::StatusCode,
-    routing::{delete, get},
+    routing::{delete, get, post},
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
 
 use super::{rules_api, ApiError, AppState};
 use trss_collect::{
-    episode_offset::{first_release, place_of, season_total},
+    episode_offset::{first_release, place_of, range_label, season_total},
     past_search::{
         judge::{Item, Range},
         query::{prefill, tidy},
@@ -55,6 +65,7 @@ use trss_core::episode::range_texts;
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/rules/{id}/past-search", get(context).post(start))
+        .route("/rules/{id}/past-search/range", post(range))
         .route("/past-searches/{search_id}", delete(cancel).get(poll))
 }
 
@@ -157,6 +168,28 @@ async fn collect_folder(state: &AppState) -> Result<Option<String>, ApiError> {
         .map(|settings| settings.folder))
 }
 
+/// The season the rule's videos go to and that season's AniList episode
+/// count: the folder's season, or the season a subscription links the rule to.
+async fn season_grounds(
+    state: &AppState,
+    rule: &Rule,
+    collect: Option<&str>,
+) -> (Option<u32>, Option<u32>) {
+    let mut season = place_of(&rule.directory).map(|(_, season)| season);
+    let mut total = None;
+    if let Some(collect) = collect {
+        match season_total(&state.library, &state.seasons.store, collect, rule).await {
+            Ok(Some((linked, count))) => {
+                season = Some(linked);
+                total = count;
+            }
+            Ok(None) => {}
+            Err(err) => eprintln!("Past search: no episode count for rule {}: {err}", rule.id),
+        }
+    }
+    (season, total)
+}
+
 async fn context(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -165,21 +198,13 @@ async fn context(
     let collect = collect_folder(&state).await?;
     let start = prefill(channel.past_search.as_deref(), &rule);
 
+    let (season, episodes) = season_grounds(&state, &rule, collect.as_deref()).await;
     let mut grounds = Grounds {
         offset: rule.episode,
-        season: place_of(&rule.directory).map(|(_, season)| season),
+        season,
+        episodes,
         ..Grounds::default()
     };
-    if let Some(collect) = &collect {
-        match season_total(&state.library, &state.seasons.store, collect, &rule).await {
-            Ok(Some((season, total))) => {
-                grounds.season = Some(season);
-                grounds.episodes = total;
-            }
-            Ok(None) => {}
-            Err(err) => eprintln!("Past search: no episode count for rule {}: {err}", rule.id),
-        }
-    }
     match state.history.first_titles_of_rule(&rule.id).await {
         Ok(titles) => grounds.first_release = first_release(&titles),
         Err(err) => eprintln!("Past search: no first release for rule {}: {err}", rule.id),
@@ -215,6 +240,49 @@ struct StartBody {
 #[derive(Serialize)]
 struct Started {
     search_id: String,
+}
+
+/// The sentence for a range of releases the search would refuse.
+const BAD_RANGE: &str = "릴리스 회차 범위를 1 이상으로, 시작이 끝보다 크지 않게 적어 주세요.";
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RangeBody {
+    from: u32,
+    to: u32,
+}
+
+/// The folder episodes of a typed range of releases.
+#[derive(Debug, Serialize)]
+pub struct RangeLabel {
+    pub from: u32,
+    pub to: u32,
+    /// `S02E01–12`, or `1–12화` when the rule's folder has no season.
+    pub label: String,
+}
+
+async fn range(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    parsed: Result<Json<RangeBody>, JsonRejection>,
+) -> Result<Json<RangeLabel>, ApiError> {
+    let b = body(parsed)?;
+    let rule = state
+        .channels
+        .get_rule(&id)
+        .await
+        .map_err(rules_api::store_error)?
+        .ok_or_else(|| not_found(&id))?;
+    if b.from == 0 || b.to == 0 || b.from > b.to {
+        return Err(ApiError::invalid(BAD_RANGE));
+    }
+    let collect = collect_folder(&state).await?;
+    let (season, _) = season_grounds(&state, &rule, collect.as_deref()).await;
+    Ok(Json(RangeLabel {
+        from: b.from,
+        to: b.to,
+        label: range_label(b.from, b.to, rule.episode, season),
+    }))
 }
 
 fn body<T>(parsed: Result<Json<T>, JsonRejection>) -> Result<T, ApiError> {
@@ -280,9 +348,7 @@ async fn start(
         )));
     }
     if b.from == 0 || b.to == 0 || b.from > b.to {
-        return Err(ApiError::invalid(
-            "릴리스 회차 범위를 1 이상으로, 시작이 끝보다 크지 않게 적어 주세요.",
-        ));
+        return Err(ApiError::invalid(BAD_RANGE));
     }
     if b.to - b.from >= MAX_SPAN {
         return Err(ApiError::invalid(format!(
@@ -360,6 +426,9 @@ pub struct Poll {
 pub struct ResultView {
     pub from: u32,
     pub to: u32,
+    /// The range as the folder names its episodes (`S02E01–12`), as the range
+    /// route tells it; `None` when the rule is gone.
+    pub range_label: Option<String>,
     pub query: String,
     pub items: Vec<ItemView>,
     pub out_of_range: usize,
@@ -408,10 +477,11 @@ impl From<&Item> for ItemView {
     }
 }
 
-fn result_view(outcome: &Outcome) -> ResultView {
+fn result_view(outcome: &Outcome, range_label: Option<String>) -> ResultView {
     ResultView {
         from: outcome.range.from,
         to: outcome.range.to,
+        range_label,
         query: outcome.query.clone(),
         items: outcome.preview.items.iter().map(ItemView::from).collect(),
         out_of_range: outcome.preview.out_of_range,
@@ -425,6 +495,20 @@ fn result_view(outcome: &Outcome) -> ResultView {
         extra_sent: outcome.extra_sent,
         extra_needed: outcome.extra_needed,
     }
+}
+
+/// The label of a finished search's range, written the way [`range`] writes
+/// it for the rule as it is now.
+async fn result_label(state: &AppState, outcome: &Outcome) -> Option<String> {
+    let rule = state.channels.get_rule(&outcome.rule_id).await.ok()??;
+    let collect = collect_folder(state).await.ok()?;
+    let (season, _) = season_grounds(state, &rule, collect.as_deref()).await;
+    Some(range_label(
+        outcome.range.from,
+        outcome.range.to,
+        rule.episode,
+        season,
+    ))
 }
 
 async fn poll(
@@ -454,7 +538,8 @@ async fn poll(
         }
         Status::Done(outcome) => {
             poll.state = "done";
-            poll.result = Some(result_view(&outcome));
+            let label = result_label(&state, &outcome).await;
+            poll.result = Some(result_view(&outcome, label));
         }
     }
     Ok(Json(poll))

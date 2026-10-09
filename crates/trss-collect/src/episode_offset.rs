@@ -430,6 +430,20 @@ pub fn folder_episode(release: Episode, offset: i64) -> Episode {
     }
 }
 
+/// The folder episodes of the releases `from` to `to` as the screens write
+/// them: `S02E01–12` (`S02E05` for one) in a `<work>/Season NN` folder, `1–12화`
+/// when the rule's folder has no season. The ends follow the rule's conversion
+/// the way [`received_as`] names a video ([`folder_episode`]).
+pub fn range_label(from: u32, to: u32, offset: i64, season: Option<u32>) -> String {
+    let first = folder_episode(Episode::whole(from), offset).number;
+    let last = folder_episode(Episode::whole(to), offset).number;
+    match season {
+        None => format!("{first}–{last}화"),
+        Some(season) if first == last => format!("S{season:02}E{first:02}"),
+        Some(season) => format!("S{season:02}E{first:02}–{last:02}"),
+    }
+}
+
 /// Whether a conversion leaves release numbers as they are: `0` and `1`.
 pub fn leaves_numbers(offset: i64) -> bool {
     matches!(offset, 0 | 1)
@@ -702,6 +716,40 @@ mod tests {
                 half: true
             }
         );
+    }
+
+    #[test]
+    fn a_range_of_releases_is_labelled_by_the_folder_episodes_trname_names() {
+        // The ends are the episodes trname gives the first and the last release.
+        let folder = std::path::Path::new("/media/Show/Season 02");
+        for (offset, from, to) in [(0i64, 1u32, 12u32), (-12, 13, 24), (3, 1, 12), (1, 5, 5)] {
+            let name = |release: u32| {
+                let title = format!("[SubsPlease] Show - {release:02} (1080p) [ABCD1234].mkv");
+                trname::trname(folder, &title, offset as isize).unwrap()
+            };
+            let label = range_label(from, to, offset, Some(2));
+            let first = name(from);
+            let last = name(to);
+            let episode = |name: &str| name.split("S02E").nth(1).unwrap()[..2].to_owned();
+            let expected = if episode(&first) == episode(&last) {
+                format!("S02E{}", episode(&first))
+            } else {
+                format!("S02E{}–{}", episode(&first), episode(&last))
+            };
+            assert_eq!(label, expected, "releases {from}-{to} by {offset}");
+        }
+        assert_eq!(range_label(1, 12, 0, Some(2)), "S02E01–12");
+        assert_eq!(range_label(13, 24, -12, Some(2)), "S02E01–12");
+        assert_eq!(range_label(1, 12, 3, Some(2)), "S02E03–14");
+        assert_eq!(range_label(5, 5, 0, Some(10)), "S10E05");
+        // A conversion that would take a number below 1 leaves it.
+        assert_eq!(range_label(5, 14, -12, Some(1)), "S01E05–02");
+        // No season in the folder: the episodes alone, even for one.
+        assert_eq!(range_label(1, 12, 0, None), "1–12화");
+        assert_eq!(range_label(13, 24, -12, None), "1–12화");
+        assert_eq!(range_label(5, 5, 0, None), "5–5화");
+        // A number that needs more than two digits is not cut.
+        assert_eq!(range_label(99, 101, 0, Some(1)), "S01E99–101");
     }
 
     fn basis(previous: Previous, held: &[u32]) -> Basis {
