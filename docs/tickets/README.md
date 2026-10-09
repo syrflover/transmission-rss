@@ -172,7 +172,7 @@
 | [0098](0098-release-name-reading.md) | 릴리스 이름과 회차 읽기를 모아요 | 완료 | 0090, 0091, 0092 |
 | [0099](0099-one-receive-path.md) | 토렌트 하나를 더하고, 기록하고, 이름을 바꾸는 경로를 하나로 만들어요 | 완료 | 0098 |
 | [0100](0100-worker-lock-release.md) | worker 잠금을 푸는 때를 정해요 | 완료 | 0092 |
-| [0101](0101-receive-line-tests.md) | 수집 받기 줄기의 테스트를 나누고 RSS 수집 명세에 검증 표를 둬요 | 대기 | 0097–0100 |
+| [0101](0101-receive-line-tests.md) | 수집 받기 줄기의 테스트를 나누고 RSS 수집 명세에 검증 표를 둬요 | 완료 | 0097–0100 |
 | [0102](0102-request-pace-in-core.md) | 요청 간격과 외부 응답 다루기를 trss-core로 모아요 | 대기 | 0092 |
 | [0103](0103-queue-loop-in-core.md) | worker 백그라운드 큐의 루프를 trss-core로 모아요 | 대기 | 0092 |
 | [0104](0104-durable-file-writes-in-core.md) | 파일을 안전하게 쓰는 일을 trss-core로 모아요 | 대기 | 0092 |

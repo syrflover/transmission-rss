@@ -20,6 +20,10 @@
 - 웹의 응답은 기존 필드의 모양을 지키고, 화면이 쓰던 값은 필드를 더해 보내요. 타입은 손으로 맞춰요.
 - 미리보기와 실제 처리는 같은 trss-collect의 인터페이스를 써서 결과가 같아요.
 - 크기 표기처럼 하나로 맞추면 화면이 달라지는 것은 따로 커밋하고 결과 절에 적어요.
+- 규칙 미리보기의 분류 테스트(trss-web `rules_api/tests.rs` 8개, `subscriptions_api/tests.rs` 1개, `subscriptions_api/title_tests.rs`의 미리보기 부분)는 `build_preview`를 옮길 때 trss-collect의 표 테스트 하나로 내려요. 웹에는 `POST /api/rules/preview`의 응답 모양, 404, 400, `subscribing`일 때만 오는 `episode_suggestion`을 확인하는 테스트를 남겨요([0101](0101-receive-line-tests.md)에서 정함).
+- 2026-10-09 [0101](0101-receive-line-tests.md)에서 두 곳을 더 찾았어요. 옮길지는 여기서 정해요.
+  - 웹의 "이미 놓였는지" 규칙(`in_place`)은 수정본 `다시 받기`를 trss-collect의 판정보다 먼저 거절하고, 그 순서를 웹이 가져요.
+  - 규칙 API는 규칙마다 마지막으로 받은 시각을 `channel_items`에서 다시 계산해요. 보관 제안 API는 trss-collect의 `last_received_of_rules`를 써요.
 
 ## 완료 기준
 
