@@ -103,10 +103,15 @@ pub fn create_dir_all_synced(dir: &Path) -> io::Result<()> {
 }
 
 /// Syncs the two folders a rename of `from` to `to` changed, the one `to` is
-/// in first. For a caller that tells a failed rename from a rename whose
-/// folders could not be synced, and so calls [`rename_noreplace`] itself.
+/// in first, and once when it is the same folder. For a caller that tells a
+/// failed rename from a rename whose folders could not be synced, and so calls
+/// [`rename_noreplace`] itself.
 pub fn sync_renamed(from: &Path, to: &Path) -> io::Result<()> {
-    for folder in [to.parent(), from.parent()].into_iter().flatten() {
+    let (into, out_of) = (to.parent(), from.parent());
+    for folder in [into, out_of.filter(|out_of| Some(*out_of) != into)]
+        .into_iter()
+        .flatten()
+    {
         sync_dir(folder)?;
     }
     Ok(())
@@ -517,6 +522,15 @@ mod tests {
         assert!(!occupied(&from.join("a")).unwrap());
         assert_eq!(testing::syncs_of(&from), 1);
         assert_eq!(testing::syncs_of(&to), 1);
+    }
+
+    #[test]
+    fn a_synced_rename_within_a_folder_syncs_it_once() {
+        let dir = tempfile::tempdir().unwrap();
+        put(&dir.path().join("a"), "bytes");
+        rename_noreplace_synced(&dir.path().join("a"), &dir.path().join("b")).unwrap();
+        assert_eq!(text(&dir.path().join("b")), "bytes");
+        assert_eq!(testing::syncs_of(dir.path()), 1);
     }
 
     #[test]

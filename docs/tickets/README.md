@@ -175,7 +175,7 @@
 | [0101](0101-receive-line-tests.md) | 수집 받기 줄기의 테스트를 나누고 RSS 수집 명세에 검증 표를 둬요 | 완료 | 0097–0100 |
 | [0102](0102-request-pace-in-core.md) | 요청 간격과 외부 응답 다루기를 trss-core로 모아요 | 완료 | 0092 |
 | [0103](0103-queue-loop-in-core.md) | worker 백그라운드 큐의 루프를 trss-core로 모아요 | 완료 | 0092 |
-| [0104](0104-durable-file-writes-in-core.md) | 파일을 안전하게 쓰는 일을 trss-core로 모아요 | 대기 | 0092 |
+| [0104](0104-durable-file-writes-in-core.md) | 파일을 안전하게 쓰는 일을 trss-core로 모아요 | 완료 | 0092 |
 | [0105](0105-episode-mapping-in-library.md) | 회차 대응의 계산과 까닭 문구를 trss-library로 옮겨요 | 대기 | 0095 |
 | [0106](0106-todo-aggregation-in-jobs.md) | 할 일 집계를 trss-jobs로 옮기고 화면은 서버의 값을 보여줘요 | 대기 | 0092 |
 | [0107](0107-split-job-store.md) | 작업 저장소를 쓰임에 따라 나눠요 | 대기 | 0092 |
