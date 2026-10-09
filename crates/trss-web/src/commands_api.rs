@@ -418,9 +418,7 @@ async fn check_anissia_captions(
 pub(super) async fn ask_anissia_captions(state: &AppState, anime_no: i64) {
     match anissia_captions::ask(&state.commands, anime_no, now_millis()).await {
         Ok(true) => {
-            if let Some(path) = &state.worker_wake {
-                trss_core::wake::wake_worker(path);
-            }
+            state.wake_worker();
         }
         Ok(false) => {}
         Err(e) => eprintln!("trss-web: cannot ask for the subtitle lines of anime {anime_no}: {e}"),
@@ -644,9 +642,7 @@ async fn create_command(
     {
         Accepted::Created(command) => {
             // The worker starts it now rather than at its next look.
-            if let Some(path) = &state.worker_wake {
-                trss_core::wake::wake_worker(path);
-            }
+            state.wake_worker();
             Ok((StatusCode::ACCEPTED, Json(CommandView::from(&command))))
         }
         Accepted::Existing(command) => Ok((StatusCode::OK, Json(CommandView::from(&command)))),

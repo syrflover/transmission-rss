@@ -400,9 +400,7 @@ pub(super) async fn decide(
         .map_err(|e| internal(&e))?;
     match decided {
         Decided::Done(to) => {
-            if let Some(path) = &state.worker_wake {
-                trss_core::wake::wake_worker(path);
-            }
+            state.wake_worker();
             Ok(Json(json!({ "state": to.code() })))
         }
         Decided::NotFound => Err(ApiError::not_found("교체 계획을 찾지 못했어요.")),
@@ -476,9 +474,7 @@ pub(super) async fn decide_many(
         return Err(ApiError::not_found("교체 계획을 찾지 못했어요."));
     }
     if decided.iter().any(|d| matches!(d, Decided::Done(_))) {
-        if let Some(path) = &state.worker_wake {
-            trss_core::wake::wake_worker(path);
-        }
+        state.wake_worker();
     }
     let results: Vec<_> = request
         .decisions

@@ -516,9 +516,7 @@ impl Worker {
             }
         }
         if stored {
-            if let Some(path) = &self.wake_path {
-                trss_core::wake::wake_worker(path);
-            }
+            trss_core::wake::wake_worker_if(self.wake_path.as_deref());
         }
     }
 
@@ -606,9 +604,7 @@ impl Worker {
         // was in the archive folder: the command runner looks at once, not at
         // its next poll.
         if report.moves_asked > 0 {
-            if let Some(path) = &self.wake_path {
-                trss_core::wake::wake_worker(path);
-            }
+            trss_core::wake::wake_worker_if(self.wake_path.as_deref());
         }
 
         // An interrupted cycle stays unfinished in the marker.

@@ -144,6 +144,12 @@ impl AppState {
         self
     }
 
+    /// Wakes the worker if this web has a wake path; call it once a command
+    /// was accepted.
+    pub fn wake_worker(&self) {
+        trss_core::wake::wake_worker_if(self.worker_wake.as_deref());
+    }
+
     /// Shows the jobs' files in `area` (the app data folder's).
     pub fn with_receive_area(mut self, area: &ReceiveArea) -> Self {
         self.receive_root = area.root().to_owned();

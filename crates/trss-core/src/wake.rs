@@ -35,6 +35,14 @@ pub fn wake_worker(path: &Path) {
     let _ = socket.send_to(&[1], path);
 }
 
+/// [`wake_worker`] when there is a wake path; nothing otherwise (a web or a
+/// worker started with no wake socket, as in tests).
+pub fn wake_worker_if(path: Option<&Path>) {
+    if let Some(path) = path {
+        wake_worker(path);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -58,6 +66,24 @@ mod tests {
         listener.set_nonblocking(true).unwrap();
         wake_worker(&path);
         let mut buf = [0u8; 8];
+        assert_eq!(listener.recv(&mut buf).unwrap(), 1);
+    }
+
+    #[test]
+    fn a_wake_with_a_path_reaches_the_listener_and_one_with_none_sends_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = wake_path_for(&dir.path().join("app.db"));
+        let listener = UnixDatagram::bind(&path).unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let mut buf = [0u8; 8];
+
+        wake_worker_if(None);
+        assert_eq!(
+            listener.recv(&mut buf).unwrap_err().kind(),
+            std::io::ErrorKind::WouldBlock
+        );
+
+        wake_worker_if(Some(&path));
         assert_eq!(listener.recv(&mut buf).unwrap(), 1);
     }
 }

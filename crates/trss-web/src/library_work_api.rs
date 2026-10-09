@@ -1157,9 +1157,7 @@ async fn apply_stored(
         .map_err(|e| ApiError::Internal(e.to_string()))?
     {
         StoredChoice::Queued { job_id, compare } => {
-            if let Some(path) = &state.worker_wake {
-                trss_core::wake::wake_worker(path);
-            }
+            state.wake_worker();
             Ok((StatusCode::ACCEPTED, Json(Applying { job_id, compare })))
         }
         StoredChoice::NotFound => Err(ApiError::not_found("이 보관본을 찾지 못했어요.")),
@@ -1262,9 +1260,7 @@ async fn clean_stored(
         .map_err(|e| ApiError::Internal(e.to_string()))?
     {
         cleanup::Asked::Asked(cleanup_id) => {
-            if let Some(path) = &state.worker_wake {
-                trss_core::wake::wake_worker(path);
-            }
+            state.wake_worker();
             Ok((StatusCode::ACCEPTED, Json(Cleaning { cleanup_id })))
         }
         cleanup::Asked::NotFound => Err(ApiError::not_found("이 보관본을 찾지 못했어요.")),

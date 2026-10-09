@@ -1023,9 +1023,7 @@ async fn create(
         .map_err(|e| internal(&e))?
     {
         Created::Created(id) => {
-            if let Some(path) = &state.worker_wake {
-                trss_core::wake::wake_worker(path);
-            }
+            state.wake_worker();
             Ok((StatusCode::ACCEPTED, Json(json!({ "id": id }))))
         }
         Created::Existing(id) => Ok((StatusCode::OK, Json(json!({ "id": id })))),
@@ -1097,9 +1095,7 @@ async fn create_find(
         .map_err(|e| internal(&e))?
     {
         Created::Created(id) => {
-            if let Some(path) = &state.worker_wake {
-                trss_core::wake::wake_worker(path);
-            }
+            state.wake_worker();
             Ok((StatusCode::ACCEPTED, Json(json!({ "id": id }))))
         }
         Created::Existing(id) => Ok((StatusCode::OK, Json(json!({ "id": id })))),
@@ -1127,9 +1123,7 @@ async fn finish(
         }
         AskedFinish::Ended => "done",
         AskedFinish::Asked => {
-            if let Some(path) = &state.worker_wake {
-                trss_core::wake::wake_worker(path);
-            }
+            state.wake_worker();
             "finishing"
         }
     };
@@ -1144,9 +1138,7 @@ async fn finish(
 pub async fn follow_now(state: &AppState) {
     match state.follow.evaluate(now_millis()).await {
         Ok(made) if !made.is_empty() => {
-            if let Some(path) = &state.worker_wake {
-                trss_core::wake::wake_worker(path);
-            }
+            state.wake_worker();
         }
         Ok(_) => {}
         Err(err) => eprintln!("Cannot look at the subscribed creators' subtitles: {err}"),

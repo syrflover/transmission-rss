@@ -467,9 +467,7 @@ async fn prepare(
         return Ok(Json(None));
     };
     if state.remote.is_some() && screen.waiting {
-        if let Some(path) = &state.worker_wake {
-            trss_core::wake::wake_worker(path);
-        }
+        state.wake_worker();
     }
     Ok(Json(Some(view_of(&state, screen))))
 }
@@ -549,9 +547,7 @@ async fn restart(
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
     if asked {
-        if let Some(path) = &state.worker_wake {
-            trss_core::wake::wake_worker(path);
-        }
+        state.wake_worker();
     }
     answered(&state, &id, asked, NO_RUN_TO_RESTART).await
 }

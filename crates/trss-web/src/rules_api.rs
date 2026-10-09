@@ -455,9 +455,7 @@ pub(super) async fn ask_start(
     .map_err(|e| ApiError::Internal(e.to_string()))?;
     match accepted {
         Accepted::Created(_) => {
-            if let Some(path) = &state.worker_wake {
-                trss_core::wake::wake_worker(path);
-            }
+            state.wake_worker();
             Ok(true)
         }
         Accepted::Existing(_) => Ok(true),

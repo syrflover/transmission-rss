@@ -643,9 +643,7 @@ async fn receive(
             dropped,
         } => {
             // What it kept is the worker's to unpack and analyse.
-            if let Some(path) = &state.worker_wake {
-                trss_core::wake::wake_worker(path);
-            }
+            state.wake_worker();
             Ok((
             StatusCode::ACCEPTED,
             Json(json!({
