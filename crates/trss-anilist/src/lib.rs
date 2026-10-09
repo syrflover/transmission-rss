@@ -3,7 +3,7 @@
 //! point to (`docs/adr/0007-anilist-work-artwork.md`).
 //!
 //! - **Pace.** Every API request takes a slot from the database
-//!   (`RequestPace::take_request_slot`), so the web and the worker together
+//!   ([`trss_core::pace::RequestPace`]), so the web and the worker together
 //!   send at most one request every [`REQUEST_SPACING`] (30 a minute, AniList's
 //!   lowest published limit). A `429` answer blocks every request until its
 //!   `Retry-After` has passed, a request already waiting for its turn included.
@@ -25,15 +25,14 @@ use serde_json::json;
 use url::Url;
 
 use trss_core::{
+    pace::{RequestPace, TurnError},
     response::{self, BodyError},
     Clock, Db, DbError,
 };
 
-use pace::RequestPace;
 use title::Candidate;
 
 mod entry;
-mod pace;
 pub mod season;
 pub mod title;
 
@@ -275,7 +274,7 @@ impl Anilist {
             config: std::sync::Arc::new(config),
             http,
             images,
-            pace: RequestPace::new(db),
+            pace: RequestPace::anilist(db),
             clock,
             spacing: REQUEST_SPACING,
         }
@@ -294,34 +293,13 @@ impl Anilist {
     /// Waits for this process's turn to send an API request. With `max_wait`,
     /// a turn further away than that is not taken: [`AnilistError::Busy`].
     async fn turn(&self, max_wait: Option<Duration>) -> Result<(), AnilistError> {
-        let now = (self.clock)();
-        let slot = self
-            .pace
-            .take_request_slot(
-                now,
-                self.spacing.as_millis() as i64,
-                max_wait.map(|d| d.as_millis() as i64),
-            )
-            .await?;
-        match slot {
-            Ok(at) => {
-                if at > now {
-                    tokio::time::sleep(Duration::from_millis((at - now) as u64)).await;
-                    // Another request may have been answered `429` while this
-                    // one waited: its turn was taken before the block was.
-                    let now = (self.clock)();
-                    if let Some(until) = self.pace.blocked_until().await?.filter(|u| *u > now) {
-                        return Err(AnilistError::Busy {
-                            retry_after: Duration::from_millis((until - now) as u64),
-                        });
-                    }
-                }
-                Ok(())
-            }
-            Err(wait) => Err(AnilistError::Busy {
-                retry_after: Duration::from_millis(wait.max(0) as u64),
-            }),
-        }
+        self.pace
+            .wait_for_turn(&self.clock, self.spacing, max_wait)
+            .await
+            .map_err(|e| match e {
+                TurnError::Db(e) => AnilistError::Store(e),
+                TurnError::Wait(retry_after) => AnilistError::Busy { retry_after },
+            })
     }
 
     /// Sends one GraphQL request. `Ok(None)` for a `404` (AniList's answer for

@@ -17,7 +17,7 @@
 //! [`parse`] reads the answers. [`Anissia`] asks for them:
 //!
 //! - **Pace.** Every request takes a slot from the database
-//!   ([`RequestPace::take_request_slot`]), so the web and the worker together
+//!   ([`trss_core::pace::RequestPace`]), so the web and the worker together
 //!   send at most one request every [`REQUEST_SPACING`]. A `429` answer blocks
 //!   every request until its `Retry-After` has passed, a request already
 //!   waiting for its turn included.
@@ -40,7 +40,6 @@
 mod anime;
 pub mod calendar;
 pub mod observe;
-pub mod pace;
 pub mod parse;
 pub mod slot;
 
@@ -65,8 +64,8 @@ use url::Url;
 pub use observe::{CaptionLine, RecentPage};
 pub use parse::{AnimePage, Caption, Creator, ScheduleEntry};
 
-use pace::RequestPace;
 use trss_core::{
+    pace::{RequestPace, TurnError},
     response::{self, BodyError},
     system_clock, Clock, Db, DbError, Millis,
 };
@@ -217,7 +216,7 @@ impl Anissia {
         Anissia {
             config: Arc::new(config),
             http,
-            pace: RequestPace::new(db),
+            pace: RequestPace::anissia(db),
             clock,
             spacing: REQUEST_SPACING,
             schedules: Arc::default(),
@@ -248,34 +247,13 @@ impl Anissia {
     /// Waits for this process's turn to send a request. With `max_wait`, a
     /// turn further away than that is not taken: [`AnissiaError::Busy`].
     async fn turn(&self, max_wait: Option<Duration>) -> Result<(), AnissiaError> {
-        let now = self.now();
-        let slot = self
-            .pace
-            .take_request_slot(
-                now,
-                self.spacing.as_millis() as i64,
-                max_wait.map(|d| d.as_millis() as i64),
-            )
-            .await?;
-        match slot {
-            Ok(at) => {
-                if at > now {
-                    tokio::time::sleep(Duration::from_millis((at - now) as u64)).await;
-                    // Another request may have been answered `429` while this
-                    // one waited: its turn was taken before the block was.
-                    let now = self.now();
-                    if let Some(until) = self.pace.blocked_until().await?.filter(|u| *u > now) {
-                        return Err(AnissiaError::Busy {
-                            retry_after: Duration::from_millis((until - now) as u64),
-                        });
-                    }
-                }
-                Ok(())
-            }
-            Err(wait) => Err(AnissiaError::Busy {
-                retry_after: Duration::from_millis(wait.max(0) as u64),
-            }),
-        }
+        self.pace
+            .wait_for_turn(&self.clock, self.spacing, max_wait)
+            .await
+            .map_err(|e| match e {
+                TurnError::Db(e) => AnissiaError::Store(e),
+                TurnError::Wait(retry_after) => AnissiaError::Busy { retry_after },
+            })
     }
 
     /// Sends one request and returns its answer's body.

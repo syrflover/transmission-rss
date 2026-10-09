@@ -3,7 +3,7 @@
 //!
 //! This is the one place that requests a search page (only the web asks), and
 //! the one place the pace is kept: every request takes its slot from the
-//! database ([`SearchPace::take_slot`]) and waits for it, so the requests of
+//! database ([`trss_core::pace::RequestPace::wait_for_turn`]) and waits for it, so the requests of
 //! the web processes and of searches running side by side stay
 //! [`REQUEST_SPACING`] apart. A `429` answer blocks the host for as long as it asks.
 //!
@@ -14,7 +14,7 @@ mod tests;
 
 use std::time::Duration;
 
-use trss_core::{system_clock, Clock};
+use trss_core::{pace::TurnError, system_clock, Clock};
 
 use crate::{
     feed::{self, FeedItem, FetchError},
@@ -117,34 +117,14 @@ impl SearchClient {
             .and_then(|u| u.host_str().map(str::to_owned))
             .ok_or(SearchError::BadAddress)?;
 
-        let now = (self.clock)();
-        let slot = self
-            .pace
-            .take_slot(
-                &host,
-                now,
-                self.spacing.as_millis() as i64,
-                Some(MAX_WAIT.as_millis() as i64),
-            )
+        self.pace
+            .host(&host)
+            .wait_for_turn(&self.clock, self.spacing, Some(MAX_WAIT))
             .await
-            .map_err(|e| SearchError::Pace(e.to_string()))?
-            .map_err(|wait| SearchError::Wait(Duration::from_millis(wait.max(0) as u64)))?;
-        if slot > now {
-            tokio::time::sleep(Duration::from_millis((slot - now) as u64)).await;
-            // A request of another search may have been answered `429` while
-            // this one waited: its turn was taken before the block was.
-            let until = self
-                .pace
-                .blocked_until(&host)
-                .await
-                .map_err(|e| SearchError::Pace(e.to_string()))?;
-            let now = (self.clock)();
-            if let Some(until) = until.filter(|until| *until > now) {
-                return Err(SearchError::Wait(Duration::from_millis(
-                    (until - now) as u64,
-                )));
-            }
-        }
+            .map_err(|e| match e {
+                TurnError::Db(e) => SearchError::Pace(e.to_string()),
+                TurnError::Wait(wait) => SearchError::Wait(wait),
+            })?;
 
         let read = match feed::fetch(&self.http, &url).await {
             Ok(read) => read,
