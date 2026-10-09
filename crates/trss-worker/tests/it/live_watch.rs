@@ -1,7 +1,13 @@
-//! Changes in the watch folders taken from inotify alerts, end to end (ticket
-//! 0016): a real worker, real temporary folders and the kernel's own alerts, the
-//! real web API for registering folders, a fake Transmission for the archive
-//! move, and no mock of the watching itself.
+//! What the worker does around the watching of the watch folders (ticket 0016):
+//! a reading an alert asked for holds the worker's lock and beats the heartbeat,
+//! an archive move and the alerts it raises do not interleave, the running
+//! worker watches the folders registered while it runs, and a real `trss-worker`
+//! process records a new episode between cycles. A real worker, real temporary
+//! folders and the kernel's own alerts, the real web API for registering
+//! folders, a fake Transmission for the archive move.
+//!
+//! What an alert makes the library read, the poll decisions and the safety net
+//! are tested in `trss-library` (`live::tests`), with the same real inotify.
 //!
 //! The worker's clock is the harness's manual one, so what time a file gets is
 //! exact; the waits are real, so they poll the database with a generous limit
@@ -28,7 +34,6 @@ use trss_collect::{
 };
 use trss_core::{heartbeat::HeartbeatStore, lock_path_for, CycleLock};
 use trss_library::{
-    discovery::Reason,
     live::{LiveConfig, Reading},
     store::library::{LibraryStore, WatchFolder, WorkRecord},
 };
@@ -181,13 +186,6 @@ impl Live {
         self.added_at(folder, work, file).await.is_some()
     }
 
-    async fn has_unrecognized(&self, folder: &WatchFolder, work: &str, path: &str) -> bool {
-        match self.work(folder, work).await {
-            Some(work) => work.unrecognized.iter().any(|u| u.path == path),
-            None => false,
-        }
-    }
-
     async fn tick(&self) -> CycleReport {
         match self.worker.tick(&CancellationToken::new()).await.unwrap() {
             TickOutcome::Ran(report) => report,
@@ -218,37 +216,6 @@ impl Live {
 }
 
 #[tokio::test]
-async fn a_file_added_while_the_worker_runs_is_recorded_without_a_cycle_and_only_its_work_is_read()
-{
-    let lib = Live::new(config()).await;
-    let (root, folder) = lib.two_works().await;
-    let status = lib.worker.live().status(&folder.id).unwrap();
-    // The folder, A, A's season, B and B's season.
-    assert_eq!(status.watches, 5);
-    assert!(status.root_watched && status.unwatched_dirs == 0);
-    let before = lib.readings().len();
-
-    lib.h.advance(5000);
-    let stamp = lib.h.now();
-    touch(&root.join("A/Season 01/A S01E02.mkv"));
-
-    eventually("the new episode is recorded", || async {
-        lib.added_at(&folder, "A", "Season 01/A S01E02.mkv").await == Some(Some(stamp))
-    })
-    .await;
-    // Nothing but A was read, and no whole folder: B was left alone.
-    let read = lib.readings_since(before);
-    assert!(!read.is_empty());
-    assert!(
-        read.iter()
-            .all(|r| *r == Reading::Work(folder.id.clone(), "A".into())),
-        "{read:?}"
-    );
-    // The work's other records are as they were.
-    assert_eq!(lib.work(&folder, "B").await.unwrap().files().len(), 1);
-}
-
-#[tokio::test]
 async fn a_reading_an_alert_asked_for_beats_under_the_lock_and_lets_go_of_the_hold() {
     let lib = Live::new(config()).await;
     let (root, _folder) = lib.two_works().await;
@@ -267,154 +234,6 @@ async fn a_reading_an_alert_asked_for_beats_under_the_lock_and_lets_go_of_the_ho
     })
     .await;
     assert!(before.beat_at < stamp);
-}
-
-#[tokio::test]
-async fn a_part_file_that_keeps_growing_is_not_read_again_and_its_rename_is_recorded() {
-    let lib = Live::new(config()).await;
-    let (root, folder) = lib.two_works().await;
-    let season = root.join("A/Season 01");
-
-    lib.h.advance(1000);
-    fs::write(season.join("A S01E02.mkv.part"), "x").unwrap();
-    eventually("the download in progress is counted", || async {
-        lib.work(&folder, "A")
-            .await
-            .unwrap()
-            .unrecognized
-            .iter()
-            .any(|u| u.path.ends_with(".part") && u.reason == Reason::Partial)
-    })
-    .await;
-    // Let the reading that its creation caused finish.
-    tokio::time::sleep(DEBOUNCE * 2).await;
-    let (_, reads) = lib.worker.live().read_counts();
-
-    // Writing more (the download) tells the worker nothing.
-    for _ in 0..5 {
-        let mut part = fs::OpenOptions::new()
-            .append(true)
-            .open(season.join("A S01E02.mkv.part"))
-            .unwrap();
-        std::io::Write::write_all(&mut part, &[0u8; 4096]).unwrap();
-        tokio::time::sleep(Duration::from_millis(80)).await;
-    }
-    tokio::time::sleep(DEBOUNCE * 3).await;
-    assert_eq!(lib.worker.live().read_counts().1, reads);
-
-    // Done: the rename to the final name is an alert, and the episode is recorded.
-    lib.h.advance(1000);
-    let stamp = lib.h.now();
-    fs::rename(
-        season.join("A S01E02.mkv.part"),
-        season.join("A S01E02.mkv"),
-    )
-    .unwrap();
-    eventually("the finished episode is recorded", || async {
-        lib.added_at(&folder, "A", "Season 01/A S01E02.mkv").await == Some(Some(stamp))
-    })
-    .await;
-    assert!(lib
-        .work(&folder, "A")
-        .await
-        .unwrap()
-        .unrecognized
-        .is_empty());
-}
-
-#[tokio::test]
-async fn a_new_work_with_a_season_and_a_file_made_together_is_recorded_and_watched() {
-    let lib = Live::new(config()).await;
-    let (root, folder) = lib.two_works().await;
-    let watches = lib.worker.live().status(&folder.id).unwrap().watches;
-
-    lib.h.advance(1000);
-    let stamp = lib.h.now();
-    touch(&root.join("New/Season 01/New S01E01.mkv"));
-    eventually("the new work, season and episode are recorded", || async {
-        lib.added_at(&folder, "New", "Season 01/New S01E01.mkv")
-            .await
-            == Some(Some(stamp))
-    })
-    .await;
-    let new = lib.work(&folder, "New").await.unwrap();
-    assert_eq!(new.seasons, [1]);
-    assert_eq!(new.first_seen_at, Some(stamp));
-    // The new work and its season are watched now.
-    let status = lib.worker.live().status(&folder.id).unwrap();
-    assert_eq!(status.watches, watches + 2);
-
-    // So the next file is an alert too, without any cycle.
-    lib.h.advance(1000);
-    let later = lib.h.now();
-    touch(&root.join("New/Season 01/New S01E02.mkv"));
-    eventually("the next episode is recorded", || async {
-        lib.added_at(&folder, "New", "Season 01/New S01E02.mkv")
-            .await
-            == Some(Some(later))
-    })
-    .await;
-    // A new season of an existing work is watched the same way.
-    lib.h.advance(1000);
-    let season_two = lib.h.now();
-    touch(&root.join("A/Season 02/A S02E01.mkv"));
-    eventually("the new season's episode is recorded", || async {
-        lib.added_at(&folder, "A", "Season 02/A S02E01.mkv").await == Some(Some(season_two))
-    })
-    .await;
-    lib.h.advance(1000);
-    let after = lib.h.now();
-    touch(&root.join("A/Season 02/A S02E02.mkv"));
-    eventually(
-        "the second episode of the new season is recorded",
-        || async {
-            lib.added_at(&folder, "A", "Season 02/A S02E02.mkv").await == Some(Some(after))
-        },
-    )
-    .await;
-}
-
-#[tokio::test]
-async fn a_work_folder_that_is_removed_or_moved_out_is_missing_and_loses_its_watches() {
-    let lib = Live::new(config()).await;
-    let (root, folder) = lib.two_works().await;
-    touch(&root.join("C/Season 01/C S01E01.mkv"));
-    eventually("C is recorded", || async {
-        lib.work(&folder, "C").await.is_some()
-    })
-    .await;
-    assert_eq!(lib.worker.live().status(&folder.id).unwrap().watches, 7);
-
-    fs::remove_dir_all(root.join("A")).unwrap();
-    let outside = lib.folder("elsewhere");
-    fs::rename(root.join("C"), outside.join("C")).unwrap();
-    eventually("A and C are missing", || async {
-        lib.work(&folder, "A").await.unwrap().missing
-            && lib.work(&folder, "C").await.unwrap().missing
-    })
-    .await;
-    assert!(!lib.work(&folder, "B").await.unwrap().missing);
-    // Only the folder and B (with its season) are watched.
-    let live = lib.worker.live();
-    eventually("the watches are released", || async {
-        live.status(&folder.id).unwrap().watches == 3
-    })
-    .await;
-
-    // What happens to the moved folder is not heard under its old name...
-    let before = lib.readings().len();
-    touch(&outside.join("C/Season 01/C S01E02.mkv"));
-    tokio::time::sleep(DEBOUNCE * 3).await;
-    assert!(lib.readings_since(before).is_empty());
-    // ...and a folder that comes back is a work again, with its ID.
-    let id = lib.work(&folder, "A").await.unwrap().id;
-    lib.h.advance(1000);
-    touch(&root.join("A/Season 01/A S01E01.mkv"));
-    eventually("A is back", || async {
-        let work = lib.work(&folder, "A").await.unwrap();
-        !work.missing && work.id == id
-    })
-    .await;
 }
 
 #[tokio::test]
@@ -507,7 +326,6 @@ async fn an_archive_move_continues_the_work_under_the_archive_folder_and_moves_i
     // folder and Clevatess with its season.
     assert_eq!(live.status(&a.collect_folder.id).unwrap().watches, 5);
     assert_eq!(live.status(&a.archive_folder.id).unwrap().watches, 3);
-    let solo = a.lib.work(&a.collect_folder, "Solo").await.unwrap();
 
     let (status, _, body) = a
         .lib
@@ -533,10 +351,10 @@ async fn an_archive_move_continues_the_work_under_the_archive_folder_and_moves_i
     );
     assert!(a.archive.join("Solo/Season 01/Solo S01E01.mkv").exists());
 
-    // The same ID now belongs to the archive folder, and the alerts of the move
-    // that follow leave it as it is.
-    let moved = a.lib.work(&a.archive_folder, "Solo").await.unwrap();
-    assert_eq!(moved.id, solo.id);
+    // The work belongs to the archive folder now (that it keeps its ID is
+    // `trss-collect`'s rule), and the alerts of the move that follow leave it as
+    // it is.
+    assert!(a.lib.work(&a.archive_folder, "Solo").await.is_some());
     eventually("both folders' watches follow the work", || async {
         live.status(&a.collect_folder.id).unwrap().watches == 3
             && live.status(&a.archive_folder.id).unwrap().watches == 5
@@ -544,7 +362,6 @@ async fn an_archive_move_continues_the_work_under_the_archive_folder_and_moves_i
     .await;
     tokio::time::sleep(DEBOUNCE * 4).await;
     let after = a.lib.work(&a.archive_folder, "Solo").await.unwrap();
-    assert_eq!(after.id, solo.id);
     assert!(!after.missing);
     assert!(a.lib.work(&a.collect_folder, "Solo").await.is_none());
 
@@ -583,180 +400,7 @@ async fn an_archive_move_continues_the_work_under_the_archive_folder_and_moves_i
     assert!(a.lib.work(&a.collect_folder, "Solo").await.is_none());
 }
 
-// --- what the alerts cannot tell -------------------------------------------------------
-
-#[tokio::test]
-async fn a_change_made_while_the_worker_was_off_is_found_by_the_first_cycle_after_the_start() {
-    let lib = Live::new(config()).await;
-    let root = lib.folder("anime");
-    touch(&root.join("A/Season 01/A S01E01.mkv"));
-    touch(&root.join("A/Season 01/A S01E02.mkv"));
-    touch(&root.join("B/Season 01/B S01E01.mkv"));
-    let folder = lib.register(&root).await;
-
-    // Nothing is watching while these happen.
-    lib.h.advance(1000);
-    touch(&root.join("A/Season 01/A S01E03.mkv"));
-    fs::remove_file(root.join("A/Season 01/A S01E01.mkv")).unwrap();
-    fs::remove_dir_all(root.join("B")).unwrap();
-
-    lib.worker.start_watching().await;
-    lib.h.advance(1000);
-    let stamp = lib.h.now();
-    lib.tick().await;
-
-    let a = lib.work(&folder, "A").await.unwrap();
-    let files = a.files();
-    assert!(!files.contains_key("Season 01/A S01E01.mkv"));
-    assert_eq!(files["Season 01/A S01E03.mkv"].added_at, Some(stamp));
-    assert!(lib.work(&folder, "B").await.unwrap().missing);
-    // It was the whole folder, once.
-    assert_eq!(lib.readings(), vec![Reading::Folder(folder.id.clone())]);
-}
-
-#[tokio::test]
-async fn a_queue_overflow_reads_the_whole_folder_and_finds_what_no_alert_told() {
-    let lib = Live::new(config()).await;
-    let (root, folder) = lib.two_works().await;
-    let season = root.join("A/Season 01");
-
-    // A folder inside a season folder has no watch of its own.
-    fs::create_dir_all(season.join("Batch")).unwrap();
-    tokio::time::sleep(DEBOUNCE * 4).await;
-    lib.h.advance(1000);
-    touch(&season.join("Batch/ep 02.mkv"));
-    tokio::time::sleep(DEBOUNCE * 4).await;
-    assert!(
-        !lib.has_unrecognized(&folder, "A", "Season 01/Batch/ep 02.mkv")
-            .await
-    );
-
-    // The kernel says it dropped alerts: the whole folder is read.
-    let before = lib.readings().len();
-    lib.worker.live().simulate_overflow(&folder.id);
-    eventually("the folder is read whole and the file is found", || async {
-        lib.has_unrecognized(&folder, "A", "Season 01/Batch/ep 02.mkv")
-            .await
-    })
-    .await;
-    assert!(lib
-        .readings_since(before)
-        .contains(&Reading::Folder(folder.id.clone())));
-}
-
-#[tokio::test]
-async fn directories_without_a_watch_are_read_by_every_cycle_and_the_row_says_why() {
-    // Room for the folder and two works with a season each, not for the third.
-    let lib = Live::new(LiveConfig {
-        max_watches: Some(5),
-        ..config()
-    })
-    .await;
-    let root = lib.folder("anime");
-    for work in ["A", "B", "C"] {
-        touch(&root.join(format!("{work}/Season 01/{work} S01E01.mkv")));
-    }
-    let folder = lib.register(&root).await;
-    lib.worker.start_watching().await;
-    lib.h.advance(1000);
-    lib.tick().await;
-
-    let status = lib.worker.live().status(&folder.id).unwrap();
-    assert_eq!(status.watches, 5);
-    assert_eq!(status.unwatched_dirs, 1);
-    assert_eq!(
-        status.unwatched_works.iter().collect::<Vec<_>>(),
-        ["C"],
-        "the third work is the one left out"
-    );
-    // The row says how many and why, through the API the screen reads.
-    eventually("the row carries the note", || async {
-        lib.library
-            .folder(&folder.id)
-            .await
-            .unwrap()
-            .unwrap()
-            .watch_note
-            .is_some()
-    })
-    .await;
-    let (status, _, body) = lib
-        .api
-        .call("GET", "/api/library/watch-folders", None)
-        .await;
-    assert_eq!(status, StatusCode::OK);
-    let note = body["folders"][0]["watch_note"].as_str().unwrap();
-    assert!(note.contains("폴더 1개"), "{note}");
-    assert!(note.contains("fs.inotify.max_user_watches"), "{note}");
-
-    // The watched works are heard...
-    lib.h.advance(1000);
-    let stamp = lib.h.now();
-    touch(&root.join("A/Season 01/A S01E02.mkv"));
-    eventually("A's episode is recorded by its alert", || async {
-        lib.added_at(&folder, "A", "Season 01/A S01E02.mkv").await == Some(Some(stamp))
-    })
-    .await;
-
-    // ...and the one without a watch is read by the next cycle, alone.
-    lib.h.advance(1000);
-    let cycle = lib.h.now();
-    touch(&root.join("C/Season 01/C S01E02.mkv"));
-    tokio::time::sleep(DEBOUNCE * 3).await;
-    assert!(!lib.has_file(&folder, "C", "Season 01/C S01E02.mkv").await);
-    let before = lib.readings().len();
-    lib.tick().await;
-    assert_eq!(
-        lib.added_at(&folder, "C", "Season 01/C S01E02.mkv").await,
-        Some(Some(cycle))
-    );
-    assert_eq!(
-        lib.readings_since(before),
-        vec![Reading::Work(folder.id.clone(), "C".into())]
-    );
-}
-
-#[tokio::test]
-async fn a_quiet_hour_reads_no_folder_but_the_safety_net() {
-    let lib = Live::new(config()).await;
-    let (_, folder) = lib.two_works().await;
-    let (folders_read, works_read) = lib.worker.live().read_counts();
-    assert_eq!(folders_read, 1, "the first cycle after the start");
-
-    // Eleven cycles over 55 minutes: every directory is watched, nothing changes.
-    for _ in 0..11 {
-        lib.h.advance(5 * 60 * 1000);
-        lib.tick().await;
-    }
-    assert_eq!(lib.worker.live().read_counts(), (1, works_read));
-
-    // The twelfth reaches the hour since the last whole read: one read, once.
-    lib.h.advance(5 * 60 * 1000);
-    lib.tick().await;
-    assert_eq!(lib.worker.live().read_counts(), (2, works_read));
-    lib.h.advance(5 * 60 * 1000);
-    lib.tick().await;
-    assert_eq!(lib.worker.live().read_counts(), (2, works_read));
-    assert_eq!(
-        lib.readings(),
-        vec![Reading::Folder(folder.id.clone()); 2],
-        "the first cycle and the safety net, nothing else"
-    );
-}
-
-#[tokio::test]
-async fn without_watching_every_cycle_reads_every_folder_as_before() {
-    let lib = Live::new(config()).await;
-    let root = lib.folder("anime");
-    touch(&root.join("A/Season 01/A S01E01.mkv"));
-    let folder = lib.register(&root).await;
-    for _ in 0..3 {
-        lib.h.advance(1000);
-        lib.tick().await;
-    }
-    assert_eq!(lib.worker.live().read_counts(), (3, 0));
-    assert!(lib.worker.live().status(&folder.id).is_none());
-}
+// --- the running worker ----------------------------------------------------------------
 
 #[tokio::test]
 async fn the_running_worker_watches_folders_registered_later_and_catches_up_on_them() {

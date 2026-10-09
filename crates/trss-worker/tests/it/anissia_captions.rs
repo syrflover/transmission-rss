@@ -1,8 +1,13 @@
-//! Subtitle candidates end to end (ticket 0035): the real web API (the link of
-//! a season, the candidates, the `새로고침` command), the real worker carrying
-//! out the `anissia_captions` command, the observer, and a fake Anissia whose
-//! answers are the shapes read from the real one on 2026-10-02. Nothing here
-//! reaches the real Anissia.
+//! What the worker does around the Anissia captions (tickets 0035, 0045): it
+//! carries out the `anissia_captions` command the web stored for a season link
+//! (and fails it when it reads no Anissia), it makes and runs the subscribed
+//! creator's job when the observer finds an episode or a season entry is stored,
+//! and its recheck task runs. The real web API, the real worker, the observer,
+//! and a fake Anissia whose answers are the shapes read from the real one on
+//! 2026-10-02. Nothing here reaches the real Anissia.
+//!
+//! What a reading makes of the lines and how the command ends are tested in
+//! `trss-collect` (`anissia::captions_tests`, `commands::anissia_captions`).
 
 use crate::common;
 
@@ -137,52 +142,18 @@ impl Env {
     }
 }
 
-fn creators(shown: &Value) -> Vec<(String, String)> {
-    let mut seen: Vec<(String, String)> = shown["candidates"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|c| {
-            (
-                c["creator"].as_str().unwrap().to_owned(),
-                c["episode"].as_str().unwrap().to_owned(),
-            )
-        })
-        .collect();
-    seen.sort();
-    seen
-}
-
 #[tokio::test]
-async fn linking_a_season_reads_the_anime_in_the_worker_and_the_older_lines_become_candidates() {
+async fn a_season_link_made_through_the_web_is_read_by_the_worker_as_a_command() {
     let env = Env::new().await;
-    // The recent list has one creator's line, observed before any link.
-    env.fake.set_recent(vec![env.fake.recent_line(
-        3492,
-        "12",
-        "2026-09-10T12:10:00",
-        "https://erulabo.com/837",
-        "에루샤",
-    )]);
-    env.observer.run_due().await.unwrap();
-    // Anissia's own list for the anime also holds a line older than the recent
-    // list reaches.
     env.fake.set_captions(
         3492,
-        vec![
-            json!({"episode": "12", "updDt": "2026-09-10T12:10:00",
-                   "website": "https://erulabo.com/837", "name": "에루샤"}),
-            json!({"episode": "24", "updDt": "2026-03-01T00:00:00",
-                   "website": "https://felia.tistory.com/1", "name": "코코렛"}),
-        ],
+        vec![json!({"episode": "24", "updDt": "2026-03-01T00:00:00",
+                    "website": "https://felia.tistory.com/1", "name": "코코렛"})],
     );
 
+    // The link stores the command; nothing is read before the worker runs it.
     env.link().await;
-    // Linked: the observation of the recent list shows at once, the older line
-    // not before the worker has read the anime.
-    let before = env.candidates().await;
-    assert_eq!(creators(&before), [("에루샤".to_owned(), "12".to_owned())]);
-    assert_eq!(before["refresh"]["state"], "pending");
+    assert_eq!(env.candidates().await["refresh"]["state"], "pending");
     assert_eq!(env.fake.count("/anime/caption/animeNo/3492"), 0);
 
     let worker = env.worker();
@@ -191,99 +162,7 @@ async fn linking_a_season_reads_the_anime_in_the_worker_and_the_older_lines_beco
     let after = env.candidates().await;
     assert_eq!(after["refresh"]["state"], "done");
     assert_eq!(after["refresh"]["outcome"]["result"], "read");
-    assert_eq!(
-        creators(&after),
-        [
-            ("에루샤".to_owned(), "12".to_owned()),
-            ("코코렛".to_owned(), "24".to_owned())
-        ]
-    );
     assert_eq!(env.fake.count("/anime/caption/animeNo/3492"), 1);
-    // The line the recent list gave is not observed twice.
-    assert_eq!(after["candidates"].as_array().unwrap().len(), 2);
-}
-
-#[tokio::test]
-async fn refresh_reads_the_anime_again_and_a_failed_read_says_so_and_keeps_the_candidates() {
-    let env = Env::new().await;
-    env.fake.set_captions(
-        3492,
-        vec![json!({"episode": "3", "updDt": "2026-10-02 21:00:00",
-                    "website": "https://a.test/3", "name": "에루샤"})],
-    );
-    env.link().await;
-    let worker = env.worker();
-    assert_eq!(env.run_commands(&worker).await, CommandsOutcome::Ran(1));
-    assert_eq!(
-        env.candidates().await["candidates"][0]["updated_at"],
-        1_790_942_400_000_i64
-    );
-
-    // The user's 새로고침 sees the creator move on to episode 4.
-    env.fake.set_captions(
-        3492,
-        vec![json!({"episode": "4", "updDt": "2026-10-09T21:00:00",
-                    "website": "https://a.test/4", "name": "에루샤"})],
-    );
-    let (status, body) = env
-        .call(
-            "POST",
-            "/api/commands",
-            Some(json!({ "id": "refresh-0001", "kind": "anissia_captions",
-                         "payload": { "anime_no": 3492 } })),
-        )
-        .await;
-    assert_eq!(status, StatusCode::ACCEPTED, "{body}");
-    assert_eq!(env.run_commands(&worker).await, CommandsOutcome::Ran(1));
-    assert_eq!(
-        creators(&env.candidates().await),
-        [
-            ("에루샤".to_owned(), "3".to_owned()),
-            ("에루샤".to_owned(), "4".to_owned())
-        ]
-    );
-
-    // Anissia fails: the command says so, and the candidates stay as they were.
-    env.fake.state.lock().unwrap().failing = 1;
-    let (status, _) = env
-        .call(
-            "POST",
-            "/api/commands",
-            Some(json!({ "id": "refresh-0002", "kind": "anissia_captions",
-                         "payload": { "anime_no": 3492 } })),
-        )
-        .await;
-    assert_eq!(status, StatusCode::ACCEPTED);
-    assert_eq!(env.run_commands(&worker).await, CommandsOutcome::Ran(1));
-    let shown = env.candidates().await;
-    assert_eq!(shown["refresh"]["state"], "failed");
-    assert!(shown["refresh"]["outcome"]["reason"]
-        .as_str()
-        .unwrap()
-        .contains("읽지 못했어요"));
-    assert_eq!(shown["candidates"].as_array().unwrap().len(), 2);
-
-    // Anissia asks to wait: also a failed command with a sentence of its own.
-    {
-        let mut state = env.fake.state.lock().unwrap();
-        state.rate_limited = 1;
-        state.retry_after = Some(120);
-    }
-    env.call(
-        "POST",
-        "/api/commands",
-        Some(json!({ "id": "refresh-0003", "kind": "anissia_captions",
-                     "payload": { "anime_no": 3492 } })),
-    )
-    .await;
-    assert_eq!(env.run_commands(&worker).await, CommandsOutcome::Ran(1));
-    let shown = env.candidates().await;
-    assert_eq!(shown["refresh"]["state"], "failed");
-    assert!(shown["refresh"]["outcome"]["reason"]
-        .as_str()
-        .unwrap()
-        .contains("잠시 요청을 받지 않아요"));
-    assert_eq!(shown["candidates"].as_array().unwrap().len(), 2);
 }
 
 #[tokio::test]
@@ -512,7 +391,7 @@ async fn rechecks_reach(env: &Env, count: i64) -> bool {
 }
 
 #[tokio::test]
-async fn the_worker_reads_the_received_episode_once_a_day_for_fourteen_days() {
+async fn the_worker_runs_the_recheck_of_a_received_episode_once_a_day_has_passed() {
     const DAY: i64 = 24 * 60 * 60 * 1000;
     let env = Env::new().await;
     env.season_entry().await;
@@ -540,19 +419,14 @@ async fn the_worker_reads_the_received_episode_once_a_day_for_fourteen_days() {
     assert_eq!(rechecks_read(&env).await, 0);
 
     // Three days later: one reading, and no second one however often the loop
-    // looks the same day.
+    // looks the same day. (The daily rule and the fourteen days are
+    // `trss-jobs`'s: its `recheck` tests.)
     let start = env.h.clock.load(Ordering::SeqCst);
     env.h.clock.store(start + 3 * DAY, Ordering::SeqCst);
     assert!(rechecks_reach(&env, 1).await, "read on the third day");
     tokio::time::sleep(Duration::from_millis(400)).await;
     assert_eq!(rechecks_read(&env).await, 1);
 
-    // The next day another one; past the fourteenth day none.
-    env.h.clock.store(start + 4 * DAY + 1, Ordering::SeqCst);
-    assert!(rechecks_reach(&env, 2).await, "read on the fourth day");
-    env.h.clock.store(start + 20 * DAY, Ordering::SeqCst);
-    tokio::time::sleep(Duration::from_millis(400)).await;
-    assert_eq!(rechecks_read(&env).await, 2);
     // The fake source's files do not differ from what was received.
     assert_eq!(jobs.done_page(None, 10).await.unwrap().items.len(), 1);
 
