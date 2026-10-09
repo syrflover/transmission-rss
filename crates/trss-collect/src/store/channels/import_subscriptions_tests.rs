@@ -230,6 +230,11 @@ async fn a_replaced_rule_that_is_a_subscription_stays_as_it_is() {
         [(Some(20), None), (Some(22), Some("Team"))]
     );
     assert_eq!(f.snapshot(21), None);
+    // The plain rule the replacement matched keeps its ID and becomes the
+    // subscription at the import time.
+    let plain = &results[0].channel().rules[1];
+    assert_eq!(plain.id, existing.rules[1].id);
+    assert_eq!(plain.subscription.as_ref().unwrap().subscribed_at, 5_000);
 }
 
 #[tokio::test]
