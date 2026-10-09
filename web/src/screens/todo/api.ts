@@ -1,5 +1,6 @@
 import { api } from "@/lib/api";
 
+import type { EpisodeSegment } from "./episodeLine.ts";
 import type { TodoKind } from "./kinds";
 import type { ConfirmView, Placement, PlacementChoice, Relocation } from "./placementTypes";
 import type {
@@ -10,6 +11,8 @@ import type {
   ReplacementResult,
 } from "./replacementTypes";
 import type { UnpackResult } from "./unpack";
+
+export type { EpisodeSegment };
 
 export type { UnpackResult } from "./unpack";
 export type {
@@ -81,6 +84,8 @@ export interface AuthTodo extends Badged {
   season: number | null;
   /** The episodes that wait, as Anissia writes them (`"11"`, `"13.5"`). */
   episodes: string[];
+  /** `episodes` as runs. */
+  episode_segments: EpisodeSegment[];
   creator: string | null;
   /** Why, in a few words (`"CAPTCHA"`). */
   reason: string;
@@ -108,6 +113,8 @@ export interface ReceiveFailedTodo extends Badged {
   season: number | null;
   /** `revision`: the episodes whose replacement failed. Empty for `add_failed`. */
   episodes: string[];
+  /** `episodes` as runs. */
+  episode_segments: EpisodeSegment[];
   /** How many failures the to-do gathers. */
   count: number;
   /** The newest failure's reason. */
@@ -134,6 +141,8 @@ export interface EpisodeCheckTodo extends Badged {
   source_id: string;
   /** The episodes that fit nowhere; empty for an undecided mapping. */
   episodes: string[];
+  /** `episodes` as runs. */
+  episode_segments: EpisodeSegment[];
   /** Why the mapping is undecided; `null` when the mapping is decided and episodes do not fit. */
   reason: string | null;
   /** How many seasons and creators of the work need a check. */
@@ -212,6 +221,8 @@ export interface ReplacementTodo extends Badged {
   season: number | null;
   /** The episodes that wait for a decision, as numbers. */
   episodes: number[];
+  /** `episodes` as runs. */
+  episode_segments: EpisodeSegment[];
   creator: string | null;
   /** The job the card's `비교` opens. */
   job_id: string;
@@ -263,6 +274,8 @@ export interface FollowSuggestion {
   anime_no: number;
   /** The candidates' episodes as Anissia writes them, once each. */
   episodes: string[];
+  /** `episodes` as runs. */
+  episode_segments: EpisodeSegment[];
   /** How many creators have candidates. */
   creators: number;
   /** When the first candidate was seen (Unix ms). */
@@ -373,6 +386,8 @@ export interface JobRow {
   season: number | null;
   /** The items' episodes in order, as Anissia writes them. */
   episodes: string[];
+  /** `episodes` as runs, in numeric order. */
+  episode_segments: EpisodeSegment[];
   creator: string | null;
   /** The host of the posts (`kairan03.blogspot.com`). */
   source: string | null;

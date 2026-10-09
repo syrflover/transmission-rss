@@ -39,52 +39,6 @@ function shown(episode: string): string {
   return /^\d+$/.test(episode) ? episode.replace(/^0+(?=\d)/, "") : episode;
 }
 
-/** How many segments of the episode list the line names before it says `외 N개`. */
-const SEGMENTS = 3;
-
-export interface EpisodeLabel {
-  /** `11화`, `2–3화`, `2·5화`, `1–4·7화`: what is shown bold. */
-  label: string;
-  /** Episodes past the shortened list (`외 3개`); 0 when the list is whole. */
-  more: number;
-}
-
-/**
- * The episodes of a to-do or a job in a line: consecutive whole numbers as a
- * range (`2–3화`), the rest joined by `·`, and a long list shortened (`1–4·7화`
- * and `외 3개`). An empty list has no label.
- */
-export function episodeLabel(episodes: readonly string[]): EpisodeLabel | null {
-  if (episodes.length === 0) return null;
-  const segments: { text: string; count: number }[] = [];
-  let run: number[] = [];
-  const flush = () => {
-    if (run.length === 0) return;
-    const first = run[0];
-    const last = run[run.length - 1];
-    segments.push({ text: run.length === 1 ? String(first) : `${first}–${last}`, count: run.length });
-    run = [];
-  };
-  for (const episode of episodes) {
-    const text = shown(episode);
-    if (/^\d+$/.test(text)) {
-      const n = Number(text);
-      if (run.length > 0 && n === run[run.length - 1] + 1) run.push(n);
-      else {
-        flush();
-        run = [n];
-      }
-    } else {
-      flush();
-      segments.push({ text, count: 1 });
-    }
-  }
-  flush();
-  const head = segments.slice(0, SEGMENTS);
-  const more = segments.slice(SEGMENTS).reduce((sum, s) => sum + s.count, 0);
-  return { label: `${head.map((s) => s.text).join("·")}화`, more };
-}
-
 /** The episodes of a job or an item, whole, for the expanded row (`11, 12, 14화`). */
 export function episodeList(episodes: readonly string[]): string {
   return `${episodes.map(shown).join(", ")}화`;

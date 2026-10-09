@@ -13,11 +13,9 @@ import {
   type CandidateJob,
   type CandidateList,
   type CandidateMapping,
-  type EpisodeRange,
   type WorkEpisode,
 } from "../api";
-import { formatRanges } from "../model";
-import { episodeKey, numericKey } from "./episodeKey.ts";
+import { episodeKey, numericKey, segmentsText } from "./episodeKey.ts";
 import { episodeLabel, type EpisodeOrder } from "./model";
 
 /**
@@ -69,30 +67,6 @@ function compareEpisodes(a: string, b: string, order: EpisodeOrder): number {
   if (x !== null) return -1;
   if (y !== null) return 1;
   return a < b ? -1 : a > b ? 1 : 0;
-}
-
-/** `1–4·11–15화 · 0`: whole episode numbers as ranges of consecutive ones, then every other text as written. */
-export function episodeRange(texts: readonly string[]): string {
-  const whole = new Map<bigint, string>();
-  const others = new Set<string>();
-  for (const text of texts) {
-    const n = numericKey(text);
-    // `0` is what a creator registers before the first episode, not an episode of a range.
-    if (n !== null && n !== "0" && !n.includes(".")) whole.set(BigInt(n), n);
-    else others.add(text);
-  }
-  const ranges: EpisodeRange[] = [];
-  let last: bigint | null = null;
-  for (const n of [...whole.keys()].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))) {
-    const written = whole.get(n)!;
-    if (last !== null && n === last + 1n) ranges[ranges.length - 1].last = written;
-    else ranges.push({ first: written, last: written });
-    last = n;
-  }
-  const parts: string[] = [];
-  if (ranges.length > 0) parts.push(`${formatRanges(ranges)}화`);
-  parts.push(...[...others].sort());
-  return parts.join(" · ");
 }
 
 // --- categories and job states -------------------------------------------------------------
@@ -193,7 +167,7 @@ export interface CandidateGroup {
   rows: CandidateRow[];
   missing: number;
   revision: number;
-  /** The episodes the rows are about, as `1–4화`. */
+  /** The episodes the rows are about, as `1–4화` (the server names the runs). */
   range: string;
   /** The newest observation's `sort_at`. */
   latest: number;
@@ -262,7 +236,7 @@ export function groupsOf(
       rows,
       missing: rows.filter((r) => r.kind === "missing").length,
       revision: rows.filter((r) => r.kind === "revision").length,
-      range: episodeRange(rows.map((r) => r.candidate.episode)),
+      range: segmentsText(list.creator_episodes.find((c) => c.source_id === sourceId)?.episode_segments ?? []),
       latest: Math.max(...observed.map((c) => c.sort_at)),
     });
   }

@@ -130,7 +130,7 @@ function JobRowItem({ job }: { job: JobRow }) {
         />
         <span className="flex min-w-0 flex-col gap-1">
           <span className="line-clamp-2 min-w-0 text-[14.5px] leading-snug font-semibold">{job.title}</span>
-          <TargetLine episodes={episodes} creator={job.creator}>
+          <TargetLine segments={job.episode_segments} creator={job.creator}>
             <OriginTags job={job} />
           </TargetLine>
         </span>

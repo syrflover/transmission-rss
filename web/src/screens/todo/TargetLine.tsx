@@ -2,7 +2,7 @@ import type { ReactNode } from "react";
 
 import { cn } from "@/lib/utils";
 
-import { episodeLabel } from "./format";
+import { episodeLabel, type EpisodeSegment } from "./episodeLine.ts";
 import { SubtitleIcon } from "./icons";
 
 /**
@@ -11,17 +11,17 @@ import { SubtitleIcon } from "./icons";
  * (`children`). Never joined into one string with ` · `.
  */
 export function TargetLine({
-  episodes,
+  segments,
   creator,
   children,
   className,
 }: {
-  episodes: readonly string[];
+  segments: readonly EpisodeSegment[];
   creator: string | null;
   children?: ReactNode;
   className?: string;
 }) {
-  const label = episodeLabel(episodes);
+  const label = episodeLabel(segments);
   if (label === null && creator === null && !children) return null;
   return (
     <p className={cn("flex min-w-0 flex-wrap items-center gap-x-2.5 gap-y-1 text-[12.5px] leading-snug", className)}>

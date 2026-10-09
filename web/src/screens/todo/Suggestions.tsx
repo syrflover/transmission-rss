@@ -11,7 +11,7 @@ import { startDate } from "../collect/subs/format";
 import type { TitleCandidate } from "../collect/subs/api";
 import type { FollowSuggestion } from "./api";
 import { Tag } from "./badges";
-import { episodeRange } from "../library/detail/candidates";
+import { segmentsText } from "../library/detail/episodeKey.ts";
 
 /** One row of `제안`: a title candidate or an archive suggestion, in the shape the list shows. */
 export interface Suggestion {
@@ -98,7 +98,7 @@ export function fromFollow(s: FollowSuggestion): Suggestion {
     id: `follow:${s.work.id}`,
     kind: "follow",
     title: s.title,
-    detail: `${episodeRange(s.episodes)} · 자막 후보 ${s.creators}명`,
+    detail: `${segmentsText(s.episode_segments)} · 자막 후보 ${s.creators}명`,
     at: s.since,
     order: s.since,
     to: candidatesLink(s.work.id, s.season),

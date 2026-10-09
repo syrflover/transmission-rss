@@ -134,7 +134,7 @@ function AuthCard({ todo, season }: { todo: AuthTodo; season: SeasonTag }) {
         </Action>
       }
     >
-      <TargetLine episodes={todo.episodes} creator={todo.creator}>
+      <TargetLine segments={todo.episode_segments} creator={todo.creator}>
         {season(todo.season)}
         {todo.jobs > 1 && <Tag>작업 {todo.jobs}개</Tag>}
       </TargetLine>
@@ -146,7 +146,7 @@ function AuthCard({ todo, season }: { todo: AuthTodo; season: SeasonTag }) {
 function ReceiveFailedCard({ todo, season }: { todo: ReceiveFailedTodo; season: SeasonTag }) {
   return (
     <Card todo={todo} action={<Action to={receiveFailedPath(todo)}>{receiveFailedAction(todo)}</Action>}>
-      <TargetLine episodes={todo.episodes} creator={null}>
+      <TargetLine segments={todo.episode_segments} creator={null}>
         {season(todo.season)}
         <Tag>{todo.context === "revision" ? "영상 수정본" : "추가 실패"}</Tag>
         {todo.count > 1 && <Tag>{todo.count}개</Tag>}
@@ -164,7 +164,7 @@ function ReplacementCard({ todo, season }: { todo: ReplacementTodo; season: Seas
   const received = receivedLine(todo);
   return (
     <Card todo={todo} action={<Action to={jobPath(todo.job_id)}>비교</Action>}>
-      <TargetLine episodes={todo.episodes.map(String)} creator={todo.creator}>
+      <TargetLine segments={todo.episode_segments} creator={todo.creator}>
         {season(todo.season)}
         {todo.jobs > 1 && <Tag>작업 {todo.jobs}개</Tag>}
       </TargetLine>
@@ -191,7 +191,7 @@ function ReplacementCard({ todo, season }: { todo: ReplacementTodo; season: Seas
 function EpisodeCheckCard({ todo, season }: { todo: EpisodeCheckTodo; season: SeasonTag }) {
   return (
     <Card todo={todo} action={<Action to={episodeCheckPath(todo)}>회차 대응 정하기</Action>}>
-      <TargetLine episodes={todo.episodes} creator={todo.creator}>
+      <TargetLine segments={todo.episode_segments} creator={todo.creator}>
         <Tag>{todo.reason === null ? "어긋난 회차" : "대응 미정"}</Tag>
         {season(todo.season)}
         {todo.sources > 1 && <Tag>확인 {todo.sources}건</Tag>}
@@ -206,7 +206,7 @@ function PlacementCheckCard({ todo, season }: { todo: PlacementCheckTodo; season
   const job = { origin: todo.origin, creator: todo.creator, revision_of: null, revises_attributed: false };
   return (
     <Card todo={todo} action={<Action to={jobPath(todo.job_id)}>확인</Action>}>
-      <TargetLine episodes={[]} creator={todo.creator}>
+      <TargetLine segments={[]} creator={todo.creator}>
         {season(todo.season)}
         <OriginTags job={job} />
         {todo.source !== null && (
@@ -232,7 +232,7 @@ function VideoCheckCard({
   return (
     <Card todo={todo} action={<VideoCheckActions todo={todo} onRefresh={onRefresh} />}>
       <h3 className="min-w-0 text-[13.5px] leading-snug font-semibold [overflow-wrap:anywhere]">{todo.path}</h3>
-      <TargetLine episodes={[]} creator={null}>
+      <TargetLine segments={[]} creator={null}>
         {season(todo.season)}
       </TargetLine>
       <Reason>{todo.reason}</Reason>

@@ -3,6 +3,7 @@ import { forget, forgetPrefix } from "@/lib/cached";
 import type { Command } from "@/lib/commands";
 
 import { forgetWeek } from "../schedule/api";
+import type { EpisodeSegment } from "../todo/episodeLine.ts";
 import type { TodoKind } from "../todo/kinds";
 import type { FormatOrder, SubtitleFormat, WorkSubtitles } from "./detail/subtitles.ts";
 import type { WorkStorage } from "./storage.ts";
@@ -276,6 +277,10 @@ export interface WorkSeason {
   info: SeasonInfo;
   /** The Anissia anime the season is linked to. */
   anissia: AnissiaLink;
+  /** The episodes that have a video, as runs (`1–3`, `5`). */
+  video_ranges: string[];
+  /** The episodes that have a subtitle, as runs. */
+  subtitle_ranges: string[];
   /** Ascending. */
   episodes: WorkEpisode[];
 }
@@ -648,6 +653,8 @@ export interface CandidateList {
   refresh: Command | null;
   /** Newest first. */
   candidates: Candidate[];
+  /** The episodes each creator's candidates are about, as runs. */
+  creator_episodes: { source_id: string; episode_segments: EpisodeSegment[] }[];
   /** The sources' episode mappings to the season (the app's decision, or the user's). */
   mappings: CandidateMapping[];
   /** The episodes of the earlier seasons together when each is known (`0` for the first season); `null` otherwise. */

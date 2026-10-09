@@ -158,7 +158,7 @@ function Page({ job, prepare }: { job: JobDetail; prepare: ScreenPrepare }) {
               job.title
             )}
           </h1>
-          <TargetLine episodes={job.episodes} creator={job.creator} className="text-[14px] max-[720px]:text-[13px]">
+          <TargetLine segments={job.episode_segments} creator={job.creator} className="text-[14px] max-[720px]:text-[13px]">
             {job.season !== null && <Tag>시즌 {job.season}</Tag>}
             <OriginTags job={job} />
             {job.source !== null && <span className="min-w-0 text-xs text-text-muted [overflow-wrap:anywhere]">{job.source}</span>}

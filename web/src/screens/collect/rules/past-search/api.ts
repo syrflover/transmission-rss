@@ -76,8 +76,12 @@ export interface SearchResult {
   not_picked: number;
   /** The release numbers the work does not have. */
   missing: number[];
+  /** `missing` as runs (`4–6`, `9`). */
+  missing_ranges: string[];
   /** The missing ones no result is an episode of. */
   not_found: number[];
+  /** `not_found` as runs. */
+  not_found_ranges: string[];
   notes: string[];
   first_full: boolean;
   extra_sent: number;
@@ -139,16 +143,4 @@ export function rangeLabel(from: number, to: number, offset: number, season: num
   const s = `S${String(season).padStart(2, "0")}`;
   const e = (n: number) => String(n).padStart(2, "0");
   return first === last ? `${s}E${e(first)}` : `${s}E${e(first)}–${e(last)}`;
-}
-
-/** `4–6, 9` for ascending release numbers. */
-export function compress(numbers: number[]): string {
-  const parts: string[] = [];
-  for (let i = 0; i < numbers.length; ) {
-    let j = i;
-    while (j + 1 < numbers.length && numbers[j + 1] === numbers[j] + 1) j += 1;
-    parts.push(j > i ? `${numbers[i]}–${numbers[j]}` : String(numbers[i]));
-    i = j + 1;
-  }
-  return parts.join(", ");
 }

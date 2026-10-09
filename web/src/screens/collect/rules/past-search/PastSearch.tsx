@@ -11,7 +11,6 @@ import { btnAction, btnNeutral, hintClass, inputClass, labelClass } from "../../
 import { PickRow, ProgressRows, SelectionBar } from "../../subs/add/PastItems";
 import { useCommandRows } from "../../subs/add/useReceive";
 import {
-  compress,
   rangeLabel,
   receivePast,
   type ResultItem,
@@ -279,8 +278,8 @@ function ResultStep({
         )}
         {result.missing.length > 0 && (
           <p className={hintClass}>
-            범위에서 아직 없는 회차: {compress(result.missing)} ({result.missing.length}개)
-            {result.not_found.length > 0 && <> · 검색 결과에도 없는 회차: {compress(result.not_found)}</>}
+            범위에서 아직 없는 회차: {result.missing_ranges.join(", ")} ({result.missing.length}개)
+            {result.not_found.length > 0 && <> · 검색 결과에도 없는 회차: {result.not_found_ranges.join(", ")}</>}
           </p>
         )}
         {result.missing.length === 0 && <p className={hintClass}>범위의 회차가 모두 있어요.</p>}

@@ -1,5 +1,4 @@
-import type { EpisodeRange, FuzzyDate, SeasonInfo, WorkEpisode, WorkSeason } from "../api";
-import { formatRanges } from "../model";
+import type { FuzzyDate, SeasonInfo, WorkEpisode, WorkSeason } from "../api";
 import { shownEpisode } from "./episodeKey.ts";
 
 /**
@@ -16,26 +15,6 @@ export function rowId(season: number, episode: string): string {
   return `ep-s${season}-e${shownEpisode(episode)}`;
 }
 
-/** The ranges of consecutive whole-numbered episodes, then each other episode alone (as the library list does). */
-function rangesOf(episodes: readonly WorkEpisode[]): EpisodeRange[] {
-  const whole: { n: bigint; written: string }[] = [];
-  const others: string[] = [];
-  for (const { episode } of episodes) {
-    if (/^\d+$/.test(episode)) whole.push({ n: BigInt(episode), written: episode });
-    else others.push(episode);
-  }
-  whole.sort((a, b) => (a.n < b.n ? -1 : a.n > b.n ? 1 : 0));
-  const out: EpisodeRange[] = [];
-  let last: bigint | null = null;
-  for (const { n, written } of whole) {
-    if (last !== null && n === last + 1n) out[out.length - 1].last = written;
-    else out.push({ first: written, last: written });
-    last = n;
-  }
-  for (const written of others) out.push({ first: written, last: written });
-  return out;
-}
-
 export interface SeasonSummary {
   number: number;
   /** `영상 1–12화` or `영상 없음` (a recorded range when the folder is gone). */
@@ -45,15 +24,14 @@ export interface SeasonSummary {
 
 /** A season's tile text: the episodes that have a video, and those that have a subtitle. */
 export function summarize(season: WorkSeason, missing: boolean): SeasonSummary {
-  const line = (label: string, has: (e: WorkEpisode) => boolean) => {
-    const ranges = rangesOf(season.episodes.filter(has));
+  const line = (label: string, ranges: readonly string[]) => {
     if (ranges.length === 0) return `${label} 없음`;
-    return `${missing ? `${label} 기록` : label} ${formatRanges(ranges)}화`;
+    return `${missing ? `${label} 기록` : label} ${ranges.join("·")}화`;
   };
   return {
     number: season.number,
-    video: line("영상", (e) => e.video.length > 0),
-    subtitle: line("자막", (e) => e.subtitle.length > 0),
+    video: line("영상", season.video_ranges),
+    subtitle: line("자막", season.subtitle_ranges),
   };
 }
 
