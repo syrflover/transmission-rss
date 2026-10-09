@@ -192,7 +192,7 @@ const LEAVE_WITHIN: Duration = Duration::from_secs(3);
 /// The most characters of a dialog's message that are sent.
 const DIALOG_MESSAGE: usize = 1000;
 /// The most characters of a prompt's text, sent or answered.
-const DIALOG_TEXT: usize = 2000;
+pub(super) const DIALOG_TEXT: usize = 2000;
 /// How long the dismissal of a dialog no one answers may take when its hub
 /// goes.
 const DISMISS_WITHIN: Duration = Duration::from_secs(2);
@@ -206,12 +206,23 @@ pub struct Viewport {
     pub touch: bool,
 }
 
+/// The least width or height of a device's viewport.
+pub(super) const MIN_SIDE: u32 = 200;
+/// The most width or height of a device's viewport.
+pub(super) const MAX_SIDE: u32 = 4096;
+/// The least pixel ratio of a device's viewport.
+pub(super) const MIN_DPR: f64 = 0.5;
+/// The most pixel ratio of a device's viewport.
+pub(super) const MAX_DPR: f64 = 4.0;
+/// The most characters of one `text` input.
+pub(super) const MAX_TEXT: usize = 2000;
+
 impl Viewport {
-    fn valid(&self) -> bool {
-        (200..=4096).contains(&self.width)
-            && (200..=4096).contains(&self.height)
+    pub(super) fn valid(&self) -> bool {
+        (MIN_SIDE..=MAX_SIDE).contains(&self.width)
+            && (MIN_SIDE..=MAX_SIDE).contains(&self.height)
             && self.dpr.is_finite()
-            && (0.5..=4.0).contains(&self.dpr)
+            && (MIN_DPR..=MAX_DPR).contains(&self.dpr)
     }
 }
 
@@ -432,7 +443,8 @@ fn command_of(message: &Incoming, view: &View) -> Option<(&'static str, Value)> 
         }
         Incoming::Text { text, .. } => {
             let length = text.chars().count();
-            (length > 0 && length <= 2000).then(|| ("Input.insertText", json!({ "text": text })))
+            (length > 0 && length <= MAX_TEXT)
+                .then(|| ("Input.insertText", json!({ "text": text })))
         }
         Incoming::Viewport(_)
         | Incoming::Reload

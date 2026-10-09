@@ -963,6 +963,36 @@ impl App {
     }
 }
 
+/// The numbers are the server's, which the screen kept a copy of before: the
+/// last page a search answers, and how many candidates one job takes.
+#[tokio::test]
+async fn the_search_and_the_candidates_tell_the_limits_the_screen_keeps_within() {
+    let app = App::new().await;
+    app.catalogue();
+    let (_, found) = app.search(1, json!({ "q": "Sayonara Lara" })).await;
+    assert_eq!(found["max_page"], 100);
+    // The last page is taken and the page after it is refused.
+    let (status, last) = app
+        .search(1, json!({ "q": "Sayonara Lara", "page": 100 }))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{last}");
+    assert_eq!(last["page"], 100);
+    assert_eq!(last["max_page"], 100);
+    let (status, _) = app
+        .search(1, json!({ "q": "Sayonara Lara", "page": 101 }))
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    // Both answers of the candidates carry the job's limit: with no link and with one.
+    assert_eq!(app.candidates(1).await["max_job_candidates"], 200);
+    app.schedule_3320();
+    let (status, linked) = app
+        .link(1, json!({ "version": 0, "anime_no": 3320, "week": 3 }))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{linked}");
+    assert_eq!(app.candidates(1).await["max_job_candidates"], 200);
+}
+
 #[tokio::test]
 async fn candidates_of_a_season_with_no_link_are_none() {
     let app = App::new().await;

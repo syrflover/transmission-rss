@@ -67,10 +67,17 @@
 //!     }],
 //!     "cleaning": [{ "id": "…", "name": "Show - 01.ass", "state": "held",
 //!                    "reason": "작품 폴더를 찾지 못했어요" }]
-//!   }
+//!   },
+//!   "upload_limits": { "files": 500, "entries": 2000, "total_bytes": 1073741824,
+//!                      "file_bytes": 209715200 },
+//!   "cover_max_bytes": 10485760
 //! }
 //! ```
 //!
+//! - `upload_limits` is what an upload of subtitle files is held to
+//!   ([`trss_jobs::upload::Limits`]): the screen checks a pick against it
+//!   before it sends the files. `cover_max_bytes` is the most bytes of a cover
+//!   image a person uploads.
 //! - `name` is the work's folder name and `folder_path` the folder itself (the
 //!   watch folder's path and the name). A work whose folder is gone (`missing`)
 //!   answers what was recorded last; the screen shows it as the last record,
@@ -502,6 +509,24 @@ struct WorkDetailView {
     cover_pending: bool,
     storage: StorageView,
     subtitles: SubtitlesView,
+    /// What an upload of subtitle files is held to, which the screen checks
+    /// before it sends the files.
+    upload_limits: UploadLimitsView,
+    /// The most bytes of a cover image a person uploads.
+    cover_max_bytes: usize,
+}
+
+/// The limits of an upload (`trss_jobs::upload::Limits`) the screen shows.
+#[derive(Serialize)]
+struct UploadLimitsView {
+    /// The most files sent in one upload.
+    files: usize,
+    /// The most files a person picks, those not sent included.
+    entries: usize,
+    /// The most bytes of all the files sent together.
+    total_bytes: u64,
+    /// The most bytes of one file.
+    file_bytes: u64,
 }
 
 /// The work's `자막` card: the format order its first apply uses and the
@@ -1077,6 +1102,16 @@ async fn show(
         cover_pending,
         storage: StorageView::from(files),
         subtitles,
+        upload_limits: {
+            let limits = state.uploads.limits();
+            UploadLimitsView {
+                files: limits.files,
+                entries: limits.entries,
+                total_bytes: limits.total_bytes,
+                file_bytes: limits.file_bytes,
+            }
+        },
+        cover_max_bytes: trss_anilist::MAX_IMAGE_BYTES,
     }))
 }
 

@@ -168,6 +168,26 @@ fn names(page: &Value) -> Vec<&str> {
         .collect()
 }
 
+/// The number is the library's, which the screen kept a copy of before.
+#[tokio::test]
+async fn a_seasons_info_tells_how_many_entries_it_links_at_most() {
+    let env = env(vec![work("Show", &[1, 2], vec![])]).await;
+    let id = env.id("Show").await;
+    let (_, info) = get(&env.state, &format!("/library/works/{id}/seasons/1/info")).await;
+    assert_eq!(info["max_entries"], 8);
+    // The work's detail carries the same info for each season.
+    let (_, detail) = get(&env.state, &format!("/library/works/{id}")).await;
+    assert_eq!(detail["seasons"][1]["info"]["max_entries"], 8);
+    // That many are taken and one more is not.
+    let (status, refused) = post(
+        &env.state,
+        &format!("/library/works/{id}/seasons/1/links"),
+        json!({ "version": 1, "anilist_ids": [1, 2, 3, 4, 5, 6, 7, 8, 9] }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+}
+
 #[tokio::test]
 async fn a_season_without_a_link_is_unknown_and_never_filled_from_another_season() {
     let env = env(vec![work(

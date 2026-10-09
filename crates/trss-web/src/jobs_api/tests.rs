@@ -9,7 +9,7 @@ use tower::ServiceExt;
 
 use super::*;
 use trss_core::{Db, DbError};
-use trss_jobs::{ItemState, JobRun, JobState, NewItem};
+use trss_jobs::{place::unpack::UNPACK_TRIES, ItemState, JobRun, JobState, NewItem};
 
 const ANIME: i64 = 3424;
 
@@ -977,13 +977,14 @@ async fn each_received_archive_says_what_came_of_unpacking_it() {
     // subtitle nor a font.
     assert_eq!(
         unpack("pack.zip"),
-        json!({ "state": "done", "reason": null, "tries": 0, "retry_at": null, "first": null,
+        json!({ "state": "done", "reason": null, "tries": 0, "max_tries": UNPACK_TRIES,
+                 "retry_at": null, "first": null,
                  "files": 4, "subtitles": 1, "fonts": 1 })
     );
     assert_eq!(
         unpack("s.part1.rar"),
         json!({ "state": "failed", "reason": "나뉜 압축 파일의 조각이 모자라요", "tries": 0,
-                 "retry_at": null, "first": null, "files": null, "subtitles": null, "fonts": null })
+                 "max_tries": UNPACK_TRIES, "retry_at": null, "first": null, "files": null, "subtitles": null, "fonts": null })
     );
     assert_eq!(unpack("s.part3.rar")["state"], "volume");
     assert_eq!(unpack("s.part3.rar")["first"], "s.part1.rar");
@@ -991,7 +992,8 @@ async fn each_received_archive_says_what_came_of_unpacking_it() {
     // the latest, or none once a worker started since.
     assert_eq!(
         unpack("full.zip"),
-        json!({ "state": "retry", "reason": "디스크가 찼어요", "tries": 1, "retry_at": 3600005,
+        json!({ "state": "retry", "reason": "디스크가 찼어요", "tries": 1, "max_tries": UNPACK_TRIES,
+                 "retry_at": 3600005,
                  "first": null, "files": null, "subtitles": null, "fonts": null })
     );
     // Not tried yet: nothing (what each state is, and the tries, is tested in

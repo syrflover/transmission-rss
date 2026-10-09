@@ -126,6 +126,39 @@ async fn answers_the_work_with_its_seasons_files_and_leftovers() {
     assert_eq!(body["rules"], serde_json::json!([]));
 }
 
+/// The numbers are the server's, which the screen kept a copy of before: the
+/// upload limits of `trss_jobs::upload::Limits` and the cover's image size.
+#[tokio::test]
+async fn the_work_tells_the_limits_of_an_upload_and_of_a_cover_for_the_screen_to_keep_within() {
+    let (state, id) = state_with_work().await;
+    let (_, body) = get(&state, &format!("/library/works/{id}")).await;
+    assert_eq!(
+        body["upload_limits"],
+        serde_json::json!({
+            "files": 500, "entries": 2000, "total_bytes": 1_073_741_824_u64,
+            "file_bytes": 209_715_200_u64
+        })
+    );
+    assert_eq!(body["cover_max_bytes"], 10 * 1024 * 1024);
+
+    // They are what the uploads of this web are held to.
+    let area = trss_jobs::ReceiveArea::new(std::env::temp_dir().join("trss-no-upload"));
+    let limits = trss_jobs::upload::Limits {
+        files: 3,
+        entries: 7,
+        total_bytes: 100,
+        file_bytes: 50,
+        ..Default::default()
+    };
+    let uploads = trss_jobs::Uploads::new(state.job_requests.clone(), area).with_limits(limits);
+    let state = state.with_uploads(uploads);
+    let (_, body) = get(&state, &format!("/library/works/{id}")).await;
+    assert_eq!(
+        body["upload_limits"],
+        serde_json::json!({ "files": 3, "entries": 7, "total_bytes": 100, "file_bytes": 50 })
+    );
+}
+
 /// The rule is `trss_core::episode`'s; this is where the answer carries it: a
 /// season's runs, and the episode texts the screen shows.
 #[tokio::test]

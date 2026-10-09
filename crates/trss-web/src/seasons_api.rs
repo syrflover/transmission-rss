@@ -25,7 +25,7 @@
 //!   "episodes": 13, "studios": ["A-1 Pictures"], "genres": ["Action"],
 //!   "anilist_url": "https://anilist.co/anime/143270",
 //!   "synopsis": ["First paragraph.", "Second paragraph."],
-//!   "suggestions": [] }
+//!   "suggestions": [], "max_entries": 8 }
 //! ```
 //!
 //! - `version` goes with every change of the links: a change made from an older
@@ -44,6 +44,8 @@
 //!   unknown. `synopsis` is the first entry's description as plain text in
 //!   paragraphs; it carries no markup, and the screen puts it on the page as
 //!   text.
+//! - `max_entries` is the most entries `links` takes
+//!   ([`trss_library::seasons::MAX_ENTRIES`]).
 //! - `anilist_url` is the first entry's AniList page, `null` without one.
 //! - `suggestions` are the `SEQUEL` entries of the previous season's last
 //!   entry, offered while the season has no entry; they link nothing until the
@@ -192,6 +194,8 @@ pub struct SeasonInfoView {
     anilist_url: Option<String>,
     synopsis: Option<Vec<String>>,
     suggestions: Vec<SuggestionView>,
+    /// The most AniList entries a season links.
+    max_entries: usize,
 }
 
 /// The info of `link`. `previous` is the link of the season before it (its
@@ -243,6 +247,7 @@ pub fn season_view(
             .into_iter()
             .map(SuggestionView::from)
             .collect(),
+        max_entries: trss_library::seasons::MAX_ENTRIES,
     }
 }
 

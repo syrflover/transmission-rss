@@ -28,7 +28,11 @@
 //!   new binding with a later `bound`, to connect to anew. `popup` (with
 //!   `run`) says the page shown is not the one the run was bound with: a
 //!   screen follows a page the run opened (a popup), for a find job and a
-//!   site's check alike.
+//!   site's check alike. `limits` (with `run`) is what the socket takes, for
+//!   the device to keep within: `{ "min_side", "max_side", "min_dpr",
+//!   "max_dpr", "max_message_bytes", "max_prompt_text" }`. The device needs
+//!   the viewport before the socket exists, so this answer is the earliest
+//!   one that has them.
 //!
 //! # Tabs: switching and closing
 //!
@@ -217,7 +221,10 @@ use trss_browser::client::LauncherClient;
 use trss_jobs::Screen;
 
 pub use hub::{admits, Binding, Times, View, Viewport, MAX_SOCKETS};
-use hub::{ended_message, Handled, Hub, Incoming, OpenError};
+use hub::{
+    ended_message, Handled, Hub, Incoming, OpenError, DIALOG_TEXT, MAX_DPR, MAX_SIDE, MIN_DPR,
+    MIN_SIDE,
+};
 
 use super::{commands_api::now_millis, env::BrowserAccess, ApiError, AppState};
 
@@ -369,7 +376,36 @@ pub struct ScreenView {
     /// With `run`: the page shown is a page the post opened, which a person
     /// may close (`POST .../screen/close`).
     pub popup: bool,
+    /// With `run`: what the socket takes, for the device to keep within.
+    pub limits: Option<ScreenLimits>,
 }
+
+/// What the socket of a screen takes, which a device keeps within so that the
+/// server need not refuse it: the screen draws no copy of these numbers.
+#[derive(Debug, Clone, Copy, Serialize, PartialEq)]
+pub struct ScreenLimits {
+    /// The least width or height (CSS pixels) of the viewport it takes.
+    pub min_side: u32,
+    /// The most width or height of the viewport.
+    pub max_side: u32,
+    /// The least pixel ratio of the viewport.
+    pub min_dpr: f64,
+    /// The most pixel ratio of the viewport.
+    pub max_dpr: f64,
+    /// The most bytes of one message of the socket.
+    pub max_message_bytes: usize,
+    /// The most characters of a prompt's answer.
+    pub max_prompt_text: usize,
+}
+
+const LIMITS: ScreenLimits = ScreenLimits {
+    min_side: MIN_SIDE,
+    max_side: MAX_SIDE,
+    min_dpr: MIN_DPR,
+    max_dpr: MAX_DPR,
+    max_message_bytes: MAX_MESSAGE,
+    max_prompt_text: DIALOG_TEXT,
+};
 
 const NO_BROWSER: &str =
     "이 웹 서버는 서버 브라우저에 연결돼 있지 않아 원격 화면을 보여줄 수 없어요";
@@ -382,10 +418,12 @@ fn view_of(state: &AppState, screen: Screen) -> ScreenView {
             bound: None,
             note: Some(NO_BROWSER.to_owned()),
             popup: false,
+            limits: None,
         };
     }
     ScreenView {
         state: screen.state.code(),
+        limits: screen.run_id.is_some().then_some(LIMITS),
         run: screen.run_id,
         bound: screen.bound_at,
         note: screen.note,

@@ -178,6 +178,28 @@ async fn the_name_is_optional_trimmed_and_returned() {
     assert_eq!(listed, [Value::Null, Value::Null, json!("Feed B")]);
 }
 
+/// The editor of a channel not yet added has no channel to read the limit
+/// from, so the list carries it.
+#[tokio::test]
+async fn the_list_tells_how_long_a_name_may_be_even_with_no_channel() {
+    let app = App::new();
+    let (_, _, list) = app.call(Method::GET, "/api/channels", None).await;
+    assert_eq!(list["channels"], json!([]));
+    assert_eq!(list["name_max_chars"], 100);
+    // That many characters are taken and one more is not.
+    let url = format!("https://feed.example/rss?token={TOKEN}");
+    for (length, status) in [(100, StatusCode::CREATED), (101, StatusCode::BAD_REQUEST)] {
+        let (got, text, _) = app
+            .call(
+                Method::POST,
+                "/api/channels",
+                Some(json!({ "url": url, "name": "가".repeat(length) })),
+            )
+            .await;
+        assert_eq!(got, status, "{length}: {text}");
+    }
+}
+
 #[tokio::test]
 async fn an_unusable_name_is_refused_without_echoing_the_request() {
     let app = App::new();

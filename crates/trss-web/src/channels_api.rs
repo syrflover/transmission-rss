@@ -3,7 +3,7 @@
 //!
 //! | call                                        | success                          |
 //! | ------------------------------------------- | -------------------------------- |
-//! | `GET /channels`                             | `200 { channels: [ChannelView] }`|
+//! | `GET /channels`                             | `200 { channels: [ChannelView], name_max_chars }` |
 //! | `POST /channels`                            | `201 ChannelView`                |
 //! | `GET /channels/{id}`                        | `200 ChannelView`                |
 //! | `PUT /channels/{id}`                        | `200 ChannelView`                |
@@ -159,6 +159,9 @@ fn view(channel: &Channel, rule_count: usize) -> ChannelView {
 #[derive(Serialize)]
 struct ChannelList {
     channels: Vec<ChannelView>,
+    /// The most characters of a channel's display name, for the editor to
+    /// keep within (a new channel has none to carry it).
+    name_max_chars: usize,
 }
 
 #[derive(Serialize)]
@@ -422,7 +425,10 @@ async fn list_channels(State(state): State<AppState>) -> Result<Json<ChannelList
         .iter()
         .map(|c| view(&c.channel, c.rules.len()))
         .collect();
-    Ok(Json(ChannelList { channels }))
+    Ok(Json(ChannelList {
+        channels,
+        name_max_chars: NAME_MAX_CHARS,
+    }))
 }
 
 async fn get_channel(

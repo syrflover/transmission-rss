@@ -785,6 +785,53 @@ async fn a_socket_from_another_site_for_a_job_not_waiting_or_for_an_ended_run_is
     assert!(seen.others.is_empty());
 }
 
+/// What a screen's socket takes, as the device is told (and as the device kept
+/// to before it was told).
+fn the_socket_takes() -> Value {
+    json!({
+        "min_side": 200, "max_side": 4096, "min_dpr": 0.5, "max_dpr": 4.0,
+        "max_message_bytes": 65536, "max_prompt_text": 2000
+    })
+}
+
+#[tokio::test]
+async fn a_screen_with_a_run_tells_the_device_what_the_socket_takes_and_one_without_tells_none() {
+    let s = setup(true).await;
+    s.waiting_on("run-1").await;
+    let (_, screen) = s
+        .http("POST", &format!("/api/subtitle-jobs/{}/screen", s.job))
+        .await;
+    assert_eq!(screen["limits"], the_socket_takes());
+    // The limits are the ones the socket holds a device to.
+    for (width, accepted) in [(199, false), (200, true), (4096, true), (4097, false)] {
+        let viewport = Viewport {
+            width,
+            height: 800,
+            dpr: 1.0,
+            touch: false,
+        };
+        assert_eq!(viewport.valid(), accepted, "width {width}");
+    }
+    for (dpr, accepted) in [(0.49, false), (0.5, true), (4.0, true), (4.01, false)] {
+        let viewport = Viewport {
+            width: 800,
+            height: 800,
+            dpr,
+            touch: false,
+        };
+        assert_eq!(viewport.valid(), accepted, "dpr {dpr}");
+    }
+
+    s.screens()
+        .unbind(&s.job, "run-1", trss_jobs::screen::RUN_ENDED, 2_000)
+        .await
+        .unwrap();
+    let (_, closed) = s
+        .http("GET", &format!("/api/subtitle-jobs/{}", s.job))
+        .await;
+    assert_eq!(closed["screen"]["limits"], Value::Null);
+}
+
 #[tokio::test]
 async fn a_web_without_the_server_browser_shows_no_screen() {
     let s = setup(false).await;
@@ -817,7 +864,8 @@ async fn reading_the_job_and_the_lists_asks_for_no_run_and_opening_its_page_does
         .await;
     assert_eq!(
         detail["screen"],
-        json!({ "state": "ready", "run": "run-1", "bound": 1000, "note": null, "popup": false })
+        json!({ "state": "ready", "run": "run-1", "bound": 1000, "note": null, "popup": false,
+                 "limits": the_socket_takes() })
     );
     assert!(s.screens().prepare_requests().await.unwrap().is_empty());
     assert_eq!(s.woken(), 0);
@@ -829,7 +877,8 @@ async fn reading_the_job_and_the_lists_asks_for_no_run_and_opening_its_page_does
     assert_eq!(status, 200);
     assert_eq!(
         screen,
-        json!({ "state": "ready", "run": "run-1", "bound": 1000, "note": null, "popup": false })
+        json!({ "state": "ready", "run": "run-1", "bound": 1000, "note": null, "popup": false,
+                 "limits": the_socket_takes() })
     );
     assert_eq!(s.woken(), 1);
     // The web itself starts nothing.

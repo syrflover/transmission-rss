@@ -24,7 +24,8 @@
 //!   copy and stored file), what came of unpacking each received archive
 //!   (`unpack`: unpacked with how many files, not unpacked with why, waiting
 //!   for the next try after this machine failed one, with which try failed
-//!   and when the next goes, or a later volume of a split archive), its
+//!   and when the next goes out of `max_tries`, or a later volume of a split
+//!   archive), its
 //!   folder in the receive area, its
 //!   log, newest first, and its remote screen (`screen`, see [`super::screen_api`];
 //!   `null` for none). It reads only: it never asks for a browser run.
@@ -235,7 +236,7 @@ const DONE_FIRST: usize = 5;
 const DONE_PAGE: usize = 20;
 const DONE_PAGE_MAX: usize = 50;
 /// The most candidates one job takes.
-const MAX_CANDIDATES: usize = 200;
+pub(crate) const MAX_CANDIDATES: usize = 200;
 
 fn internal(e: &dyn std::fmt::Display) -> ApiError {
     ApiError::Internal(e.to_string())
@@ -500,6 +501,9 @@ struct UnpackView {
     /// `failed` the try after them that the archive's own reason ended; 0
     /// for none.
     tries: u32,
+    /// How many tries an archive gets in all
+    /// ([`trss_jobs::place::unpack::UNPACK_TRIES`]).
+    max_tries: u32,
     /// For `retry`: when the next try goes at the latest; `null` when a
     /// worker started since, which tries it at its next run.
     retry_at: Option<i64>,
@@ -674,6 +678,7 @@ fn unpack_view(
         state,
         reason: None,
         tries,
+        max_tries: trss_jobs::place::unpack::UNPACK_TRIES,
         retry_at: None,
         first: None,
         files: None,

@@ -34,8 +34,9 @@
 //!   name, without empty or repeated ones. They are text to read, nothing is
 //!   searched with them.
 //! - `search` looks `q` up in Anissia's full anime list, finished anime
-//!   included, one page of up to 30 at a time. `page` counts from 1. `q` is
-//!   required: an empty one answers `400`. The list matches Korean titles
+//!   included, one page of up to 30 at a time. `page` counts from 1 up to the
+//!   answer's `max_page`. The answer is `{ "q", "items", "has_next", "page",
+//!   "max_page" }`. `q` is required: an empty one answers `400`. The list matches Korean titles
 //!   (the native title of an AniList entry and the folder names of a library
 //!   rarely hit), so nothing is searched until the user writes a query,
 //!   reading the link's `reference_titles`. When Anissia does not answer, or
@@ -73,7 +74,7 @@
 //!     { "source_id": "6f0c…", "kind": "auto", "offset": -12,
 //!       "evidence": "13화가 1화 방영 뒤에 올라왔고 앞 시즌 회차 수(12)만큼 이어 셌어요",
 //!       "decided_at": 1790780400000, "version": 4, "exceptions": [] } ],
-//!   "previous_episodes": 12, "season_episodes": 12 }
+//!   "previous_episodes": 12, "season_episodes": 12, "max_job_candidates": 200 }
 //! ```
 //!
 //! - `candidates` are newest first by `sort_at`: the update time, or the time
@@ -123,7 +124,9 @@
 //!   together when each is known (`0` for the first season), `null` otherwise:
 //!   the sum `앞 시즌에 이어 셈` subtracts. `season_episodes` is the season's own
 //!   episode count `N` as the app measures a mapping against (the AniList count, else the highest
-//!   scheduled episode), `null` when it is not known.
+//!   scheduled episode), `null` when it is not known. `max_job_candidates` is
+//!   the most candidates one job takes (`POST /api/subtitle-jobs`), for the
+//!   screen to ask for no more.
 
 use std::collections::{BTreeMap, HashMap};
 
@@ -428,6 +431,8 @@ struct SearchView {
     items: Vec<CandidateView>,
     has_next: bool,
     page: u32,
+    /// The last page a search answers; a page past it is refused.
+    max_page: u32,
 }
 
 /// The sentence for a search Anissia did not answer, whatever the failure. The
@@ -505,6 +510,7 @@ async fn search(
         items: found.page.entries.iter().map(CandidateView::from).collect(),
         has_next: !found.page.last,
         page,
+        max_page: MAX_PAGE,
     }))
 }
 
@@ -683,6 +689,8 @@ struct CandidatesView {
     previous_episodes: Option<u32>,
     /// The season's episode count `N` (AniList, else the highest scheduled episode), when it is known.
     season_episodes: Option<u32>,
+    /// The most candidates one job takes (`POST /api/subtitle-jobs`).
+    max_job_candidates: usize,
 }
 
 impl From<&trss_collect::store::anissia::Candidate> for CandidateObservation {
@@ -755,6 +763,7 @@ async fn candidates(
             mappings: Vec::new(),
             previous_episodes: None,
             season_episodes: None,
+            max_job_candidates: super::jobs_api::MAX_CANDIDATES,
         }));
     };
     let picks = state
@@ -841,5 +850,6 @@ async fn candidates(
         mappings,
         previous_episodes: facts.previous,
         season_episodes: facts.total,
+        max_job_candidates: super::jobs_api::MAX_CANDIDATES,
     }))
 }
