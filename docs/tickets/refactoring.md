@@ -83,7 +83,7 @@ workspace 테스트 한 번에 새 DB를 약 1,814번 열어요. 테스트별 �
 | 회차 대응의 계산과 까닭 문구 | trss-jobs의 `mapping`과, 대응한 회차를 배치 대상이나 까닭 문구로 바꾸는 5곳이었어요. trss-collect도 회차 이동을 따로 더했어요. [0105](0105-episode-mapping-in-library.md)에서 trss-library의 `mapping`과 `mapping::reason`으로 옮겼어요. | trss-library(ADR 0015가 회차 대응의 주인으로 적은 곳) | 화면 문구는 글자 그대로 둬요. |
 | 웹이 다시 구현한 규칙 | worker가 살아 있는지 판정(웹의 상태와 편성 API), 할 일 집계(약 630줄), 규칙 미리보기의 분류, 폴더 검사 2벌, 날짜·분기·자막 형식·방영 시각 계산이에요. 폴더 검사는 [0096](0096-file-and-path-helpers.md)에서 trss-core의 `folder_check`로 모았어요. 할 일 집계와 화면이 다시 계산하던 변경 합계·배지는 [0106](0106-todo-aggregation-in-jobs.md)에서 trss-jobs의 `todo`로 옮겼어요. 나머지와 자막 작업 줄기의 웹 규칙 아홉 곳은 [0111](0111-web-and-screen-rules.md)에서 주인 크레이트로 옮겼어요. | 살아 있음 판정은 trss-core의 하트비트, 할 일 집계는 trss-jobs([모듈 구성](../specs/web-app.md#공통-라이브러리의-모듈-구성)의 작업 관리), 미리보기 분류는 trss-collect, 폴더 검사는 trss-core. 수정본 `다시 받기`를 trss-collect의 판정보다 먼저 거절하는 `in_place`는 그 순서가 웹의 것이라 웹에 둬요. | JSON 모양. 미리보기와 실제 처리가 같은 결과. 웹의 사전 검사는 worker의 실행 검사를 대신하지 않아요. |
 | 화면이 다시 계산하는 규칙 | 변경 합계, 배지, 회차 범위 5벌, 앞자리 0 지우기 3벌, 같은 날 공유본 판정 2벌, 서버 한도 숫자예요. 변경 합계와 배지는 [0106](0106-todo-aggregation-in-jobs.md)에서, 나머지는 [0111](0111-web-and-screen-rules.md)에서 모았어요. | 서버가 계산해 보내요. 입력하는 동안의 미리보기도 서버의 미리보기 요청으로 계산해요(사용자 결정, 2026-10-09). 요일 이름 6벌과 크기 표기 2벌처럼 표기만 하는 것과, 보는 사람의 시간대를 쓰는 같은 날 공유본 판정은 화면의 한 모듈이에요(사용자 결정, 2026-10-09). | 화면에 보이는 내용. 크기 표기의 `22 KB`와 `22KB`처럼 화면이 달라지는 통일은 따로 커밋해요. |
-| 작은 도우미 | 파일 존재 확인, 기록한 파일 지우기, 16진수 표기, 내려받는 중인 `.part`, 폴더 fsync, 파일 이름 다듬기 4벌, 앱 데이터 폴더 이름, 경로 정규화 3벌, `/proc/net/route` 읽기 2벌, 바쁨 응답, worker 깨우기 14곳, 같은 요청 ID 받기 4벌, 실행 task와 종료 유예 4–5벌이에요. | 쓰는 곳들의 가장 아래 크레이트 | 서버 브라우저의 파일 이름 다듬기는 trss-jobs가 다시 다듬는 두 단계 설계예요([0096](0096-file-and-path-helpers.md)에서 확인). 파일 존재 확인, 기록한 파일 지우기, 16진수 표기, `.part`, 앱 데이터 폴더 이름, 경로 정규화는 0096에서 모았어요. 같은 요청 ID 받기는 [0107](0107-split-job-store.md)에서 작업 만들기 3벌을 trss-jobs의 함수 하나로 모았고, 명령 큐의 것은 키와 견주는 것이 달라 따로 둬요(사용자 결정, 2026-10-09). 실행 task와 종료 유예는 [0108](0108-split-job-runner.md)에서 동작이 같은 수집 주기와 자막 작업 실행만 trss-worker의 함수 하나로 모았어요. |
+| 작은 도우미 | 파일 존재 확인, 기록한 파일 지우기, 16진수 표기, 내려받는 중인 `.part`, 폴더 fsync, 파일 이름 다듬기 4벌, 앱 데이터 폴더 이름, 경로 정규화 3벌, `/proc/net/route` 읽기 2벌, 바쁨 응답, worker 깨우기 14곳, 같은 요청 ID 받기 4벌, 실행 task와 종료 유예 4–5벌이에요. | 쓰는 곳들의 가장 아래 크레이트 | 서버 브라우저의 파일 이름 다듬기는 trss-jobs가 다시 다듬는 두 단계 설계예요([0096](0096-file-and-path-helpers.md)에서 확인). 파일 존재 확인, 기록한 파일 지우기, 16진수 표기, `.part`, 앱 데이터 폴더 이름, 경로 정규화는 0096에서 모았어요. 같은 요청 ID 받기는 [0107](0107-split-job-store.md)에서 작업 만들기 3벌을 trss-jobs의 함수 하나로 모았고, 명령 큐의 것은 키와 견주는 것이 달라 따로 둬요(사용자 결정, 2026-10-09). 실행 task와 종료 유예는 [0108](0108-split-job-runner.md)에서 동작이 같은 수집 주기와 자막 작업 실행만 trss-worker의 함수 하나로 모았어요. `/proc/net/route` 읽기, 바쁨 응답, worker 깨우기는 [0112](0112-small-helpers-and-test-helpers.md)에서 trss-core의 `net_route`, trss-web의 `ApiError` 변환, trss-core의 `wake_worker_if`로 모았어요. 표를 읽지 못할 때 웹은 시작하지 않고 송신 프록시는 빈 표로 보는 차이는 그대로예요. |
 
 ### 수집 받기 줄기의 재구성
 
@@ -129,8 +129,8 @@ worker 잠금은 멈춘 worker가 마지막 하트비트 뒤에 따로 띄운 ta
 
 - trss-web의 `folders_on_different_filesystems_are_refused`는 `/proc`를 훑어 혼자 4.9초가 걸리고, trss-collect의 같은 이름 테스트와 같은 규칙을 확인해요. 웹 쪽은 ADR 0015대로 정리해요.
 - 웹 API 테스트 461개 중 70–110개가 다른 크레이트의 규칙을 다시 확인한다고 추정했어요. 그 규칙의 영역을 정리할 때 함께 나눠요.
-- 가짜 AniList와 가짜 Anissia의 같은 뼈대, 웹 테스트 모듈 19곳의 요청 도우미, ZIP 만들기 4벌, 루프백 서버 띄우기 약 14곳은 하나로 모아요.
-- trss-subtitles의 `testing.rs`에 섞인 테스트 20개는 도우미와 떼어요.
+- 가짜 AniList와 가짜 Anissia의 같은 뼈대, 웹 테스트 모듈 19곳의 요청 도우미, ZIP 만들기 4벌, 루프백 서버 띄우기 약 14곳은 하나로 모아요. [0112](0112-small-helpers-and-test-helpers.md)에서 trss-core의 `loopback`과 `fake_http`, trss-web의 `testing`, trss-archive의 `testing`(사용자 결정, 2026-10-10)으로 모았어요.
+- trss-subtitles의 `testing.rs`에 섞인 테스트 20개는 도우미와 떼어요. 0112에서 `testing/tests.rs`로 옮겼어요.
 
 ### 영역별 검증 표
 
