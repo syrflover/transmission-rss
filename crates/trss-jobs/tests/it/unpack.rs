@@ -17,6 +17,7 @@ use std::{
 
 use rusqlite::params;
 use tokio_util::sync::CancellationToken;
+use trss_archive::testing::{deflated_zip, zip_with_dirs, Entry, Method};
 use trss_core::Db;
 use trss_jobs::{
     area::ReceiveArea,
@@ -870,10 +871,7 @@ async fn an_empty_archive_is_not_tried_again() {
         .await
         .unwrap();
     let d = s.detail(&id).await;
-    let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
-    zip.add_directory("Fonts/", zip::write::SimpleFileOptions::default())
-        .unwrap();
-    let folder_only = zip.finish().unwrap().into_inner();
+    let folder_only = zip_with_dirs(&[Entry::Dir("Fonts/")], Method::Deflated);
     replace_bytes(&s, &d.items[0].files[0], &folder_only).await;
     s.store
         .run
@@ -1226,19 +1224,6 @@ async fn upload(s: &Setup, command: &str, files: &[(&str, Vec<u8>)]) -> (String,
         ),
         other => panic!("{other:?}"),
     }
-}
-
-/// A ZIP of `members`, deflated.
-fn deflated_zip(members: &[(&str, &[u8])]) -> Vec<u8> {
-    use std::io::Write;
-    let options = zip::write::SimpleFileOptions::default()
-        .compression_method(zip::CompressionMethod::Deflated);
-    let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
-    for (name, bytes) in members {
-        zip.start_file(*name, options).unwrap();
-        zip.write_all(bytes).unwrap();
-    }
-    zip.finish().unwrap().into_inner()
 }
 
 // Bombs and a password (ticket 0065): each archive alone is not unpacked,

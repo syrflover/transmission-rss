@@ -129,12 +129,7 @@ fn a_zip_that_lies_about_its_size_in_the_directory_is_refused() {
 /// so that the declared size passes the checks made before it is written.
 fn zip_that_declares(declared_size: u32, deflated: bool) -> Vec<u8> {
     let mut bytes = if deflated {
-        let mut writer = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
-        let options = zip::write::SimpleFileOptions::default()
-            .compression_method(zip::CompressionMethod::Deflated);
-        writer.start_file("a.ass", options).unwrap();
-        std::io::Write::write_all(&mut writer, &sample(5000, 1)).unwrap();
-        writer.finish().unwrap().into_inner()
+        trss_archive::testing::deflated_zip(&[("a.ass", &sample(5000, 1))])
     } else {
         zip_of(&[("a.ass", &sample(5000, 1))])
     };

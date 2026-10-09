@@ -13,6 +13,7 @@ use sha2::{Digest, Sha256};
 use tempfile::TempDir;
 use trss_archive::{
     run::{Unpacked, Unpacker},
+    testing::{zip_of, Method},
     Refusal,
 };
 
@@ -93,21 +94,6 @@ impl Case {
     }
 }
 
-fn zip_of(entries: &[(&str, &[u8])], deflate: bool) -> Vec<u8> {
-    let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
-    let method = if deflate {
-        zip::CompressionMethod::Deflated
-    } else {
-        zip::CompressionMethod::Stored
-    };
-    let options = zip::write::SimpleFileOptions::default().compression_method(method);
-    for (name, bytes) in entries {
-        writer.start_file(*name, options).unwrap();
-        writer.write_all(bytes).unwrap();
-    }
-    writer.finish().unwrap().into_inner()
-}
-
 fn hex_sha256(bytes: &[u8]) -> String {
     Sha256::digest(bytes)
         .iter()
@@ -155,7 +141,7 @@ fn a_zip_is_unpacked_by_the_child() {
     let b = vec![7u8; 5000];
     let part = case.write(
         "pack.zip",
-        &zip_of(&[("sub/a.ass", &a), ("b.srt", &b)], true),
+        &zip_of(&[("sub/a.ass", &a), ("b.srt", &b)], Method::Deflated),
     );
     let unpacker = Unpacker::new(EXTRACT);
     let Unpacked::Done(members) = case.run(&unpacker, &[part], "pack.zip") else {
@@ -179,7 +165,10 @@ fn a_zip_is_unpacked_by_the_child() {
 fn a_zip_bomb_is_refused_and_leaves_nothing() {
     let case = Case::new();
     let zeros = vec![0u8; 24 << 20];
-    let part = case.write("bomb.zip", &zip_of(&[("zeros.bin", &zeros)], true));
+    let part = case.write(
+        "bomb.zip",
+        &zip_of(&[("zeros.bin", &zeros)], Method::Deflated),
+    );
     let unpacked = case.run(&Unpacker::new(EXTRACT), &[part], "bomb.zip");
     assert!(
         matches!(
@@ -194,7 +183,7 @@ fn a_zip_bomb_is_refused_and_leaves_nothing() {
 #[test]
 fn a_refusal_of_the_child_is_passed_on() {
     let case = Case::new();
-    let part = case.write("esc.zip", &zip_of(&[("../x.ass", b"x")], false));
+    let part = case.write("esc.zip", &zip_of(&[("../x.ass", b"x")], Method::Stored));
     let unpacked = case.run(&Unpacker::new(EXTRACT), &[part], "esc.zip");
     assert!(
         matches!(unpacked, Unpacked::Refused(Refusal::Path { .. })),
@@ -264,7 +253,7 @@ fn a_cancellation_kills_the_child_and_leaves_nothing() {
     case.assert_no_output();
 
     // Cancelled from the start, the child is not started.
-    let part = case.write("pack2.zip", &zip_of(&[("a.ass", b"x")], false));
+    let part = case.write("pack2.zip", &zip_of(&[("a.ass", b"x")], Method::Stored));
     let unpacked = case.run_cancelled(&Unpacker::new(EXTRACT), &[part], "pack2.zip", &|| true);
     assert_eq!(unpacked, Unpacked::Cancelled);
     case.assert_no_output();
@@ -273,7 +262,7 @@ fn a_cancellation_kills_the_child_and_leaves_nothing() {
 #[test]
 fn a_child_that_crashes_or_cannot_start_is_a_failure() {
     let case = Case::new();
-    let part = case.write("pack.zip", &zip_of(&[("a.ass", b"x")], false));
+    let part = case.write("pack.zip", &zip_of(&[("a.ass", b"x")], Method::Stored));
     for program in ["/bin/false", "/nonexistent/trss-extract"] {
         let unpacked = case.run(
             &Unpacker::new(program),
@@ -304,7 +293,7 @@ fn a_child_that_crashes_or_cannot_start_is_a_failure() {
 #[test]
 fn what_the_child_prints_is_not_believed() {
     let case = Case::new();
-    let part = case.write("pack.zip", &zip_of(&[("a.ass", b"x")], false));
+    let part = case.write("pack.zip", &zip_of(&[("a.ass", b"x")], Method::Stored));
     let digest = hex_sha256(b"x");
     let answers = [
         // A path out of the folder.
@@ -344,7 +333,7 @@ fn an_output_folder_that_is_there_is_replaced() {
     let case = Case::new();
     std::fs::create_dir_all(case.out()).unwrap();
     std::fs::write(case.out().join("old"), b"left from before").unwrap();
-    let part = case.write("pack.zip", &zip_of(&[("a.ass", b"new")], false));
+    let part = case.write("pack.zip", &zip_of(&[("a.ass", b"new")], Method::Stored));
     let Unpacked::Done(members) = case.run(&Unpacker::new(EXTRACT), &[part], "pack.zip") else {
         panic!("not unpacked");
     };
@@ -355,7 +344,7 @@ fn an_output_folder_that_is_there_is_replaced() {
 #[test]
 fn a_failure_the_child_reports_is_a_failure_and_not_a_refusal() {
     let case = Case::new();
-    let part = case.write("pack.zip", &zip_of(&[("a.ass", b"x")], false));
+    let part = case.write("pack.zip", &zip_of(&[("a.ass", b"x")], Method::Stored));
     let reason = "압축을 풀 자리에 쓰지 못했어요: No space left on device (os error 28)";
     let program = case.script("full.sh", &format!("echo '{{\"failed\":\"{reason}\"}}'"));
     let unpacked = case.run(&Unpacker::new(&program), &[part], "pack.zip");
@@ -366,7 +355,7 @@ fn a_failure_the_child_reports_is_a_failure_and_not_a_refusal() {
 #[test]
 fn a_failure_the_child_reports_is_believed_only_when_it_could_be_one() {
     let case = Case::new();
-    let part = case.write("pack.zip", &zip_of(&[("a.ass", b"x")], false));
+    let part = case.write("pack.zip", &zip_of(&[("a.ass", b"x")], Method::Stored));
     let answers = [
         // No reason, a line break and a control character in it, too long.
         r#"{"failed":""}"#.to_owned(),
@@ -397,7 +386,7 @@ fn a_failure_the_child_reports_is_believed_only_when_it_could_be_one() {
 #[test]
 fn a_folder_the_child_cannot_write_in_is_a_failure_and_not_a_broken_archive() {
     let case = Case::new();
-    let part = case.write("pack.zip", &zip_of(&[("a.ass", b"x")], false));
+    let part = case.write("pack.zip", &zip_of(&[("a.ass", b"x")], Method::Stored));
     // The unpacker makes the parent of `out`; the child cannot make `out` in
     // it. Nothing stops a user that may write anywhere, such as root.
     let work = case.dir.path().join("work");

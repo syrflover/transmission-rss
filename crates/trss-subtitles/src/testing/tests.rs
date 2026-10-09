@@ -1,8 +1,9 @@
 use sha2::{Digest, Sha256};
+use trss_archive::testing::deflated_zip;
 use url::Url;
 
 use super::*;
-use crate::{verify, FailureKind, FileInfo, Opened, Source};
+use crate::{FailureKind, FileInfo, Opened, Source};
 
 const SRT: &[u8] = b"1\n00:00:01,000 --> 00:00:02,000\nHi\n";
 
@@ -25,7 +26,7 @@ async fn files(source: &Source, post: &Url) -> Vec<crate::PostFile> {
 #[tokio::test]
 async fn a_zip_comes_whole_with_no_cookie_or_referer() {
     let server = SourceServer::start().await;
-    let zip = verify::zip_of(&[("Seihantai - 24.srt", SRT)]);
+    let zip = deflated_zip(&[("Seihantai - 24.srt", SRT)]);
     server.post(
         "sumomomo",
         492,
@@ -327,7 +328,7 @@ async fn a_page_from_drive_instead_of_the_file_is_a_classified_failure() {
 #[tokio::test]
 async fn a_redirect_is_followed_on_the_cdn_with_no_referer_and_stopped_elsewhere() {
     let server = SourceServer::start().await;
-    let zip = verify::zip_of(&[("a.srt", SRT)]);
+    let zip = deflated_zip(&[("a.srt", SRT)]);
     server.post(
         "blog",
         1,
@@ -569,7 +570,7 @@ async fn drive_and_the_cdn_set_a_cookie_the_sources_never_send() {
 /// 공룡이's post of 네죽사 8화 (2026-10-03): a ZIP of 1~8화 and the ASS
 /// of 8화, inside the inner frame.
 fn elaina(server: &SourceServer) -> (Url, Vec<u8>, Vec<u8>) {
-    let zip = verify::zip_of(&[("네죽사 08.ass", crate::fake::ass("08").as_slice())]);
+    let zip = deflated_zip(&[("네죽사 08.ass", crate::fake::ass("08").as_slice())]);
     let ass = crate::fake::ass("Kimi ga Shinu 08");
     server.naver_post(
         "elainalove1017",

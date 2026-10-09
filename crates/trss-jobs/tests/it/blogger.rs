@@ -4,6 +4,7 @@
 
 use crate::{world::Base, Handles};
 use std::time::Duration;
+use trss_archive::testing::deflated_zip;
 
 use sha2::{Digest, Sha256};
 use tokio_util::sync::CancellationToken;
@@ -23,7 +24,7 @@ use trss_subtitles::{
         BLOGGER_MODIFIED, DRIVE_MODIFIED,
     },
     tistory::TistorySource,
-    verify, Sources,
+    Sources,
 };
 
 struct Setup {
@@ -143,7 +144,7 @@ async fn individual_links_give_only_the_chosen_episodes_file_and_the_fonts_once(
         .map(|(w, id)| (w.as_str(), id.as_str()))
         .collect();
     let url = post(&s, "2026/07/2.html", &links);
-    let fonts = verify::zip_of(&[("얼음폰트.ttf", b"font")]);
+    let fonts = deflated_zip(&[("얼음폰트.ttf", b"font")]);
     s.server
         .drive("1fontsOfThePost", file("얼음폰트.zip", fonts.clone()));
     for n in 13..=24 {
@@ -228,14 +229,14 @@ async fn a_zip_of_a_range_is_received_once_for_its_episodes_as_a_zip() {
         .iter()
         .map(|(n, b)| (n.as_str(), b.as_slice()))
         .collect();
-    let zip = verify::zip_of(&members);
+    let zip = deflated_zip(&members);
     s.server.drive(
         "10EFK_9-G9VPVFy08Zuit88H0ciLJMFKq",
         file("그랑블루3 1-12.zip", zip.clone()),
     );
     s.server.drive(
         "1yiOdJ6YbwrbGmJ4gVMGeLfhdk4w0dAwM",
-        file("그랑블루폰트.zip", verify::zip_of(&[("a.ttf", b"font")])),
+        file("그랑블루폰트.zip", deflated_zip(&[("a.ttf", b"font")])),
     );
     let id = make(&s.store, "c1", &[("11", url.clone()), ("12", url.clone())]).await;
     // An episode the range does not hold: the post has changed.

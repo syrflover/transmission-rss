@@ -41,17 +41,17 @@ fn a_zip_unpacks_with_its_folders_and_korean_names() {
 
 #[test]
 fn a_deflated_zip_unpacks() {
-    use std::io::Write;
+    use trss_archive::testing::{zip_with_dirs, Entry, Method};
     let (a, _) = files();
     let case = Case::new();
-    let mut writer = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
-    let options = zip::write::SimpleFileOptions::default()
-        .compression_method(zip::CompressionMethod::Deflated);
-    writer.start_file("sub/a.ass", options).unwrap();
-    writer.write_all(&a).unwrap();
-    writer.add_directory("sub2/", options).unwrap();
-    writer.start_file("sub2/empty.txt", options).unwrap();
-    let bytes = writer.finish().unwrap().into_inner();
+    let bytes = zip_with_dirs(
+        &[
+            Entry::File("sub/a.ass", &a),
+            Entry::Dir("sub2/"),
+            Entry::File("sub2/empty.txt", b""),
+        ],
+        Method::Deflated,
+    );
     let members = case.unpack("pack.zip", &bytes).unwrap();
     let contents = case.contents(&members);
     assert_eq!(contents["sub/a.ass"], a);

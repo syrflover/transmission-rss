@@ -1,4 +1,5 @@
 use std::{path::Path, time::Duration};
+use trss_archive::testing::deflated_zip;
 
 use axum::{
     body::Body,
@@ -13,7 +14,6 @@ use super::*;
 use crate::testing;
 use trss_core::{Db, DbError};
 use trss_jobs::{upload::Limits, ReceiveArea, Uploads};
-use trss_subtitles::verify::zip_of;
 
 const BOUNDARY: &str = "----trss-test-boundary";
 const ASS: &[u8] = b"\xEF\xBB\xBF[Script Info]\nTitle: x\n\n[Events]\nDialogue: 0,0:00:01.00,0:00:02.00,Default,,0,0,0,,Hi\n";
@@ -307,7 +307,7 @@ async fn a_rar_a_7z_and_a_zip_tell_their_archive_in_the_detail_and_a_subtitle_te
         &Form::to("a1", 1, None)
             .file("pack.part1.rar", &rar)
             .file("pack.7z.001", &sevenz)
-            .file("z.zip", &zip_of(&[("a.srt", SRT)]))
+            .file("z.zip", &deflated_zip(&[("a.srt", SRT)]))
             .file("01.ass", ASS),
     )
     .await;

@@ -3,6 +3,7 @@ use axum::{
     Router,
 };
 use serde_json::{json, Value};
+use trss_archive::testing::deflated_zip;
 
 use super::*;
 use crate::testing;
@@ -575,8 +576,7 @@ async fn a_tistory_receipt_shows_its_format_and_failures_by_class_and_no_signed_
             spec("x", "x.zip", "1KB"),
         ])],
     );
-    let zip =
-        trss_subtitles::verify::zip_of(&[("a.srt", b"1\n00:00:01,000 --> 00:00:02,000\nx\n")]);
+    let zip = deflated_zip(&[("a.srt", b"1\n00:00:01,000 --> 00:00:02,000\nx\n")]);
     server.file("z", vec![FileAnswer::Refused, FileAnswer::Bytes(zip)]);
     server.file("p", vec![FileAnswer::Page]);
     server.file("x", vec![FileAnswer::Refused]);

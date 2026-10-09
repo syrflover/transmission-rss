@@ -2947,6 +2947,7 @@ dependencies = [
  "sha2",
  "tar",
  "tempfile",
+ "trss-archive",
  "zip",
 ]
 
@@ -3111,6 +3112,7 @@ dependencies = [
  "tempfile",
  "thiserror",
  "tokio",
+ "trss-archive",
  "trss-browser",
  "trss-core",
  "url",
@@ -3153,6 +3155,7 @@ dependencies = [
  "tower-http 0.7.1",
  "trss-anilist",
  "trss-anissia",
+ "trss-archive",
  "trss-browser",
  "trss-collect",
  "trss-core",

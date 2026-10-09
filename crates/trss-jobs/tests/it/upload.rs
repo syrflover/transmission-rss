@@ -8,6 +8,7 @@ use crate::{
     Handles,
 };
 use std::time::Duration;
+use trss_archive::testing::deflated_zip;
 
 use trss_jobs::{
     upload::{Counts, Dropped, Limits, UploadError, UploadRequest, UPLOAD_SLOTS},
@@ -603,7 +604,7 @@ async fn the_zips_of_one_upload_share_one_inflation_budget() {
         ..Limits::default()
     });
     let body = vec![b'a'; 64 * 1024];
-    let zip = trss_subtitles::verify::zip_of(&[("a.srt", &body)]);
+    let zip = deflated_zip(&[("a.srt", &body)]);
     let staging = stage(
         &uploads,
         &[("1.zip", &zip), ("2.zip", &zip), ("3.zip", &zip)],
@@ -651,10 +652,7 @@ async fn archives_of_every_format_are_kept_whole_and_one_that_is_none_is_dropped
     let mut tar = b"readme.txt".to_vec();
     tar.resize(300, 0);
     tar[257..262].copy_from_slice(b"ustar");
-    let zip = trss_subtitles::verify::zip_of(&[(
-        "a.srt",
-        b"1\r\n00:00:01,000 --> 00:00:02,000\r\nHi\r\n",
-    )]);
+    let zip = deflated_zip(&[("a.srt", b"1\r\n00:00:01,000 --> 00:00:02,000\r\nHi\r\n")]);
     let files: Vec<(&str, Vec<u8>, Archive)> = vec![
         ("a.rar", b"Rar!\x1A\x07\x00 volume".to_vec(), Archive::Rar),
         (
@@ -855,7 +853,7 @@ async fn the_volumes_of_a_split_archive_are_kept_with_the_volume_that_has_the_ma
 
     // A spanned ZIP: the last part `.zip` holds the end records but cannot be
     // read alone, and the volumes `.z01` and `.z02` start with a spanning mark.
-    let whole = trss_subtitles::verify::zip_of(&[("a.srt", &vec![b'a'; 4096])]);
+    let whole = deflated_zip(&[("a.srt", &vec![b'a'; 4096])]);
     let made = upload_of(
         &s,
         "vzip",
@@ -1000,7 +998,7 @@ async fn a_file_dropped_by_its_content_is_not_stored_whatever_its_name_says() {
 async fn a_zip_stays_whole_in_the_package_and_one_cut_short_is_dropped_with_its_reason() {
     use trss_subtitles::{upload::Kind, verify::Format};
     let s = setup().await;
-    let zip = trss_subtitles::verify::zip_of(&[
+    let zip = deflated_zip(&[
         ("01.ass", ASS),
         ("fonts/Font.ttf", &ttf()),
         ("readme.txt", b"hi"),

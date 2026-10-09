@@ -447,8 +447,9 @@ fn is_microdvd_line(line: &[u8]) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use trss_archive::testing::deflated_zip;
+
     use super::*;
-    use crate::verify::zip_of;
 
     const ASS: &[u8] = b"\xEF\xBB\xBF[Script Info]\nTitle: x\n\n[Events]\n";
     const SRT: &[u8] = b"1\r\n00:00:01,000 --> 00:00:02,500\r\nHello\r\n";
@@ -576,10 +577,10 @@ mod tests {
 
     #[test]
     fn a_zip_is_kept_as_it_is_when_it_reads_to_its_end() {
-        let zip = zip_of(&[("a.srt", SRT), ("readme.txt", b"hello")]);
+        let zip = deflated_zip(&[("a.srt", SRT), ("readme.txt", b"hello")]);
         assert_eq!(judged(&zip), kept_archive(Format::Zip, Archive::Zip));
         // A ZIP is a ZIP whatever its name says, and its members are not judged here.
-        let only_text = zip_of(&[("readme.txt", b"hello")]);
+        let only_text = deflated_zip(&[("readme.txt", b"hello")]);
         assert_eq!(judged(&only_text), kept_archive(Format::Zip, Archive::Zip));
         // Cut short.
         assert!(dropped(&zip[..zip.len() / 2]).contains("ZIP"));
@@ -606,7 +607,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("a.zip");
         // 64 KiB of text inflates to more than a 1 KiB budget.
-        std::fs::write(&path, zip_of(&[("a.srt", &vec![b'a'; 64 * 1024])])).unwrap();
+        std::fs::write(&path, deflated_zip(&[("a.srt", &vec![b'a'; 64 * 1024])])).unwrap();
         let mut budget = 1024;
         assert!(matches!(
             judge(&path, &mut budget),
@@ -614,7 +615,7 @@ mod tests {
         ));
         // Spent budgets drop the next ZIP without reading it.
         let small = dir.path().join("b.zip");
-        std::fs::write(&small, zip_of(&[("a.srt", SRT)])).unwrap();
+        std::fs::write(&small, deflated_zip(&[("a.srt", SRT)])).unwrap();
         let mut spent = 0;
         assert!(matches!(
             judge(&small, &mut spent),
@@ -701,7 +702,7 @@ mod tests {
 
     #[test]
     fn a_zip_that_cannot_be_read_alone_comes_back_as_bad_zip_not_dropped() {
-        let zip = zip_of(&[("a.srt", SRT)]);
+        let zip = deflated_zip(&[("a.srt", SRT)]);
         assert!(matches!(judged(&zip[..zip.len() / 2]), Verdict::BadZip(_)));
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("a.zip");

@@ -3,6 +3,10 @@ name = "trss-archive"
 version.workspace = true
 edition.workspace = true
 
+# `testing`: sample ZIPs for the tests of the crates that read or receive one.
+[features]
+test-support = []
+
 [dependencies]
 bzip2.workspace = true
 encoding_rs.workspace = true
@@ -20,6 +24,8 @@ tar.workspace = true
 zip.workspace = true
 
 [dev-dependencies]
+# Turns the feature on for `tests/it`, which sees the crate as any other.
+trss-archive = { workspace = true, features = ["test-support"] }
 # Make the sample archives of the tests; the app only reads.
 rars = { workspace = true, features = ["write"] }
 sevenz-rust2 = { workspace = true, features = ["compress"] }

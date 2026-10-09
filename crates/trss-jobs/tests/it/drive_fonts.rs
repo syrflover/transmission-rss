@@ -13,6 +13,7 @@ use std::{
     path::{Path, PathBuf},
     time::Duration,
 };
+use trss_archive::testing::deflated_zip;
 
 use tokio_util::sync::CancellationToken;
 use trss_core::{Clock, Db, DbError};
@@ -31,7 +32,7 @@ use trss_subtitles::{
         blogger_page, drive_link, naver_file, DriveAnswer, FileAnswer, PostAnswer, SourceServer,
         DRIVE_FILES, DRIVE_MODIFIED,
     },
-    verify, Sources,
+    Sources,
 };
 
 const WORK: &str = "w1";
@@ -488,7 +489,7 @@ async fn a_zip_whose_font_is_kept_is_received_whole_and_adds_no_font() {
     s.font(font_file(FONT));
     s.episode(1).await;
 
-    let zip = verify::zip_of(&[("Font.ttf", FONT)]);
+    let zip = deflated_zip(&[("Font.ttf", FONT)]);
     s.server.drive(
         "1fontsInAZipFile",
         vec![DriveAnswer::File {
@@ -704,7 +705,7 @@ async fn episode_2_waiting(s: &Setup) -> String {
         "1moreFontsInAZip",
         vec![DriveAnswer::File {
             name: "더 많은 폰트.zip".to_owned(),
-            bytes: verify::zip_of(&[("Other.ttf", OTHER_FONT)]),
+            bytes: deflated_zip(&[("Other.ttf", OTHER_FONT)]),
         }],
     );
     let url = s.post(

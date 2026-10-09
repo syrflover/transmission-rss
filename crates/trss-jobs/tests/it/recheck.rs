@@ -11,6 +11,7 @@ use crate::{
     Handles,
 };
 use std::sync::Arc;
+use trss_archive::testing::deflated_zip;
 
 use sha2::{Digest, Sha256};
 use tokio_util::sync::CancellationToken;
@@ -436,7 +437,7 @@ async fn a_drive_file_whose_size_changed_three_days_after_makes_a_revision_job_a
 #[tokio::test]
 async fn a_tistory_post_whose_modified_time_changed_with_the_same_total_is_not_received_again() {
     let w = World::new().await;
-    let zip = verify::zip_of(&[("Show - 05.srt", SRT_A)]);
+    let zip = deflated_zip(&[("Show - 05.srt", SRT_A)]);
     let post = w.server.post_url("sumomomo", 491);
     w.server.post(
         "sumomomo",
@@ -472,7 +473,7 @@ async fn a_tistory_post_whose_modified_time_changed_with_the_same_total_is_not_r
     assert!(seen.iter().all(|s| s.method != "HEAD"));
 
     // The file itself grew: now it is received again.
-    let bigger = verify::zip_of(&[("Show - 05.srt", SRT_B)]);
+    let bigger = deflated_zip(&[("Show - 05.srt", SRT_B)]);
     w.server.file("z1", vec![FileAnswer::Bytes(bigger.clone())]);
     let report = w.recheck_at(3 * DAY + HOUR).await;
     assert_eq!((report.changed, report.jobs.len()), (1, 1));
@@ -709,7 +710,7 @@ async fn a_size_that_differs_between_the_receipt_and_the_recheck_makes_one_job_n
 async fn a_tistory_attachment_deleted_and_attached_again_is_received_again() {
     let w = World::new().await;
     let post = w.server.post_url("sumomomo", 491);
-    let zip = verify::zip_of(&[("Show - 05.srt", SRT_A)]);
+    let zip = deflated_zip(&[("Show - 05.srt", SRT_A)]);
     w.server.post(
         "sumomomo",
         491,
@@ -726,7 +727,7 @@ async fn a_tistory_attachment_deleted_and_attached_again_is_received_again() {
 
     // The creator deleted the attachment and attached the fixed file: a new
     // address (so a new key) with the same name.
-    let fixed_zip = verify::zip_of(&[("Show - 05.srt", SRT_B)]);
+    let fixed_zip = deflated_zip(&[("Show - 05.srt", SRT_B)]);
     w.server.post(
         "sumomomo",
         491,
@@ -763,7 +764,7 @@ async fn a_tistory_attachment_deleted_and_attached_again_is_received_again() {
 async fn a_post_that_still_offers_its_other_files_but_not_the_missing_one_is_only_missing() {
     let w = World::new().await;
     let post = w.server.post_url("sumomomo", 491);
-    let zip = verify::zip_of(&[("Show - 05.srt", SRT_A)]);
+    let zip = deflated_zip(&[("Show - 05.srt", SRT_A)]);
     w.server.post(
         "sumomomo",
         491,

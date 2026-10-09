@@ -4,6 +4,7 @@
 
 use crate::{world::Base, Handles};
 use std::time::Duration;
+use trss_archive::testing::deflated_zip;
 
 use sha2::{Digest, Sha256};
 use tokio_util::sync::CancellationToken;
@@ -18,7 +19,7 @@ use trss_subtitles::{
     drive::Drive,
     naver::{self, NaverSource},
     testing::{naver_file, FileAnswer, PostAnswer, SourceServer, NAVER_PUBLISHED},
-    verify, Sources,
+    Sources,
 };
 
 struct Setup {
@@ -187,7 +188,7 @@ async fn an_attachment_inside_the_inner_frame_is_received_with_the_posts_fonts()
 #[tokio::test]
 async fn a_zip_of_a_range_and_the_episodes_file_are_both_received() {
     let s = setup().await;
-    let zip = verify::zip_of(&[("네죽사 08.ass", b"[Script Info]\r\n".as_slice())]);
+    let zip = deflated_zip(&[("네죽사 08.ass", b"[Script Info]\r\n".as_slice())]);
     let ass = trss_subtitles::fake::ass("Kimi ga Shinu 08");
     let ass_name = "[SubsPlease] Kimi ga Shinu made Koi wo Shitai - 08 (1080p) [F3B053C5].ass";
     s.server.naver_post(

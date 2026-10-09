@@ -32,12 +32,15 @@ trss-anissia.workspace = true
 trss-anilist.workspace = true
 reqwest.workspace = true
 trss-subtitles = { workspace = true, features = ["test-support"] }
+# The sample ZIPs of the tests (`trss_archive::testing`).
+trss-archive = { workspace = true, features = ["test-support"] }
 serde_json.workspace = true
 tempfile.workspace = true
 # `test-util`: the remote-screen and find tests wait the page follower's and
 # the finish's polls in paused time (`start_paused`).
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "fs", "io-util", "time", "test-util"] }
-# The archives the child process of `tests/extract_process.rs` unpacks.
+# The archive of 500,000 members that the child process of
+# `tests/extract_process.rs` unpacks, which only this writer makes.
 zip.workspace = true
 # Encodes the CP949 subtitles the comparison tests read (`tests/it/replace.rs`).
 encoding_rs.workspace = true

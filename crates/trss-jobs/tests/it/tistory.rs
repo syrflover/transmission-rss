@@ -7,6 +7,7 @@ use crate::{
     Handles,
 };
 use std::time::Duration;
+use trss_archive::testing::deflated_zip;
 
 use sha2::{Digest, Sha256};
 use tokio_util::sync::CancellationToken;
@@ -20,7 +21,7 @@ use trss_jobs::{
 use trss_subtitles::{
     testing::{spec, FileAnswer, PostAnswer, SourceServer, BODY_OPEN, CDN},
     tistory::TistorySource,
-    verify, Sources,
+    Sources,
 };
 
 const SRT: &[u8] = b"1\n00:00:01,000 --> 00:00:02,000\nHello\n";
@@ -121,7 +122,7 @@ fn posts_read(s: &Setup) -> usize {
 #[tokio::test]
 async fn a_tistory_post_goes_through_open_and_receive_and_leaves_its_zip_with_size_and_sha256() {
     let s = setup().await;
-    let zip = verify::zip_of(&[("Seihantai - 24.srt", SRT)]);
+    let zip = deflated_zip(&[("Seihantai - 24.srt", SRT)]);
     s.server.post(
         "sumomomo",
         492,
@@ -334,8 +335,8 @@ async fn a_missing_post_fails_as_missing_and_a_drive_folder_post_waits_for_a_sou
 #[tokio::test]
 async fn every_file_of_a_post_is_received_once_for_the_episodes_it_serves() {
     let s = setup().await;
-    let series = verify::zip_of(&[("01.srt", SRT), ("02.srt", SRT)]);
-    let font = verify::zip_of(&[("Hotori.ttf", b"\x00\x01\x00\x00")]);
+    let series = deflated_zip(&[("01.srt", SRT), ("02.srt", SRT)]);
+    let font = deflated_zip(&[("Hotori.ttf", b"\x00\x01\x00\x00")]);
     let smi = b"<SAMI>\n<BODY>\n<SYNC Start=1000><P>hi\n</BODY></SAMI>".to_vec();
     s.server.post(
         "isulbi",
@@ -483,7 +484,7 @@ async fn no_signed_address_reaches_the_records_or_the_log() {
         "a",
         vec![
             FileAnswer::Refused,
-            FileAnswer::Bytes(verify::zip_of(&[("a.srt", SRT)])),
+            FileAnswer::Bytes(deflated_zip(&[("a.srt", SRT)])),
         ],
     );
     s.server.file("b", vec![FileAnswer::Page]);

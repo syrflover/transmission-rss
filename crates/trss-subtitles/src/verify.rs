@@ -404,22 +404,10 @@ fn claimed_members(file: &mut File) -> io::Result<Claimed> {
     )
 }
 
-/// A ZIP of `members` (name, bytes), deflated: for the tests.
-#[cfg(any(test, feature = "test-support"))]
-pub fn zip_of(members: &[(&str, &[u8])]) -> Vec<u8> {
-    use std::io::Write;
-    let mut out = zip::ZipWriter::new(io::Cursor::new(Vec::new()));
-    let options = zip::write::SimpleFileOptions::default()
-        .compression_method(zip::CompressionMethod::Deflated);
-    for (name, bytes) in members {
-        out.start_file(*name, options).unwrap();
-        out.write_all(bytes).unwrap();
-    }
-    out.finish().unwrap().into_inner()
-}
-
 #[cfg(test)]
 mod tests {
+    use trss_archive::testing::{deflated_zip, zip_of, Method};
+
     use super::*;
 
     const ASS: &[u8] = b"\xEF\xBB\xBF[Script Info]\nTitle: x\n\n[Events]\n";
@@ -472,7 +460,7 @@ mod tests {
 
     #[test]
     fn a_zip_whose_end_record_claims_too_many_members_is_refused_before_it_is_opened() {
-        let zip = zip_of(&[("a.srt", SRT)]);
+        let zip = deflated_zip(&[("a.srt", SRT)]);
         let end = zip.windows(4).rposition(|w| w == EOCD).unwrap();
         let with_count = |count: u16| {
             let mut crafted = zip.clone();
@@ -541,7 +529,7 @@ mod tests {
     fn files_checked_within_one_budget_share_what_their_zips_inflate() {
         let dir = tempfile::tempdir().unwrap();
         let member = vec![b'x'; 1000];
-        let zip = zip_of(&[("a.txt", &member)]);
+        let zip = deflated_zip(&[("a.txt", &member)]);
         let (first, second) = (dir.path().join("a.docx"), dir.path().join("b.docx"));
         std::fs::write(&first, &zip).unwrap();
         std::fs::write(&second, &zip).unwrap();
@@ -564,21 +552,13 @@ mod tests {
 
     #[test]
     fn a_zip_passes_when_every_member_has_its_crc_and_any_members_will_do() {
-        let zip = zip_of(&[("Seihantai - 24.srt", SRT), ("font.ttf", b"\x00\x01")]);
+        let zip = deflated_zip(&[("Seihantai - 24.srt", SRT), ("font.ttf", b"\x00\x01")]);
         assert_eq!(checked("Seihantai - 24.zip", &zip), Ok(Format::Zip));
         // Under a name with no extension it is a ZIP all the same.
         assert_eq!(checked("download", &zip), Ok(Format::Zip));
 
         // One flipped byte of a member's data fails its CRC (or its inflate).
-        let stored = {
-            use std::io::Write;
-            let mut out = zip::ZipWriter::new(io::Cursor::new(Vec::new()));
-            let options = zip::write::SimpleFileOptions::default()
-                .compression_method(zip::CompressionMethod::Stored);
-            out.start_file("a.srt", options).unwrap();
-            out.write_all(SRT).unwrap();
-            out.finish().unwrap().into_inner()
-        };
+        let stored = zip_of(&[("a.srt", SRT)], Method::Stored);
         let at = stored.windows(3).position(|w| w == b"-->").unwrap();
         let mut broken = stored.clone();
         broken[at] = b'=';
