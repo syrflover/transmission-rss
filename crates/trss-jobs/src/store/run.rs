@@ -6,7 +6,10 @@ use trss_core::Millis;
 use trss_subtitles::FailureKind;
 
 use super::{rows::steps, JobError, JobRun, StepRow};
-use crate::model::{ItemState, JobState, StepKind, StepState, Wait};
+use crate::{
+    model::{ItemState, JobState, StepKind, StepState, Wait},
+    place::{relocate, replace},
+};
 
 /// The note of a job a decision on its replacement put back in line
 /// ([`crate::place::replace::records::decide`]), and the note and log line
@@ -437,45 +440,11 @@ impl JobRun {
                      WHERE job_id = ?1 AND state = 'current'",
                 )?
                 .execute(params![id, note, now])?;
-                // Its file effects under way are not known to have ended:
-                // held with their rows and replacement plans, so their
-                // targets are free again and the plans are not carried on.
-                // A done plan's removals only wait for their clean-up: the
-                // replacement stays done, and the clean-up runs when the job
-                // runs again.
-                let under_way = "SELECT * FROM subtitle_file_effects
-                                  WHERE job_id = ?1
-                                    AND state IN ('intended', 'prepared', 'set_aside')
-                                    AND (plan_id IS NULL OR plan_id NOT IN
-                                         (SELECT id FROM subtitle_replacements
-                                           WHERE state = 'done'))";
-                tx.prepare_cached(&format!(
-                    "UPDATE subtitle_job_plan SET outcome = 'held', note = ?2, updated_at = ?3
-                         WHERE job_id = ?1 AND position IN
-                               (SELECT position FROM ({under_way}))"
-                ))?
-                .execute(params![id, note, now])?;
-                tx.prepare_cached(&format!(
-                    "UPDATE subtitle_replacements SET state = 'held', reason = ?2, updated_at = ?3
-                         WHERE state = 'approved' AND id IN
-                               (SELECT plan_id FROM ({under_way}) WHERE plan_id IS NOT NULL)"
-                ))?
-                .execute(params![id, note, now])?;
-                tx.prepare_cached(&format!(
-                    "UPDATE subtitle_file_effects SET state = 'held', reason = ?2, updated_at = ?3
-                         WHERE id IN (SELECT id FROM ({under_way}))"
-                ))?
-                .execute(params![id, note, now])?;
-                // So are a relocation's removals under way (the copy may be
-                // aside); one not started keeps its copy, which a later
-                // relocation may move.
-                tx.prepare_cached(
-                    "UPDATE subtitle_relocations
-                        SET state = CASE state WHEN 'planned' THEN 'kept' ELSE 'held' END,
-                            reason = ?2, updated_at = ?3
-                      WHERE job_id = ?1 AND state IN ('planned', 'intended', 'set_aside')",
-                )?
-                .execute(params![id, note, now])?;
+                // Its file effects under way are not known to have ended: each
+                // feature holds its own, a replacement's with its rows and
+                // plans, a relocation's removals.
+                replace::records::hold_under_way(&tx, &id, &note, now)?;
+                relocate::hold_under_way(&tx, &id, &note, now)?;
                 tx.prepare_cached(
                     "UPDATE subtitle_jobs
                      SET state = 'held', wait = NULL, note = ?2, stage = NULL, state_at = ?3,

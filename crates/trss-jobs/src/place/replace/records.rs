@@ -735,6 +735,43 @@ pub fn hold_plan(
     })
 }
 
+/// Holds a job's file effects under way, with their rows and replacement
+/// plans, in the open transaction `tx`, so their targets are free again and
+/// the plans are not carried on. A done plan's removals only wait for their
+/// clean-up: the replacement stays done, and the clean-up runs when the job
+/// runs again.
+pub(crate) fn hold_under_way(
+    tx: &rusqlite::Transaction,
+    job_id: &str,
+    note: &str,
+    now: Millis,
+) -> rusqlite::Result<()> {
+    let under_way = "SELECT * FROM subtitle_file_effects
+                      WHERE job_id = ?1
+                        AND state IN ('intended', 'prepared', 'set_aside')
+                        AND (plan_id IS NULL OR plan_id NOT IN
+                             (SELECT id FROM subtitle_replacements
+                               WHERE state = 'done'))";
+    tx.prepare_cached(&format!(
+        "UPDATE subtitle_job_plan SET outcome = 'held', note = ?2, updated_at = ?3
+             WHERE job_id = ?1 AND position IN
+                   (SELECT position FROM ({under_way}))"
+    ))?
+    .execute(params![job_id, note, now])?;
+    tx.prepare_cached(&format!(
+        "UPDATE subtitle_replacements SET state = 'held', reason = ?2, updated_at = ?3
+             WHERE state = 'approved' AND id IN
+                   (SELECT plan_id FROM ({under_way}) WHERE plan_id IS NOT NULL)"
+    ))?
+    .execute(params![job_id, note, now])?;
+    tx.prepare_cached(&format!(
+        "UPDATE subtitle_file_effects SET state = 'held', reason = ?2, updated_at = ?3
+             WHERE id IN (SELECT id FROM ({under_way}))"
+    ))?
+    .execute(params![job_id, note, now])?;
+    Ok(())
+}
+
 /// Ends the effect, which left nothing behind, `abandoned`.
 pub fn abandon(c: &mut Connection, effect_id: &str, now: Millis) -> Result<(), JobError> {
     place_records::end_effect(c, effect_id, EffectState::Abandoned, None, now)

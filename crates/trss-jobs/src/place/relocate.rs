@@ -882,6 +882,25 @@ pub(super) fn hold_rows(c: &mut Connection, job: &str, now: Millis) -> Result<us
     })
 }
 
+/// Holds a job's removals under way in the open transaction `tx` (the copy
+/// may be aside); one not started keeps its copy, which a later relocation
+/// may move.
+pub(crate) fn hold_under_way(
+    tx: &rusqlite::Transaction,
+    job_id: &str,
+    note: &str,
+    now: Millis,
+) -> rusqlite::Result<()> {
+    tx.prepare_cached(
+        "UPDATE subtitle_relocations
+            SET state = CASE state WHEN 'planned' THEN 'kept' ELSE 'held' END,
+                reason = ?2, updated_at = ?3
+          WHERE job_id = ?1 AND state IN ('planned', 'intended', 'set_aside')",
+    )?
+    .execute(params![job_id, note, now])?;
+    Ok(())
+}
+
 /// Why a removal keeps a copy whose stored subtitle's file is not there as
 /// recorded: the copy may be the last of its bytes.
 pub const STORED_MISSING: &str = "보관본 파일이 없거나 기록과 달라 적용본을 그대로 뒀어요";
