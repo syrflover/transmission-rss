@@ -214,7 +214,7 @@ use serde_json::{json, Value};
 use tokio::sync::broadcast::error::RecvError;
 use tokio_util::sync::CancellationToken;
 use trss_browser::client::LauncherClient;
-use trss_jobs::{Screen, ScreenState};
+use trss_jobs::Screen;
 
 pub use hub::{admits, Binding, Times, View, Viewport, MAX_SOCKETS};
 use hub::{ended_message, Handled, Hub, Incoming, OpenError};
@@ -593,20 +593,15 @@ async fn socket(
             );
         }
     };
-    let (Some(run), Some(target), Some(bound_at), ScreenState::Ready) = (
-        screen.run_id.clone(),
-        screen.target_id.clone(),
-        screen.bound_at,
-        screen.state,
-    ) else {
+    let Some(binding) = screen.seat() else {
         return refuse(
             StatusCode::GONE,
             "gone",
             "이 작업의 서버 브라우저가 닫혔어요. 작업 화면을 다시 열면 다시 준비해요.",
         );
     };
-    if query.run.as_deref() != Some(run.as_str())
-        || query.bound.is_some_and(|bound| bound != bound_at)
+    if query.run.as_deref() != Some(binding.run.as_str())
+        || query.bound.is_some_and(|bound| bound != binding.bound_at)
     {
         return refuse(
             StatusCode::GONE,
@@ -617,11 +612,6 @@ async fn socket(
     let upgrade = match upgrade {
         Ok(upgrade) => upgrade,
         Err(rejection) => return rejection.into_response(),
-    };
-    let binding = Binding {
-        run,
-        target,
-        bound_at,
     };
     upgrade
         .max_message_size(MAX_MESSAGE)

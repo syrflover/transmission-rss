@@ -117,6 +117,35 @@ pub struct Screen {
     pub first_target_id: Option<String>,
 }
 
+impl Screen {
+    /// Where a person's browser sits on this screen: the bound run, the page
+    /// of it that shows the check and when it was bound. `Some` only while the
+    /// job waits for its check and the screen is [`ScreenState::Ready`]. A
+    /// socket or a hub of a browser belongs to the job as long as this is the
+    /// seat it was opened for; another check of the job in the same run is
+    /// another seat (`bound_at`).
+    pub fn seat(&self) -> Option<Seat> {
+        match (&self.run_id, &self.target_id, self.bound_at, self.state) {
+            (Some(run), Some(target), Some(bound_at), ScreenState::Ready) if self.waiting => {
+                Some(Seat {
+                    run: run.clone(),
+                    target: target.clone(),
+                    bound_at,
+                })
+            }
+            _ => None,
+        }
+    }
+}
+
+/// The seat of a bound run on a job's screen ([`Screen::seat`]).
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Seat {
+    pub run: String,
+    pub target: String,
+    pub bound_at: Millis,
+}
+
 /// A binding of a run to a job that waits for its check: what the worker
 /// watches.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -994,4 +1023,92 @@ fn screen(c: &Connection, job_id: &str) -> Result<Option<Screen>, JobError> {
         _ => return Ok(None),
     };
     Ok(Some(screen))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ready() -> Screen {
+        Screen {
+            state: ScreenState::Ready,
+            waiting: true,
+            run_id: Some("run1".into()),
+            target_id: Some("page1".into()),
+            bound_at: Some(500),
+            note: None,
+            popup: false,
+            pages: vec!["page1".into()],
+            first_target_id: Some("page1".into()),
+        }
+    }
+
+    #[test]
+    fn a_screen_has_a_seat_only_while_a_run_is_bound_and_the_job_waits_for_its_check() {
+        let seat = Some(Seat {
+            run: "run1".into(),
+            target: "page1".into(),
+            bound_at: 500,
+        });
+        // (what, the screen, its seat)
+        let cases = [
+            ("bound and waiting", ready(), seat),
+            (
+                "the job does not wait for its check",
+                Screen {
+                    waiting: false,
+                    ..ready()
+                },
+                None,
+            ),
+            (
+                "prepared again",
+                Screen {
+                    state: ScreenState::Preparing,
+                    run_id: None,
+                    target_id: None,
+                    bound_at: None,
+                    ..ready()
+                },
+                None,
+            ),
+            (
+                "closed",
+                Screen {
+                    state: ScreenState::Closed,
+                    run_id: None,
+                    target_id: None,
+                    bound_at: None,
+                    ..ready()
+                },
+                None,
+            ),
+            (
+                "ready with no page",
+                Screen {
+                    target_id: None,
+                    ..ready()
+                },
+                None,
+            ),
+            (
+                "ready with no bound time",
+                Screen {
+                    bound_at: None,
+                    ..ready()
+                },
+                None,
+            ),
+        ];
+        for (what, screen, expected) in cases {
+            assert_eq!(screen.seat(), expected, "{what}");
+        }
+        // Another check of the job in the same run on the same page is
+        // another seat.
+        let again = Screen {
+            bound_at: Some(900),
+            ..ready()
+        };
+        assert_ne!(again.seat(), ready().seat());
+    }
 }

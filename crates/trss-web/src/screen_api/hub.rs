@@ -443,13 +443,10 @@ fn command_of(message: &Incoming, view: &View) -> Option<(&'static str, Value)> 
 }
 
 /// The binding a hub shows: the run, its page and when it was bound to the
-/// job. Another check of the job in the same run is another binding.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct Binding {
-    pub run: String,
-    pub target: String,
-    pub bound_at: i64,
-}
+/// job. Another check of the job in the same run is another binding. It is
+/// the job's seat ([`trss_jobs::screen::Screen::seat`]), which says whether it
+/// is still the job's.
+pub use trss_jobs::screen::Seat as Binding;
 
 /// The most sockets open on one hub; one more takes the oldest one's seat
 /// (`replaced`).
@@ -1653,13 +1650,10 @@ async fn watch_binding(hub: std::sync::Weak<Hub>, every: Duration, stop: Cancell
         let Ok(screen) = hub.screens.screen(&hub.job).await else {
             continue;
         };
-        let b = &hub.binding;
-        let still = screen.as_ref().is_some_and(|s| {
-            s.waiting
-                && s.run_id.as_deref() == Some(b.run.as_str())
-                && s.target_id.as_deref() == Some(b.target.as_str())
-                && s.bound_at == Some(b.bound_at)
-        });
+        let still = screen
+            .as_ref()
+            .and_then(|s| s.seat())
+            .is_some_and(|seat| seat == hub.binding);
         if !still {
             hub.end_because("run");
             return;
