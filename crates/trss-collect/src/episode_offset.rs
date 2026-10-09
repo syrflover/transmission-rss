@@ -99,6 +99,7 @@ use crate::{
     release_name::{Episode, ReleaseName},
     store::channels::{Rule, SeasonRef},
 };
+use trss_core::episode::{ranges, signed};
 use trss_library::{
     seasons::combine::combine,
     store::{
@@ -186,34 +187,6 @@ impl Verdict {
             Verdict::Suggest { value, basis } => Some((value, basis)),
         }
     }
-}
-
-/// A number with a real minus sign, as the screen writes offsets.
-pub fn signed(value: i64) -> String {
-    if value < 0 {
-        format!("−{}", -value)
-    } else {
-        value.to_string()
-    }
-}
-
-/// `1–12, 14` for the episodes given in ascending order.
-pub fn ranges(episodes: &[u32]) -> String {
-    let mut out: Vec<String> = Vec::new();
-    let mut at = 0;
-    while at < episodes.len() {
-        let mut end = at;
-        while end + 1 < episodes.len() && episodes[end + 1] == episodes[end] + 1 {
-            end += 1;
-        }
-        out.push(if end == at {
-            episodes[at].to_string()
-        } else {
-            format!("{}–{}", episodes[at], episodes[end])
-        });
-        at = end + 1;
-    }
-    out.join(", ")
 }
 
 impl Missing {
@@ -1262,11 +1235,5 @@ mod tests {
         assert!(worth_offering(&held(0), None));
         assert!(worth_offering(&held(1), None));
         assert!(!worth_offering(&held(-12), None));
-    }
-
-    #[test]
-    fn episodes_are_written_as_ranges() {
-        assert_eq!(ranges(&[1, 2, 3, 5, 7, 8]), "1–3, 5, 7–8");
-        assert_eq!(ranges(&[4]), "4");
     }
 }

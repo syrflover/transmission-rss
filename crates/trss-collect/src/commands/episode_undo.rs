@@ -122,6 +122,7 @@ use transmission_rpc::types::Id;
 
 use trss_core::{
     commands::{Command, CommandState, Outcome},
+    episode::signed,
     files::occupied,
     folder_locks::Section,
     settings::SettingsStore,
@@ -130,7 +131,6 @@ use trss_core::{
 
 use crate::{
     context::TransmissionLink,
-    episode_offset::signed,
     plan::rule_work_folder,
     revision::{rename_video, FileIdentity},
     revisions::{episode_name, owner_of, same_folder, Owner},

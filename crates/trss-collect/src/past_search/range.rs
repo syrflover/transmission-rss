@@ -15,7 +15,8 @@
 
 use serde::Serialize;
 
-use crate::episode_offset::{leaves_numbers, shift, signed};
+use crate::episode_offset::{leaves_numbers, shift};
+use trss_core::episode::signed;
 
 /// What the app knows of the range.
 #[derive(Debug, Clone, Default)]

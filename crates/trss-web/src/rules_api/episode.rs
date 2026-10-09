@@ -37,13 +37,13 @@ use super::{body, build_preview, channel_items, rule_conflict, rule_view, store_
 use crate::{commands_api::CommandView, ApiError, AppState};
 use trss_collect::{
     commands::episode_undo,
-    episode_offset::{self, decide, first_release, gather, may_decide, signed, worth_offering},
+    episode_offset::{self, decide, first_release, gather, may_decide, worth_offering},
     store::{
         channels::{ChannelError, ChannelWithRules, Rule, RuleInput, RuleState},
         history::HistoryItem,
     },
 };
-use trss_core::settings::CollectionSettings;
+use trss_core::{episode::signed, settings::CollectionSettings};
 
 /// What the app offers for a rule's offset.
 #[derive(Debug, Clone, Serialize)]

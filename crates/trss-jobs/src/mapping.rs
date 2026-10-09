@@ -91,11 +91,11 @@
 use std::collections::{BTreeMap, HashMap};
 
 use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
-use trss_collect::{
-    episode_offset::{ranges, signed},
-    store::anissia::episode_key,
+use trss_collect::store::anissia::episode_key;
+use trss_core::{
+    episode::{ranges, signed, EpisodeNumber},
+    Millis,
 };
-use trss_core::{episode::EpisodeNumber, Millis};
 
 /// How long after the last scheduled episode aired a post still belongs to it.
 const LAST_WINDOW_MS: i64 = 7 * 24 * 60 * 60 * 1000;

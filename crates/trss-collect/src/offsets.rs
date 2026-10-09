@@ -29,9 +29,11 @@
 
 use std::collections::HashMap;
 
+use trss_core::episode::signed;
+
 use crate::store::{channels::ChannelStore, history::HistoryStore};
 use crate::{
-    episode_offset::{decide, first_release, gather, may_decide, same_effect, signed, Verdict},
+    episode_offset::{decide, first_release, gather, may_decide, same_effect, Verdict},
     store::channels::Rule,
 };
 use trss_library::store::{library::LibraryStore, seasons::SeasonStore};

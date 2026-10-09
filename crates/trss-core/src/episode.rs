@@ -1,6 +1,7 @@
 //! How the app reads an episode text (`13`, `013`, `13.5`, `SP1`) as a key,
 //! orders episodes, and writes one as `13화` (`docs/specs/library.md`, 자막의
-//! 회차 대응).
+//! 회차 대응). It also writes an offset ([`signed`]) and a run of episodes
+//! ([`ranges`]) as the screens do.
 //!
 //! An episode text that is a decimal number (ASCII digits, then optionally a
 //! `.` and ASCII digits) is an [`EpisodeNumber`]. Its value is what is left
@@ -166,6 +167,35 @@ pub fn episode_label(text: &str) -> String {
     }
 }
 
+/// A number with a real minus sign, as the screen writes offsets: `0`, `12`,
+/// `−12`.
+pub fn signed(value: i64) -> String {
+    if value < 0 {
+        format!("−{}", -value)
+    } else {
+        value.to_string()
+    }
+}
+
+/// `1–12, 14` for the episodes given in ascending order.
+pub fn ranges(episodes: &[u32]) -> String {
+    let mut out: Vec<String> = Vec::new();
+    let mut at = 0;
+    while at < episodes.len() {
+        let mut end = at;
+        while end + 1 < episodes.len() && episodes[end + 1] == episodes[end] + 1 {
+            end += 1;
+        }
+        out.push(if end == at {
+            episodes[at].to_string()
+        } else {
+            format!("{}–{}", episodes[at], episodes[end])
+        });
+        at = end + 1;
+    }
+    out.join(", ")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -305,5 +335,19 @@ mod tests {
         for text in ["SP", "1e3", "inf", "+5", "-1", ".5", "1.", ""] {
             assert_eq!(episode_label(text), text);
         }
+    }
+
+    #[test]
+    fn episodes_are_written_as_ranges() {
+        assert_eq!(ranges(&[1, 2, 3, 5, 7, 8]), "1–3, 5, 7–8");
+        assert_eq!(ranges(&[4]), "4");
+    }
+
+    #[test]
+    fn an_offset_is_written_with_a_real_minus_sign() {
+        assert_eq!(signed(0), "0");
+        assert_eq!(signed(12), "12");
+        assert_eq!(signed(-12), "−12");
+        assert_eq!(signed(i64::MIN + 1), format!("−{}", i64::MAX));
     }
 }
