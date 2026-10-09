@@ -1330,7 +1330,6 @@ mod replacements {
 
         let alone = episode(&body, "03");
         assert_eq!(alone["video"], serde_json::json!([]));
-        assert_eq!(alone["failure"]["files"][0]["state"], "kept");
         assert_eq!(episode(&body, "01")["failure"], Value::Null);
         let episodes = body["seasons"][0]["episodes"].as_array().unwrap();
         assert_eq!(episodes.len(), 3, "{body}");

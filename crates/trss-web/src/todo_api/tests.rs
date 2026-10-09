@@ -395,11 +395,10 @@ fn replacement(
     }
 }
 
-/// What a failed replacement says of its two files comes from the row alone:
-/// the old video is `removed` once the replacement went ahead to remove it
-/// (or was received again after that) and `kept` before, the new one is
-/// under its received name, `missing` after the replacement ended, or not
-/// received yet.
+/// A failed replacement tells its two files by the strings of the wire: the
+/// old video `kept` or `removed`, the new one under its `received_name`,
+/// `missing` or `not_received` (what decides each is tested on the row in
+/// trss-collect).
 #[test]
 fn a_failed_replacements_files_are_told_by_its_row() {
     use RevisionState::*;
@@ -415,25 +414,10 @@ fn a_failed_replacements_files_are_told_by_its_row() {
             )),
         ),
         (
-            "the download stopped",
-            replacement(Failed, Some("stopped"), None, None),
-            "kept",
-            None,
-        ),
-        (
             "received again after the old video was removed",
             replacement(Failed, Some("stopped"), None, Some(15)),
             "removed",
             None,
-        ),
-        (
-            "the rename has not gone through",
-            replacement(Removed, Some("busy"), Some(NEW_NAME), Some(15)),
-            "removed",
-            Some((
-                "Season 01/[SubsPlease] Show - 14v2 (1080p) [8F2EFECC].mkv",
-                "received_name",
-            )),
         ),
         (
             "the replacement ended with no video left",
@@ -442,24 +426,6 @@ fn a_failed_replacements_files_are_told_by_its_row() {
             Some((
                 "Season 01/[SubsPlease] Show - 14v2 (1080p) [8F2EFECC].mkv",
                 "missing",
-            )),
-        ),
-        (
-            "the old file is waited for",
-            replacement(Removing, Some("waits"), Some(NEW_NAME), Some(15)),
-            "kept",
-            Some((
-                "Season 01/[SubsPlease] Show - 14v2 (1080p) [8F2EFECC].mkv",
-                "received_name",
-            )),
-        ),
-        (
-            "the new file was missing on one look",
-            replacement(Verified, Some("missing once"), Some(NEW_NAME), None),
-            "kept",
-            Some((
-                "Season 01/[SubsPlease] Show - 14v2 (1080p) [8F2EFECC].mkv",
-                "received_name",
             )),
         ),
     ];
