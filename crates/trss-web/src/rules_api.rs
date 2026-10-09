@@ -89,11 +89,13 @@
 //!
 //! # The preview is the worker's evaluation
 //!
-//! The preview does not judge titles itself. It puts the edited rule into the
-//! channel's stored rules (at the requested place in the order), hands that to
-//! the very mapping the worker uses ([`ChannelPlan`], which builds the shared
-//! [`trss_collect::rss`] evaluation from stored channels and rules) and judges every
-//! item the channel has in the collection history with it. So the channel's
+//! The preview does not judge titles itself. [`trss_collect::plan::preview`]
+//! puts the edited rule into the channel's stored rules (at the requested place
+//! in the order), hands that to the very mapping the worker uses
+//! ([`ChannelPlan`], which builds the shared [`trss_collect::rss`] evaluation
+//! from stored channels and rules) and judges every item the channel has in the
+//! collection history with it; this API loads the items and says the result in
+//! the wire's shapes. So the channel's
 //! excludes, collect folder and rule order apply exactly as they do in a
 //! cycle, and the same items and settings give the same selection, applied
 //! rule and save path. The history holds the worker's last read of the feed
@@ -125,8 +127,8 @@
 //!
 //! A rule is `overlap` when some recorded item is taken by an earlier rule
 //! although this rule matches it too. It is computed over the recorded items
-//! with the channel's active rules; archived rules neither take items nor
-//! overlap.
+//! with the channel's active rules ([`preview::overlapping_rules`]); archived
+//! rules neither take items nor overlap.
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path as FsPath;
@@ -152,18 +154,15 @@ use super::{
 use trss_anissia::Anime;
 use trss_collect::{
     commands::rule_archive::{self, RuleArchive},
-    episode_offset,
-    plan::{ChannelPlan, Judgement, PastCause, PlanEvaluation},
-    release_name::ReleaseName,
+    plan::{preview, ChannelPlan, PastCause},
     rss::{ChannelEvaluator, ChannelSpec, RuleSpec},
     store::{
         channels::{
             Channel, ChannelError, ChannelWithRules, OrderItem, Rule, RuleInput, RuleState,
-            SeasonRef, MASK,
+            SeasonRef,
         },
         history::{
-            HistoryError, HistoryItem, HistoryQuery, HistoryResult, HistoryStore, KnownItem,
-            MAX_PAGE_SIZE,
+            HistoryError, HistoryItem, HistoryQuery, HistoryResult, HistoryStore, MAX_PAGE_SIZE,
         },
     },
 };
@@ -194,9 +193,6 @@ const MAX_ITEMS_PER_CHANNEL: usize = 20_000;
 
 /// How many matching items a preview lists (the counts cover all of them).
 const PREVIEW_LIST_LIMIT: usize = 100;
-
-/// The ID the edited rule has in a preview when it is not saved yet.
-const NEW_RULE_ID: &str = "new";
 
 // ---------------------------------------------------------------------------
 // Response shapes
@@ -774,17 +770,16 @@ async fn analyze(state: &AppState, cwr: &ChannelWithRules) -> Result<Analysis, A
             .errors
             .insert(problem.rule_id, regex_problem(&problem.error));
     }
-    for item in channel_items(&state.history, &cwr.channel.id).await? {
+    let items = channel_items(&state.history, &cwr.channel.id).await?;
+    for item in &items {
         if item.result == HistoryResult::Received {
             if let Some(rule_id) = &item.rule_id {
                 let latest = analysis.last_received.entry(rule_id.clone()).or_insert(0);
                 *latest = (*latest).max(item.result_at);
             }
         }
-        analysis
-            .overlap
-            .extend(plan.evaluate(&item.title).overlapping);
     }
+    analysis.overlap = preview::overlapping_rules(&plan, items.iter().map(|i| i.title.as_str()));
     Ok(analysis)
 }
 
@@ -1449,7 +1444,7 @@ pub struct PreviewItem {
     /// first, so the rule's first episode offset is decided from it.
     pub release: Option<u32>,
     /// The episode the item is received as with the edited rule's offset and
-    /// folder (`S02E24`, [`episode_offset::received_as`]); set with `release`.
+    /// folder (`S02E24`, [`trss_collect::episode_offset::received_as`]); set with `release`.
     pub episode_name: Option<String>,
 }
 
@@ -1491,77 +1486,9 @@ pub struct Preview {
     pub earliest_receivable: Option<u32>,
 }
 
-/// The channel's rules with the edited one put in: replacing the stored rule
-/// `edited_id` when there is one, or added as a new rule. It always collects.
-fn substitute(
-    cwr: &ChannelWithRules,
-    edited_id: Option<&str>,
-    edited: &RuleInput,
-    position: Option<usize>,
-) -> Result<ChannelWithRules, ApiError> {
-    let mut rules = cwr.rules.clone();
-    let stored_index = match edited_id {
-        Some(id) => Some(rules.iter().position(|r| r.id == id).ok_or_else(|| {
-            ApiError::from(ChannelError::NotFound {
-                kind: "rule",
-                id: id.to_owned(),
-            })
-        })?),
-        None => None,
-    };
-    let mut rule = match stored_index {
-        Some(index) => rules.remove(index),
-        None => Rule {
-            id: NEW_RULE_ID.to_owned(),
-            channel_id: cwr.channel.id.clone(),
-            position: rules.len() as i64,
-            version: 0,
-            r#match: None,
-            regex: false,
-            case_insensitive: false,
-            directory: String::new(),
-            episode: 0,
-            episode_auto: false,
-            state: RuleState::Active,
-            subscription: None,
-            resumed_at: None,
-        },
-    };
-    // A subscription that waits for its title is given one by a save, and what
-    // history recorded before is past for it, as the store notes it.
-    if rule.r#match.is_none() && edited.r#match.is_some() {
-        if let Some(subscription) = rule.subscription.as_mut() {
-            subscription.titled_at = Some(i64::MAX);
-        }
-    }
-    rule.r#match = edited.r#match.clone();
-    rule.regex = edited.regex;
-    rule.case_insensitive = edited.case_insensitive;
-    rule.directory = edited.directory.clone();
-    rule.episode = edited.episode;
-    // The preview shows the rule collecting. One that is off now would be
-    // turned back on after everything recorded so far, so what it has not
-    // taken is past for it.
-    if rule.state != RuleState::Active {
-        rule.resumed_at = Some(i64::MAX);
-    }
-    rule.state = RuleState::Active;
-
-    let at = position
-        .or(stored_index)
-        .unwrap_or(rules.len())
-        .min(rules.len());
-    rules.insert(at, rule);
-    Ok(ChannelWithRules {
-        channel: cwr.channel.clone(),
-        rules,
-    })
-}
-
-/// Judges `items` with the edited rule put into the channel's rules.
-/// Each item says whether the channel's first read recorded it, which tells a
-/// subscription what the feed already held then. Pure: the same items and
-/// settings always give the same [`Preview`]; the handler only fetches them.
+/// Judges `items` with the edited rule put into the channel's rules, by
+/// [`preview::preview`], the evaluation the worker's cycle uses, and says it in
+/// the wire's shapes.
 pub fn build_preview(
     collect_folder: &FsPath,
     cwr: &ChannelWithRules,
@@ -1570,143 +1497,81 @@ pub fn build_preview(
     position: Option<usize>,
     items: &[HistoryItem],
 ) -> Result<Preview, ApiError> {
-    let substituted = substitute(cwr, edited_id, edited, position)?;
-    let id = edited_id.unwrap_or(NEW_RULE_ID).to_owned();
-    let match_of: HashMap<&str, Option<String>> = substituted
-        .rules
-        .iter()
-        .map(|r| (r.id.as_str(), r.r#match.clone()))
-        .collect();
+    preview::preview(
+        collect_folder,
+        cwr,
+        preview::Edit {
+            id: edited_id,
+            input: edited,
+            position,
+        },
+        items,
+        PREVIEW_LIST_LIMIT,
+    )
+    .map(Preview::from)
+    .map_err(|preview::RuleNotFound(id)| {
+        ApiError::from(ChannelError::NotFound { kind: "rule", id })
+    })
+}
 
-    // The same mapping twice: as the channel is, and with no excludes, which
-    // tells whether an excluded item would have been the edited rule's.
-    let plan = ChannelPlan::new(substituted.clone(), collect_folder);
-    let mut open_channel = substituted.clone();
-    open_channel.channel.excludes.clear();
-    let open_plan = ChannelPlan::new(open_channel, collect_folder);
-
-    let error = plan
-        .rule_errors()
-        .into_iter()
-        .find(|problem| problem.rule_id == id)
-        .map(|problem| regex_problem(&problem.error));
-
-    let mut counts = PreviewCounts {
-        total: items.len(),
-        ..PreviewCounts::default()
-    };
-    let mut masked_total = 0;
-    let mut listed = Vec::new();
-    let mut earliest_receivable: Option<u32> = None;
-
-    for item in items {
-        let masked = item.title.contains(MASK);
-        masked_total += usize::from(masked);
-        let PlanEvaluation {
-            judgement,
-            overlapping,
-        } = plan.evaluate(&item.title);
-
-        let matches_edited = |applied: Option<&str>, overlapping: &[String]| {
-            applied == Some(id.as_str()) || overlapping.iter().any(|r| r == &id)
-        };
-        let mut past_cause = None;
-        let (kind, save_path, taken_by, excluded_by) = match &judgement {
-            Judgement::Selected {
-                rule_id, save_path, ..
-            } if rule_id == &id => {
-                // The cycle's own test, on the same record of the item.
-                let known = Some(KnownItem::from(item));
-                let kind = if plan.is_past(&id, known) {
-                    past_cause = plan
-                        .past_cause(&id, item.first_seen_at)
-                        .map(PastCause::code);
-                    Kind::Past
-                } else {
-                    Kind::Mine
-                };
-                (kind, Some(save_path.display().to_string()), None, None)
-            }
-            Judgement::Selected {
-                rule_id, save_path, ..
-            } if overlapping.iter().any(|r| r == &id) => (
-                Kind::Earlier,
-                Some(save_path.display().to_string()),
-                Some(TakenBy {
-                    rule_id: Some(rule_id.clone()),
-                    r#match: match_of.get(rule_id.as_str()).cloned().flatten(),
-                }),
-                None,
-            ),
-            Judgement::Excluded => {
-                let open = open_plan.evaluate(&item.title);
-                let applied = match &open.judgement {
-                    Judgement::Selected { rule_id, .. } => Some(rule_id.as_str()),
-                    _ => None,
-                };
-                if matches_edited(applied, &open.overlapping) {
-                    let by = cwr
-                        .channel
-                        .excludes
-                        .iter()
-                        .find(|ex| item.title.contains(ex.as_str()))
-                        .cloned();
-                    (Kind::Excluded, None, None, by)
-                } else {
-                    counts.unmatched += 1;
-                    continue;
-                }
-            }
-            _ => {
-                counts.unmatched += 1;
-                continue;
-            }
-        };
-
+impl From<preview::Kind> for Kind {
+    fn from(kind: preview::Kind) -> Self {
         match kind {
-            Kind::Mine => counts.mine += 1,
-            Kind::Earlier => counts.earlier += 1,
-            Kind::Excluded => counts.excluded += 1,
-            Kind::Past => counts.past += 1,
-        }
-        let release = matches!(kind, Kind::Mine | Kind::Past)
-            .then(|| ReleaseName::read(&item.title).whole_episode())
-            .flatten();
-        if item.result == HistoryResult::NoMatch {
-            if let Some(release) = release {
-                earliest_receivable = Some(earliest_receivable.map_or(release, |e| e.min(release)));
-            }
-        }
-        if listed.len() < PREVIEW_LIST_LIMIT {
-            listed.push(PreviewItem {
-                id: item.id,
-                title: item.title.clone(),
-                first_seen_at: item.first_seen_at,
-                masked,
-                kind,
-                save_path,
-                taken_by,
-                excluded_by,
-                past_cause,
-                stored_result: item.result.code(),
-                release,
-                episode_name: release.and_then(|_| {
-                    episode_offset::received_as(&edited.directory, edited.episode, &item.title)
-                }),
-            });
+            preview::Kind::Mine => Kind::Mine,
+            preview::Kind::Earlier => Kind::Earlier,
+            preview::Kind::Excluded => Kind::Excluded,
+            preview::Kind::Past => Kind::Past,
         }
     }
+}
 
-    let matching = counts.mine + counts.earlier + counts.excluded + counts.past;
-    Ok(Preview {
-        error,
-        counts,
-        masked_total,
-        truncated: matching > listed.len(),
-        items: listed,
-        episode_suggestion: None,
-        earliest_receivable,
-    })
+impl From<preview::PreviewItem> for PreviewItem {
+    fn from(item: preview::PreviewItem) -> Self {
+        PreviewItem {
+            id: item.id,
+            title: item.title,
+            first_seen_at: item.first_seen_at,
+            masked: item.masked,
+            kind: item.kind.into(),
+            save_path: item.save_path.map(|path| path.display().to_string()),
+            taken_by: item.taken_by.map(|by| TakenBy {
+                rule_id: Some(by.rule_id),
+                r#match: by.r#match,
+            }),
+            excluded_by: item.excluded_by,
+            past_cause: item.past_cause.map(PastCause::code),
+            stored_result: item.stored_result.code(),
+            release: item.release,
+            episode_name: item.episode_name,
+        }
+    }
+}
+
+impl From<preview::PreviewCounts> for PreviewCounts {
+    fn from(counts: preview::PreviewCounts) -> Self {
+        PreviewCounts {
+            total: counts.total,
+            mine: counts.mine,
+            earlier: counts.earlier,
+            excluded: counts.excluded,
+            past: counts.past,
+            unmatched: counts.unmatched,
+        }
+    }
+}
+
+impl From<preview::Preview> for Preview {
+    fn from(preview: preview::Preview) -> Self {
+        Preview {
+            error: preview.error.as_ref().map(regex_problem),
+            counts: preview.counts.into(),
+            masked_total: preview.masked_total,
+            items: preview.items.into_iter().map(PreviewItem::from).collect(),
+            truncated: preview.truncated,
+            episode_suggestion: None,
+            earliest_receivable: preview.earliest_receivable,
+        }
+    }
 }
 
 async fn preview(

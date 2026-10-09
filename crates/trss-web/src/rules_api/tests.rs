@@ -8,9 +8,12 @@ use serde_json::{json, Value};
 use tower::ServiceExt;
 
 use super::*;
-use trss_collect::store::{
-    channels::{ChannelInput, ChannelWithRules},
-    history::Observation,
+use trss_collect::{
+    plan::Judgement,
+    store::{
+        channels::{ChannelInput, ChannelWithRules},
+        history::Observation,
+    },
 };
 use trss_core::Db;
 

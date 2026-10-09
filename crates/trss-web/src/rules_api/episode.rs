@@ -33,11 +33,12 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 
-use super::{body, build_preview, channel_items, rule_conflict, rule_view, store_error, RuleView};
+use super::{body, channel_items, rule_conflict, rule_view, store_error, RuleView};
 use crate::{commands_api::CommandView, ApiError, AppState};
 use trss_collect::{
     commands::episode_undo,
     episode_offset::{self, decide, first_release, gather, may_decide, worth_offering},
+    plan::preview::{preview, Edit},
     store::{
         channels::{ChannelError, ChannelWithRules, Rule, RuleInput, RuleState},
         history::HistoryItem,
@@ -213,13 +214,17 @@ async fn earliest_past(
         });
     }
     let items = items.as_deref().unwrap_or_default();
-    match build_preview(
+    // Nothing is listed: only the earliest release is asked for.
+    match preview(
         std::path::Path::new(collect_folder),
         cwr,
-        Some(&rule.id),
-        &rule.to_input(),
-        None,
+        Edit {
+            id: Some(&rule.id),
+            input: &rule.to_input(),
+            position: None,
+        },
         items,
+        0,
     ) {
         Ok(preview) => preview.earliest_receivable,
         Err(err) => {
