@@ -856,28 +856,7 @@ async fn each_received_archive_says_what_came_of_unpacking_it() {
         json!({ "state": "retry", "reason": "디스크가 찼어요", "tries": 1, "retry_at": 3600005,
                  "first": null, "files": null, "subtitles": null, "fonts": null })
     );
-    assert_eq!(
-        (
-            &unpack("started.zip")["state"],
-            &unpack("started.zip")["tries"],
-            &unpack("started.zip")["retry_at"]
-        ),
-        (&json!("retry"), &json!(2), &Value::Null)
-    );
-    // The third failure is 풀지 못함, with the tries it took.
-    assert_eq!(
-        (
-            &unpack("thrice.zip")["state"],
-            &unpack("thrice.zip")["reason"],
-            &unpack("thrice.zip")["tries"]
-        ),
-        (
-            &json!("failed"),
-            &json!("120초 안에 다 풀지 못해 멈췄어요"),
-            &json!(3)
-        )
-    );
-    // Not tried yet, and no archive.
+    // Not tried yet: nothing (what each state is, and the tries, is tested in
+    // trss-jobs).
     assert_eq!(unpack("later.7z"), Value::Null);
-    assert_eq!(unpack("01.ass"), Value::Null);
 }

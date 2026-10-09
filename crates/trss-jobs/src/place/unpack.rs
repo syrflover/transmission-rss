@@ -942,6 +942,12 @@ mod tests {
             member_row("readme.txt", Ok(Format::Other)),
             member_row("broken.ass", Err("not a file".into())),
         ];
+        let with_a_page = [
+            member_row("Show - 01.ass", Ok(Format::Ass)),
+            member_row("Fonts/A.ttf", Ok(Format::Other)),
+            member_row("readme.txt", Ok(Format::Other)),
+            member_row("page.ass", Err("웹 페이지예요".into())),
+        ];
         // (what, the receipt, its members, the first volume's name, the status)
         type Case<'a> = (
             &'a str,
@@ -1036,6 +1042,64 @@ mod tests {
                     // An SSA is a subtitle too, though it is not applied by itself.
                     subtitles: 3,
                     fonts: 2,
+                }),
+            ),
+            (
+                "a web page among the members is a file, and neither a subtitle nor a font",
+                FileRow {
+                    unpacked_at: Some(2),
+                    ..archive()
+                },
+                &with_a_page,
+                None,
+                Some(UnpackStatus::Done {
+                    tries: 0,
+                    files: 4,
+                    subtitles: 1,
+                    fonts: 1,
+                }),
+            ),
+            (
+                "a split archive with a volume missing",
+                FileRow {
+                    unpack_error: Some("나뉜 압축 파일의 조각이 모자라요".into()),
+                    ..archive()
+                },
+                &[],
+                None,
+                Some(UnpackStatus::Failed {
+                    reason: "나뉜 압축 파일의 조각이 모자라요".into(),
+                    tries: 0,
+                }),
+            ),
+            (
+                "a worker started after the second try failed",
+                FileRow {
+                    unpack_tries: 2,
+                    unpack_failure: Some("디스크가 찼어요".into()),
+                    ..archive()
+                },
+                &[],
+                None,
+                Some(UnpackStatus::Retry {
+                    reason: Some("디스크가 찼어요".into()),
+                    tries: 2,
+                    retry_at: None,
+                }),
+            ),
+            (
+                "the third failed try ends the archive",
+                FileRow {
+                    unpack_error: Some("120초 안에 다 풀지 못해 멈췄어요".into()),
+                    unpack_tries: 3,
+                    unpack_failure: Some("120초 안에 다 풀지 못해 멈췄어요".into()),
+                    ..archive()
+                },
+                &[],
+                None,
+                Some(UnpackStatus::Failed {
+                    reason: "120초 안에 다 풀지 못해 멈췄어요".into(),
+                    tries: 3,
                 }),
             ),
             (
