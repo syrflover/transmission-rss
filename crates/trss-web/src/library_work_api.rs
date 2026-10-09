@@ -251,7 +251,10 @@ use trss_collect::{
 use trss_core::{
     episode::EpisodeNumber, settings::policy::FormatOrder, trname_names::season_episode,
 };
-use trss_jobs::place::cleanup;
+use trss_jobs::place::{
+    cleanup,
+    records::{by_creator, Choice, StoredCopy},
+};
 use trss_library::seasons::combine::air_time_of;
 use trss_library::store::{
     artwork::JobKind,
@@ -373,7 +376,7 @@ struct StoredView {
 impl From<trss_jobs::place::records::StoredOnly> for StoredView {
     fn from(stored: trss_jobs::place::records::StoredOnly) -> Self {
         StoredView {
-            can_apply: stored.format.extension().is_some() && stored.job_id.is_some(),
+            can_apply: stored.can_apply(),
             id: stored.id,
             name: stored.name,
             creator: stored.creator,
@@ -537,53 +540,41 @@ struct AppliedView {
     applied_at: i64,
 }
 
-/// The stored subtitles by creator: creators by name (none last), a
-/// creator's copies by season, episode and then newest stored first.
-fn creators_of(copies: Vec<trss_jobs::place::records::StoredCopy>) -> Vec<CreatorCopies> {
-    let mut groups: Vec<CreatorCopies> = Vec::new();
-    for copy in copies {
-        let view = CopyView {
-            id: copy.id,
-            season: copy.season,
-            episode: format!("{:02}", copy.episode),
-            name: copy.name,
-            format: copy.format.code(),
-            stored_at: copy.stored_at,
-            stored_path: copy.stored_path,
-            applied: copy
-                .applied
+/// The stored subtitles by creator ([`by_creator`]).
+fn creators_of(copies: Vec<StoredCopy>) -> Vec<CreatorCopies> {
+    by_creator(copies)
+        .into_iter()
+        .map(|group| CreatorCopies {
+            creator: group.creator,
+            copies: group
+                .copies
                 .into_iter()
-                .map(|a| AppliedView {
-                    path: a.path,
-                    applied_at: a.applied_at,
+                .map(|copy| CopyView {
+                    choice: copy.options.choice().map(|choice| match choice {
+                        Choice::Apply => "apply",
+                        Choice::Compare => "compare",
+                    }),
+                    can_add: copy.options.add.is_ok(),
+                    blocked: copy.options.blocked(),
+                    id: copy.id,
+                    season: copy.season,
+                    episode: format!("{:02}", copy.episode),
+                    name: copy.name,
+                    format: copy.format.code(),
+                    stored_at: copy.stored_at,
+                    stored_path: copy.stored_path,
+                    applied: copy
+                        .applied
+                        .into_iter()
+                        .map(|a| AppliedView {
+                            path: a.path,
+                            applied_at: a.applied_at,
+                        })
+                        .collect(),
                 })
                 .collect(),
-            choice: match (&copy.options.apply, copy.options.applied) {
-                (_, true) | (Err(_), _) => None,
-                (Ok(true), _) => Some("compare"),
-                (Ok(false), _) => Some("apply"),
-            },
-            can_add: copy.options.add.is_ok(),
-            blocked: match (&copy.options.apply, copy.options.applied) {
-                (Err(reason), false) => Some(*reason),
-                _ => None,
-            },
-        };
-        match groups.iter_mut().find(|g| g.creator == copy.creator) {
-            Some(group) => group.copies.push(view),
-            None => groups.push(CreatorCopies {
-                creator: copy.creator,
-                copies: vec![view],
-            }),
-        }
-    }
-    groups.sort_by(|a, b| match (&a.creator, &b.creator) {
-        (Some(a), Some(b)) => a.cmp(b),
-        (Some(_), None) => std::cmp::Ordering::Less,
-        (None, Some(_)) => std::cmp::Ordering::Greater,
-        (None, None) => std::cmp::Ordering::Equal,
-    });
-    groups
+        })
+        .collect()
 }
 
 /// The work's stored files and their cleanup.

@@ -1398,6 +1398,15 @@ pub struct StoredOnly {
     pub compare: bool,
 }
 
+impl StoredOnly {
+    /// Whether a person can ask for it to be applied: the app applies its
+    /// format ([`SubtitleFormat::is_applicable`]) and a job takes it
+    /// (`job_id`). [`stored_options`] decides the rest when it is asked.
+    pub fn can_apply(&self) -> bool {
+        self.format.is_applicable() && self.job_id.is_some()
+    }
+}
+
 pub fn stored_only(c: &Connection, work_id: &str) -> rusqlite::Result<Vec<StoredOnly>> {
     let mut stmt = c.prepare_cached(
         "SELECT s.id, s.season, s.episode, a.relative_path, s.creator, s.format, s.stored_at,
@@ -1641,6 +1650,66 @@ pub struct StoredOptions {
     job: Result<(String, Option<i64>), &'static str>,
 }
 
+/// What choosing a stored subtitle does ([`StoredOptions::choice`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Choice {
+    /// It is applied at once: the episode has no subtitle.
+    Apply,
+    /// It is compared with the episode's subtitle first.
+    Compare,
+}
+
+impl StoredOptions {
+    /// What choosing it as the episode's does ([`Chosen::Apply`]); `None` for
+    /// the applied copy and for one that cannot be chosen
+    /// ([`StoredOptions::blocked`] says why).
+    pub fn choice(&self) -> Option<Choice> {
+        match (&self.apply, self.applied) {
+            (_, true) | (Err(_), _) => None,
+            (Ok(true), _) => Some(Choice::Compare),
+            (Ok(false), _) => Some(Choice::Apply),
+        }
+    }
+
+    /// Why it cannot be chosen, for a copy that is not applied.
+    pub fn blocked(&self) -> Option<&'static str> {
+        match (&self.apply, self.applied) {
+            (Err(reason), false) => Some(reason),
+            _ => None,
+        }
+    }
+}
+
+/// The stored subtitles of one creator ([`by_creator`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CreatorCopies {
+    /// `None` for the copies that name no creator.
+    pub creator: Option<String>,
+    pub copies: Vec<StoredCopy>,
+}
+
+/// `copies`, as [`work_copies`] lists them, by creator: creators by name, the
+/// one that names none last, and a creator's copies in the order they came.
+pub fn by_creator(copies: Vec<StoredCopy>) -> Vec<CreatorCopies> {
+    let mut groups: Vec<CreatorCopies> = Vec::new();
+    for copy in copies {
+        match groups.iter_mut().find(|g| g.creator == copy.creator) {
+            Some(group) => group.copies.push(copy),
+            None => groups.push(CreatorCopies {
+                creator: copy.creator.clone(),
+                copies: vec![copy],
+            }),
+        }
+    }
+    groups.sort_by(|a, b| match (&a.creator, &b.creator) {
+        (Some(a), Some(b)) => a.cmp(b),
+        (Some(_), None) => std::cmp::Ordering::Less,
+        (None, Some(_)) => std::cmp::Ordering::Greater,
+        (None, None) => std::cmp::Ordering::Equal,
+    });
+    groups
+}
+
 /// A job that may take a stored subtitle: its ID, the position of the row
 /// that keeps it (none for an imported copy), the job's state and what it
 /// waits for.
@@ -1700,7 +1769,7 @@ fn options_in(
             "SELECT count(*) FROM subtitle_applied WHERE stored_id = ?1 AND removed_at IS NULL",
         )?
         .query_row([stored_id], |r| r.get(0))?;
-    let early = if format.extension().is_none() {
+    let early = if !format.is_applicable() {
         Some("자동으로 적용하지 않는 형식이라 적용할 수 없어요.")
     } else if applied > 0 {
         Some("이 보관본은 이미 영상 옆에 적용했어요.")
@@ -2339,4 +2408,139 @@ pub fn observation(c: &Connection, observation_id: i64) -> rusqlite::Result<Opti
     )?
     .query_row([observation_id], |r| r.get(0))
     .optional()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn options(applied: bool, apply: Result<bool, &'static str>) -> StoredOptions {
+        StoredOptions {
+            applied,
+            has_subtitle: false,
+            apply,
+            add: Err(ADD_REFUSED),
+            job: Err("none"),
+        }
+    }
+
+    fn copy(id: &str, creator: Option<&str>) -> StoredCopy {
+        StoredCopy {
+            id: id.into(),
+            season: 1,
+            episode: 1,
+            name: format!("{id}.ass"),
+            stored_path: format!(".trss/{id}.ass"),
+            creator: creator.map(str::to_owned),
+            format: SubtitleFormat::Ass,
+            stored_at: 0,
+            applied: Vec::new(),
+            options: options(false, Ok(false)),
+        }
+    }
+
+    #[test]
+    fn what_choosing_a_stored_subtitle_does_and_why_it_cannot_be_chosen() {
+        // (what, the options, choice, blocked)
+        let cases = [
+            (
+                "the episode has no subtitle",
+                options(false, Ok(false)),
+                Some(Choice::Apply),
+                None,
+            ),
+            (
+                "the episode has a subtitle to compare with",
+                options(false, Ok(true)),
+                Some(Choice::Compare),
+                None,
+            ),
+            (
+                "refused with a reason",
+                options(false, Err("자동으로 적용하지 않는 형식이에요")),
+                None,
+                Some("자동으로 적용하지 않는 형식이에요"),
+            ),
+            (
+                "the applied copy is neither chosen nor blocked",
+                options(true, Ok(false)),
+                None,
+                None,
+            ),
+            (
+                "the applied copy, whatever else refuses it",
+                options(true, Err("이미 적용했어요")),
+                None,
+                None,
+            ),
+        ];
+        for (what, options, choice, blocked) in cases {
+            assert_eq!(options.choice(), choice, "{what}");
+            assert_eq!(options.blocked(), blocked, "{what}");
+        }
+    }
+
+    #[test]
+    fn stored_copies_are_grouped_by_creator_named_ones_first_by_name_and_each_in_order() {
+        let copies = vec![
+            copy("a", None),
+            copy("b", Some("하느")),
+            copy("c", Some("가람")),
+            copy("d", None),
+            copy("e", Some("하느")),
+            copy("f", Some("가람")),
+        ];
+
+        let groups = by_creator(copies);
+
+        let shown: Vec<(Option<&str>, Vec<&str>)> = groups
+            .iter()
+            .map(|g| {
+                (
+                    g.creator.as_deref(),
+                    g.copies.iter().map(|c| c.id.as_str()).collect(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            shown,
+            [
+                (Some("가람"), vec!["c", "f"]),
+                (Some("하느"), vec!["b", "e"]),
+                (None, vec!["a", "d"]),
+            ]
+        );
+        assert!(by_creator(Vec::new()).is_empty());
+    }
+
+    #[test]
+    fn a_stored_subtitle_can_be_asked_for_when_the_app_applies_its_format_and_a_job_takes_it() {
+        let only = |format, job_id: Option<&str>| StoredOnly {
+            id: "s1".into(),
+            season: 1,
+            episode: 1,
+            name: "a".into(),
+            creator: None,
+            format,
+            stored_at: 0,
+            job_id: job_id.map(str::to_owned),
+            awaiting_video: false,
+            awaiting_approval: None,
+            compare: false,
+        };
+        for (format, job, expected) in [
+            (SubtitleFormat::Ass, Some("j1"), true),
+            (SubtitleFormat::Srt, Some("j1"), true),
+            (SubtitleFormat::Smi, Some("j1"), true),
+            (SubtitleFormat::Ass, None, false),
+            (SubtitleFormat::Other, Some("j1"), false),
+            (SubtitleFormat::Other, None, false),
+        ] {
+            assert_eq!(
+                only(format, job).can_apply(),
+                expected,
+                "{format:?} {job:?}"
+            );
+        }
+    }
 }

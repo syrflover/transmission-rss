@@ -256,6 +256,12 @@ codes! {
 }
 
 impl SubtitleFormat {
+    /// Whether the app applies a subtitle of this format beside a video by
+    /// itself, which is when a copy gets an [`extension`](Self::extension).
+    pub fn is_applicable(self) -> bool {
+        self.extension().is_some()
+    }
+
     /// The extension a copy beside a video gets.
     pub fn extension(self) -> Option<&'static str> {
         match self {
