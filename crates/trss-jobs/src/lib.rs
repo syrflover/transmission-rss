@@ -16,6 +16,9 @@
 //! - [`follow`]: the subscribed creator's subtitles, made into jobs without a
 //!   pick, and the `자막 구독` suggestions; [`mapping`]: the episode mapping
 //!   the app decides for that creator's source.
+//! - [`todo`]: the to-dos that need a person (`처리 필요`): what the jobs, the
+//!   subscriptions, the library and the failed receipts wait on, grouped and
+//!   ordered, and each work's badges.
 //! - [`recheck`]: the daily reading of the received episodes' files for 14
 //!   days, and the revision jobs made when a file differs.
 //!
@@ -40,6 +43,7 @@ pub mod recheck;
 pub mod runner;
 pub mod screen;
 pub mod store;
+pub mod todo;
 pub mod upload;
 
 pub use area::ReceiveArea;

@@ -246,6 +246,16 @@ pub struct JobRow {
     pub receiving: bool,
 }
 
+impl JobRow {
+    /// What to call the job: its anime's title, else its work's name.
+    pub fn title(&self) -> String {
+        self.anime_title
+            .clone()
+            .or_else(|| self.work_name.clone())
+            .unwrap_or_else(|| "작품을 찾지 못한 작업".to_owned())
+    }
+}
+
 /// What an upload or a find job kept, by kind, and how many files it dropped.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct UploadSummary {

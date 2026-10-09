@@ -297,14 +297,6 @@ pub fn work_ref(row: &JobRow, covers: &HashMap<String, String>) -> Option<WorkRe
     })
 }
 
-/// What to call a job: its anime's title, else its work's name.
-pub fn title_of(row: &JobRow) -> String {
-    row.anime_title
-        .clone()
-        .or_else(|| row.work_name.clone())
-        .unwrap_or_else(|| "작품을 찾지 못한 작업".to_owned())
-}
-
 fn view(row: &JobRow, covers: &HashMap<String, String>) -> JobRowView {
     JobRowView {
         id: row.id.clone(),
@@ -319,7 +311,7 @@ fn view(row: &JobRow, covers: &HashMap<String, String>) -> JobRowView {
         state_at: row.state_at,
         created_at: row.created_at,
         work: work_ref(row, covers),
-        title: title_of(row),
+        title: row.title(),
         season: row.season,
         episodes: row.episodes.clone(),
         creator: row.creator.clone(),

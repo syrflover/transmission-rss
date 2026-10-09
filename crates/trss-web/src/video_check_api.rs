@@ -36,13 +36,8 @@ pub fn routes() -> Router<AppState> {
     Router::new().route("/library/works/{id}/videos/check", post(check))
 }
 
-/// A video as the scan saw it, as the to-do gives it to the screen: its size
-/// and modification time in nanoseconds, which a JSON number in a browser could
-/// not hold exactly.
-pub fn seen(identity: SeenFile) -> String {
-    format!("{}:{}", identity.size, identity.mtime_ns)
-}
-
+/// The video the screen sends back, as [`trss_jobs::todo::seen`] gave it to the
+/// to-do: its size and modification time in nanoseconds (`size:mtime_ns`).
 fn parse_seen(seen: &str) -> Option<SeenFile> {
     let (size, mtime_ns) = seen.split_once(':')?;
     Some(SeenFile {
