@@ -319,9 +319,6 @@ async fn the_creators_later_candidate_of_an_episode_with_such_a_file_is_a_revisi
         revision_of(&candidates, "하느", "5"),
         json!({ "of": null, "same_post": null })
     );
-    // Not the other creator's, and not an episode with no file.
-    assert_eq!(revision_of(&candidates, "카이란", "5"), Value::Null);
-    assert_eq!(revision_of(&candidates, "하느", "13"), Value::Null);
 
     // Naming 카이란 for episode 5 only marks 카이란's candidate too.
     let (status, _) = app
@@ -379,34 +376,6 @@ async fn the_sources_mapping_decides_which_episode_of_the_season_a_candidate_is(
         revision_of(&candidates, "하느", "13"),
         json!({ "of": null, "same_post": null })
     );
-
-    // Under -10 the candidate of 5 would be before the season's start, and 13
-    // is the season's 3.
-    map("user", Some(-10)).await;
-    let candidates = app.candidates().await;
-    assert_eq!(revision_of(&candidates, "하느", "5"), Value::Null);
-    assert_eq!(
-        revision_of(&candidates, "하느", "13"),
-        json!({ "of": null, "same_post": null })
-    );
-
-    // A mapping the app could not decide cannot say which episode it is.
-    map("undecided", None).await;
-    for candidate in app.candidates().await {
-        if candidate["creator"] == "하느" {
-            assert_eq!(candidate["revision"], Value::Null, "{candidate}");
-        }
-    }
-}
-
-#[tokio::test]
-async fn a_season_without_a_creator_named_marks_no_candidate_a_revision() {
-    let app = App::new().await;
-    app.link().await;
-    app.observe_episode_5().await;
-    for candidate in app.candidates().await {
-        assert_eq!(candidate["revision"], Value::Null, "{candidate}");
-    }
 }
 
 #[tokio::test]

@@ -815,3 +815,35 @@ async fn picked_candidates_are_the_animes_own_and_of_one_creator() {
         assert_eq!(store.pick(1, ids).await.unwrap(), Err(error), "{what}");
     }
 }
+
+#[test]
+fn a_mappings_offset_moves_the_candidates_episode_to_the_season_files_it_is_compared_with() {
+    use trss_library::mapping::MappingKind::{Auto, Undecided, User};
+    let marked = Some(Revision {
+        of: None,
+        same_post: None,
+    });
+    // The season has a file for each of its twelve episodes.
+    let files: Vec<Attributed> = (1..=12).map(|n| held("s1", &format!("{n:02}"))).collect();
+    // (candidate episode, the mapping, whether it is marked)
+    let cases = [
+        // 5 is the season's 1 under -4 (the season's 5 is the creator's 9);
+        // 13 is its 9.
+        ("5", mapping_of(Auto, Some(-4), &[]), marked.clone()),
+        ("13", mapping_of(Auto, Some(-4), &[]), marked.clone()),
+        // Under -10, 5 would be before the season's start; 13 is its 3.
+        ("5", mapping_of(User, Some(-10), &[]), None),
+        ("13", mapping_of(User, Some(-10), &[]), marked.clone()),
+        // A mapping the app could not decide cannot say which episode it is.
+        ("5", mapping_of(Undecided, None, &[]), None),
+        ("13", mapping_of(Undecided, None, &[]), None),
+    ];
+    for (episode, mapping, expected) in cases {
+        let candidate = plain_candidate(1, "s1", episode);
+        assert_eq!(
+            revision_by_mapping(&candidate, Some(&mapping), &files),
+            expected,
+            "episode {episode:?} under {mapping:?}"
+        );
+    }
+}

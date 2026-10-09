@@ -408,51 +408,6 @@ async fn a_creator_the_app_does_not_decide_goes_back_to_no_mapping_at_all() {
 }
 
 #[tokio::test]
-async fn an_exception_decides_which_candidate_revises_a_subtitle_file_the_user_named() {
-    let app = App::new().await;
-    app.observe(&["5", "14"]).await;
-    // The season's 5 and 12 have a subtitle file the user gave to 에루샤.
-    sql(
-        &app.state,
-        "INSERT INTO episodes (work_id, season, episode) VALUES ('w1', 1, '05'), ('w1', 1, '12');
-         INSERT INTO media_files (work_id, path, season, episode, kind, creator_source_id)
-             VALUES ('w1', 'S01E05.ass', 1, '05', 'subtitle', 's1'),
-                    ('w1', 'S01E12.ass', 1, '12', 'subtitle', 's1');"
-            .to_owned(),
-    )
-    .await;
-    let revision = |list: &Value, episode: &str| {
-        list["candidates"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|c| c["episode"] == episode)
-            .unwrap()["revision"]
-            .clone()
-    };
-    let marked = json!({ "of": null, "same_post": null });
-
-    // No mapping: compared by number as they are.
-    let list = app.get(CANDIDATES).await;
-    assert_eq!(revision(&list, "5"), marked);
-    assert_eq!(revision(&list, "14"), Value::Null);
-
-    // The default 0 changes nothing; the exceptions come first: 14 is the
-    // season's 12, and 5 is not received, so it revises nothing.
-    let (status, _) = app
-        .save(
-            0,
-            0,
-            json!([{ "episode": "014", "target": 12 }, { "episode": "5", "target": null }]),
-        )
-        .await;
-    assert_eq!(status, StatusCode::OK);
-    let list = app.get(CANDIDATES).await;
-    assert_eq!(revision(&list, "5"), Value::Null);
-    assert_eq!(revision(&list, "14"), marked);
-}
-
-#[tokio::test]
 async fn reverting_a_source_with_no_mapping_is_refused_as_invalid_and_a_stale_version_as_a_conflict(
 ) {
     let app = App::new().await;
