@@ -724,6 +724,18 @@ fn mask_url_masks_only_secret_values() {
         mask_url("https://h/rss?to%6Ben=abc", &secret(&["token"])),
         "https://h/rss?to%6Ben=***"
     );
+    // A name that repeats is masked at each place, around a fragment too.
+    assert_eq!(
+        mask_url(
+            "https://h/rss?r=1080&token=abc&r=2#f",
+            &secret(&["r", "token"])
+        ),
+        "https://h/rss?r=***&token=***&r=***#f"
+    );
+    assert_eq!(
+        mask_url("https://h/rss?r=1080&token=abc&r=2#f", &secret(&["token"])),
+        "https://h/rss?r=1080&token=***&r=2#f"
+    );
     assert_eq!(
         mask_url("https://h/rss", &secret(&["token"])),
         "https://h/rss"
