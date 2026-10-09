@@ -3,9 +3,17 @@
 //! 수정본의 대체). What a release name says about its revision and its CRC32
 //! is read by [`crate::release_name`].
 
-use std::{fs::File, io, io::Read, path::Path};
+use std::{
+    fs::File,
+    io,
+    io::Read,
+    path::{Path, PathBuf},
+};
 
-use trss_core::file_id::FileId;
+use trss_core::{
+    file_id::FileId,
+    files::{rename_noreplace, sync_renamed},
+};
 
 /// `v2`, as the version line writes a revision.
 pub fn label(version: u32) -> String {
@@ -22,6 +30,30 @@ pub fn parse_crc(text: &str) -> Option<u32> {
     (text.len() == 8)
         .then(|| u32::from_str_radix(text, 16).ok())
         .flatten()
+}
+
+/// Renames the video `source` to `target`, which must be free
+/// ([`rename_noreplace`]: `AlreadyExists` otherwise, and nothing moves), and
+/// syncs the two folders so the name outlives a power loss, off the async
+/// threads. This is for a video renamed by trss itself; a torrent's is renamed
+/// by Transmission.
+///
+/// A folder that cannot be synced is no failure of the rename: the video has
+/// its new name and nothing can take it back, so the failure is only logged.
+pub async fn rename_video(source: PathBuf, target: PathBuf) -> io::Result<()> {
+    tokio::task::spawn_blocking(move || {
+        rename_noreplace(&source, &target)?;
+        if let Err(err) = sync_renamed(&source, &target) {
+            eprintln!(
+                "Could not sync the folders of {} renamed to {}: {err}",
+                source.display(),
+                target.display()
+            );
+        }
+        Ok(())
+    })
+    .await
+    .map_err(io::Error::other)?
 }
 
 /// How much of a file [`file_crc32`] holds in memory at a time.

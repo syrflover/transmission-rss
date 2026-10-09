@@ -8,7 +8,7 @@
 use super::fixtures::*;
 use super::*;
 use crate::test_world::{show_hash, World};
-use trss_core::commands::CommandState;
+use trss_core::{commands::CommandState, files::testing};
 use trss_transmission::fake::FakeTorrent;
 
 #[tokio::test]
@@ -97,6 +97,42 @@ async fn a_video_whose_torrent_is_gone_is_renamed_on_disk_without_replacing() {
     assert_eq!(s.torrent_names(), ["Show S03E25.mkv"]);
     assert_eq!(s.on_disk(), ["Show S03E25.mkv", "Show S03E26.mkv"]);
     assert_eq!(s.content("Show S03E26.mkv"), b"video 50");
+}
+
+/// A rename on disk is the app's own, so its folder is synced for the new name
+/// to outlast a power loss (the folder is the source's and the target's both).
+/// A folder that cannot be synced does not undo the rename.
+#[tokio::test]
+async fn a_video_renamed_on_disk_has_its_folder_synced_and_a_failing_sync_does_not_undo_it() {
+    let (s, rule) = third_season_received().await;
+    s.tr.remove(&show_hash(50));
+    s.tr.remove(&show_hash(49));
+    let folder = s.season3();
+    assert_eq!(testing::syncs_of(&folder), 0);
+
+    let finished = s.undo(&rule, "undo-0006-a", -48).await;
+
+    assert_eq!(finished.state, CommandState::Done, "{finished:?}");
+    assert_eq!(s.on_disk(), ["Show S03E25.mkv", "Show S03E26.mkv"]);
+    assert!(
+        testing::syncs_of(&folder) >= 1,
+        "the folder the videos were renamed in was not synced"
+    );
+
+    let (s, rule) = third_season_received().await;
+    s.tr.remove(&show_hash(50));
+    s.tr.remove(&show_hash(49));
+    let _failing = testing::fail_syncs_of(&s.season3());
+    let finished = s.undo(&rule, "undo-0007-a", -48).await;
+    assert_eq!(finished.state, CommandState::Done, "{finished:?}");
+    assert_eq!(s.on_disk(), ["Show S03E25.mkv", "Show S03E26.mkv"]);
+    assert_eq!(
+        s.undo_files("undo-0007-a").await,
+        [
+            file("Show S03E01.mkv", "Show S03E25.mkv", "renamed"),
+            file("Show S03E02.mkv", "Show S03E26.mkv", "renamed"),
+        ]
+    );
 }
 
 #[tokio::test]

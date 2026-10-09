@@ -11,6 +11,7 @@ use crate::{
     store::history::{HistoryResult, Observation},
     test_world::{crc, magnet, read, World},
 };
+use trss_core::files::testing;
 use trss_transmission::fake::FakeTorrent;
 
 /// Before ticket 0025 the cycle renamed `14v2` onto the episode name right
@@ -526,6 +527,45 @@ async fn a_rename_whose_done_was_not_written_finishes_without_its_torrent_too() 
     assert_eq!(s.state_of(&v2()).await, RevisionState::Done);
     assert!(s.failures().await.is_empty());
     assert_eq!(read(&s.file(EPISODE_NAME)), NEW_BYTES);
+}
+
+/// Transmission renames the new video of a revision whose torrent is still
+/// there; the app renames it itself when the torrent has gone, and then syncs
+/// the folder so the episode name outlasts a power loss. A folder that cannot
+/// be synced does not undo the rename.
+#[tokio::test]
+async fn a_new_video_renamed_on_disk_has_its_folder_synced_and_a_failing_sync_does_not_undo_it() {
+    for fail in [false, true] {
+        let s = World::new().await;
+        s.received_v1().await;
+        s.feed(&[(NEW_HASH, &v2()), (OLD_HASH, &v1())]);
+        s.tr.content_on_add(NEW_HASH, NEW_BYTES);
+        s.cycle().await;
+        s.complete(NEW_HASH);
+        // The rename does not go through, as for a worker stopped right after
+        // the old video went, and the torrent has left by the next look.
+        s.tr.reject_rename_of(NEW_HASH, Some("busy"));
+        s.cycle().await;
+        assert_eq!(s.names(), vec![v2()]);
+        s.tr.remove(NEW_HASH);
+        let folder = s.file(EPISODE_NAME).parent().unwrap().to_path_buf();
+        let failing = fail.then(|| testing::fail_syncs_of(&folder));
+        assert_eq!(testing::syncs_of(&folder), 0);
+
+        s.cycle().await;
+
+        assert_eq!(s.names(), vec![EPISODE_NAME], "failing syncs: {fail}");
+        assert_eq!(read(&s.file(EPISODE_NAME)), NEW_BYTES);
+        assert_eq!(s.state_of(&v2()).await, RevisionState::Done);
+        assert!(s.failures().await.is_empty());
+        match failing {
+            None => assert!(
+                testing::syncs_of(&folder) >= 1,
+                "the folder the video was renamed in was not synced"
+            ),
+            Some(_) => assert_eq!(testing::syncs_of(&folder), 0),
+        }
+    }
 }
 
 /// A file put over the old video (an atomic rename by another program) while

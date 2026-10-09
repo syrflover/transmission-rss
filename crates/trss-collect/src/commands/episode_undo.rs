@@ -122,7 +122,7 @@ use transmission_rpc::types::Id;
 
 use trss_core::{
     commands::{Command, CommandState, Outcome},
-    files::{occupied, rename_noreplace},
+    files::occupied,
     folder_locks::Section,
     settings::SettingsStore,
     Clock,
@@ -132,7 +132,7 @@ use crate::{
     context::TransmissionLink,
     episode_offset::signed,
     plan::rule_work_folder,
-    revision::FileIdentity,
+    revision::{rename_video, FileIdentity},
     revisions::{episode_name, owner_of, same_folder, Owner},
     rss::save_path,
     store::{
@@ -965,7 +965,7 @@ async fn rename(
     if claimed(listing.get(ctx).await?, None, folder, &file.to_name) {
         return Ok(Some(CLAIMED.to_owned()));
     }
-    Ok(match rename_noreplace(&source, &target) {
+    Ok(match rename_video(source, target).await {
         Ok(()) => None,
         Err(err) if err.kind() == io::ErrorKind::AlreadyExists => Some(TAKEN.to_owned()),
         Err(err) => Some(format!("이름을 바꾸지 못했어요({err}).")),

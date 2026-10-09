@@ -109,7 +109,7 @@ use crate::{
 };
 use crate::{
     release_name::{has_extension, ReleaseName},
-    revision::{crc_text, file_crc32_identified, FileIdentity},
+    revision::{crc_text, file_crc32_identified, rename_video, FileIdentity},
     store::{
         channels::{ChannelStore, RuleState},
         history::{HistoryItem, HistoryResult, HistoryStore},
@@ -1771,7 +1771,8 @@ async fn rename(ctx: &RevisionsContext, row: &mut Revision, listing: &Listing) -
         }
         // Nothing of Transmission's to keep in step with: the file is renamed
         // on disk, never over another.
-        None => trss_core::files::rename_noreplace(&source, &target)
+        None => rename_video(source.clone(), target.to_path_buf())
+            .await
             .err()
             .map(|err| err.to_string()),
     };
