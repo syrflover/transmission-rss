@@ -314,3 +314,134 @@ API의 Rust 응답 구조체와 화면의 TypeScript 타입은 생성 도구 없
   보류 중에도 오배치 금지 요구는 유지해요.
 - 외부 알림은 보류해요.
   외부 알림 없이 웹에서 후보·실패·인증 필요를 확인하는 요구는 유지해요.
+
+## 검증 표
+
+요구마다 실제 사용에서 본 것(날짜와 티켓), 테스트로 확인한 것(크레이트와 파일, 테스트 이름), 확인하지 않은 것을 나눠 적었어요. 테스트는 요구를 가장 직접 겨눈 것만 골라 적었고 같은 요구를 다루는 다른 테스트는 나열하지 않았어요.
+이 표는 2026-10-10에 `6e46ef1`에서, [0113](../tickets/0113-remaining-area-tests.md)이 남은 영역의 테스트를 나눈 뒤 만들었어요. 실제 사용은 배포한 서버(j4105)와 로컬 개발 환경이고, 무엇으로 봤는지(서버 DB 사본, iPhone Safari 등)를 티켓이 적은 경우 괄호에 적었어요. `서버(0.5.0)`은 원격 화면이 생기기 전의 0.5.0을 본 것이에요.
+행은 요구의 항목 하나(최상위 글머리 기호, 규칙을 담은 문단, 입력·결과 표의 행)이고, 한 항목 안에서 확인 방법이 갈리는 부분은 칸 안에서 `<br>`로 나누고 `(1)`, `(2)`로 번호를 붙였어요. 외부 서비스, 브라우저, 디스크를 본 기록은 trss를 본 것이 아니라서 `근거만:`으로, 가짜 출처나 바꿔 넣은 응답으로 본 개발 환경의 확인은 `참고(가짜 출처):`로, 실제 데이터 없이 빈 화면이나 스크래치 DB를 헤드리스 브라우저로 본 확인은 `참고(헤드리스 브라우저):`로 따로 적었어요.
+코드가 명세와 다른 요구는 `코드가 이 요구와 달라요`로 적고, 리팩터링 뒤에 그것을 고칠 티켓을 붙였어요.
+
+### 접근 경계와 기기
+
+요구 절: [접근 경계와 기기](#접근-경계와-기기)
+
+| 요구 | 실제 사용에서 본 것 | 테스트로 확인한 것 | 확인하지 않은 것 |
+| --- | --- | --- | --- |
+| 접근 경계와 `browser_net` 차단 | (1) 2026-10-07 서버: LAN에서 보낸 다른 Host는 `421`, 다른 Origin·`null`·`cross-site`의 변경 요청과 Origin 없는 WebSocket은 `403`이었고, 서버 브라우저의 송신 프록시는 LAN·게이트웨이·루프백 대상 11개를 모두 `403`으로 거절했어요 ([0082])<br>(2) 2026-10-07 서버: 웹이 서버 브라우저의 네트워크(`172.20.0.0/16`)를 거절한다고 알리고 떴어요 ([0081])<br>(3) 2026-10-07 서버: 사용자가 VPN을 끈 LTE에서 웹 포트에 닿지 않는 것을 확인했다고 알렸어요. 관찰 값은 받지 않았어요 ([0082]) | (1) `trss-web` `browser_net.rs` `a_peer_in_the_browsers_network_is_refused_before_anything_is_read`<br>(2) `trss-web` `browser_net.rs` `a_default_route_through_the_browsers_network_stops_the_start`<br>(3) `trss-web` `screen_api/tests.rs` `a_socket_from_another_site_for_a_job_not_waiting_or_for_an_ended_run_is_refused` (원격 화면 연결) | VPN으로는 시도하지 않았어요 ([0082]). HTTPS 앞단 프록시 뒤의 경로와 그 뒤 WSS는 확인하지 않았어요 (이 명세의 [검증 근거와 완료 판정](#검증-근거와-완료-판정), [0082]). hairpin NAT, Host를 다시 쓰는 프록시, iptables 예시는 확인하지 않았어요 ([0053]). Docker Engine 28·Compose 2.33보다 오래된 환경에서는 웹이 시작하지 않고 그 환경은 확인하지 않았어요 (서버는 Engine 29.8.1이에요) ([0040], [0081]). LTE에서 원격 화면 경로를 따로 시도한 기록이 없어요 |
+| 경계 안 다른 출처의 Host·Origin 검사 | 2026-10-07 서버: LAN에서 `Host: evil.example`는 `421`, 다른 Origin·`null`의 POST는 `403`이었고, 같은 출처 대조는 검사를 지나 `200`·`415`·`404`로 답했어요 ([0082]) | (1) `trss-web` `origin_guard.rs` `a_host_that_is_not_allowed_is_refused_everywhere`<br>(2) `trss-web` `origin_guard.rs` `which_hosts_are_allowed`, `trss-web` `env.rs` `reads_the_host_names`<br>(3) `trss-web` `origin_guard.rs` `a_change_from_another_origin_is_refused`, `a_websocket_needs_its_own_origin`<br>(4) `trss-web` `origin_guard.rs` `origins` | 실제 DNS 재바인딩이 아니라 `Host` 헤더를 직접 바꿔 보냈어요 ([0053], [0082]). 앞단 프록시가 Host를 넘기고 `TRSS_WEB_HOSTS`를 맞춘 배치와 프록시 뒤 WSS는 확인하지 않았어요 ([0053], [0082]) |
+| PC·태블릿·휴대폰의 주요 흐름과 원격 인증 | (1) 2026-10-07 서버: iPhone(iOS 27 Safari, LAN)으로 후보를 골라 받고 교체 비교를 승인했고, 작은 화면에서도 비교 정보와 `현재 유지`·`새 자막으로 교체`가 빠짐없이 보였다고 알렸어요 ([0083], [0085])<br>(2) 2026-10-07 서버: erulabo의 Turnstile을 휴대폰 터치로 풀었고 확대하거나 돌린 뒤에도 누른 자리가 맞았다고 알렸어요 ([0085]) | (1) `web` `src/screens/todo/remote/geometry.test.ts` `a frame of another size than the box is scaled on each axis`<br>(2) `trss-web` `screen_api/tests.rs` `a_frame_sent_before_the_new_screencast_started_is_never_the_new_sizes` (크기를 바꾼 직후의 입력)<br>(3) 없음 (구독·후보 선택·비교 승인·설정 편집 화면) | 원격 페이지 입력란의 가상 키보드와 입력 초점은 확인하지 않았어요 (사용자 결정, 2026-10-07) ([0085], [0040]). 휴대폰으로 구독한 관찰이 없고, 2026-10-08 서버의 구독은 기기를 기록하지 않았어요 ([0085], [0123]). 설정 편집을 휴대폰이나 태블릿으로 한 기록이 없어요. 태블릿은 iPad 13인치가 있다고만 알렸고 어느 흐름을 어느 기기로 봤는지는 받지 않았어요 ([0085]). 원격 입력의 초점과 다른 폼 편집을 가르는 동작은 관찰과 테스트가 없어요 |
+| 다섯 폭·두 모드의 가로 넘침 없음과 하단 메뉴·동작 막대 | (1) 2026-10-05 개발(내장 브라우저의 휴대폰 크기): 교체 비교의 버튼 두 개가 하단 메뉴 바로 위에 고정됐고 맨 아래 내용이 가려지지 않았어요 ([0068])<br>(2) 참고(헤드리스 브라우저): 2026-09-30 1440·1024·768·390·320px의 라이트·다크에서 여섯 경로 모두 가로 넘침이 없었어요 ([0003]) | 없음 | 실제 기기에서 다섯 폭을 본 기록이 없어요. 0003 뒤에 만든 화면은 작품 상세(721–1100px)만 폭별로 확인했어요 ([0014]). 안전 영역은 Chromium의 덮어쓴 값(34px)으로만 봤고 Firefox와 Safari는 보지 않았어요 ([0003]). 가로 넘침을 확인하는 자동 테스트가 없어요 |
+| Transmission 상태와 기존 관리 화면 링크 | 2026-10-07 서버: 사용자가 수집 상태판을 열어 이상이 없다고 했어요. 값은 적지 않았어요 ([0081]) | (1) `trss-web` `status_api/tests.rs` `transmission_counts_and_the_last_cycle_are_reported_with_their_time`<br>(2) `trss-worker` `tests/it/worker_cycle.rs` `a_cycle_adds_the_selected_items_and_records_every_item` (RSS 주기가 토렌트를 추가해요) | 코드가 이 요구와 달라요: 수집 상태(`web/src/screens/collect/status/StatusBoard.tsx`)는 받는 중·시딩 개수만 보여 주고, Transmission 관리 화면으로 가는 링크는 어느 화면에도 없어요 ([0133](../tickets/0133-web-notation-rules.md)). 웹에 시작·일시정지·삭제를 중복 구현하지 않은 것과 RSS 처리의 Transmission 연동이 읽기 전용으로 바뀌지 않은 것은 코드에서만 그렇고, 관찰과 테스트가 없어요 |
+
+### 메뉴와 탐색
+
+요구 절: [메뉴와 탐색](#메뉴와-탐색)
+
+| 요구 | 실제 사용에서 본 것 | 테스트로 확인한 것 | 확인하지 않은 것 |
+| --- | --- | --- | --- |
+| 주 메뉴·반응형 메뉴·현재 메뉴 구분 | (1) 2026-10-07 서버: 사용자가 라이브러리·수집·할 일 화면과 수집 상태판을 열어 이상이 없다고 했어요. 값은 적지 않았어요 ([0081])<br>(2) 2026-10-04 서버(0.5.0): 사용자가 휴대폰에서 골격 화면을 한 번 열었다고 알렸어요. 값은 받지 않았어요 ([0009])<br>(3) 참고(헤드리스 브라우저): 2026-09-30 768px에서 아이콘만 보이는 상단 메뉴, 390·320px에서 하단 메뉴였고 Tab 이동에 경로와 현재 메뉴 표시가 그대로였어요 ([0003]) | 없음 | 실제 기기의 안전 영역, 스크린 리더로 아이콘만 있는 메뉴를 읽는 것, Firefox와 Safari는 확인하지 않았어요 ([0003]). 태블릿 폭(721–979px)의 상단 아이콘 메뉴를 실제 태블릿으로 본 기록이 없어요 |
+| `할 일` 개수 배지와 화면 모드 전환 버튼 | (1) 2026-10-06 개발(서버 DB 사본): `확인함`을 누르자 메뉴 개수가 11에서 10이 됐어요 ([0078])<br>(2) 참고(헤드리스 브라우저): 2026-09-30 상단 버튼 하나가 시스템→라이트→다크 순으로 돌았어요 ([0003]) | (1) `trss-web` `todo_api/tests.rs` `a_work_without_a_creator_is_one_suggestion_with_no_names_and_no_badge` (`제안`은 세지 않아요)<br>(2) `trss-jobs` `tests/it/todo.rs` `a_site_check_comes_before_a_receive_failure_and_the_count_has_both`<br>(3) 없음 (배지 숨김, 모드 버튼) | 코드가 이 요구와 달라요: 처음 설정 중인지 보는 조건이 배지 코드(`web/src/app/MainNav.tsx`, `todo-count.ts`)에 없어요. 처음 설정 중에 개수가 0보다 클 수 있는지는 확인하지 않았어요 ([0134](../tickets/0134-settings-version-and-first-run-badge.md)). 배지의 색은 `시각 방향과 테마`의 `빨간색 사용 한정과 할 일 종류의 색` 행에 적었어요 |
+| 목록의 무한 스크롤·시트와 창 머리·뒤로 화살표·되돌리기 어려운 동작의 확인·도착 강조 없음 | (1) 2026-10-04 개발(iPhone Safari): 라이브러리를 끝까지 스크롤해도 멈칫하거나 밀리지 않았고 뒤로 가면 같은 위치였어요 ([0013])<br>(2) 2026-10-04 개발(iPhone Safari): 시즌 고르기 시트에서 시즌을 고르면 닫혔고, 시트를 연 채 뒤로 가도 남지 않았어요 ([0014]) | (1) 없음 (무한 스크롤, 시트와 창 머리, 뒤로 화살표, 위험 동작의 확인, 도착 강조)<br>(2) `더 보기` 버튼이 지금 모습으로 굳어 있어요(요구와 반대): `web` `src/screens/todo/changes.test.ts` `the first 200 lines show, and the button says how many more it adds` | 코드가 이 요구와 달라요: 할 일의 변경 목록(`web/src/screens/todo/Changes.tsx`)에 `n줄 더 보기`가, 작품 상세의 Anissia 연결(`SeasonAnissiaDialog.tsx`)·시즌 정보 연결(`SeasonLinksDialog.tsx`)·표지 고르기(`CoverDialog.tsx`)에 `결과 더 보기`가 있어요 ([0133](../tickets/0133-web-notation-rules.md)). 뒤로 화살표, 위험 동작의 제자리 확인, 도착 강조가 없는 것은 관찰과 테스트가 없어요. 실제 기기에서 520개를 스크롤하는 확인은 하지 않기로 했고(사용자 결정, 2026-10-04) 89편만 스크롤했어요 ([0013]). 시트의 여닫는 움직임은 눈으로 보지 못했어요 ([0014]) |
+
+### 이번 주 편성
+
+요구 절: [이번 주 편성](#이번-주-편성)
+
+| 요구 | 실제 사용에서 본 것 | 테스트로 확인한 것 | 확인하지 않은 것 |
+| --- | --- | --- | --- |
+| 작품 카드의 내용·상태 줄·강조, `방영 전`·`받기 멈춤`·`결방`, 종영과 보관 구독의 카드, 방영 없는 날, 카드 링크 | (1) 2026-10-07 개발(서버 DB 사본): 이번 주 편성이 복사본의 데이터를 보여줬어요 ([0080])<br>(2) 참고(헤드리스 브라우저): 2026-10-01 스크래치 DB에서 카드, `방영 전`, 결방과 `받기 멈춤`, `방영 없음`의 줄을 봤어요 ([0021]) | (1) `trss-web` `schedule_api/tests.rs` `the_week_has_a_card_on_each_day_something_airs_and_a_bare_day_otherwise`, `a_work_before_its_air_time_is_upcoming_and_a_new_subscription_has_an_empty_cover`<br>(2) `trss-collect` `schedule/state.rs` `the_video_line_follows_the_library_then_the_download_then_the_clock`<br>(3) `trss-web` `schedule_api/tests.rs` `an_anime_anissia_marks_off_has_a_card_with_no_episode_in_place_of_its_lines`, `an_archived_subscription_has_no_card`<br>(4) `trss-anissia` `slot.rs` `the_run_is_over_by_the_end_date_or_only_without_one_by_the_listing`<br>(5) `trss-collect` `anissia/tests.rs` `a_weekday_that_comes_back_empty_does_not_unlist_the_anime_it_held`, `a_refresh_that_fails_or_stops_halfway_never_records_an_anime_as_unlisted` | 실제 Anissia·AniList로 이 화면을 본 기록이 없어요. 결방, 편성표에서 빠지는 카드, 새 설치는 스크래치 DB에서만 봤고 표지 이미지가 있는 카드는 보지 않았어요 ([0021]). 요일 하나가 모두 종영돼 비면 `unlisted_at`이 찍히지 않아 카드 제거를 받지 못하는 한계가 남아 있어요 ([0021]). 강조 색과 올려 둔 카드의 배경 밝힘은 화면 코드라 테스트가 없어요 |
+| 화면 제목·`오늘로 이동`·이번 주 범위와 분기·기준 시각, 휴대폰과 넓은 화면의 배치 | (1) 근거만: 2026-09-29 시안 검토에서 사용자가 휴대폰은 날짜 열 옆에 쌓고 넓은 화면은 줄바꿈하는 배치를 골랐어요 ([웹 재설계](../brainstorm/web-redesign.md), 이 명세의 [검증 근거와 완료 판정](#검증-근거와-완료-판정))<br>(2) 참고(헤드리스 브라우저): 2026-10-01 `오늘로 이동`이 오늘 줄을 머리 아래로 옮기고 초점을 줬고, 1440·1024px는 옆 열, 375px는 한 줄 요약이었어요 ([0021]) | (1) `trss-web` `schedule_api/tests.rs` `the_week_changes_with_the_day` (주의 시작일이 요청 시각을 따라요)<br>(2) 없음 (`오늘로 이동`, 배치, 분기, 기준 시각) | `오늘로 이동`은 자동 테스트가 없어요 ([0021]). 실제 휴대폰·태블릿으로 본 기록이 없고 320px는 가로 넘침만 봤어요. 다크 모드는 편성 화면을 한 번만 봤어요 ([0021]). 이번 주의 끝, 분기, 기준 시각을 겨눈 테스트가 없어요. 화면 제목이 다른 화면과 같은 크기인지는 확인한 기록이 없어요 |
+| 수집 상태·다음 분기 구독의 자리, RSS 확인 시각과 정지 경고, 처음 설정 중의 체크리스트 | (1) 2026-10-07 서버: 사용자가 수집 상태판을 열어 이상이 없다고 했어요. 값은 적지 않았어요 ([0081])<br>(2) 참고(헤드리스 브라우저): 2026-10-01 스크래치 DB에서 3시간 전에 멈춘 worker의 옆 열·요약 줄·상태판에 같은 정지 문구가 떴어요. 주기의 간격은 DB에 직접 넣었어요 ([0021]) | (1) `trss-core` `heartbeat.rs` `a_stale_heartbeat_tells_a_worker_killed_in_a_cycle_from_a_slow_one`, `trss-web` `status_api/tests.rs` `a_worker_killed_in_a_cycle_is_stalled_once_its_heartbeat_is_stale`<br>(2) `trss-web` `status_api/tests.rs` `received_items_are_counted_per_day_of_the_viewers_time_zone`<br>(3) `trss-web` `schedule_api/tests.rs` `the_next_quarter_counts_its_subscriptions_and_those_waiting_for_a_title`<br>(4) `trss-web` `setup_api/tests.rs` `a_new_install_shows_only_the_checklist` | 정지 경고가 실제 worker를 주기 도중에 멈춘 상태에서 뜨는 것은 본 기록이 없어요 ([0021]). 박동이 이어지는 긴 감시 폴더 읽기가 오탐되지 않는 것은 시계를 바꾼 테스트로만 확인했어요. 휴대폰 요약의 `RSS 멈춤`, 옆 열과 한 줄 요약의 자리, 다음 분기 구독의 바로가기, 처음 설정 중 휴대폰 요약 줄이 없는 것은 본 기록과 테스트가 없어요 |
+
+### 시각 방향과 테마
+
+요구 절: [시각 방향과 테마](#시각-방향과-테마)
+
+| 요구 | 실제 사용에서 본 것 | 테스트로 확인한 것 | 확인하지 않은 것 |
+| --- | --- | --- | --- |
+| 표지를 중심에 둔 어두운 영화관 톤과 라이트·다크의 면 구분 | 근거만: 2026-09-29 사용자 한 명의 시안 검토에서 다크 시네마 방향을 가장 선호한다고 했어요 ([웹 재설계](../brainstorm/web-redesign.md), 이 명세의 [검증 근거와 완료 판정](#검증-근거와-완료-판정)) | 없음 | 실제 휴대폰·태블릿에서는 확인하지 않았어요 (이 명세의 [검증 근거와 완료 판정](#검증-근거와-완료-판정)). 제품 화면에서 라이트 모드의 면 명도 차이와 카드·표지의 그림자를 실제 기기로 본 기록이 없어요 |
+| 라이트·다크 제공, 시스템 설정 따르기, 선택한 모드의 보존 | 참고(헤드리스 브라우저): 2026-09-30 다크를 고르고 새로고침하거나 화면을 옮겨도 남았고, 시스템 모드는 `prefers-color-scheme` 변경을 따랐어요 ([0003]) | 없음 | 실제 기기에서 모드를 바꿔 본 기록이 없어요 |
+| 빨간색 사용 한정과 할 일 종류의 색 | 없음 | 없음 | 코드가 이 요구와 달라요: 메뉴의 `할 일` 개수 배지가 빨간색(`bg-urgent`)이에요(`web/src/app/NavBadge.tsx`). 처리 필요 개수는 실패나 오류가 아니에요 ([0133](../tickets/0133-web-notation-rules.md)). 할 일 종류별 색을 화면으로 본 기록과 테스트가 없어요 |
+| 상태 배지의 한 가지 모양과 물음표·바깥 화살표 아이콘의 쓰임 | 없음 | 없음 | 코드가 이 요구와 달라요: `교체 승인` 배지가 물음표 아이콘을 써요(`web/src/screens/todo/badges.tsx`의 `approval`·`replacement`). 물음표는 `확인 필요`에만 쓰는 아이콘이에요 ([0133](../tickets/0133-web-notation-rules.md)). 한 상태를 화면마다 같은 모양으로 그리는지와 바깥 화살표를 외부 링크에만 쓰는지는 본 기록과 테스트가 없어요 |
+| 받은 영상·자막의 체크 표시는 모든 화면에서 초록 | 없음 | 없음 | 작품 상세의 회차 줄(`web/src/screens/library/detail/EpisodeList.tsx`)은 체크를 `text-ok`로 그려요. 모든 화면에서 초록인지는 본 기록과 테스트가 없어요 |
+| 이동 버튼은 색 없이, 상태를 바꾸는 동작 버튼은 맥락 강조색의 테두리와 글자로, 꽉 찬 색은 주 동작과 최종 버튼에만 | 없음 | 없음 | 확인한 기록과 테스트가 없어요 |
+| 카드 전체가 링크인 카드는 올려 두면 배경을 밝히고 밑줄은 글자 링크에만 | 참고(헤드리스 브라우저): 2026-10-01 라이브러리 목록의 한 줄을 올려 두자 배경이 `#f1f4f8`에서 `#fbfcfd`로 밝아지고 밑줄이 없었어요 ([0013]) | 없음 | 편성 카드와 다른 카드에서 올려 둔 표시를 본 기록이 없어요 |
+| 두 모드에서 제목·상태·초점·선택을 읽고 구분하는 조건과 4.5:1 글자 대비 | 참고(헤드리스 브라우저): 2026-09-30 텍스트 대비를 토큰 값으로 계산해 두 모드 모두 4.5:1 이상이었고(가장 낮은 것은 라이트의 `text-muted` 5.06:1), 키보드 초점 고리를 눈으로 봤어요 ([0003]) | 없음 | 실제 렌더링 배경 위와 표지 위 글자의 대비는 측정하지 않았어요 ([0003]). 선택 글자·상태 배지·보유 체크·키보드 초점을 같은 상태의 두 모드에서 직접 관찰한 기록이 없어요. 키보드 조작과 초점 표시는 확인하지 않았어요 ([0013]). 스크린 리더로 읽은 결과는 보지 않았어요 ([0014]) |
+
+### 문구와 표기
+
+요구 절: [문구와 표기](#문구와-표기)
+
+| 요구 | 실제 사용에서 본 것 | 테스트로 확인한 것 | 확인하지 않은 것 |
+| --- | --- | --- | --- |
+| 자리의 크기에 맞춘 화면 문구 | 없음 | 없음 | 화면 문구 전체를 이 원칙으로 검토한 기록이 없어요 |
+| 버튼·배지·상태 줄·목록 줄·항목 값·기록 줄의 짧은 명사구와 버튼 이름 | 없음 | 없음 | 화면의 버튼 이름을 이 규칙으로 확인한 기록이 없어요 |
+| 빈 화면·알림·확인 질문·실패 이유·상태 배너의 해요체와 배너 제목 | 없음 | 없음 | 확인한 기록이 없어요 |
+| 설명 줄은 새 정보가 있을 때만 | 없음 | 없음 | 확인한 기록이 없어요 |
+| ` · `로 잇지 않고 정보 종류마다 모양을 달리해 나눔 | 2026-10-07 서버: 작품 상세의 `자막` 카드가 `제작자 1명 · 자막 12개`로 보였어요. 규칙이 깨진 모습을 본 것이에요 ([0083]) | 현재 모양을 굳히는 테스트가 있어요(요구와 반대): `web` `src/screens/library/storage.test.ts` ``a work's kinds read `자막 12개 · 340 KB` in a fixed order, and a kind with no file is left out`` | 코드가 이 요구와 달라요: 수집 상태(`StatusBoard.tsx`), 구독 추가(`PickTitle.tsx`), 구독 후보(`Candidates.tsx`), 작업 결과(`JobResults.tsx`), 작품 상세의 카드(`SideCards.tsx`), 수집 이력(`HistoryRow.tsx`)을 비롯한 여러 화면이 정보를 ` · `로 한 줄에 이어요. 위 테스트도 이 모양을 기대해요 ([0133](../tickets/0133-web-notation-rules.md)). 정보 종류마다 모양을 달리하는 규칙은 본 기록과 테스트가 없어요 |
+| 경로는 본문 글꼴, 해시·시각표만 고정폭 | 없음 | 없음 | 확인한 기록이 없어요 |
+| 한국어 제목과 문장은 띄어쓰기 단위로 줄바꿈 | 없음 | 없음 | 코드는 `web/src/index.css`에서 `word-break: keep-all`을 써요. 화면에서 본 기록과 테스트가 없어요 |
+| 같은 뜻은 한 단어, 한자어 용어가 있으면 그것 | 없음 | 없음 | 코드가 이 요구와 달라요: 작업 상세의 `회차별 결과`(`web/src/screens/todo/JobResults.tsx`)는 교체 승인을 `교체 승인 대기`로, 묶음 제목을 `확인 필요`로 써요 ([0131](../tickets/0131-waiting-state-names.md)). 화면 문구 전체를 이 원칙으로 검토한 기록은 없어요 |
+| 표: 바꾸기·지우기·고르기·되돌리기·찾기·찾음·만들기는 `변경`·`삭제`·`선택`·`복원`·`검색`·`발견`·`생성` | 없음 | 없음 | 확인한 기록이 없어요 |
+| 표: 시즌은 설명·버튼·타일 모두 `시즌 1`처럼 `시즌` | 2026-10-04 개발(iPhone Safari): 현재 시즌 타일과 `시즌 변경`이 보였어요 ([0014]) | 없음 | 설명 문장까지 `시즌`으로 쓴 것은 확인한 기록이 없어요 |
+| 표: 회차 보유는 `영상 ✓`·`자막 −`이고 `파일`은 폴더·정리 카드 이름과 실제 파일 이름에만 | 2026-10-07 서버: 작품 상세의 1화 줄이 영상 `보유`, 자막 `보유`로 읽혔어요. 이 글자는 화면의 `영상 ✓`·`자막 −`와 같은 칸에 있는 보조 기술용 글자(`sr-only`)예요(`web/src/screens/library/detail/EpisodeList.tsx`) ([0083]) | 없음 | `파일`을 폴더·정리 카드 이름과 실제 파일 이름에만 쓰는지는 확인한 기록이 없어요 |
+| 표: 기다리는 상태는 `무엇 + 대기`(`제목 대기`·`영상 대기`·`자막 대기`) | 2026-10-08 개발(서버 DB 사본): 영상이 없는 2화 줄이 영상 `없음`, 자막 `보유`, `영상 대기` 배지였어요 ([0083]) | 전달하는 이름만 확인해요(화면 낱말은 아님): `trss-collect` `schedule/state.rs` `the_subtitle_line_waits_until_a_subtitle_is_held` | `제목 대기`를 화면에서 본 기록이 없어요. 자막 출처에 연결되지 않아 다시 확인을 기다리는 작업이 `자막 대기`로 보이는 것은 본 기록과 테스트가 없어요 |
+| 표: 교체 승인은 할 일 종류·회차 배지·기록 모두 `교체 승인` | 2026-10-07 서버: `All Works Maid` 1화가 교체 승인을 기다렸고 iPhone에서 승인했어요 ([0083], [0085]) | `trss-jobs` `tests/it/todo.rs` `a_revision_waiting_for_approval_is_one_card_of_its_work_opening_its_job` (카드 종류만, 화면 낱말은 아님) | 작업 상세의 `회차별 결과`는 `교체 승인 대기`를 써서 이 이름과 달라요. 사용자가 상태 이름을 `교체 승인 대기`로 정했고(사용자 결정, 2026-10-09) 이 요구의 이름은 그때 고쳐요 ([0131](../tickets/0131-waiting-state-names.md)) |
+| 표: 회차를 정하지 못한 파일은 편성·할 일·작품 상세·기록 모두 `회차 확인 필요` | 2026-10-06 개발(서버 DB 사본): 격자의 Wistoria에 `회차 확인 필요` 배지가 있었고 할 일 카드가 3장 나왔어요 ([0078]) | 전달하는 이름만 확인해요(화면 낱말은 아님): `trss-jobs` `todo/tests.rs` `every_kind_has_its_badge` | 코드가 이 요구와 달라요: 작업 상세 `회차별 결과`의 묶음 제목이 `확인 필요`예요(`JobResults.tsx`) ([0131](../tickets/0131-waiting-state-names.md)) |
+| 표: 할 일 종류 `인증 필요`·`받기 실패`·`교체 승인`·`회차 확인 필요`·`제목 후보`·`자막 구독`·`보관 제안` | (1) 2026-10-07 서버: erulabo 12화의 Turnstile을 풀어 ZIP을 받았어요(`인증 필요`) ([0083])<br>(2) 2026-10-06 개발(서버 DB 사본): `인증 필요` 카드가 13화, `CAPTCHA`, `10월 3일 00:05`를 보였어요 ([0075]) | 전달하는 이름만 확인해요(화면 낱말은 아님): `trss-jobs` `todo/tests.rs` `every_kind_has_its_badge` | 일곱 종류의 이름을 한 화면에서 함께 본 기록은 없어요. 종류별 관찰은 작업과 인증 명세의 [검증 표](jobs.md#검증-표)가 맡아요 |
+| 표: 수집 개념 `일치 문구`·`저장 폴더`·`수집 폴더`·`보관 폴더`·`보관 제안`·`제작자 미정`·`받기`·`자막 후보` | 없음 | 없음 | 확인한 기록이 없어요 |
+| 시각·날짜·개수 표기(`오늘 13:40`·`9월 13일`·`9월 28일 (월)`, 상대 표기 금지, 연도, 줄바꿈, `개`·`편`·`건`) | (1) 2026-10-06 개발(서버 DB 사본): 카드에 `10월 3일 00:05`와 `어제 04:46`이 쓰였어요 ([0075])<br>(2) 2026-10-07 서버: 작품 상세의 카드가 `자막 12개`로 개수를 적었어요 ([0083]) | (1) `web` `src/screens/library/received.test.ts` `a received date carries its time only when asked to, and the clock is padded`<br>(2) 없음 (상대 표기 금지, 연도, 날짜 머리, 줄바꿈, `편`·`건`) | 코드가 이 요구와 달라요: `web/src/lib/time.ts`의 `ago()`가 `방금`·`n분 전`·`n시간 전`·`n일 전`을 만들고 구독 추가(`PickTitle.tsx`, `PickAnime.tsx`)·규칙 상세(`parts.tsx`, `ArchiveMoveNotice.tsx`)·작품 상세의 자막 후보(`CandidateSection.tsx`)·설정의 폴더(`FoldersPanel.tsx`)가 써요 ([0133](../tickets/0133-web-notation-rules.md)). 코드가 이 요구와 달라요: `lib/time.ts`의 `when()`과 `dateTime()`은 올해가 아니어도 연도를 붙이지 않아요(수집 이력 `history/format.ts`와 자막 후보 `candidates.ts`는 붙여요) ([0133](../tickets/0133-web-notation-rules.md)) |
+
+### 웹 명령과 상태 갱신
+
+요구 절: [웹 명령과 상태 갱신](#웹-명령과-상태-갱신)
+
+| 요구 | 실제 사용에서 본 것 | 테스트로 확인한 것 | 확인하지 않은 것 |
+| --- | --- | --- | --- |
+| 설정 저장·명령 접수 응답의 뜻, 접수와 실제 진행의 구분, 확인한 대상 버전의 전달, 실행 중 버전과 YAML `version`의 구분 | (1) 2026-10-08 개발(서버 DB 사본): 회차 줄의 `적용` 뒤 줄이 `적용했어요. 라이브러리에 보이기를 기다려요.`를 보였다가 약 4초 만에 새로고침 없이 자막 `보유`로 바뀌었어요 ([0127])<br>(2) 2026-10-06 개발(서버 DB 사본): 요청의 `seen`을 옛 값으로 바꿔 `확인함`을 누르자 `409` 문장이 카드에 나오고 카드가 남았어요 ([0078]) | (1) `trss-web` `commands_api/tests.rs` `a_command_is_accepted_pending_and_can_be_read_back`<br>(2) `trss-web` `settings_api/tests.rs` `both_folders_are_saved_and_read_back`<br>(3) `trss-web` `rules_api/tests.rs` `the_second_save_from_an_old_version_is_a_conflict_that_shows_the_saved_rule`, `trss-web` `jobs_api/replacement/tests.rs` `a_decision_names_the_version_it_saw`<br>(4) `web` `src/screens/library/detail/subtitles.test.ts` `a finished apply shows once the episode lists the file the job put beside the video, and not before`<br>(5) 없음 (실행 중 버전을 화면에 보이지 않는 것) | 2026-10-07 서버에서 사용자가 본 것은 고치기 전의 동작이에요(적용 직후 화면이 바로 바뀌지 않았어요) ([0083], [0119]). 고친 뒤의 동작은 서버에서 아직 보지 못했고 다음 배포 뒤에 봐요 ([0127]). `ApplyStatus`의 조회 순환(React 효과)은 자동 테스트가 없어요 ([0127]). 가져오기 계획 편집의 버전 전달은 이 행에서 확인하지 않았어요 |
+| 접수한 명령의 즉시 실행, 겹치는 대상의 차례, worker가 멈춘 동안의 대기 | (1) 2026-10-08 서버: 속편 구독의 `start` 명령이 9 ms 만에 `moved`로 끝났어요 ([0123])<br>(2) 2026-10-02 개발(컨테이너 두 개): 웹으로 보낸 `다시 확인` 3개가 접수 뒤 16–28 ms 안에 끝났어요 ([0031]) | (1) `trss-worker` `tests/it/receive_once.rs` `a_command_the_web_accepts_starts_within_a_second_without_waiting_for_a_look`<br>(2) `trss-worker` `tests/it/receive_once.rs` `a_command_runs_to_its_end_while_the_same_workers_cycle_is_held_in_transmission`, `the_cycles_removal_leaves_the_torrents_alone_while_a_command_adds`<br>(3) `trss-worker` `tests/it/receive_once.rs` `a_retry_and_the_cycles_add_of_the_same_item_go_in_turn`<br>(4) `trss-worker` `tests/it/receive_once.rs` `a_command_accepted_before_a_restart_runs_once_after_it` | 실제 Transmission으로 오래 걸리는 이동과 명령을 겹쳐 본 기록이 없어요 ([0031]). 서버에서 worker를 멈추거나 재시작한 채 명령을 접수해 본 기록이 없고, 화면이 기다리는 명령을 실행 실패로 표시하지 않는 것도 테스트와 관찰이 없어요. 차례는 경로 글자로 겹침을 판단해서 심볼릭 링크로 다르게 적으면 겹침을 놓치는 한계가 남아 있어요 ([0031]) |
+| 표: 두 화면에서 같은 설정을 편집 | (1) 참고(헤드리스 브라우저): 2026-09-30 두 컨텍스트에서 규칙을 열어 한쪽이 먼저 저장하자 나중 저장이 `409`로 거부되고 내 입력이 남았어요 ([0006]). 채널도 같았어요 ([0007]) | (1) `trss-core` `settings/tests.rs` `a_write_from_a_stale_version_changes_nothing`<br>(2) `trss-web` `settings_api/tests.rs` `a_save_from_a_stale_version_conflicts_and_shows_the_current_value`<br>(3) `trss-web` `rules_api/tests.rs` `the_second_save_from_an_old_version_is_a_conflict_that_shows_the_saved_rule` | 두 번째 화면이 편집 입력을 남기고 현재 값과 비교해 다시 저장하는 동작은 헤드리스 브라우저(임시 DB)로만 봤고 자동 테스트가 없어요. 설정 화면의 폴더 저장에서 두 화면이 부딪치는 것을 본 기록이 없어요. 코드가 이 요구와 달라요: 작품별 자막 형식 순서의 저장과 삭제(`PUT`·`DELETE /api/library/works/{id}/subtitle-order`, `trss-web` `library_work_api.rs`)는 버전을 받지 않아요 ([0134](../tickets/0134-settings-version-and-first-run-badge.md)) |
+| 표: 비교 후 계획·대상이 변경 | 2026-10-05 개발(서버 DB 사본): 올리기 3화의 첫 계획이 그 사이 다른 자막이 생겨 낡았고, 다시 비교한 계획을 승인하자 적용됐어요 ([0076]) | (1) `trss-web` `jobs_api/replacement/tests.rs` `a_decision_names_the_version_it_saw`<br>(2) `trss-jobs` `tests/it/replace.rs` `a_video_replaced_after_approval_asks_to_compare_again`, `a_mapping_changed_after_approval_is_not_applied` | 오래된 화면의 활성 승인 버튼을 서버가 거부하는 장면을 화면에서 본 기록이 없어요. 결정과 다시 비교가 겹치는 경쟁(계획을 `다시 비교 필요`로 옮기지 못하는 경우)은 시험하지 않았어요 ([0068]) |
+| 표: 같은 명령의 중복 전달 | 없음 | (1) `trss-core` `commands/tests.rs` `the_same_id_with_the_same_content_returns_the_stored_command`, `the_same_id_with_other_content_is_refused_and_changes_nothing`<br>(2) `trss-web` `commands_api/tests.rs` `the_same_command_delivered_twice_is_stored_once_and_answered_alike` | 화면이 같은 사용자 동작의 명령 ID와 내용을 고정해 다시 보내는 코드(`web/src/lib/commands.ts`)는 테스트와 관찰이 없어요. 반복 전달 뒤 실제 작업이 추가로 생기지 않는 것을 서버에서 본 기록이 없어요 |
+| 표: 명령 접수 후 응답 단절 | 없음 | `trss-web` `commands_api/tests.rs` `a_command_is_accepted_pending_and_can_be_read_back`, `an_unknown_command_id_is_not_found` | 화면이 확인 전에 성공·실패를 단정하지 않고 새 ID로 자동 재전송하지 않는 동작은 테스트와 관찰이 없어요. 기록을 찾을 수 없는 경우를 화면이 확인 불가와 실행 실패로 가려 보이는지도 확인하지 않았어요. 서버가 없는 ID를 `not_found`로 답하는 것까지만 확인했어요 |
+| 표: 목록 정렬·필터·새 조회에서의 선택 유지 | 없음 | (1) `web` `src/screens/todo/replacementView.test.ts` `모두 교체 and 모두 유지 decide each plan the list shows, at the version it shows`<br>(2) `web` `src/screens/library/storage.test.ts` `the request sends exactly the ids the confirmation listed, in its order`<br>(3) `trss-jobs` `tests/it/replace_many.rs` `an_episode_planned_again_before_the_batch_is_stale_and_the_others_are_approved` | 새로 나타난 후보를 자동 선택하지 않는 것과 사라지거나 바뀐 선택 대상을 확인 필요로 표시하는 것은 본 기록과 테스트가 없어요. 정렬·필터를 바꿀 때 선택이 유지되는지는 확인한 기록이 없어요 |
+| 표: 늦게 도착한 이전 조회 응답 | 참고(헤드리스 브라우저): 2026-10-01 응답을 1.5초 늦춘 `zz` 요청 뒤에 `series 02`를 치자 `series 02`의 7편이 남고 늦은 답이 덮지 않았어요 ([0013]) | 원격 화면의 프레임에 한해서: `web` `src/screens/todo/remote/session.test.ts` `a late frame of an older generation does not make inputs valid again` | 목록과 작업 화면의 조회(`usePolled`, `web/src/lib/cached.ts`)에서 응답 순서를 뒤집어도 선택과 완료 상태가 되돌아가지 않는 것은 테스트와 관찰이 없어요. 이미 확인한 명령 접수 결과를 이전 응답이 덮지 않는 것도 확인하지 않았어요 |
+| 표: 연결 단절·접근 거부 | 없음 | 원격 화면의 소켓에 한해서: `web` `src/screens/todo/remote/reconnect.test.ts` `the delays grow and the attempts stop after five`, `web` `src/screens/todo/remote/move.test.ts` `another end, a lost socket or the limit ends the move so the screen says what happened` | 마지막으로 확인한 상태와 조회 시점을 남기고 최신으로 표시하지 않는 동작, 조회 실패만으로 서버 작업을 실패 처리하지 않는 동작, 접근이 거부되면 새 명령과 원격 입력을 중지하는 동작은 본 기록과 테스트가 없어요 |
+| 표: 화면 재접속 | (1) 참고(가짜 출처): 2026-10-03 확인 화면을 연 채 `trss-web`만 재시작하자 묶인 실행이 그대로였고 화면이 다시 붙어 상자를 눌러 받았어요 ([0040])<br>(2) 참고(헤드리스 브라우저): 2026-09-30 다시 불러온 화면도 진행 중 명령을 이어 보여줬어요 ([0008]) | (1) `trss-web` `screen_api/tests.rs` `a_reconnect_reaches_the_same_run_and_asks_for_none`<br>(2) `web` `src/screens/todo/prepareGate.test.ts` `the reads a reconnecting socket makes never ask`<br>(3) `trss-worker` `tests/it/receive_once.rs` `a_command_accepted_before_a_restart_runs_once_after_it` | 화면을 복원하는 것만으로 다운로드·적용·승인을 다시 보내지 않는 것은 원격 화면과 접수된 명령에서만 확인했어요. 할 일과 작품 상세 화면의 복원은 테스트와 관찰이 없어요 |
+| 작업 상태 갱신의 HTTP 주기 조회, 2초 기본 간격과 겹치지 않는 조회, 숨겨진 화면의 멈춤, 마지막 동기화 시각, 조회가 사용 시각을 갱신하지 않음 | (1) 2026-10-08 개발(서버 DB 사본): 적용한 뒤 새로고침 없이 약 4초 만에 회차 줄이 바뀌었어요 ([0127])<br>(2) 2026-10-08 개발(서버 DB 사본): 열어 둔 화면은 다시 열기 전까지 `영상 대기`로 남았어요 ([0083]) | (1) `web` `src/screens/library/detail/subtitles.test.ts` `a finished apply shows once the episode lists the file the job put beside the video, and not before`<br>(2) `trss-web` `screen_api/tests.rs` `reading_the_job_and_the_lists_asks_for_no_run_and_opening_its_page_does`<br>(3) 없음 (간격, 겹치지 않는 조회, 숨겨진 화면의 멈춤, 마지막 동기화 시각, 편집 중 입력) | 조회 간격이 화면마다 달라요. 작업 목록과 작업 상세는 2초(`TodoScreen.tsx`, `JobDetailScreen.tsx`), 할 일 목록은 10초(`screens/todo/poll.ts`), 메뉴의 할 일 개수는 15초(`app/todo-count.ts`), 이번 주 편성과 수집 상태판은 30초(`ScheduleScreen.tsx`, `StatusBoard.tsx`), 작품 상세의 표지는 3초(`WorkDetailScreen.tsx`)예요. 명세가 2초를 초기 UI 기본값이라고 해서 어긋남으로 올리지 않았어요. 앞선 조회가 끝나기 전에 쌓지 않는 것과 숨겨진 화면의 멈춤은 코드(`poll.ts`)에만 있어요. 폴링 비용은 측정하지 않았어요 ([0021]) |
+| 출처에서 받은 자막 본문·파일명·오류 문구·RSS 제목을 데이터로 표시 | 참고(가짜 출처): 2026-10-01 AniList 줄거리의 `<script>`·`<svg onload>`·`<img onerror>`가 DOM에 생기지 않았어요 ([0017]) | AniList 줄거리에 한해서: `trss-library` `seasons/describe.rs` `other_tags_go_and_their_text_stays` | 자막 본문·파일명·오류 문구·RSS 항목 제목을 화면에서 확인한 테스트와 관찰이 없어요. `web/src`에는 `dangerouslySetInnerHTML`과 `innerHTML`이 없어요(2026-10-10 검색) |
+
+### 확인하지 않은 요구
+
+실제 사용에서 본 것도 없고 테스트도 없는 요구는 48행 중 17행이에요.
+
+- 시각 방향과 테마의 8행 모두: 영화관 톤과 면 구분, 라이트·다크와 모드 보존, 빨간색 한정과 할 일 종류의 색, 상태 배지의 모양과 아이콘, 체크 표시의 초록, 버튼 색, 카드 링크를 올려 둔 표시, 두 모드의 구분과 4.5:1 대비예요. 넷은 시안 검토나 헤드리스 브라우저로만 봤어요. 빨간 할 일 개수 배지와 `교체 승인` 배지의 물음표는 코드가 요구와 달라서 [0133](../tickets/0133-web-notation-rules.md)에서 고쳐요.
+- 문구와 표기의 9행: 자리에 맞춘 문구, 짧은 명사구와 버튼 이름, 해요체와 배너 제목, 설명 줄, 경로의 글꼴, 띄어쓰기 단위 줄바꿈, 같은 뜻은 한 단어, `표: 바꾸기·지우기·고르기·되돌리기·찾기·찾음·만들기`, `표: 수집 개념`이에요. 화면 문구 전체를 이 규칙으로 검토한 기록이 없어요. 같은 뜻의 상태 이름은 [0131](../tickets/0131-waiting-state-names.md)에서 맞춰요.
+
+나머지 행에도 일부만 확인한 요구가 있어요. 그 부분은 행마다 `확인하지 않은 것`에 적었어요.
+
+[0003]: ../archive/tickets/1-app-owned-collection/0003-web-shell.md
+[0006]: ../archive/tickets/1-app-owned-collection/0006-rules-tab-preview.md
+[0007]: ../archive/tickets/1-app-owned-collection/0007-channels-tab-secrets.md
+[0008]: ../archive/tickets/1-app-owned-collection/0008-history-tab-receive-once.md
+[0009]: ../archive/tickets/1-app-owned-collection/0009-deploy-web-worker.md
+[0013]: ../archive/tickets/2-work-discovery-and-subscriptions/0013-library-screen.md
+[0014]: ../archive/tickets/2-work-discovery-and-subscriptions/0014-work-detail-video.md
+[0017]: ../archive/tickets/2-work-discovery-and-subscriptions/0017-season-info.md
+[0021]: ../archive/tickets/2-work-discovery-and-subscriptions/0021-weekly-schedule.md
+[0031]: ../archive/tickets/3-subtitle-candidates-and-receiving/0031-immediate-commands.md
+[0040]: ../archive/tickets/3-subtitle-candidates-and-receiving/0040-remote-auth-screen.md
+[0053]: ../archive/tickets/3-subtitle-candidates-and-receiving/0053-browser-egress-and-web-origin.md
+[0068]: ../archive/tickets/4-store-apply-and-replace/0068-replacement-approval.md
+[0075]: ../archive/tickets/4-store-apply-and-replace/0075-todo-badges-and-cards.md
+[0076]: ../archive/tickets/4-store-apply-and-replace/0076-eight-paths-end-to-end.md
+[0078]: ../archive/tickets/4-store-apply-and-replace/0078-video-episode-check.md
+[0080]: ../archive/tickets/5-deployed-verification/0080-server-db-migration-check.md
+[0081]: ../archive/tickets/5-deployed-verification/0081-deploy-new-release.md
+[0082]: ../archive/tickets/5-deployed-verification/0082-deployed-access-boundary.md
+[0083]: ../archive/tickets/5-deployed-verification/0083-deployed-end-to-end.md
+[0085]: ../archive/tickets/5-deployed-verification/0085-phone-and-tablet-flows.md
+[0119]: ../archive/tickets/5-deployed-verification/0119-refresh-after-stored-apply.md
+[0123]: ../archive/tickets/5-deployed-verification/0123-collect-moves-archived-work-folder.md
+[0127]: ../archive/tickets/5-deployed-verification/0127-row-waits-for-library-after-apply.md

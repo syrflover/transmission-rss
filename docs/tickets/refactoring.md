@@ -108,7 +108,7 @@ worker 잠금은 멈춘 worker가 마지막 하트비트 뒤에 따로 띄운 ta
 - Transmission 가짜 서버는 trss-worker의 테스트 폴더에만 있었어요. [0097](0097-shared-transmission-fake.md)에서 trss-transmission의 `fake`로 옮겨, trss-collect의 테스트도 써요. 피드 서버와 nyaa 검색의 가짜는 trss-collect의 `fake`에 있어요.
 - 2026-10-07 worker의 해당 테스트는 한 번 받기 78개, 영상 수정본 86개, 수집 주기 41개, 영상 회차 변환 44개, 보관 폴더 이동 30개였어요. 0101에서 worker의 다섯 파일에 있던 297개 중 211개를 trss-collect와 trss-transmission으로 내리고 28개를 지워 60개가 남았어요. worker에는 잠금, 주기와 명령의 순서, 동시 실행, 중단 뒤 이어 하기, 웹에서 worker까지 이어지는 명령만 남아요.
 - 조사에서는 그대로 겹치는 테스트를 30–60개, 내릴 규칙 테스트를 약 100개로 추정했어요. 테스트마다 몸통을 견주어, 남는 테스트가 확인하지 않는 입력이나 결과가 있으면 지우지 않고 내렸어요.
-- 완료는 위의 요구가 코드에 있고, 기존 worker 테스트가 정리 전까지 고치지 않고 통과했고, 테스트를 나눈 뒤 [RSS 수집 명세](../specs/collection.md#검증-표)에 검증 표가 있는 때예요. 2026-10-09에 셋 다 갖춰 이 줄기를 마쳤어요. worker의 수집 영역 중 0101의 다섯 파일 밖에 있는 테스트는 [0113](0113-remaining-area-tests.md)에서 나눠요.
+- 완료는 위의 요구가 코드에 있고, 기존 worker 테스트가 정리 전까지 고치지 않고 통과했고, 테스트를 나눈 뒤 [RSS 수집 명세](../specs/collection.md#검증-표)에 검증 표가 있는 때예요. 2026-10-09에 셋 다 갖춰 이 줄기를 마쳤어요. worker의 수집 영역 중 0101의 다섯 파일 밖에 있는 테스트는 [0113](0113-remaining-area-tests.md)에서 나눴어요.
 
 ### 자막 작업 줄기의 재구성
 
@@ -127,8 +127,8 @@ worker 잠금은 멈춘 worker가 마지막 하트비트 뒤에 따로 띄운 ta
 
 ### 그 밖의 테스트 정리
 
-- trss-web의 `folders_on_different_filesystems_are_refused`는 `/proc`를 훑어 혼자 4.9초가 걸리고, trss-collect의 같은 이름 테스트와 같은 규칙을 확인해요. 웹 쪽은 ADR 0015대로 정리해요.
-- 웹 API 테스트 461개 중 70–110개가 다른 크레이트의 규칙을 다시 확인한다고 추정했어요. 그 규칙의 영역을 정리할 때 함께 나눠요.
+- trss-web의 `folders_on_different_filesystems_are_refused`는 `/proc`를 훑어 혼자 4.9초가 걸리고, trss-collect의 같은 이름 테스트와 같은 규칙을 확인해요. 웹 쪽은 ADR 0015대로 정리해요. 0113에서 `/proc`를 수집 폴더로 저장하던 요청을 빼서, 웹 테스트는 거절 응답만 확인하고 `/proc`를 훑지 않아요.
+- 웹 API 테스트 461개 중 70–110개가 다른 크레이트의 규칙을 다시 확인한다고 추정했어요. 그 규칙의 영역을 정리할 때 함께 나눠요. 0101과 0110이 나누지 않은 나머지는 0113에서 나눴어요.
 - 가짜 AniList와 가짜 Anissia의 같은 뼈대, 웹 테스트 모듈 19곳의 요청 도우미, ZIP 만들기 4벌, 루프백 서버 띄우기 약 14곳은 하나로 모아요. [0112](0112-small-helpers-and-test-helpers.md)에서 trss-core의 `loopback`과 `fake_http`, trss-web의 `testing`, trss-archive의 `testing`(사용자 결정, 2026-10-10)으로 모았어요.
 - trss-subtitles의 `testing.rs`에 섞인 테스트 20개는 도우미와 떼어요. 0112에서 `testing/tests.rs`로 옮겼어요.
 
@@ -136,7 +136,7 @@ worker 잠금은 멈춘 worker가 마지막 하트비트 뒤에 따로 띄운 ta
 
 한 영역의 테스트를 정리할 때 그 영역 명세에 요구별 검증 표를 둬요(사용자 결정, 2026-10-07).
 표는 요구마다 실제 사용에서 관찰한 것(날짜와 티켓), 테스트로 확인한 것(테스트 이름이나 파일), 확인하지 않은 것을 나눠 적어요.
-완료는 여섯 명세([웹 앱 공통](../specs/web-app.md), [라이브러리와 작품](../specs/library.md), [RSS 수집](../specs/collection.md), [자막](../specs/subtitles.md), [작업과 인증](../specs/jobs.md), [설정과 이전](../specs/settings.md))에 모두 표가 있는 때예요.
+완료는 여섯 명세([웹 앱 공통](../specs/web-app.md), [라이브러리와 작품](../specs/library.md), [RSS 수집](../specs/collection.md), [자막](../specs/subtitles.md), [작업과 인증](../specs/jobs.md), [설정과 이전](../specs/settings.md))에 모두 표가 있는 때예요. 2026-10-10에 0113이 웹 앱 공통, 라이브러리와 작품, 설정과 이전 명세에 표를 둬서 여섯 명세 모두에 표가 있어요.
 
 ### 순서
 

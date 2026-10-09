@@ -284,3 +284,257 @@ Anissia 후보 갱신일·출처에서 보고한 파일 날짜·앱 수신 시�
   이 필드들은 `version: 1`이 아직 구현되지 않았으므로 새 버전을 만들지 않고 `version: 1`에 넣어요.
 - 기존 YAML 주석에서 Anissia 주소·요일·시간·제작자를 읽는 형식은 2026-09-29에 읽은 사용자의 채널 설정 한 벌의 관례예요.
   다른 사람의 주석 형식은 읽지 못한 주석으로 다뤄요.
+
+## 검증 표
+
+요구마다 실제 사용에서 본 것(날짜와 티켓), 테스트로 확인한 것(크레이트와 파일, 테스트 이름), 확인하지 않은 것을 나눠 적었어요. 테스트는 요구를 가장 직접 겨눈 것만 골라 적었고 같은 요구를 다루는 다른 테스트는 나열하지 않았어요.
+이 표는 2026-10-10에 `6e46ef1`에서, [0113](../tickets/0113-remaining-area-tests.md)이 남은 영역의 테스트를 나눈 뒤 만들었어요. 실제 사용은 배포한 서버(j4105)와 로컬 개발 환경이고, 개발 환경에서 서버 DB 사본으로 본 것은 괄호에 적었어요. 확인한 날짜를 티켓이 적지 않은 것은 `날짜 미기재`로 적었어요.
+행은 요구의 항목 하나(최상위 글머리 기호, 규칙을 담은 문단, 입력·결과 표의 행)이고, 한 항목 안에서 확인 방법이 갈리는 부분은 칸 안에서 `<br>`로 나누고 `(1)`, `(2)`로 번호를 붙였어요. 외부 서비스, 브라우저, 디스크를 본 기록은 trss를 본 것이 아니라서 `근거만:`으로, 가짜 출처나 바꿔 넣은 응답으로 본 개발 환경의 확인은 `참고(가짜 출처):`로, 화면을 시험하려고 만든 DB에서 본 확인은 `참고(스크래치 DB):`로 따로 적었어요.
+[목표 6](../tickets/README.md#6-앱-yaml-내보내기와-가져오기)에서 만드는 앱 YAML 내보내기·가져오기의 요구는 `목표 6에서 만들어요`로 적었어요. 명세에만 있고 맡은 목표가 없던 요구는 `만들지 않았어요`, 코드가 명세와 다른 요구는 `코드가 이 요구와 달라요`로 적고 리팩터링 뒤에 그것을 맡을 티켓을 붙였어요.
+
+### 앱이 소유하는 설정
+
+요구 절: [앱이 소유하는 설정](#앱이-소유하는-설정)
+
+| 요구 | 실제 사용에서 본 것 | 테스트로 확인한 것 | 확인하지 않은 것 |
+| --- | --- | --- | --- |
+| 실행 기준을 앱이 관리하는 설정으로 전환, 외부 YAML이 앱 설정을 덮어쓰는 경로 제거 | 2026-10-01 서버: 기존 YAML을 가져온 뒤 worker 첫 주기가 cron이 넣은 항목을 같은 폴더에서 알아봤어요 ([0009])<br>2026-10-01 서버: cron 항목을 지웠어요 ([0009]) | (1) `trss-worker` `tests/it/worker_cycle.rs` `edits_made_during_a_cycle_apply_from_the_next_cycle`<br>(2) `trss-worker` `tests/it/worker_process.rs` `the_worker_needs_transmission_and_a_database_but_not_the_yaml_url` | 서버에서 웹으로 고친 규칙이 다음 주기에 쓰인 기록은 없어요([목표 1]은 시험으로만 확인). `CHANNELS_CONFIG_URL`에 값을 둬도 앱 설정이 바뀌지 않는지는 시험하지 않았어요. |
+| 환경 변수·배포 설정으로 분리한 값(Transmission 주소·기존 속도 제한·큐 크기, 서버 포트, DB·앱 데이터 폴더 위치) | 2026-10-07 서버: `.env`에 `TRSS_BROWSER_TOKEN`과 `TRSS_WEB_HOST_IP`만 있고 `TRSS_DATA_DIR`는 없어 기본값 `./data`예요 ([0081]) | (1) `trss-worker` `env.rs` `session_settings_use_the_legacy_variable_names`<br>(2) 응답 없는 `session-set`이 주기를 시간 제한만큼만 늦추는 것만: `trss-worker` `tests/it/worker_cycle.rs` `a_hung_session_set_delays_the_cycle_by_the_timeout_only` | (2) 읽은 값이 Transmission에 가는 내용과 서버에서 속도 제한·큐 크기를 적용한 결과는 보지 않았어요([0030]은 개발에서 worker 속도 제한 1 KiB/s로 띄웠다고만 적음). 이 값들이 웹이나 가져오기로 바뀌지 않는다는 것은 시험하지 않았어요. |
+| 설정 변경의 버전 계약 | 2026-10-03 개발: 공통 정책을 curl로 먼저 저장한 뒤 화면에서 저장하자 `409`가 나오고 입력값이 남았어요 ([0049]) | (1) `trss-web` `policy_api/tests.rs` `a_save_from_a_version_another_screen_saved_over_is_refused_with_the_stored_policy`<br>(2) `trss-web` `settings_api/tests.rs` `a_save_from_a_stale_version_conflicts_and_shows_the_current_value` | 코드가 이 요구와 달라요: 작품별 자막 형식 순서의 `PUT`·`DELETE /api/library/works/{id}/subtitle-order`가 버전을 받지 않아서 두 화면이 같은 작품의 순서를 바꾸면 늦은 쪽이 묻지 않고 덮어요 ([0134], [0072]도 이 점을 적었어요)<br>수집 폴더 저장의 충돌 화면은 브라우저에서 보지 않았고([0012]) 동시 저장은 시험하지 않고 코드를 따라가 확인했어요([0049]). 서버에서 설정을 저장한 기록이 없어요. |
+
+### 공통 정책
+
+요구 절: [공통 정책](#공통-정책)
+
+| 요구 | 실제 사용에서 본 것 | 테스트로 확인한 것 | 확인하지 않은 것 |
+| --- | --- | --- | --- |
+| 자막 형식 우선순위와 작품별 재정의 | 2026-10-06 개발: 편집기에서 SRT를 올려 저장하자 설정의 `작품별 재정의`에 이 작품이 나오고 `전역 순서로 되돌리기` 뒤 목록이 비었어요 ([0072]) | (1) `trss-core` `settings/policy/tests.rs` `the_policy_is_the_defaults_until_saved_and_versioned_after`<br>(2) `trss-web` `policy_api/tests.rs` `the_works_with_their_own_order_are_listed_with_their_names`<br>(3) `trss-web` `library_work_api/tests.rs` `a_works_own_format_order_is_set_listed_in_the_policy_and_taken_away` | 위아래 이동 단추와 재정의 목록의 작품 이동 링크는 화면 테스트가 없어요. 서버에서 순서를 바꾼 기록이 없고 2026-10-07 서버의 `policy_settings`·`work_subtitle_policy`는 0행이었어요([0081]). |
+| 브라우저 유휴 시간(기본 5분)과 동시 작업 수(기본 1개)의 범위, 유휴 종료 안내 | 2026-10-03 개발: 동시 작업 수 0·4·빈 값과 유휴 시간 0·61·1.5에 허용 범위 문장이 나오고 `저장`이 꺼졌어요 ([0049]) | (1) `trss-core` `settings/policy/tests.rs` `the_policy_is_the_defaults_until_saved_and_versioned_after`<br>(2) `trss-web` `policy_api/tests.rs` `an_order_with_a_format_twice_or_a_number_out_of_range_is_refused_and_nothing_changes`<br>(3) `trss-browser` `tests/it/pool.rs` `the_reaper_ends_a_run_that_has_been_idle_past_the_idle_time` | 허용 범위 문장과 유휴 종료 안내 문장(`PolicyPanel.tsx`)은 화면 테스트가 없어요. 실제 erulabo로 유휴 종료를 기다려 다시 연 확인은 하지 않았고 서버에서도 본 기록이 없어요([0040]). 서버에서 정책을 저장한 기록이 없어요. 어두운 테마는 보지 않았어요([0049]). |
+| 한 정책 버전의 저장 줄(`저장`·`되돌리기`·마지막 저장 시각) | 2026-10-03 개발: 순서를 바꾸면 저장 줄이 켜지고 `되돌리기`가 저장된 순서로 돌렸어요. 저장 뒤 `마지막 저장 10월 3일 00:51`과 목록 값이 바뀌었어요 ([0049]) | `trss-web` `policy_api/tests.rs` `the_policy_starts_at_the_defaults_and_a_save_answers_it_as_saved` | 저장 줄이 나타나는 조건과 `되돌리기` 동작은 화면 테스트가 없어요. 서버에서 정책을 저장한 기록이 없어요. 어두운 테마는 보지 않았어요([0049]). |
+| 저장이 거부됐을 때 입력값과 서버 값, 배너, `서버 값 사용`·`내 값으로 다시 저장`, 자동 재시도 없음 | 2026-10-03 개발: curl로 먼저 저장한 뒤 화면에서 저장하자 `409`, 입력값 유지, 배너에 두 값이 나란히 보였어요. `내 값으로 다시 저장`은 새 버전으로 한 번 보내 `200`이었어요 ([0049]) | `trss-web` `policy_api/tests.rs` `a_save_from_a_version_another_screen_saved_over_is_refused_with_the_stored_policy` | 배너·두 값 나란히·두 단추는 화면 테스트가 없어요. 서버에서 본 기록이 없어요. 동시 저장은 시험하지 않고 코드를 따라가 확인했어요([0049]). |
+| 표: 형식 순서에 SMI를 두 번 넣어 저장 | 없음 | `trss-core` `settings/policy/tests.rs` `a_format_order_names_each_format_once`<br>`trss-web` `policy_api/tests.rs` `an_order_with_a_format_twice_or_a_number_out_of_range_is_refused_and_nothing_changes` | 화면에서 만들 수 없다는 것은 이동 단추만 있는 구조를 코드로 읽은 것이고 화면 테스트는 없어요. |
+| 표: 두 화면이 같은 정책 버전을 열고 한쪽이 먼저 저장 | 2026-10-03 개발: 먼저 저장된 뒤 늦은 저장이 거부되고 입력값과 서버 값이 나란히 남았어요 ([0049]) | `trss-web` `policy_api/tests.rs` `a_save_from_a_version_another_screen_saved_over_is_refused_with_the_stored_policy` | 서버에서 본 기록이 없어요. 동시 저장은 시험하지 않았어요([0049]). |
+| 표: 동시 작업 수를 0이나 상한 초과로 입력 | 2026-10-03 개발: 화면에서 0·4·빈 값에 범위 문장이 나오고 `저장`이 꺼졌어요. API는 0·4·-1·2³²+1을 거절했어요 ([0049]) | `trss-web` `policy_api/tests.rs` `an_order_with_a_format_twice_or_a_number_out_of_range_is_refused_and_nothing_changes` | 화면이 범위 문장을 보이고 저장을 막는 것은 화면 테스트가 없어요. |
+
+### 설정 화면
+
+요구 절: [설정 화면](#설정-화면)
+
+| 요구 | 실제 사용에서 본 것 | 테스트로 확인한 것 | 확인하지 않은 것 |
+| --- | --- | --- | --- |
+| 목록·상세형 설정 화면, PC 좌우와 휴대폰 자기 화면, 목록의 현재 값 | 2026-10-07 서버: 사용자가 휴대폰으로 설정 편집을 포함한 흐름을 끝냈다고 알렸어요. 어느 흐름을 어느 기기로 봤는지는 받지 않았어요 ([0085]) | 없음 | `web/src/screens/settings` 아래에 화면 테스트가 없어요. 라이트 모드와 키보드 조작은 보지 않았고([0010], [0012]) 목록을 읽는 동안 값 자리가 잠깐 비는 원인은 확인하지 않았어요([0012]). 휴대폰 폭은 내장 브라우저 크기로만 봤어요([0073]). 목록의 `마지막 내보내기 …` 값은 목표 6에서 만들어요 ([목표 6]). |
+| 표: 공통 정책 항목(`자막 형식·브라우저`) | 2026-10-03 개발: 순서를 저장하자 목록 값이 바로 바뀌었어요 ([0049]) | 없음 | 목록의 현재 값(`ASS → SMI → SRT`) 표시는 화면 테스트가 없어요. 어두운 테마는 보지 않았어요([0049]). |
+| 표: 수집 폴더 항목(수집 폴더와 보관 폴더, 목록의 `Shows (current) · 보관 Shows`) | 2026-10-07 개발(서버 DB 사본): 앱의 수집 설정에 `Shows (current)`와 `Shows`가 들어 있어요 ([0060]) | `trss-web` `settings_api/tests.rs` `both_folders_are_saved_and_read_back` | 목록 줄의 두 폴더 이름은 화면 테스트가 없어요. 서버의 설정 화면에서 폴더를 정하거나 바꾼 기록이 없어요. 읽기 전용 마운트 안의 폴더 검사와 `st_dev` 비교는 컨테이너에서 보지 못했어요([0010]). 폴더 검증은 [수집 폴더와 보관 폴더](collection.md#수집-폴더와-보관-폴더)의 검증 표에서 봐요. |
+| 표: 감시 폴더 항목(폴더 목록·추가·다시 확인·등록 해제) | 2026-10-07 서버(worker 쪽): 감시 폴더 2개에 inotify 감시 76개·154개 폴더, 스캔 작품 30개·58개였어요 ([0081]) | (1) `trss-web` `watch_folders_api/tests.rs` `adding_a_folder_answers_its_row_and_how_many_works_it_found_and_the_list_shows_it`<br>(2) `trss-worker` `tests/it/library_watch.rs` `a_rescan_the_web_accepted_is_run_by_the_worker_once_per_command_id`<br>(3) `trss-web` `watch_folders_api/tests.rs` `unregistering_takes_the_works_out_and_the_same_path_brings_them_back_under_their_ids` | 서버의 설정 화면에서 폴더를 추가·해제·다시 확인한 기록이 없어요. `등록 해제` 클릭은 브라우저에서 누르지 않았고([0012]) `watch_note` 표시도 보지 않았어요([0016]). 목록 줄 `폴더 N개`와 폴더 줄 화면은 화면 테스트가 없어요. 읽기 전용 마운트의 첫 읽기, 링크가 많은 폴더, 멈춘 마운트, NAS 읽기 시간은 측정하지 않았어요([0012]). 요구는 [작품 발견과 감시 폴더](library.md#작품-발견과-감시-폴더)에 있어요. |
+| 표: 파일 용량과 정리 항목(작품·종류·개수·용량, 작품으로 이동만, 여러 파일을 한 번에 지우는 기능 없음) | 2026-10-05 개발: 설정의 `파일 용량·정리`가 작품 63개를 용량 순으로 보이고 줄을 누르면 `#files`로 가서 `파일` 카드가 펼쳐졌어요 ([0073]) | (1) `trss-web` `library_work_api/tests.rs` `the_storage_list_shows_each_works_kinds_cover_and_cleanable_count`<br>(2) `web` `src/screens/library/storage.test.ts` `the settings summary counts the works and their stored size, and has none without a work`, `a work's 파일 card has its own address`<br>(3) 정리 요청이 보관본 하나를 받는 것만: `trss-web` `library_work_api/tests.rs` `a_work_shows_its_stored_files_and_one_is_cleaned_on_request` | 여러 파일을 한 번에 지우는 기능이 없다는 것은 테스트가 겨누지 않아요. 줄의 화면과 '정리는 작품 상세에서 파일 하나씩' 안내 문장은 화면 테스트가 없어요. `#files`로 새로 열면 스크롤이 카드에 못 미칠 수 있고 정리하면서 남긴 파일은 용량에 남아요([0073]). 서버의 설정 화면에서 본 기록이 없어요. 항목 이름은 `파일 용량·정리`예요([0134]에서 맞출 쪽을 물어요). |
+| 표: 데이터 묶음의 내보내기·가져오기 항목 | 2026-10-01 서버(가져오기만): 사용자의 기존 YAML을 웹으로 가져왔어요(채널 2개, 규칙 26개) ([0009]) | 가져오기만: `trss-web` `import_api/tests.rs` `an_empty_app_takes_everything_without_asking_and_keeps_the_file_exactly` | 내보내기는 목표 6에서 만들어요 ([목표 6]). 화면의 `내보내기` 항목은 `아직 내보낼 수 없어요` 문구만 보여요(`items.ts`). 화면은 `내보내기`와 `가져오기` 항목 둘로 나눠요([0134]에서 맞출 쪽을 물어요). |
+| 표: 배포 설정 항목(배포 값 읽기 전용, 비밀 값 가림) | 없음 | 없음 | 만들지 않았어요 ([0135]). 화면의 `배포 설정` 항목은 `배포 설정은 아직 보여줄 수 없어요` 문구만 보여요(`items.ts`). |
+| 화면 모드를 설정에 두지 않음 | 없음 | 없음 | 설정 목록에 화면 모드 항목이 없는 것은 `items.ts`를 읽어서 알았고 테스트와 사용 기록은 없어요. |
+
+### 앱 YAML의 구성
+
+요구 절: [앱 YAML의 구성](#앱-yaml의-구성)
+
+| 요구 | 실제 사용에서 본 것 | 테스트로 확인한 것 | 확인하지 않은 것 |
+| --- | --- | --- | --- |
+| 앱 YAML의 구성(`version: 1`, `settings`·`library`, 채널 안의 순서 있는 규칙, DB 덤프가 아님) | 없음 | 없음 | 목표 6에서 만들어요 ([목표 6]) |
+| 표: `settings.collection` | 없음 | 없음 | 목표 6에서 만들어요 ([목표 6]) |
+| 표: `settings.channels` | 없음 | 없음 | 목표 6에서 만들어요 ([목표 6]) |
+| 표: `settings.channels[].rules` | 없음 | 없음 | 목표 6에서 만들어요 ([목표 6]) |
+| 표: `settings.watch_folders` | 없음 | 없음 | 목표 6에서 만들어요 ([목표 6]) |
+| 표: `settings.works` | 없음 | 없음 | 목표 6에서 만들어요 ([목표 6]). 표지와 시즌 정보의 내보내기·가져오기 필드는 목표 6으로 옮겼어요([0015], [0017]) |
+| 표: `settings.subtitle_policy` | 없음 | 없음 | 목표 6에서 만들어요 ([목표 6]). 내보내기와 가져오기는 이 필드를 만들 때 한다고 [0049]가 적었어요 |
+| 표: `settings.browser` | 없음 | 없음 | 목표 6에서 만들어요 ([목표 6]). 내보내기와 가져오기는 이 필드를 만들 때 한다고 [0049]가 적었어요 |
+| 표: `library.works` | 없음 | 없음 | 목표 6에서 만들어요 ([목표 6]) |
+
+#### 채널과 규칙 필드
+
+요구 절: [채널과 규칙 필드](#채널과-규칙-필드)
+
+| 요구 | 실제 사용에서 본 것 | 테스트로 확인한 것 | 확인하지 않은 것 |
+| --- | --- | --- | --- |
+| 표: `channels[].name` | 없음 | 없음 | 목표 6에서 만들어요 ([목표 6]) |
+| 표: `channels[].url`과 `secret_query` | 없음 | 없음 | 목표 6에서 만들어요 ([목표 6]). 내보내기가 비밀 값을 비우고 가져올 때 다시 입력받는 동작은 구현되지 않아 테스트도 없다고 [수집 명세의 검증 표]가 적었어요 |
+| 표: `channels[].past_search` | 없음 | 없음 | 목표 6에서 만들어요 ([목표 6]) |
+| 표: `rules[].state` | 없음 | 없음 | 목표 6에서 만들어요 ([목표 6]) |
+| 표: `rules[].match`의 `null` | 없음 | 없음 | 목표 6에서 만들어요 ([목표 6]) |
+| 표: `rules[].episode_auto` | 없음 | 없음 | 목표 6에서 만들어요 ([목표 6]). 설정 내보내기가 없어서 `episode_auto`의 왕복은 가져오기 쪽 저장소 시험으로만 봤어요([0024]) |
+| 표: `rules[].subscription` | 없음 | 없음 | 목표 6에서 만들어요 ([목표 6]). 교환 형식이 없어서 확인하지 못했다고 [0018]이 적었어요 |
+| 기존 `episode`의 쓰임, 내보내지 않는 값, 새 ID 발급, 담지 않는 이력<br>(1) 기존 `episode`를 자막 회차 대응으로 전용하지 않음<br>(2) 앱이 정하기 전 값과 정했다는 사실을 내보내지 않음, `episode_auto`가 `true`인 규칙은 다시 정하지 않음<br>(3) ID 없는 기존 YAML에 새 ID 발급, 작품 연결·회차 대응을 추측해 만들지 않음<br>(4) 수집 이력·작업 이력·큐·과거 승인을 담지 않음 | 없음 | (2) `trss-collect` `store/channels/episode_tests.rs` `an_import_keeps_the_grounds_of_an_automatic_value_it_leaves_as_it_is`<br>(3) `trss-collect` `store/channels/import_tests.rs` `adding_keeps_existing_channels_and_gives_new_ids`<br>(1)(4) 없음 | (1)(2)(4)의 내보내기 쪽은 목표 6에서 만들어요 ([목표 6]). 기존 YAML 가져오기가 작품 연결·회차 대응을 만들지 않는 것은 겨눈 테스트가 없어요. 수집 이력이 빠지는지 확인하는 테스트는 내보내기를 만들 때 필요해요([수집 명세의 검증 표]). |
+
+#### 작품·회차 대응 필드
+
+요구 절: [작품·회차 대응 필드](#작품회차-대응-필드)
+
+| 요구 | 실제 사용에서 본 것 | 테스트로 확인한 것 | 확인하지 않은 것 |
+| --- | --- | --- | --- |
+| ID·참조·선택적 관찰값의 규칙(비어 있지 않은 ID, 선언 ID 중복 불가, 참조의 종류·작품 범위, 생략·`null`은 미상) | 없음 | 없음 | 목표 6에서 만들어요 ([목표 6]) |
+| 표: `settings.works[]` | 없음 | 없음 | 목표 6에서 만들어요 ([목표 6]) |
+| 표: `seasons[]` | 없음 | 없음 | 목표 6에서 만들어요 ([목표 6]). 시즌 정보의 YAML 필드는 내보내기를 구현할 때 정한다고 [0017]이 적었어요 |
+| 표: `sources[]` | 없음 | 없음 | 목표 6에서 만들어요 ([목표 6]) |
+| 표: `episode_mappings[]` | 없음 | 없음 | 목표 6에서 만들어요 ([목표 6]) |
+| 표: `basis` | 없음 | 없음 | 목표 6에서 만들어요 ([목표 6]) |
+| 표: `mode`·`offset` | 없음 | 없음 | 목표 6에서 만들어요 ([목표 6]) |
+| 표: `overrides[]` | 없음 | 없음 | 목표 6에서 만들어요 ([목표 6]) |
+
+#### 작품 표지 필드
+
+요구 절: [작품 표지 필드](#작품-표지-필드)
+
+| 요구 | 실제 사용에서 본 것 | 테스트로 확인한 것 | 확인하지 않은 것 |
+| --- | --- | --- | --- |
+| 표지 필드의 구성(선택 상태와 이미지 메타데이터의 분리, 바이트는 YAML에 없음, 새 내보내기의 명시적 객체, 예전 `version: 1` 입력 읽기) | 없음 | 없음 | 목표 6에서 만들어요 ([목표 6]). 표지의 YAML 내보내기·가져오기 필드는 목표 6으로 옮겼어요([0015]) |
+| 표: `settings.works[].artwork` | 없음 | 없음 | 목표 6에서 만들어요 ([목표 6]) |
+| 표: `library.works[].artwork_image` | 없음 | 없음 | 목표 6에서 만들어요 ([목표 6]) |
+| `mode: auto`의 미선택 상태 | 없음 | 없음 | 목표 6에서 만들어요 ([목표 6]) |
+| 명확한 후보를 자동 선택하면 선택을 유지 | 없음 | 없음 | 목표 6에서 만들어요 ([목표 6]) |
+| `mode: manual`의 AniList 작품과 직접 올린 파일 | 없음 | 없음 | 목표 6에서 만들어요 ([목표 6]) |
+| `mode: disabled` | 없음 | 없음 | 목표 6에서 만들어요 ([목표 6]) |
+| `image_id` 참조와 `origin`의 일치 | 없음 | 없음 | 목표 6에서 만들어요 ([목표 6]) |
+| 허용하지 않는 표지 조합(`auto`와 `upload`, 선택 없는 `manual`, 참조 없는 `manual`) | 없음 | 없음 | 목표 6에서 만들어요 ([목표 6]) |
+| 표지의 이력을 YAML에 남기지 않음 | 없음 | 없음 | 목표 6에서 만들어요 ([목표 6]) |
+| 표지 가져오기 계획(선택적 추가·지정 교체, 새 ID 발급과 연결, 상대 경로 검증) | 없음 | 없음 | 목표 6에서 만들어요 ([목표 6]) |
+| 표: 보관 항목이 없는 예전 작품과 두 표지 필드 생략 | 없음 | 없음 | 목표 6에서 만들어요 ([목표 6]) |
+| 표: `artwork: null`, 한쪽 생략, `auto`·업로드 조합, 이미지 참조 없는 수동 상태, 어긋난 참조·ID | 없음 | 없음 | 목표 6에서 만들어요 ([목표 6]) |
+
+#### 보관 관계 필드
+
+요구 절: [보관 관계 필드](#보관-관계-필드)
+
+| 요구 | 실제 사용에서 본 것 | 테스트로 확인한 것 | 확인하지 않은 것 |
+| --- | --- | --- | --- |
+| 표: `library.works[]` | 없음 | 없음 | 목표 6에서 만들어요 ([목표 6]) |
+| 표: `packages[]` | 없음 | 없음 | 목표 6에서 만들어요 ([목표 6]) |
+| 표: `entries[]` | 없음 | 없음 | 목표 6에서 만들어요 ([목표 6]) |
+| 표: `assets[]` | 없음 | 없음 | 목표 6에서 만들어요 ([목표 6]) |
+| 표: `kind`·`base` | 없음 | 없음 | 목표 6에서 만들어요 ([목표 6]) |
+| 표: `stored_subtitles[]` | 없음 | 없음 | 목표 6에서 만들어요 ([목표 6]) |
+| 표: `source_episodes` | 없음 | 없음 | 목표 6에서 만들어요 ([목표 6]) |
+| 표: `assignment` | 없음 | 없음 | 목표 6에서 만들어요 ([목표 6]) |
+| 표: 출처 관찰 정보(`anissia_observation`) | 없음 | 없음 | 목표 6에서 만들어요 ([목표 6]) |
+| 경로·표시 이름을 ID로 쓰지 않음, 수정본 계보를 추측하지 않음, 의존 자산 `null`과 `[]`, 동일 폰트 재사용, `entries`의 출처 보존 | 없음 | 없음 | 목표 6에서 만들어요 ([목표 6]) |
+| `updDt_raw`와 `source_file_date`의 해석, 쿠키·인증 토큰·서명 URL을 저장해 내보내지 않음<br>(1) `updDt_raw`를 `Asia/Seoul`로 해석하고 부재와 해석 실패를 구분<br>(2) `source_file_date`의 `raw`·`origin`·`timezone`, 모르는 시간대를 서버 시간대로 채우지 않음<br>(3) Anissia 갱신일·파일 날짜·수신 시각·파일시스템 시각을 서로 대체하지 않음<br>(4) 쿠키·토큰·서명 URL을 저장하지 않고 내보내지 않음 | 2026-10-03 개발: 작업 표와 웹·worker 로그에 `signature=`·`credential=`이 없었어요 ([0038])<br>2026-10-03 개발: 실제 erulabo의 Drive ID는 DB의 수신 기록 스냅샷 한 곳에만 있고 로그·수신 폴더·작업 API에는 없었어요 ([0041]) | (1) `updDt` 해석만: `trss-anissia` `observe.rs` `a_value_without_a_zone_is_seoul_time_in_either_spelling`<br>(2)(3) 없음<br>(4) 기록·로그 쪽만: `trss-jobs` `tests/it/tistory.rs` `no_signed_address_reaches_the_records_or_the_log` | (1)~(3)의 YAML 필드와 (4)의 내보내기 쪽은 목표 6에서 만들어요 ([목표 6]). 설정 내보내기에 쿠키와 서명 주소가 없는지를 겨눈 시험은 없고 서버에서 이 검색을 한 기록도 없어요([jobs 명세의 검증 표](jobs.md#검증-표)). |
+
+#### 가져오기 검증과 파일 가용성
+
+요구 절: [가져오기 검증과 파일 가용성](#가져오기-검증과-파일-가용성)
+
+| 요구 | 실제 사용에서 본 것 | 테스트로 확인한 것 | 확인하지 않은 것 |
+| --- | --- | --- | --- |
+| 가져오기 전 검증(필수 필드·자료형·열거값·참조·알 수 없는 필드·중복 키·미지원 버전·중복 ID, 형식 우선순위와 브라우저 값의 범위) | 없음 | 없음 | 목표 6에서 만들어요 ([목표 6]). 공통 정책 저장 때의 값 검증은 '공통 정책' 절의 행에 적었어요 |
+| 상대 경로가 작품 폴더의 `.trss/subtitles/`나 앱 데이터 폴더 밖으로 나가지 않음 | 없음 | 없음 | 목표 6에서 만들어요 ([목표 6]) |
+| 보관 정보의 복원과 파일 가용성 검사(`available`·`missing`·`mismatch`·`unverified`), `확인`·`누락`·`내용 다름` 표시, 표지의 `available`, 같은 폰트의 재사용과 재검증 | 없음 | 없음 | 목표 6에서 만들어요 ([목표 6]) |
+
+### 내보내기
+
+요구 절: [내보내기](#내보내기)
+
+| 요구 | 실제 사용에서 본 것 | 테스트로 확인한 것 | 확인하지 않은 것 |
+| --- | --- | --- | --- |
+| 내보내기에 담는 정보와 실제 파일과 함께 가져와 복원, `drive_id`는 담지 않음 | 없음 | 없음 | 목표 6에서 만들어요 ([목표 6]). `drive_id`를 내보내기에 남기지 않는다는 결정은 [0041]에 있고, 웹 API가 Drive 파일 ID를 내보내지 않는다는 것까지는 [0050]이 적었어요(설정 내보내기가 아니에요) |
+| 담지 않는 것과 화면의 표시(담는 것은 개수, 담지 않는 것은 목록, 마지막 내보내기 시각) | 없음 | 없음 | 목표 6에서 만들어요 ([목표 6]). 설정 화면의 `내보내기` 항목은 `아직 내보낼 수 없어요` 문구만 보여요. 수집 이력이 빠지는지 확인하는 테스트도 필요해요([수집 명세의 검증 표]) |
+| 구버전 YAML이나 DB 백업으로 안내하지 않음, 파일 영역 복사 안내 문장 | 없음 | 없음 | 목표 6에서 만들어요 ([목표 6]) |
+| 일관된 DB 읽기 시점의 설정·보관 관계 | 없음 | 없음 | 목표 6에서 만들어요 ([목표 6]) |
+| 보관 정보는 SQLite에만 두고 사이드카 매니페스트를 두지 않음 | 2026-10-07 서버: 배포 뒤 디스크에서 바뀐 것은 자막 작업이 만든 8개 경로뿐이었어요. 자막 작업 하나의 관찰이에요 ([0081]) | 없음 | 사이드카를 만들지 않는다는 점을 겨눈 테스트가 없어요([자막 명세의 검증 표](subtitles.md#검증-표)). |
+
+### 가져오기
+
+요구 절: [가져오기](#가져오기)
+
+| 요구 | 실제 사용에서 본 것 | 테스트로 확인한 것 | 확인하지 않은 것 |
+| --- | --- | --- | --- |
+| 세 단계 흐름, 가져오기가 아무것도 실행하지 않고 과거 승인을 되살리지 않음, 선택하지 않은 항목과 가져온 파일에 없는 설정은 그대로, 임의 병합 금지<br>(1) 세 단계와 결과 문장<br>(2) 다운로드·자막 적용·파일 정리·표지 수신을 실행하지 않고 과거 승인을 되살리지 않음<br>(3) 선택하지 않은 항목과 가져온 파일에 없는 기존 설정이 그대로<br>(4) 이름·조건 유사성으로 규칙을 병합하지 않음 | 2026-10-01 서버: 웹으로 가져온 뒤 worker 첫 주기가 `0 added, 17 already in Transmission`이었어요. 가져오기가 아무것도 받지 않았다는 직접 기록은 아니에요 ([0009]) | (1) 없음<br>(2) 열린 명령이 없고 이력 개수가 그대로이며 Anissia 요청이 편성 조회뿐인 것만: `trss-web` `import_api/subscription_tests.rs` `an_import_receives_nothing_and_leaves_history_and_commands_alone`<br>(3) `trss-web` `import_api/tests.rs` `skip_leaves_everything_and_choices_must_cover_every_conflict`<br>(4) `trss-collect` `store/channels/import_tests.rs` `rules_match_on_phrase_regex_and_case_flags_only` | (1) 세 단계 표시와 결과 문장은 화면 테스트가 없어요. (2) 과거 승인과 실제 영상·자막 파일이 그대로인 것은 시험하지 않았어요. 앱 YAML 쪽은 목표 6에서 만들어요 ([목표 6]). 웹과 worker가 다른 프로세스로 동시에 쓰는 경우는 확인하지 않았어요([0005]). |
+| 파일 선택 단계(기존 YAML인지 앱 YAML인지 알아봄, 읽을 수 없는 파일은 까닭을 실패로 보이고 다음 단계로 가지 않음) | 2026-10-01 서버: 사용자의 기존 YAML을 읽어 가져왔어요 ([0009])<br>2026-10-01 개발: 사용자의 실제 YAML 파일이 로컬 미리보기에서 읽혔어요 ([0022]) | `trss-web` `import_api/tests.rs` `files_that_cannot_be_read_fail_with_a_reason_and_change_nothing`<br>`trss-import` `legacy.rs` `rejects_files_that_are_not_channel_lists_with_a_reason` | 앱 YAML을 알아보는 것(`PickStep.tsx`는 기존 YAML만 읽을 수 있다고 알려요)은 목표 6에서 만들어요 ([목표 6]). 거부 까닭을 화면에 보이고 다음 단계로 가지 못하게 하는 것은 화면 테스트가 없어요. |
+| 결과 단계(추가·교체·그대로 남은 것과 없앤 규칙의 개수) | 2026-10-01 서버: 가져온 개수(채널 2개, 규칙 26개)만 적혀 있고 결과 화면은 적혀 있지 않아요 ([0009]) | `trss-web` `import_api/tests.rs` `replace_shows_the_rules_that_go_and_reports_them_separately` | 개수를 문장으로 보이는 결과 화면(`ResultStep.tsx`)은 화면 테스트가 없어요. |
+
+#### 기존 YAML
+
+요구 절: [기존 YAML](#기존-yaml)
+
+| 요구 | 실제 사용에서 본 것 | 테스트로 확인한 것 | 확인하지 않은 것 |
+| --- | --- | --- | --- |
+| 기존 YAML 형식을 채널 단위로 가져오기, 채널·규칙 순서 보존, 기본값이 생략된 파일 읽기 | 2026-10-01 서버: 가져온 YAML로 첫 주기가 cron이 넣은 항목을 같은 폴더에서 알아봤어요 ([0009]) | `trss-import` `legacy.rs` `reads_the_sample_in_file_order_with_every_value`, `a_given_zero_or_positive_episode_is_kept_and_only_an_omitted_one_reads_as_1` | 서버 기록에는 순서 보존과 기본값이 생략된 파일이 따로 없어요. |
+| 이미 있는 채널의 `교체`·`추가`·`건너뛰기`<br>(1) `교체`: 파일 내용으로 통째로 바꾸고 없어질 규칙 이름을 검토 단계에 보이고 결과에 없앤 개수를 적음<br>(2) 제목 대기 구독은 교체해도 그대로 두고 남는 개수를 알림<br>(3) 구독 규칙의 저장 폴더는 작품 폴더 검사를 거쳐, 수집 폴더 자체나 `..`이면 지금 폴더를 둠<br>(4) `추가`: 새 ID의 복사본<br>(5) `건너뛰기`: 채널과 구독 제안을 뺌<br>(6) 각 선택지를 문장으로 설명 | 없음 | (1) `trss-web` `import_api/tests.rs` `replace_shows_the_rules_that_go_and_reports_them_separately`<br>(2) `trss-collect` `store/channels/import_tests.rs` `replacing_leaves_title_waiting_subscriptions_as_they_are`<br>(3) `trss-import` `plan.rs` `a_replacement_keeps_the_folder_of_a_subscription_the_file_gives_no_work_folder`<br>(4) `trss-web` `import_api/tests.rs` `add_copies_the_channel_with_new_ids_and_leaves_the_existing_one_alone`<br>(5) `trss-import` `picks/tests.rs` `a_pick_is_asked_for_once_and_a_channel_that_is_skipped_or_not_imported_drops_its_picks`<br>(6) 없음 | (6)과 (2)(3)의 검토·결과 단계 문장(`ReviewStep.tsx`)은 화면 테스트가 없어요. (1)에서 그 규칙으로 받은 파일과 보관 기록이 남는 것은 이 테스트들이 보지 않아요. 구독 규칙의 저장 폴더 검사와 제목 대기 구독 유지를 본 사용 기록은 못 찾았어요. |
+| 이미 있는 채널의 선택지는 선택 없이 시작하고 모든 채널을 고르기 전에는 `가져오기`를 누를 수 없음 | 참고(가짜 출처): 두 채널 중 하나만 고르면 `가져오기`가 비활성이고 남은 채널 수 문장이 바뀌었어요. 날짜 미기재 ([0005]) | `trss-import` `plan.rs` `every_conflicting_channel_needs_one_choice_that_matches_now` | 선택 없이 시작하는 것과 `가져오기` 비활성(`ReviewStep.tsx`)은 화면 테스트가 없어요. |
+| 지금 없는 채널은 묻지 않고 추가 | 2026-10-01 서버: 빈 DB에 채널 2개를 추가했어요. 묻지 않았는지는 적혀 있지 않아요 ([0009]) | `trss-import` `plan.rs` `nothing_is_asked_when_no_channel_exists` | 서버에서 묻지 않았다는 기록은 없어요. |
+| 가져온 채널의 URL 쿼리 값은 모두 비밀로 시작 | 참고(가짜 출처): 모든 쿼리 이름이 `secret_query`에 들어갔어요. 날짜 미기재 ([0005]) | `trss-collect` `store/channels/import_tests.rs` `adding_appends_channels_in_order_with_every_rule_value` | 서버에서 가져온 채널의 비밀 표시를 본 기록이 없어요([0009]의 채널 탭 기록은 가림 여부를 적지 않았어요). |
+| 채널의 `directory`를 수집 폴더에 맞춤, 수집 폴더 밖의 채널은 까닭과 함께 알리고 가져오지 않음 | 없음 | `trss-import` `fit.rs` `with_no_collect_folder_differing_folders_share_their_common_ancestor`, `a_channel_folder_inside_the_collect_folder_gets_the_rest_in_front_of_its_rules`, `a_channel_folder_outside_the_collect_folder_is_reported_not_imported` | 실제 DB에서 수집 폴더 마이그레이션의 결과는 기록이 없어요([0010]). 서버의 가져오기는 수집 폴더가 생기기 전이었어요([0009]). 검토 단계가 까닭을 보이는 문구는 화면 테스트가 없어요. |
+| `match`가 빈 규칙이 있는 파일은 파일 선택 단계에서 위치와 까닭을 알리고 가져오지 않음 | 없음 | `trss-import` `legacy.rs` `an_empty_match_is_refused_naming_the_rule` | 웹의 미리보기·적용이 이 거부를 `400`으로 돌려주는 것은 `directory`가 없는 파일로만 시험했어요. 파일 선택 단계의 화면 문구는 화면 테스트가 없어요. |
+| 규칙 목록, 규칙 위 주석에서 구독 제안을 만들고 체크한 제안만 구독으로 가져옴<br>(1) 주석에서 Anissia 작품 주소와 제작자를 읽음<br>(2) 체크한 제안만 구독, 나머지는 규칙만 | 2026-10-01 개발: 사용자의 실제 YAML에서 주석 처리하지 않은 규칙 26개가 모두 `with_creator` 제안이고 처음부터 체크됐으며 값이 파일 주석과 같았어요 ([0022]) | (1) `trss-import` `comments/tests.rs` `the_two_line_convention_gives_the_weekday_time_creator_and_anime`<br>(2) `trss-web` `import_api/subscription_tests.rs` `a_first_run_import_adds_everything_unasked_and_the_checked_suggestions_become_subscriptions` | 실제 Anissia 조회는 가짜 서버로만 봤어요([0022]). 서버의 가져오기는 구독 제안 이전이라 서버 기록이 없어요. 주석 형식은 2026-09-29에 읽은 한 벌의 관례예요. 규칙 목록의 평가 순서·일치 문구·저장 폴더·회차 변환 표시는 화면 테스트가 없어요. |
+| 표: 주석에서 Anissia 주소와 제작자를 읽음 | 2026-10-01 개발: 실제 YAML의 규칙 26개 모두 이 경우였어요 ([0022]) | `trss-web` `import_api/subscription_tests.rs` `the_preview_offers_the_four_cases_checked_as_the_spec_says_without_asking_anissia` | 요일·시간·제작자를 보이는 화면은 화면 테스트가 없어요. 실제 Anissia 조회는 하지 않았어요([0022]). |
+| 표: Anissia 주소는 읽었지만 제작자가 없음 | 참고(가짜 출처): 가짜 Anissia와 합성 YAML로 봤어요. 실제 파일에는 이 경우가 없었어요 ([0022]) | `trss-import` `picks/tests.rs` `a_checked_address_follows_its_creator_and_one_without_leaves_the_creator_undecided` | `제작자 미정` 문구와 체크하지 않은 모양은 화면 테스트가 없어요. |
+| 표: 주석이 있지만 읽을 수 없음 | 참고(가짜 출처): `Anissia 주소 형식이 달라서` 문장을 합성 YAML로 봤어요 ([0022]) | `trss-import` `comments/tests.rs` `a_comment_that_names_no_readable_address_says_why` | `주석을 읽을 수 없음`과 까닭을 보이는 화면(`ReviewStep.tsx`)은 화면 테스트가 없어요. 다른 사람의 주석 형식은 읽지 못한 주석으로 다뤄요. |
+| 표: 주석 없음 | 참고(가짜 출처): 합성 YAML로 봤어요 ([0022]) | `trss-import` `comments/tests.rs` `no_comment_text_is_no_comment` | `주석 없음` 표시는 화면 테스트가 없어요. |
+| 채널마다 `모두 선택`·`모두 해제`, 네 경우의 개수 칩 | 참고(가짜 출처): 모두 선택·모두 해제와 개수 칩이 동작했어요 ([0022]) | `모두 해제` 뒤 화면이 보내는 빈 선택을 서버가 받는 것만: `trss-web` `import_api/subscription_tests.rs` `unchecked_suggestions_import_the_rules_alone_and_ask_nothing_of_anissia` | 두 단추와 개수 칩의 계산(`ReviewStep.tsx`)은 화면 테스트가 없어요. |
+
+#### 앱 YAML
+
+요구 절: [앱 YAML](#앱-yaml)
+
+| 요구 | 실제 사용에서 본 것 | 테스트로 확인한 것 | 확인하지 않은 것 |
+| --- | --- | --- | --- |
+| 채널 안에서 규칙별로 골라 추가·교체, 선택하지 않은 규칙 유지, 적용 전에 최종 평가 순서 표시 | 없음 | 없음 | 목표 6에서 만들어요 ([목표 6]) |
+| 항목의 안정적인 ID와 참조 보존, 이름·조건만으로 덮어쓰지 않음, 복제에 새 ID | 없음 | 없음 | 목표 6에서 만들어요 ([목표 6]) |
+| 비어 있는 채널 URL의 비밀 값을 검토 단계에서 다시 입력받음, 교체할 때 지금 저장된 비밀 값 유지 | 없음 | 없음 | 목표 6에서 만들어요 ([목표 6]). 구현되지 않아 테스트도 없다고 [수집 명세의 검증 표]가 적었어요 |
+| 보관 정보의 가용성 결과를 `확인`·`누락`·`내용 다름`의 개수와 목록으로 보임 | 없음 | 없음 | 목표 6에서 만들어요 ([목표 6]) |
+| 참조가 풀리지 않은 감시 폴더를 필요한 연결로 보이고 기존 감시 폴더를 고르기 전에는 적용을 막음 | 없음 | 없음 | 목표 6에서 만들어요 ([목표 6]) |
+| 작품 폴더를 옮긴 환경에서 작품의 `directory`를 새 위치로 지정하고 `.trss/`를 다시 검사 | 없음 | 없음 | 목표 6에서 만들어요 ([목표 6]). 가져오기가 규칙을 만들 때 작품 폴더를 옮길지는 구현 때 정한다고 [0123]이 적었어요 |
+| 표: 채널 A의 규칙 5개와 기존 YAML의 규칙 3개(겹침 2개)를 교체로 고름 | 참고(가짜 출처): 교체 때 없어질 규칙 이름과 결과의 `없앤 규칙` 목록을 봤어요. 날짜 미기재 ([0005]) | `trss-web` `import_api/tests.rs` `replace_shows_the_rules_that_go_and_reports_them_separately` | 그 규칙으로 받은 파일과 보관 기록이 남는 것은 이 테스트가 보지 않아요. 이름 목록과 개수를 문장으로 보이는 화면은 화면 테스트가 없어요. |
+| 표: 채널 A에 일반 규칙 하나와 제목 대기 구독 하나, 기존 YAML에 다른 규칙 하나를 교체로 고름 | 없음 | `trss-web` `import_api/tests.rs` `replacing_keeps_the_title_waiting_subscriptions_of_the_channel` | `제목 대기 구독 1개는 그대로 남겨요.` 문장(`ReviewStep.tsx`)은 화면 테스트가 없어요. |
+| 표: 채널 A의 구독 규칙에 대해 기존 YAML의 같은 규칙이 저장 폴더로 수집 폴더 자체를 가리키는데 교체를 고름 | 없음 | `trss-import` `plan.rs` `a_replacement_keeps_the_folder_of_a_subscription_the_file_gives_no_work_folder` | 검토 단계와 결과가 그 사실을 구독마다 알리는 문장은 화면 테스트가 없어요. 규칙 상세에서 계속 저장할 수 있는지는 보지 않았어요. |
+| 표: 이미 있는 채널 두 개 중 하나만 고름 | 참고(가짜 출처): `가져오기`가 비활성이고 남은 채널 수 문장이 2개에서 1개로 바뀌었어요. 날짜 미기재 ([0005]) | `trss-import` `plan.rs` `every_conflicting_channel_needs_one_choice_that_matches_now` | 버튼 비활성과 `아직 N개 채널이 남았어요` 문장(`ReviewStep.tsx`)은 화면 테스트가 없어요. |
+| 표: 앱 YAML에서 규칙 하나만 골라 추가 | 없음 | 없음 | 목표 6에서 만들어요 ([목표 6]) |
+| 표: 앱 YAML의 감시 폴더 `/mnt/nas/anime`가 이 환경에 없음 | 없음 | 없음 | 목표 6에서 만들어요 ([목표 6]) |
+| 표: 미지원 `version`, 중복 ID, 알 수 없는 필드 | 없음 | 없음 | 목표 6에서 만들어요 ([목표 6]) |
+
+### 처음 실행
+
+요구 절: [처음 실행](#처음-실행)
+
+| 요구 | 실제 사용에서 본 것 | 테스트로 확인한 것 | 확인하지 않은 것 |
+| --- | --- | --- | --- |
+| 이번 주 편성 자리의 `처음 설정` 체크리스트, 단계 두 개(`감시 폴더 등록`·`기존 설정 가져오기`), 건너뛸 수 있음 | 참고(스크래치 DB): 2026-10-01 새 설치에서 체크리스트만 보였어요 ([0021]) | `trss-web` `setup_api/tests.rs` `a_new_install_shows_only_the_checklist`<br>`trss-core` `db.rs` `an_empty_database_from_before_the_first_run_begins_one_and_gets_the_week_tables` | 체크리스트 화면은 화면 테스트가 없어요. 서버에서 처음 실행을 본 기록이 없어요. 다크 모드, 실제 휴대폰, 스크린 리더, 터치는 보지 않았어요([0021]). |
+| 각 단계의 버튼과 완료 조건(폴더 하나를 추가, 채널·규칙·구독을 하나라도 만들거나 바꾸는 가져오기), 모든 채널을 건너뛴 적용은 완료가 아님<br>(1) 단계 버튼이 설정으로 이어짐<br>(2) 폴더 단계의 완료<br>(3) 가져오기 단계의 완료<br>(4) 기존 YAML이 없을 때 안내 문장 | 참고(스크래치 DB): 2026-10-01 폴더 하나를 추가하고 가져오기를 건너뛰면 모든 기기에서 체크리스트가 끝났어요. 마지막 감시 폴더를 해제해도 돌아오지 않았어요 ([0021]) | (1)(4) 없음<br>(2) `trss-library` `store/setup/tests.rs` `registering_a_folder_finishes_the_folder_step_for_good`<br>(3) `trss-web` `import_api/tests.rs` `an_apply_that_creates_or_changes_nothing_does_not_finish_the_import_step` | 단계 버튼이 감시 폴더와 가져오기로 이어지는 것과 기존 YAML이 없을 때의 안내 문장은 화면 테스트가 없어요. 다크 모드와 실제 기기는 보지 않았어요([0021]). |
+| 각 단계를 건너뛰고 되돌릴 수 있음, 두 단계가 끝나거나 건너뛰면 체크리스트가 사라지고 다시 나오지 않음, 마지막 단계를 건너뛴 직후만 안내 줄에서 되돌림 | 참고(스크래치 DB): 2026-10-01 건너뛰기에서 `건너뛰기 취소`가 보이고 두 단계를 건너뛴 뒤 안내 줄의 취소가 서버 상태를 바꿨어요 ([0021]) | `trss-library` `store/setup/tests.rs` `the_checklist_ends_once_both_steps_are_done_or_skipped_and_stays_ended`, `taking_back_the_last_skip_brings_the_checklist_back`<br>`trss-web` `setup_api/tests.rs` `a_folder_and_a_skipped_import_end_the_checklist_for_every_device` | 마지막 단계를 건너뛴 직후에만 안내 줄에서 되돌리는 화면은 화면 테스트가 없어요([0021]이 구현으로 적었어요). |
+| 구독 제안의 확인은 가져오기 검토 단계에서 하고 별도 단계로 두지 않음 | 없음 | `trss-web` `setup_api/tests.rs` `a_new_install_shows_only_the_checklist` | 구독 제안을 검토 단계에서 확인하는 흐름은 '가져오기' 절의 구독 제안 행이 다뤄요. |
+| 처음 실행 중에는 이번 주 편성의 수집 상태·다음 분기 구독, 휴대폰 요약 줄, 할 일 개수 배지를 두지 않음<br>(1) 수집 상태·다음 분기 구독·요약 줄<br>(2) 할 일 개수 배지 | (1) 참고(스크래치 DB): 2026-10-01 새 설치에서 수집 상태·다음 분기·요약 줄이 없고 `/api/collect/status`를 부르지 않았어요 ([0021]) | (1) `trss-web` `setup_api/tests.rs` `a_new_install_shows_only_the_checklist`(`week`가 `null`)<br>(2) 없음 | (2) 코드가 이 요구와 달라요: 메뉴의 할 일 배지(`web/src/app/MainNav.tsx`, 개수는 `web/src/app/todo-count.ts`)에 처음 실행인지 보는 조건이 없어요. 배지는 개수가 0이면 그리지 않으므로 처음 실행 중에 할 일 개수가 0보다 클 수 있는지는 확인하지 않았어요. [0021]은 세는 곳이 아직 없어서 배지를 바꾸지 않았다고 적었고 그 뒤에 배지가 생겼어요 ([0134])<br>(1)의 휴대폰 요약 줄과 수집 상태판이 보이지 않는 화면은 화면 테스트가 없어요. |
+| 설정도 연결한 작품이 없는 상태로 보임(작품별 형식 지정과 정리할 작품은 비고 보관 파일 용량은 0, 내보내기는 마지막 내보내기가 없고 담기는 것은 등록한 폴더와 가져온 채널·규칙 수뿐) | 없음 | `trss-web` `policy_api/tests.rs` `the_policy_starts_at_the_defaults_and_a_save_answers_it_as_saved`(재정의 목록이 빔)<br>`web` `src/screens/library/storage.test.ts` `the settings summary counts the works and their stored size, and has none without a work` | 보관 파일 용량이 0으로 보이는 설정 화면과 정리할 작품 목록이 비는 것은 화면 테스트가 없어요. 내보내기의 마지막 내보내기와 담기는 개수는 목표 6에서 만들어요 ([목표 6]). |
+| 처음 실행의 기존 YAML 가져오기는 채널마다 묻지 않고 모두 추가 | 2026-10-01 서버: 빈 DB에 채널 2개를 추가했어요. 묻지 않았는지는 적혀 있지 않아요 ([0009]) | `trss-web` `setup_api/tests.rs` `importing_the_legacy_file_into_a_new_install_adds_every_channel_without_asking` | 서버 기록에는 처음 실행 상태에서 가져온 것이 없어요. 묻지 않는 화면은 화면 테스트가 없어요. |
+
+### 확인하지 않은 요구
+
+실제 사용에서 본 것도 없고 테스트도 없는 요구는 111행 중 65행이에요.
+
+- 63행은 [목표 6](../tickets/README.md#6-앱-yaml-내보내기와-가져오기)에서 만드는 앱 YAML 내보내기·가져오기의 요구예요. 앱 YAML의 구성 9행, 채널과 규칙 필드의 표 7행, 작품·회차 대응 필드 8행, 작품 표지 필드 13행, 보관 관계 필드 10행, 가져오기 검증과 파일 가용성 3행, 내보내기 4행, 앱 YAML 9행이에요.
+- 설정 화면: `표: 배포 설정 항목`은 만들지 않았고 [0135](../tickets/0135-deploy-settings-item.md)에서 만들어요. 화면 모드를 설정에 두지 않는 것은 코드를 읽어서만 알았어요.
+
+나머지 행에도 일부만 확인한 요구가 있어요. 그 부분은 행마다 `확인하지 않은 것`에 적었어요.
+
+[0005]: ../archive/tickets/1-app-owned-collection/0005-legacy-yaml-import.md
+[0009]: ../archive/tickets/1-app-owned-collection/0009-deploy-web-worker.md
+[0010]: ../archive/tickets/2-work-discovery-and-subscriptions/0010-app-collect-folder.md
+[0012]: ../archive/tickets/2-work-discovery-and-subscriptions/0012-watch-folders-discovery.md
+[0015]: ../archive/tickets/2-work-discovery-and-subscriptions/0015-work-artwork.md
+[0016]: ../archive/tickets/2-work-discovery-and-subscriptions/0016-watch-inotify.md
+[0017]: ../archive/tickets/2-work-discovery-and-subscriptions/0017-season-info.md
+[0018]: ../archive/tickets/2-work-discovery-and-subscriptions/0018-subscribe-from-schedule.md
+[0021]: ../archive/tickets/2-work-discovery-and-subscriptions/0021-weekly-schedule.md
+[0022]: ../archive/tickets/2-work-discovery-and-subscriptions/0022-legacy-yaml-subscriptions.md
+[0024]: ../archive/tickets/2-work-discovery-and-subscriptions/0024-video-episode-offset.md
+[0030]: ../archive/tickets/3-subtitle-candidates-and-receiving/0030-feature-crates.md
+[0038]: ../archive/tickets/3-subtitle-candidates-and-receiving/0038-receive-result-tistory.md
+[0040]: ../archive/tickets/3-subtitle-candidates-and-receiving/0040-remote-auth-screen.md
+[0041]: ../archive/tickets/3-subtitle-candidates-and-receiving/0041-source-erulabo.md
+[0049]: ../archive/tickets/3-subtitle-candidates-and-receiving/0049-common-policy-settings.md
+[0050]: ../archive/tickets/3-subtitle-candidates-and-receiving/0050-silent-revision-recheck.md
+[0060]: ../archive/tickets/4-store-apply-and-replace/0060-server-filesystem-probe.md
+[0072]: ../archive/tickets/4-store-apply-and-replace/0072-choose-stored-subtitle.md
+[0073]: ../archive/tickets/4-store-apply-and-replace/0073-stored-file-cleanup.md
+[0081]: ../archive/tickets/5-deployed-verification/0081-deploy-new-release.md
+[0085]: ../archive/tickets/5-deployed-verification/0085-phone-and-tablet-flows.md
+[0123]: ../archive/tickets/5-deployed-verification/0123-collect-moves-archived-work-folder.md
+[0134]: ../tickets/0134-settings-version-and-first-run-badge.md
+[0135]: ../tickets/0135-deploy-settings-item.md
+[목표 1]: ../tickets/README.md#1-앱-소유-설정과-수집-기반
+[목표 6]: ../tickets/README.md#6-앱-yaml-내보내기와-가져오기
+[수집 명세의 검증 표]: collection.md#검증-표
