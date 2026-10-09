@@ -5,16 +5,13 @@
 use std::sync::Arc;
 
 use axum::{
-    body::Body,
-    http::{Method, Request, StatusCode},
+    http::{Method, StatusCode},
     Router,
 };
-use http_body_util::BodyExt;
 use serde_json::{json, Value};
 use tokio_util::sync::CancellationToken;
-use tower::ServiceExt;
 
-use crate::AppState;
+use crate::{testing, AppState};
 use trss_core::{Db, DbError};
 use trss_jobs::{area::ReceiveArea, Created, JobRun, NewItem, NewJob, Runner};
 use trss_subtitles::{
@@ -75,7 +72,7 @@ impl App {
             ReceiveArea::in_app_data(dir.path()),
             Arc::new(|| 2_000),
         );
-        let router = Router::new().nest("/api", crate::api::router().with_state(state.clone()));
+        let router = testing::api(&state);
         App {
             state,
             router,
@@ -145,21 +142,7 @@ impl App {
     }
 
     async fn call(&self, method: Method, uri: &str, body: Option<Value>) -> (StatusCode, Value) {
-        let request = Request::builder().method(method).uri(uri);
-        let request = match body {
-            Some(body) => request
-                .header("content-type", "application/json")
-                .body(Body::from(body.to_string())),
-            None => request.body(Body::empty()),
-        }
-        .unwrap();
-        let response = self.router.clone().oneshot(request).await.unwrap();
-        let status = response.status();
-        let bytes = response.into_body().collect().await.unwrap().to_bytes();
-        (
-            status,
-            serde_json::from_slice(&bytes).unwrap_or(Value::Null),
-        )
+        testing::call(&self.router, method, uri, body).await
     }
 
     async fn detail(&self, job: &str) -> Value {
@@ -647,7 +630,7 @@ async fn the_worker_is_woken_only_when_a_decision_was_written() {
     let socket = UnixDatagram::bind(&socket_path).unwrap();
     socket.set_nonblocking(true).unwrap();
     app.state = app.state.clone().with_worker_wake(socket_path);
-    app.router = Router::new().nest("/api", crate::api::router().with_state(app.state.clone()));
+    app.router = testing::api(&app.state);
     let (job, plans) = app.three_waiting().await;
     let woke = || socket.recv(&mut [0u8; 8]).is_ok();
     while woke() {}

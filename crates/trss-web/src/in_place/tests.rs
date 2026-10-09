@@ -8,16 +8,13 @@
 use std::path::PathBuf;
 
 use axum::{
-    body::Body,
-    http::{header, Method, Request, StatusCode},
+    http::{Method, StatusCode},
     Router,
 };
-use http_body_util::BodyExt;
 use serde_json::{json, Value};
-use tower::ServiceExt;
 
 use super::Evidence;
-use crate::{commands_api::now_millis, AppState};
+use crate::{commands_api::now_millis, testing, AppState};
 use trss_collect::store::{
     channels::{Channel, ChannelInput, Rule, RuleInput, RuleState},
     history::{HistoryItem, HistoryResult, Observation},
@@ -57,7 +54,7 @@ struct World {
 impl World {
     async fn new() -> World {
         let state = AppState::new(Db::open_blocking(":memory:").unwrap());
-        let router = Router::new().nest("/api", crate::api::router().with_state(state.clone()));
+        let router = testing::api(&state);
         let dir = tempfile::tempdir().unwrap();
         let media = dir.path().join("media");
         let folder = media.join("Show").join("Season 01");
@@ -109,26 +106,7 @@ impl World {
     }
 
     async fn call(&self, method: Method, uri: &str, body: Option<Value>) -> (StatusCode, Value) {
-        let mut request = Request::builder().method(method).uri(uri);
-        let body = match body {
-            Some(json) => {
-                request = request.header(header::CONTENT_TYPE, "application/json");
-                Body::from(json.to_string())
-            }
-            None => Body::empty(),
-        };
-        let response = self
-            .router
-            .clone()
-            .oneshot(request.body(body).unwrap())
-            .await
-            .unwrap();
-        let status = response.status();
-        let bytes = response.into_body().collect().await.unwrap().to_bytes();
-        (
-            status,
-            serde_json::from_slice(&bytes).unwrap_or(Value::Null),
-        )
+        testing::call(&self.router, method, uri, body).await
     }
 
     /// A history item of the rule, recorded ten minutes ago; its torrent hash.

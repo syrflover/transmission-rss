@@ -1,13 +1,11 @@
 use axum::{
-    body::Body,
-    http::{Method, Request, StatusCode},
+    http::{Method, StatusCode},
     Router,
 };
-use http_body_util::BodyExt;
 use serde_json::Value;
-use tower::ServiceExt;
 
 use super::*;
+use crate::testing;
 use trss_collect::store::{
     channels::ChannelInput,
     history::{HistoryResult, Observation},
@@ -22,28 +20,12 @@ const NOON: i64 = 1_790_769_600_000;
 
 fn app() -> (AppState, Router) {
     let state = AppState::new(Db::open_blocking(":memory:").unwrap());
-    let router = Router::new().nest("/api", crate::api::router().with_state(state.clone()));
+    let router = testing::api(&state);
     (state, router)
 }
 
 async fn get(router: &Router, uri: &str) -> (StatusCode, Value) {
-    let response = router
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method(Method::GET)
-                .uri(uri)
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    let status = response.status();
-    let bytes = response.into_body().collect().await.unwrap().to_bytes();
-    (
-        status,
-        serde_json::from_slice(&bytes).unwrap_or(Value::Null),
-    )
+    testing::call(router, Method::GET, uri, None).await
 }
 
 fn observation(key: &str, result: HistoryResult) -> Observation {

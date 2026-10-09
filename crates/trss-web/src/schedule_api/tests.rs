@@ -6,17 +6,12 @@ use std::{
     },
 };
 
-use axum::{
-    body::Body,
-    http::{Method, Request, StatusCode},
-};
-use http_body_util::BodyExt;
+use axum::http::{Method, StatusCode};
 use serde_json::{json, Value};
-use tower::ServiceExt;
 
 use trss_core::{Clock, Db};
 
-use crate::{api, AppState};
+use crate::{testing, AppState};
 use trss_anissia::{Anime, Anissia};
 use trss_collect::store::{
     channels::{Channel, ChannelInput, NewSubscription, Rule, RuleInput, RuleState, SubtitleMode},
@@ -110,25 +105,7 @@ impl App {
     }
 
     async fn call(&self, method: Method, uri: &str, body: Option<Value>) -> (StatusCode, Value) {
-        let mut request = Request::builder().method(method).uri(uri);
-        let body = match body {
-            Some(json) => {
-                request = request.header("content-type", "application/json");
-                Body::from(json.to_string())
-            }
-            None => Body::empty(),
-        };
-        let response = api::router()
-            .with_state(self.state.clone())
-            .oneshot(request.body(body).unwrap())
-            .await
-            .unwrap();
-        let status = response.status();
-        let bytes = response.into_body().collect().await.unwrap().to_bytes();
-        (
-            status,
-            serde_json::from_slice(&bytes).unwrap_or(Value::Null),
-        )
+        testing::call(&testing::bare_api(&self.state), method, uri, body).await
     }
 
     async fn week(&self) -> Value {

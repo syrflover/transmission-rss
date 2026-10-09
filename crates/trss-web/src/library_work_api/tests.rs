@@ -1,15 +1,10 @@
 use std::collections::BTreeSet;
 
-use axum::{
-    body::Body,
-    http::{Method, Request, StatusCode},
-};
-use http_body_util::BodyExt;
+use axum::http::{Method, StatusCode};
 use serde_json::Value;
-use tower::ServiceExt;
 
 use super::*;
-use crate::api;
+use crate::testing;
 use trss_collect::store::channels::{ChannelInput, RuleInput, RuleState};
 use trss_core::Db;
 use trss_library::discovery::{
@@ -53,19 +48,7 @@ fn rule(directory: &str, state: RuleState) -> RuleInput {
 }
 
 async fn get(state: &AppState, uri: &str) -> (StatusCode, Value) {
-    let request = Request::builder()
-        .method(Method::GET)
-        .uri(uri)
-        .body(Body::empty())
-        .unwrap();
-    let response = api::router()
-        .with_state(state.clone())
-        .oneshot(request)
-        .await
-        .unwrap();
-    let status = response.status();
-    let bytes = response.into_body().collect().await.unwrap().to_bytes();
-    (status, serde_json::from_slice(&bytes).unwrap())
+    testing::call(&testing::bare_api(state), Method::GET, uri, None).await
 }
 
 fn state() -> AppState {
@@ -421,22 +404,7 @@ async fn without_a_collect_folder_no_rule_belongs_to_a_work() {
 }
 
 async fn post(state: &AppState, uri: &str) -> (StatusCode, Value) {
-    let request = Request::builder()
-        .method(Method::POST)
-        .uri(uri)
-        .body(Body::empty())
-        .unwrap();
-    let response = api::router()
-        .with_state(state.clone())
-        .oneshot(request)
-        .await
-        .unwrap();
-    let status = response.status();
-    let bytes = response.into_body().collect().await.unwrap().to_bytes();
-    (
-        status,
-        serde_json::from_slice(&bytes).unwrap_or(Value::Null),
-    )
+    testing::call(&testing::bare_api(state), Method::POST, uri, None).await
 }
 
 /// A done job of the work that stored `Show - <n>.ass` for each episode `n`
@@ -594,23 +562,8 @@ async fn a_stored_subtitle_waiting_for_a_replacement_names_its_job() {
 }
 
 async fn post_json(state: &AppState, uri: &str, body: &str) -> (StatusCode, Value) {
-    let request = Request::builder()
-        .method(Method::POST)
-        .uri(uri)
-        .header("content-type", "application/json")
-        .body(Body::from(body.to_owned()))
-        .unwrap();
-    let response = api::router()
-        .with_state(state.clone())
-        .oneshot(request)
-        .await
-        .unwrap();
-    let status = response.status();
-    let bytes = response.into_body().collect().await.unwrap().to_bytes();
-    (
-        status,
-        serde_json::from_slice(&bytes).unwrap_or(Value::Null),
-    )
+    let request = testing::request(Method::POST, uri, Some(body.to_owned()));
+    testing::send(&testing::bare_api(state), request).await
 }
 
 /// [`state_with_work`] with the watch folder, the work folder and its
@@ -838,24 +791,8 @@ async fn send(
     uri: &str,
     body: Option<&str>,
 ) -> (StatusCode, Value) {
-    let mut request = Request::builder().method(method).uri(uri);
-    if body.is_some() {
-        request = request.header("content-type", "application/json");
-    }
-    let request = request
-        .body(Body::from(body.unwrap_or_default().to_owned()))
-        .unwrap();
-    let response = api::router()
-        .with_state(state.clone())
-        .oneshot(request)
-        .await
-        .unwrap();
-    let status = response.status();
-    let bytes = response.into_body().collect().await.unwrap().to_bytes();
-    (
-        status,
-        serde_json::from_slice(&bytes).unwrap_or(Value::Null),
-    )
+    let request = testing::request(method, uri, body.map(str::to_owned));
+    testing::send(&testing::bare_api(state), request).await
 }
 
 /// What a person chose of the stored subtitle's row.

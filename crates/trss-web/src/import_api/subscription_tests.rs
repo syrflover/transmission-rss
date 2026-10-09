@@ -1,6 +1,7 @@
 //! The subscription suggestions of the legacy import, end to end through the
 //! API with a stand-in for Anissia. No test reaches the real Anissia.
 
+use crate::testing;
 use std::{
     sync::{
         atomic::{AtomicI64, Ordering},
@@ -10,14 +11,11 @@ use std::{
 };
 
 use axum::{
-    body::Body,
-    http::{header, Method, Request, StatusCode},
+    http::{Method, StatusCode},
     Router,
 };
-use http_body_util::BodyExt;
 use serde_json::{json, Value};
 use tempfile::TempDir;
-use tower::ServiceExt;
 
 use trss_core::{Clock, Db};
 
@@ -52,7 +50,7 @@ impl App {
         let clock: Clock = Arc::new(move || now.load(Ordering::SeqCst));
         let anissia = Anissia::new(db.clone(), fake.config(), clock).with_spacing(Duration::ZERO);
         let state = AppState::new(db).with_anissia(anissia);
-        let router = Router::new().nest("/api", crate::api::router().with_state(state.clone()));
+        let router = testing::api(&state);
         let app = App {
             dir,
             state,
@@ -88,19 +86,7 @@ impl App {
     }
 
     async fn post(&self, uri: &str, body: Value) -> (StatusCode, Value) {
-        let request = Request::builder()
-            .method(Method::POST)
-            .uri(uri)
-            .header(header::CONTENT_TYPE, "application/json")
-            .body(Body::from(body.to_string()))
-            .unwrap();
-        let response = self.router.clone().oneshot(request).await.unwrap();
-        let status = response.status();
-        let bytes = response.into_body().collect().await.unwrap().to_bytes();
-        (
-            status,
-            serde_json::from_slice(&bytes).unwrap_or(Value::Null),
-        )
+        testing::call(&self.router, Method::POST, uri, Some(body)).await
     }
 
     async fn preview(&self, content: &str) -> Value {

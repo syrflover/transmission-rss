@@ -4,17 +4,15 @@ use std::sync::{
 };
 
 use axum::{
-    body::Body,
-    http::{header, Method, Request, StatusCode},
+    http::{Method, StatusCode},
     Router,
 };
-use http_body_util::BodyExt;
 use serde_json::{json, Value};
-use tower::ServiceExt;
 
 use trss_core::{Clock, Db};
 
 use super::*;
+use crate::testing;
 use trss_anissia::{fake::Fake, Anissia};
 use trss_collect::store::{
     channels::{Channel, ChannelInput},
@@ -47,7 +45,7 @@ impl App {
             .put_collection(0, "/media".to_owned(), None)
             .await
             .unwrap();
-        let router = Router::new().nest("/api", crate::api::router().with_state(state.clone()));
+        let router = testing::api(&state);
         App {
             state,
             router,
@@ -57,24 +55,7 @@ impl App {
     }
 
     async fn call(&self, method: Method, uri: &str, body: Option<Value>) -> (StatusCode, Value) {
-        let mut request = Request::builder().method(method).uri(uri);
-        let body = match body {
-            Some(json) => {
-                request = request.header(header::CONTENT_TYPE, "application/json");
-                Body::from(json.to_string())
-            }
-            None => Body::empty(),
-        };
-        let response = self
-            .router
-            .clone()
-            .oneshot(request.body(body).unwrap())
-            .await
-            .unwrap();
-        let status = response.status();
-        let bytes = response.into_body().collect().await.unwrap().to_bytes();
-        let json = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
-        (status, json)
+        testing::call(&self.router, method, uri, body).await
     }
 
     async fn get(&self, uri: &str) -> (StatusCode, Value) {

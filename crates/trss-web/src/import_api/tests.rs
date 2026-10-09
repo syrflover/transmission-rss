@@ -1,11 +1,6 @@
-use axum::{
-    body::Body,
-    http::{header, Method, Request, StatusCode},
-};
-use http_body_util::BodyExt;
+use axum::http::{Method, StatusCode};
 use serde_json::{json, Value};
 use tempfile::TempDir;
-use tower::ServiceExt;
 
 use trss_collect::store::channels::{ChannelInput, ChannelStore, RuleInput};
 use trss_core::{
@@ -18,6 +13,7 @@ use trss_library::store::{
 };
 
 use super::*;
+use crate::testing;
 
 const TOKEN_A: &str = "sekret-token-A-123";
 const TOKEN_B: &str = "sekret-token-B-456";
@@ -44,7 +40,7 @@ async fn app() -> App {
         settings: state.settings.clone(),
         library: state.library.clone(),
         setup: state.setup.clone(),
-        app: Router::new().nest("/api", crate::api::router().with_state(state)),
+        app: testing::api(&state),
     }
 }
 
@@ -71,18 +67,8 @@ impl App {
     }
 
     async fn post_raw(&self, uri: &str, body: String) -> (StatusCode, String, Value) {
-        let request = Request::builder()
-            .method(Method::POST)
-            .uri(uri)
-            .header(header::CONTENT_TYPE, "application/json")
-            .body(Body::from(body))
-            .unwrap();
-        let response = self.app.clone().oneshot(request).await.unwrap();
-        let status = response.status();
-        let bytes = response.into_body().collect().await.unwrap().to_bytes();
-        let text = String::from_utf8(bytes.to_vec()).unwrap();
-        let json = serde_json::from_str(&text).unwrap_or(Value::Null);
-        (status, text, json)
+        let request = testing::request(Method::POST, uri, Some(body));
+        testing::send_text(&self.app, request).await
     }
 
     async fn preview(&self, content: &str) -> (StatusCode, String, Value) {

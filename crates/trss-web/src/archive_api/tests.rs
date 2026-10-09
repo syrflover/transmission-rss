@@ -4,19 +4,17 @@
 //! which rules are listed and in what order, the forecast sentences) are tested
 //! in trss-collect (`archive_suggestions/tests.rs`, `rule_archive.rs`, ADR 0015).
 
+use crate::testing;
 use std::sync::{
     atomic::{AtomicI64, Ordering},
     Arc,
 };
 
 use axum::{
-    body::Body,
-    http::{header, Method, Request, StatusCode},
+    http::{Method, StatusCode},
     Router,
 };
-use http_body_util::BodyExt;
 use serde_json::{json, Value};
-use tower::ServiceExt;
 
 use trss_core::{Clock, Db};
 
@@ -80,7 +78,7 @@ impl App {
             .create_channel(ChannelInput::new("https://feed.test/rss"))
             .await
             .unwrap();
-        let router = Router::new().nest("/api", crate::api::router().with_state(state.clone()));
+        let router = testing::api(&state);
         App {
             db,
             state,
@@ -138,26 +136,7 @@ impl App {
 
     async fn call(&self, method: Method, uri: &str, body: Option<Value>) -> (StatusCode, Value) {
         self.read_to_now().await;
-        let mut request = Request::builder().method(method).uri(uri);
-        let body = match body {
-            Some(json) => {
-                request = request.header(header::CONTENT_TYPE, "application/json");
-                Body::from(json.to_string())
-            }
-            None => Body::empty(),
-        };
-        let response = self
-            .router
-            .clone()
-            .oneshot(request.body(body).unwrap())
-            .await
-            .unwrap();
-        let status = response.status();
-        let bytes = response.into_body().collect().await.unwrap().to_bytes();
-        (
-            status,
-            serde_json::from_slice(&bytes).unwrap_or(Value::Null),
-        )
+        testing::call(&self.router, method, uri, body).await
     }
 
     async fn suggestions(&self) -> Vec<Value> {

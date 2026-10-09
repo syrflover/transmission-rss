@@ -8,15 +8,12 @@ use std::{
 };
 
 use axum::{
-    body::Body,
-    http::{header, Method, Request, StatusCode},
+    http::{Method, StatusCode},
     Router,
 };
-use http_body_util::BodyExt;
 use serde_json::{json, Value};
-use tower::ServiceExt;
 
-use crate::AppState;
+use crate::{testing, AppState};
 use trss_anissia::{fake::Fake, Anissia};
 use trss_collect::anissia::captions::CaptionObserver;
 use trss_core::{Clock, Db, DbError};
@@ -82,7 +79,7 @@ impl App {
             .await
             .unwrap();
         let work = state.library.works(&folder.id).await.unwrap().remove(0).id;
-        let router = Router::new().nest("/api", crate::api::router().with_state(state.clone()));
+        let router = testing::api(&state);
         let app = App {
             db,
             state,
@@ -110,26 +107,7 @@ impl App {
     }
 
     async fn call(&self, method: Method, uri: &str, body: Option<Value>) -> (StatusCode, Value) {
-        let mut request = Request::builder().method(method).uri(uri);
-        let body = match body {
-            Some(json) => {
-                request = request.header(header::CONTENT_TYPE, "application/json");
-                Body::from(json.to_string())
-            }
-            None => Body::empty(),
-        };
-        let response = self
-            .router
-            .clone()
-            .oneshot(request.body(body).unwrap())
-            .await
-            .unwrap();
-        let status = response.status();
-        let bytes = response.into_body().collect().await.unwrap().to_bytes();
-        (
-            status,
-            serde_json::from_slice(&bytes).unwrap_or(Value::Null),
-        )
+        testing::call(&self.router, method, uri, body).await
     }
 
     fn season_path(&self, season: u32, tail: &str) -> String {

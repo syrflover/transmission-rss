@@ -2,15 +2,12 @@
 //! them (`trss_jobs::mapping` and `trss_jobs::follow` have the decisions).
 
 use axum::{
-    body::Body,
-    http::{Method, Request, StatusCode},
+    http::{Method, StatusCode},
     Router,
 };
-use http_body_util::BodyExt;
 use serde_json::{json, Value};
-use tower::ServiceExt;
 
-use crate::AppState;
+use crate::{testing, AppState};
 use trss_collect::store::channels::{ChannelInput, NewSubscription, Rule, RuleInput, SubtitleMode};
 use trss_core::{Db, DbError};
 
@@ -94,7 +91,7 @@ impl App {
             .unwrap();
         state.channels.link_season(&rule.id, "w1:1").await.unwrap();
         let rule = state.channels.get_rule(&rule.id).await.unwrap().unwrap();
-        let router = Router::new().nest("/api", crate::api::router().with_state(state.clone()));
+        let router = testing::api(&state);
         App {
             state,
             router,
@@ -135,21 +132,7 @@ impl App {
     }
 
     async fn call(&self, method: Method, uri: &str, body: Option<Value>) -> (StatusCode, Value) {
-        let request = Request::builder().method(method).uri(uri);
-        let request = match body {
-            Some(body) => request
-                .header("content-type", "application/json")
-                .body(Body::from(body.to_string())),
-            None => request.body(Body::empty()),
-        }
-        .unwrap();
-        let response = self.router.clone().oneshot(request).await.unwrap();
-        let status = response.status();
-        let bytes = response.into_body().collect().await.unwrap().to_bytes();
-        (
-            status,
-            serde_json::from_slice(&bytes).unwrap_or(Value::Null),
-        )
+        testing::call(&self.router, method, uri, body).await
     }
 
     async fn get(&self, uri: &str) -> Value {

@@ -53,6 +53,9 @@ pub mod todo_api;
 pub mod video_check_api;
 pub mod watch_folders_api;
 
+#[cfg(test)]
+pub(crate) mod testing;
+
 pub use error::ApiError;
 pub use state::AppState;
 

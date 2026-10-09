@@ -10,6 +10,7 @@ use serde_json::{json, Value};
 use tower::ServiceExt;
 
 use super::*;
+use crate::testing;
 use trss_core::{Db, DbError};
 use trss_jobs::{upload::Limits, ReceiveArea, Uploads};
 use trss_subtitles::verify::zip_of;
@@ -72,7 +73,7 @@ async fn setup_with(limits: Option<Limits>) -> Setup {
                     ('s9', 'https://fake.trss.invalid/ok/9', '9', 'x', 6);",
     )
     .await;
-    let router = Router::new().nest("/api", crate::api::router().with_state(state.clone()));
+    let router = testing::api(&state);
     Setup { state, router, dir }
 }
 

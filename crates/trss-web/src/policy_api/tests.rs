@@ -1,14 +1,12 @@
 use axum::{
-    body::Body,
-    http::{header, Method, Request, StatusCode},
+    http::{Method, StatusCode},
     Router,
 };
-use http_body_util::BodyExt;
 use serde_json::{json, Value};
-use tower::ServiceExt;
 use trss_core::Db;
 
 use super::*;
+use crate::testing;
 
 struct App {
     db: Db,
@@ -21,33 +19,12 @@ impl App {
         let state = AppState::new(db.clone());
         App {
             db,
-            router: Router::new().nest("/api", crate::api::router().with_state(state)),
+            router: testing::api(&state),
         }
     }
 
     async fn call(&self, method: Method, body: Option<Value>) -> (StatusCode, Value) {
-        let mut request = Request::builder()
-            .method(method)
-            .uri("/api/settings/policy");
-        let body = match body {
-            Some(json) => {
-                request = request.header(header::CONTENT_TYPE, "application/json");
-                Body::from(json.to_string())
-            }
-            None => Body::empty(),
-        };
-        let response = self
-            .router
-            .clone()
-            .oneshot(request.body(body).unwrap())
-            .await
-            .unwrap();
-        let status = response.status();
-        let bytes = response.into_body().collect().await.unwrap().to_bytes();
-        (
-            status,
-            serde_json::from_slice(&bytes).unwrap_or(Value::Null),
-        )
+        testing::call(&self.router, method, "/api/settings/policy", body).await
     }
 
     async fn get(&self) -> Value {

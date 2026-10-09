@@ -1,13 +1,11 @@
 use axum::{
-    body::Body,
-    http::{header, Method, Request, StatusCode},
+    http::{header, HeaderValue, Method, StatusCode},
     Router,
 };
-use http_body_util::BodyExt;
 use serde_json::Value;
-use tower::ServiceExt;
 
 use super::*;
+use crate::testing;
 use trss_collect::store::{
     channels::{ChannelInput, RuleInput, RuleState},
     history::Observation,
@@ -27,23 +25,16 @@ struct App {
 impl App {
     fn new() -> App {
         let state = AppState::new(Db::open_blocking(":memory:").unwrap());
-        let router = Router::new().nest("/api", crate::api::router().with_state(state.clone()));
+        let router = testing::api(&state);
         App { state, router }
     }
 
     async fn get(&self, uri: &str) -> (StatusCode, String, Value) {
-        let request = Request::builder()
-            .method(Method::GET)
-            .uri(uri)
-            .header(header::ACCEPT, "application/json")
-            .body(Body::empty())
-            .unwrap();
-        let response = self.router.clone().oneshot(request).await.unwrap();
-        let status = response.status();
-        let bytes = response.into_body().collect().await.unwrap().to_bytes();
-        let text = String::from_utf8(bytes.to_vec()).unwrap();
-        let json = serde_json::from_str(&text).unwrap_or(Value::Null);
-        (status, text, json)
+        let mut request = testing::request(Method::GET, uri, None);
+        request
+            .headers_mut()
+            .insert(header::ACCEPT, HeaderValue::from_static("application/json"));
+        testing::send_text(&self.router, request).await
     }
 
     async fn channel(&self, host: &str, name: Option<&str>) -> Channel {

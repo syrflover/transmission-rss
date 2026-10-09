@@ -1,33 +1,16 @@
 use std::collections::BTreeSet;
 
-use axum::{
-    body::Body,
-    http::{Method, Request, StatusCode},
-};
-use http_body_util::BodyExt;
+use axum::http::{Method, StatusCode};
 use serde_json::Value;
-use tower::ServiceExt;
 
-use crate::{api, AppState};
+use crate::{testing, AppState};
 use trss_core::Db;
 use trss_library::discovery::{
     EpisodeFile, FileKind, Reason, Scan, ScannedWork, Unrecognized, WorkRead,
 };
 
 async fn get(state: &AppState, uri: &str) -> (StatusCode, Value) {
-    let request = Request::builder()
-        .method(Method::GET)
-        .uri(uri)
-        .body(Body::empty())
-        .unwrap();
-    let response = api::router()
-        .with_state(state.clone())
-        .oneshot(request)
-        .await
-        .unwrap();
-    let status = response.status();
-    let bytes = response.into_body().collect().await.unwrap().to_bytes();
-    (status, serde_json::from_slice(&bytes).unwrap())
+    testing::call(&testing::bare_api(state), Method::GET, uri, None).await
 }
 
 fn state() -> AppState {

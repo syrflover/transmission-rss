@@ -1,13 +1,11 @@
 use axum::{
-    body::Body,
-    http::{header, Method, Request, StatusCode},
+    http::{Method, StatusCode},
     Router,
 };
-use http_body_util::BodyExt;
 use serde_json::{json, Value};
-use tower::ServiceExt;
 
 use super::*;
+use crate::testing;
 use trss_collect::store::{
     channels::{ChannelInput, ChannelWithRules},
     history::{HistoryResult, Observation},
@@ -30,7 +28,7 @@ impl App {
             .put_collection(0, "/media".to_owned(), None)
             .await
             .unwrap();
-        let router = Router::new().nest("/api", crate::api::router().with_state(state.clone()));
+        let router = testing::api(&state);
         App { state, router, db }
     }
 
@@ -40,25 +38,7 @@ impl App {
         uri: &str,
         body: Option<Value>,
     ) -> (StatusCode, String, Value) {
-        let mut request = Request::builder().method(method).uri(uri);
-        let body = match body {
-            Some(json) => {
-                request = request.header(header::CONTENT_TYPE, "application/json");
-                Body::from(json.to_string())
-            }
-            None => Body::empty(),
-        };
-        let response = self
-            .router
-            .clone()
-            .oneshot(request.body(body).unwrap())
-            .await
-            .unwrap();
-        let status = response.status();
-        let bytes = response.into_body().collect().await.unwrap().to_bytes();
-        let text = String::from_utf8(bytes.to_vec()).unwrap();
-        let json = serde_json::from_str(&text).unwrap_or(Value::Null);
-        (status, text, json)
+        testing::call_text(&self.router, method, uri, body).await
     }
 
     /// A channel at `https://<host>/rss?token=<token>` with rules `(phrase, directory)`.

@@ -1,17 +1,12 @@
-use axum::{
-    body::Body,
-    http::{header, Method, Request, StatusCode},
-};
-use http_body_util::BodyExt;
+use axum::http::{Method, StatusCode};
 use serde_json::{json, Value};
-use tower::ServiceExt;
 
-use crate::api;
 use trss_collect::store::channels::ChannelInput;
 use trss_core::Db;
 use trss_library::discovery::Scan;
 
 use super::*;
+use crate::testing;
 
 struct App {
     state: AppState,
@@ -30,25 +25,7 @@ impl App {
     }
 
     async fn call(&self, method: Method, uri: &str, body: Option<Value>) -> (StatusCode, Value) {
-        let mut request = Request::builder().method(method).uri(uri);
-        let body = match body {
-            Some(json) => {
-                request = request.header(header::CONTENT_TYPE, "application/json");
-                Body::from(json.to_string())
-            }
-            None => Body::empty(),
-        };
-        let response = api::router()
-            .with_state(self.state.clone())
-            .oneshot(request.body(body).unwrap())
-            .await
-            .unwrap();
-        let status = response.status();
-        let bytes = response.into_body().collect().await.unwrap().to_bytes();
-        (
-            status,
-            serde_json::from_slice(&bytes).unwrap_or(Value::Null),
-        )
+        testing::call(&testing::bare_api(&self.state), method, uri, body).await
     }
 
     async fn home(&self) -> Value {
