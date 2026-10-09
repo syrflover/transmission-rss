@@ -31,6 +31,7 @@ use std::{
 };
 
 use tokio::net::{TcpListener, TcpStream};
+use trss_core::net_route;
 use url::Url;
 
 /// An IPv4 subnet: an address and the length of its prefix.
@@ -76,49 +77,24 @@ fn mask(prefix: u8) -> u32 {
 /// text of `/proc/net/route`) that holds `ip`, the longest such prefix. A
 /// default route is not one.
 pub fn subnet_of(routes: &str, ip: Ipv4Addr) -> Option<Subnet> {
-    // The kernel writes each address (in network order in memory) as the
-    // hexadecimal of a native 32-bit number: its native bytes are the octets.
-    let addr = |hex: &str| {
-        u32::from_str_radix(hex, 16)
-            .ok()
-            .map(|v| Ipv4Addr::from(v.to_ne_bytes()))
-    };
-    routes
-        .lines()
-        .skip(1)
-        .filter_map(|line| {
-            let fields: Vec<&str> = line.split_whitespace().collect();
-            let (destination, gateway, netmask) = (
-                addr(fields.get(1)?)?,
-                addr(fields.get(2)?)?,
-                addr(fields.get(7)?)?,
-            );
-            let prefix = u32::from(netmask).count_ones() as u8;
-            let subnet = Subnet::new(destination, prefix);
-            (gateway.is_unspecified() && prefix > 0 && subnet.contains(IpAddr::V4(ip)))
+    net_route::parse(routes)
+        .filter_map(|route| {
+            let prefix = route.prefix();
+            let subnet = Subnet::new(route.destination, prefix);
+            (route.gateway.is_unspecified() && prefix > 0 && subnet.contains(IpAddr::V4(ip)))
                 .then_some(subnet)
         })
         .max_by_key(|subnet| subnet.prefix)
 }
 
 /// The gateway of the default route in `routes` (the text of
-/// `/proc/net/route`): of the lowest metric when there are several.
+/// `/proc/net/route`): of the lowest metric when there are several. A route
+/// whose metric is not a number does not count.
 pub fn default_gateway(routes: &str) -> Option<Ipv4Addr> {
-    let addr = |hex: &str| {
-        u32::from_str_radix(hex, 16)
-            .ok()
-            .map(|v| Ipv4Addr::from(v.to_ne_bytes()))
-    };
-    routes
-        .lines()
-        .skip(1)
-        .filter_map(|line| {
-            let fields: Vec<&str> = line.split_whitespace().collect();
-            let destination = addr(fields.get(1)?)?;
-            let gateway = addr(fields.get(2)?)?;
-            let metric: u32 = fields.get(6)?.parse().ok()?;
-            let netmask = addr(fields.get(7)?)?;
-            (destination.is_unspecified() && netmask.is_unspecified()).then_some((metric, gateway))
+    net_route::parse(routes)
+        .filter_map(|route| {
+            (route.destination.is_unspecified() && route.mask.is_unspecified())
+                .then_some((route.metric?, route.gateway))
         })
         .min_by_key(|(metric, _)| *metric)
         .map(|(_, gateway)| gateway)
@@ -173,7 +149,7 @@ pub async fn find(launcher: &Url) -> Result<Subnet, String> {
             "the server browser's host {host:?} has an IPv6 address; only an IPv4 network can be refused"
         ));
     }
-    let routes = tokio::fs::read_to_string("/proc/net/route")
+    let routes = tokio::fs::read_to_string(net_route::PATH)
         .await
         .map_err(|e| format!("cannot read this host's routes (/proc/net/route): {e}"))?;
     let mut subnets = addresses.iter().filter_map(|ip| match ip {

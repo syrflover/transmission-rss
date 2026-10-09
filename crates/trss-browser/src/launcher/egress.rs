@@ -57,6 +57,7 @@ use hyper::{
 };
 use hyper_util::rt::{TokioIo, TokioTimer};
 use tokio::net::{TcpListener, TcpStream};
+use trss_core::net_route;
 
 /// The most a request head (request line and headers) may take.
 pub const MAX_HEAD: usize = 64 * 1024;
@@ -158,7 +159,7 @@ impl LocalNetworks {
     /// `/proc/net/ipv6_route`). A table that cannot be read gives nothing.
     pub fn read() -> LocalNetworks {
         let read = |path| std::fs::read_to_string(path).unwrap_or_default();
-        LocalNetworks::from_tables(&read("/proc/net/route"), &read("/proc/net/ipv6_route"))
+        LocalNetworks::from_tables(&read(net_route::PATH), &read("/proc/net/ipv6_route"))
     }
 
     /// The networks of the routes in `route` and `ipv6_route` (the text of
@@ -168,34 +169,15 @@ impl LocalNetworks {
     /// a network the container is on.
     pub fn from_tables(route: &str, ipv6_route: &str) -> LocalNetworks {
         let mut networks = Vec::new();
-        // Iface Destination Gateway Flags RefCnt Use Metric Mask ...; the
-        // addresses are hexadecimal in the machine's byte order.
-        for line in route.lines().skip(1) {
-            let fields: Vec<&str> = line.split_whitespace().collect();
-            let (Some(iface), Some(destination), Some(gateway), Some(mask)) =
-                (fields.first(), fields.get(1), fields.get(2), fields.get(7))
-            else {
-                continue;
-            };
-            let v4 = |hex: &str| {
-                u32::from_str_radix(hex, 16)
-                    .ok()
-                    .map(|v| Ipv4Addr::from(v.to_ne_bytes()))
-            };
-            let (Some(destination), Some(gateway), Some(mask)) =
-                (v4(destination), v4(gateway), v4(mask))
-            else {
-                continue;
-            };
-            if *iface == "lo" {
+        for route in net_route::parse(route) {
+            if route.iface == "lo" {
                 continue;
             }
-            let prefix = u32::from(mask).count_ones() as u8;
-            if prefix >= 8 {
-                networks.push((IpAddr::V4(destination), prefix));
+            if route.prefix() >= 8 {
+                networks.push((IpAddr::V4(route.destination), route.prefix()));
             }
-            if !gateway.is_unspecified() {
-                networks.push((IpAddr::V4(gateway), 32));
+            if !route.gateway.is_unspecified() {
+                networks.push((IpAddr::V4(route.gateway), 32));
             }
         }
         // Destination PrefixLen Source SourcePrefixLen NextHop Metric RefCnt
