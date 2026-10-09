@@ -27,6 +27,7 @@ use axum::{
 };
 use serde_json::{json, Value};
 
+use trss_anilist::AnilistError;
 use trss_collect::store::channels::ChannelError;
 
 #[derive(Debug)]
@@ -141,6 +142,26 @@ impl From<ChannelError> for ApiError {
     }
 }
 
+/// What a refused AniList call says on the API: a busy AniList asks the
+/// person to try again after the wait it named (at least one second), a
+/// failed store is internal, and any other failure is logged and told as
+/// "could not connect".
+impl From<AnilistError> for ApiError {
+    fn from(e: AnilistError) -> Self {
+        match e {
+            AnilistError::Busy { retry_after } => ApiError::invalid(format!(
+                "AniList 요청이 몰려 있어요. {}초 뒤에 다시 해 주세요.",
+                retry_after.as_secs().max(1)
+            )),
+            AnilistError::Store(e) => ApiError::Internal(e.to_string()),
+            e => {
+                eprintln!("trss-web: AniList: {e}");
+                ApiError::invalid("AniList에 연결하지 못했어요. 잠시 뒤 다시 해 주세요.")
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use http_body_util::BodyExt;
@@ -189,5 +210,32 @@ mod tests {
             rule_id: "r1".into(),
         };
         assert_eq!(body(moved.into()).await.0, StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn anilist_failures_map_to_api_answers() {
+        let busy = |retry_after| AnilistError::Busy { retry_after };
+        let (status, json) = body(busy(std::time::Duration::from_secs(30)).into()).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(
+            json["message"],
+            "AniList 요청이 몰려 있어요. 30초 뒤에 다시 해 주세요."
+        );
+        // A wait under a second is told as one second.
+        let (_, json) = body(busy(std::time::Duration::from_millis(200)).into()).await;
+        assert_eq!(
+            json["message"],
+            "AniList 요청이 몰려 있어요. 1초 뒤에 다시 해 주세요."
+        );
+        let (status, json) = body(AnilistError::Status(500).into()).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(
+            json["message"],
+            "AniList에 연결하지 못했어요. 잠시 뒤 다시 해 주세요."
+        );
+        let (status, json) =
+            body(AnilistError::Store(trss_core::DbError::PathNotConfigured).into()).await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(json["error"], "internal");
     }
 }

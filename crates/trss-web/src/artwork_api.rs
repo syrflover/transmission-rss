@@ -68,7 +68,7 @@ use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 
 use super::{ApiError, AppState};
-use trss_anilist::{title::Candidate, AnilistError, ImageFetchError, MAX_IMAGE_BYTES};
+use trss_anilist::{title::Candidate, ImageFetchError, MAX_IMAGE_BYTES};
 use trss_library::{
     artwork::{ActionError, Artwork, USER_MAX_WAIT},
     store::artwork::{ArtworkError, Selection, UserChange},
@@ -164,13 +164,6 @@ async fn view(artwork: &Artwork, selection: Selection) -> ArtworkView {
 
 const WORK_NOT_FOUND: &str = "이 작품을 찾지 못했어요.";
 
-fn busy(retry_after: std::time::Duration) -> ApiError {
-    ApiError::invalid(format!(
-        "AniList 요청이 몰려 있어요. {}초 뒤에 다시 해 주세요.",
-        retry_after.as_secs().max(1)
-    ))
-}
-
 /// The answer for a refused action; a conflict carries the current state.
 async fn refused(artwork: &Artwork, error: ActionError) -> ApiError {
     match error {
@@ -185,12 +178,7 @@ async fn refused(artwork: &Artwork, error: ActionError) -> ApiError {
             ApiError::invalid("표지를 저장하는 동안 작업이 끊겼어요. 다시 해 주세요.")
         }
         ActionError::Store(ArtworkError::Db(e)) => ApiError::Internal(e.to_string()),
-        ActionError::Anilist(AnilistError::Busy { retry_after }) => busy(retry_after),
-        ActionError::Anilist(AnilistError::Store(e)) => ApiError::Internal(e.to_string()),
-        ActionError::Anilist(e) => {
-            eprintln!("trss-web: AniList: {e}");
-            ApiError::invalid("AniList에 연결하지 못했어요. 잠시 뒤 다시 해 주세요.")
-        }
+        ActionError::Anilist(e) => e.into(),
         ActionError::Fetch(ImageFetchError::TooLarge) => {
             ApiError::invalid(trss_library::artwork::Rejected::TooLarge.message())
         }

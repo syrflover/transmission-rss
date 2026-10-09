@@ -68,7 +68,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 
 use super::{ApiError, AppState};
-use trss_anilist::{title::Candidate, AnilistError, Entry, FuzzyDate, Sequel};
+use trss_anilist::{title::Candidate, Entry, FuzzyDate, Sequel};
 use trss_library::{
     artwork::USER_MAX_WAIT,
     seasons::{combine, describe, ActionError},
@@ -317,13 +317,6 @@ fn refused_store(error: SeasonError) -> ApiError {
     }
 }
 
-fn busy(retry_after: std::time::Duration) -> ApiError {
-    ApiError::invalid(format!(
-        "AniList 요청이 몰려 있어요. {}초 뒤에 다시 해 주세요.",
-        retry_after.as_secs().max(1)
-    ))
-}
-
 /// The answer for a refused action; a conflict carries the current info.
 async fn refused(state: &AppState, work_id: &str, season: u32, error: ActionError) -> ApiError {
     match error {
@@ -337,12 +330,7 @@ async fn refused(state: &AppState, work_id: &str, season: u32, error: ActionErro
             },
         },
         ActionError::Store(e) => refused_store(e),
-        ActionError::Anilist(AnilistError::Busy { retry_after }) => busy(retry_after),
-        ActionError::Anilist(AnilistError::Store(e)) => ApiError::Internal(e.to_string()),
-        ActionError::Anilist(e) => {
-            eprintln!("trss-web: AniList: {e}");
-            ApiError::invalid("AniList에 연결하지 못했어요. 잠시 뒤 다시 해 주세요.")
-        }
+        ActionError::Anilist(e) => e.into(),
         ActionError::NoEntry(_) => ApiError::invalid("AniList에서 이 항목을 찾지 못했어요."),
     }
 }
