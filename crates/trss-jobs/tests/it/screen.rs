@@ -1296,6 +1296,44 @@ async fn a_request_that_was_written_is_taken_once_and_counts_as_the_persons_inpu
     assert_eq!(s.screens.take_switch(&id, "run-1").await.unwrap(), None);
 }
 
+#[tokio::test]
+async fn closing_with_no_page_named_closes_the_page_shown_when_it_is_not_the_first() {
+    let s = setup(true).await;
+    let id = waiting(&s).await;
+    let pages = ["target-1".to_owned(), "popup-1".to_owned()];
+    assert!(s
+        .screens
+        .set_pages(&id, "run-1", &pages, 1_500)
+        .await
+        .unwrap());
+    let before = shown(&s, &id).await.bound_at.unwrap();
+    s.screens
+        .retarget(&id, "run-1", "popup-1", 2_000)
+        .await
+        .unwrap();
+    let bound = shown(&s, &id).await.bound_at.unwrap();
+    assert!(bound > before);
+
+    // A binding the person no longer sees is refused, as with a page named.
+    assert!(!s
+        .screens
+        .request_close(&id, "run-1", before, None, 2_100)
+        .await
+        .unwrap());
+    assert!(s.screens.take_close(&id, "run-1").await.unwrap().is_empty());
+    // The page shown is the one closed, and it is taken once.
+    assert!(s
+        .screens
+        .request_close(&id, "run-1", bound, None, 2_200)
+        .await
+        .unwrap());
+    assert_eq!(
+        s.screens.take_close(&id, "run-1").await.unwrap(),
+        vec!["popup-1".to_owned()]
+    );
+    assert!(s.screens.take_close(&id, "run-1").await.unwrap().is_empty());
+}
+
 /// Waits until the fake's watch has given up its feed (it ended), for up to
 /// two seconds.
 async fn watch_ended(s: &Setup) {

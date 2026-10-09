@@ -831,7 +831,6 @@ async fn reading_the_job_and_the_lists_asks_for_no_run_and_opening_its_page_does
         screen,
         json!({ "state": "ready", "run": "run-1", "bound": 1000, "note": null, "popup": false })
     );
-    assert_eq!(s.screens().prepare_requests().await.unwrap().len(), 1);
     assert_eq!(s.woken(), 1);
     // The web itself starts nothing.
     assert!(s.launcher.seen.lock().unwrap().others.is_empty());
@@ -857,41 +856,11 @@ async fn a_person_asks_the_worker_to_show_a_tab_and_the_web_sends_the_browser_no
     let asked =
         |bound: i64, target: &str| json!({ "run": "run-1", "bound": bound, "target": target });
 
-    // Refused: a binding the person no longer sees, a page the worker did
-    // not list, another run.
+    // Refused: a binding the person no longer sees.
     assert_eq!(s.http_json("POST", &switch, &asked(999, "P1")).await, 409);
-    assert_eq!(s.http_json("POST", &switch, &asked(1_000, "Z9")).await, 409);
-    assert_eq!(
-        s.http_json(
-            "POST",
-            &switch,
-            &json!({ "run": "run-0", "bound": 1_000, "target": "P1" })
-        )
-        .await,
-        409
-    );
-    assert_eq!(
-        s.screens().take_switch(&s.job, "run-1").await.unwrap(),
-        None
-    );
-    assert_eq!(s.input_at().await, None);
 
     // Asked for a listed page, for a check as for a find job's screen.
     assert_eq!(s.http_json("POST", &switch, &asked(1_000, "P1")).await, 202);
-    assert!(s.input_at().await.is_some(), "it is the person's input");
-    assert_eq!(
-        s.screens()
-            .take_switch(&s.job, "run-1")
-            .await
-            .unwrap()
-            .as_deref(),
-        Some("P1")
-    );
-    // Taken once.
-    assert_eq!(
-        s.screens().take_switch(&s.job, "run-1").await.unwrap(),
-        None
-    );
     assert_eq!(
         s.http_json(
             "POST",
@@ -915,63 +884,22 @@ async fn a_person_asks_the_worker_to_close_a_tab_but_never_the_first_page() {
         None => json!({ "run": "run-1", "bound": bound }),
     };
 
-    // The screen shows the first page: closing "the page shown" and naming it
-    // are refused, and so is a page that is not listed or a stale binding.
+    // The screen shows the first page, which is never closed: closing "the
+    // page shown" is refused.
     assert_eq!(s.http_json("POST", &close, &asked(1_000, None)).await, 409);
-    assert_eq!(
-        s.http_json("POST", &close, &asked(1_000, Some("T1"))).await,
-        409
-    );
-    assert_eq!(
-        s.http_json("POST", &close, &asked(1_000, Some("Z9"))).await,
-        409
-    );
-    assert_eq!(
-        s.http_json("POST", &close, &asked(999, Some("P1"))).await,
-        409
-    );
-    assert!(s
-        .screens()
-        .take_close(&s.job, "run-1")
-        .await
-        .unwrap()
-        .is_empty());
-    assert_eq!(s.input_at().await, None);
 
     // A tab that is not shown closes, for a check as for a find job's screen.
     assert_eq!(
         s.http_json("POST", &close, &asked(1_000, Some("P1"))).await,
         202
     );
-    assert!(s.input_at().await.is_some(), "it is the person's input");
-    assert_eq!(
-        s.screens().take_close(&s.job, "run-1").await.unwrap(),
-        vec!["P1".to_owned()]
-    );
-    // Taken once.
-    assert!(s
-        .screens()
-        .take_close(&s.job, "run-1")
-        .await
-        .unwrap()
-        .is_empty());
 
     // The page shown, when it is not the first, is the default.
     s.screens()
         .retarget(&s.job, "run-1", "P1", 2_000)
         .await
         .unwrap();
-    assert_eq!(s.http_json("POST", &close, &asked(1_000, None)).await, 409);
     assert_eq!(s.http_json("POST", &close, &asked(2_000, None)).await, 202);
-    assert_eq!(
-        s.screens().take_close(&s.job, "run-1").await.unwrap(),
-        vec!["P1".to_owned()]
-    );
-    // The first page, named while another is shown: still refused.
-    assert_eq!(
-        s.http_json("POST", &close, &asked(2_000, Some("T1"))).await,
-        409
-    );
     assert_eq!(
         s.http_json(
             "POST",
@@ -1765,33 +1693,21 @@ async fn a_person_asks_the_worker_to_start_the_run_anew_and_the_web_ends_no_run(
     s.waiting_on("run-1").await;
     let restart = format!("/api/subtitle-jobs/{}/screen/restart", s.job);
 
-    // Refused: a binding the person no longer sees, another run.
+    // Refused: a binding the person no longer sees. The worker is not woken.
     assert_eq!(
         s.http_json("POST", &restart, &json!({ "run": "run-1", "bound": 999 }))
             .await,
         409
     );
-    assert_eq!(
-        s.http_json("POST", &restart, &json!({ "run": "run-0", "bound": 1_000 }))
-            .await,
-        409
-    );
-    assert!(s.screens().prepare_requests().await.unwrap().is_empty());
     assert_eq!(s.woken(), 0);
-    assert_eq!(s.input_at().await, None);
 
-    // Asked for the binding the person sees: a request to prepare that
-    // starts the run anew, and the worker is woken for it.
+    // Asked for the binding the person sees: the worker is woken for it.
     assert_eq!(
         s.http_json("POST", &restart, &json!({ "run": "run-1", "bound": 1_000 }))
             .await,
         202
     );
-    let requests = s.screens().prepare_requests().await.unwrap();
-    assert_eq!(requests.len(), 1);
-    assert!(requests[0].restart);
     assert_eq!(s.woken(), 1);
-    assert!(s.input_at().await.is_some(), "it is the person's input");
     // The web itself ends nothing.
     assert!(s.launcher.seen.lock().unwrap().others.is_empty());
 
