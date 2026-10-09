@@ -83,6 +83,7 @@ use super::{
 };
 use crate::{
     context::{TransmissionLink, MAX_REASON_CHARS},
+    episode_offset::may_decide,
     offsets,
     plan::{picks, rule_destination, rule_work_folder, ChannelPlan},
     receive::{self, Original, RenameJob, RenameMode},
@@ -564,9 +565,11 @@ impl Retry {
 /// rule saves into ([`rule_work_folder`]), the rule found as [`execute`] finds
 /// it, and the item alone ([`Section::item`]): the add and the rename of an
 /// item are not to meet another receive's or a cycle's of the same item, while
-/// receives of other items and readings of the folder go on beside it. The
-/// folder part is empty when the request, the item, the rule or the collect
-/// folder cannot be found: the command then ends by itself.
+/// receives of other items and readings of the folder go on beside it. A
+/// request that names its rule takes the rule alone too while the item may
+/// decide the rule's episode offset ([`rule_section`]). The folder part is
+/// empty when the request, the item, the rule or the collect folder cannot be
+/// found: the command then ends by itself.
 ///
 /// The folder is named when the command is claimed, by its text: a rule or a
 /// collect folder changed before the command runs, or a link to the folder
@@ -580,10 +583,15 @@ pub async fn section(ctx: &ReceiveContext, command: &Command) -> Result<Section,
         .get(payload.item_id)
         .await
         .map_err(Retry::store)?;
+    // As in [`execute_with`]: only a request that names its rule settles it.
+    let settle = match payload.rule_id {
+        Some(_) => Settle::Offset,
+        None => Settle::Keep,
+    };
     let rule_id = payload
         .rule_id
         .or_else(|| item.as_ref().and_then(|item| item.rule_id.clone()));
-    let section = rule_section(ctx, rule_id.as_deref()).await?;
+    let section = rule_section(ctx, rule_id.as_deref(), settle).await?;
     Ok(match item {
         Some(item) => section.item(&item.channel_id, &item.identity_key),
         None => section,
@@ -592,9 +600,18 @@ pub async fn section(ctx: &ReceiveContext, command: &Command) -> Result<Section,
 
 /// A read of the work folder the rule `rule_id` saves into, or nothing when
 /// there is no such rule or no collect folder.
+///
+/// With [`Settle::Offset`], the rule alone besides ([`Section::rule`]) while
+/// the item may decide the rule's episode offset ([`may_settle`]): such
+/// receives of one rule go one at a time in the order they were accepted, so
+/// that of the items asked for together, earliest number first, the earliest
+/// decides (ticket 0130). The rule is not held otherwise: its later receives,
+/// whose add and rename can wait on a torrent that does not start, go on side
+/// by side.
 pub(crate) async fn rule_section(
     ctx: &ReceiveContext,
     rule_id: Option<&str>,
+    settle: Settle,
 ) -> Result<Section, Retry> {
     let Some(id) = rule_id else {
         return Ok(Section::new());
@@ -605,7 +622,28 @@ pub(crate) async fn rule_section(
     let Some(collect) = ctx.settings.collection().await.map_err(Retry::store)? else {
         return Ok(Section::new());
     };
-    Ok(Section::new().read(rule_work_folder(Path::new(&collect.folder), &rule)))
+    let section = Section::new().read(rule_work_folder(Path::new(&collect.folder), &rule));
+    Ok(match settle {
+        Settle::Offset if may_settle(ctx, &rule).await? => section.rule(&rule.id),
+        _ => section,
+    })
+}
+
+/// Whether receiving an item for `rule` may decide the rule's episode offset,
+/// as [`offsets::settle_one`] would look at it: the app may decide the rule
+/// and it has picked nothing yet. Read when the command is claimed, so the
+/// receives claimed before the first of them runs all see a rule that has
+/// picked nothing.
+async fn may_settle(ctx: &ReceiveContext, rule: &Rule) -> Result<bool, Retry> {
+    if !may_decide(rule) {
+        return Ok(false);
+    }
+    let picked = ctx
+        .history
+        .rules_with_items(vec![rule.id.clone()])
+        .await
+        .map_err(Retry::store)?;
+    Ok(picked.is_empty())
 }
 
 /// Runs a `receive_once` command to its end, with its turn ([`section`])

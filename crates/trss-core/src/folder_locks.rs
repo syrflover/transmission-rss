@@ -22,8 +22,16 @@
 //!   folder, so two receives of one item (a retry and the cycle's add of the
 //!   same release) go one after the other while each only reads its work
 //!   folder, and receives of other items and readings of the folder go on
-//!   beside them. The rename of a receive's own torrent is part of its add:
-//!   it touches that item's file alone, which the item keeps apart.
+//!   beside them, unless they may decide the same rule's offset (below). The rename
+//!   of a receive's own torrent is part of its add: it touches that item's
+//!   file alone, which the item keeps apart.
+//! - **Rule** (`rule`): the work receives an item that may decide the
+//!   episode offset of one rule. Such receives of one rule go one after the
+//!   other, in the order they came: a rule that has picked nothing decides
+//!   its episode offset from the first item it receives, and items asked for
+//!   together are sent earliest number first so that the earliest number
+//!   decides (`docs/specs/collection.md`, 영상 회차 변환). A rule is not a
+//!   folder: it overlaps the same rule alone.
 //!
 //! Two folders overlap when they are the same or one is inside the other, by
 //! whole path components after `.` and `..` are resolved by text (links are
@@ -76,19 +84,22 @@ impl Access {
     }
 }
 
-/// What a section names: a folder, or a feed item (see the module docs).
+/// What a section names: a folder, a feed item or a rule (see the module
+/// docs).
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Place {
     Folder(PathBuf),
     /// A channel's ID and the item's identity key.
     Item(String, String),
+    /// A rule's ID.
+    Rule(String),
 }
 
 impl Place {
     fn overlaps(&self, other: &Place) -> bool {
         match (self, other) {
             (Place::Folder(a), Place::Folder(b)) => a.starts_with(b) || b.starts_with(a),
-            (Place::Item(..), Place::Item(..)) => self == other,
+            (Place::Item(..), Place::Item(..)) | (Place::Rule(_), Place::Rule(_)) => self == other,
             _ => false,
         }
     }
@@ -129,6 +140,14 @@ impl Section {
             Place::Item(channel_id.to_owned(), identity_key.to_owned()),
             Access::Write,
         ));
+        self
+    }
+
+    /// The work receives an item that may decide the episode offset of the
+    /// rule `rule_id`: one at a time among such receives of that rule.
+    pub fn rule(mut self, rule_id: &str) -> Section {
+        self.parts
+            .push((Place::Rule(rule_id.to_owned()), Access::Write));
         self
     }
 
@@ -384,6 +403,40 @@ mod tests {
 
         drop((retry, other));
         assert!(locks.try_lock(same).is_some());
+    }
+
+    #[tokio::test]
+    async fn receives_for_one_rule_go_one_at_a_time_and_meet_no_folder_or_item() {
+        let locks = FolderLocks::new();
+        let first = locks
+            .try_lock(
+                Section::new()
+                    .read("/media/A")
+                    .item("ch", "guid:2")
+                    .rule("r1"),
+            )
+            .expect("free");
+        // Another item for the same rule waits; one for another rule goes in.
+        let second = Section::new()
+            .read("/media/A")
+            .item("ch", "guid:3")
+            .rule("r1");
+        assert!(locks.try_lock(second.clone()).is_none());
+        let other = locks.try_lock(
+            Section::new()
+                .read("/media/A")
+                .item("ch", "guid:4")
+                .rule("r2"),
+        );
+        assert!(other.is_some());
+        // No folder or item overlaps a rule, whatever its text.
+        assert!(locks
+            .try_lock(Section::new().read("/media/A").item("r1", "r1"))
+            .is_some());
+        assert!(locks.try_lock(Section::new().write("r1")).is_some());
+
+        drop(first);
+        assert!(locks.try_lock(second).is_some());
     }
 
     #[tokio::test]

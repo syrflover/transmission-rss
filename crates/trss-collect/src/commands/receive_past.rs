@@ -99,7 +99,8 @@ fn store(err: impl std::fmt::Display) -> Retry {
 
 /// The turn the command takes before it runs: a read of the work folder its
 /// rule saves into and the result's item alone, as for `receive_once`
-/// ([`receive_once::section`]).
+/// ([`receive_once::section`]). Never the rule alone: a past episode search
+/// does not decide the rule's episode offset ([`Settle::Keep`]).
 pub async fn section(
     ctx: &ReceiveContext,
     command: &Command,
@@ -107,7 +108,7 @@ pub async fn section(
     let Ok(payload) = serde_json::from_str::<ReceivePast>(&command.payload) else {
         return Ok(trss_core::folder_locks::Section::new());
     };
-    let section = receive_once::rule_section(ctx, Some(&payload.rule_id)).await?;
+    let section = receive_once::rule_section(ctx, Some(&payload.rule_id), Settle::Keep).await?;
     let rule = ctx
         .channels
         .get_rule(&payload.rule_id)

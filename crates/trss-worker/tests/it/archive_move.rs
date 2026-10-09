@@ -29,9 +29,12 @@ use axum::http::StatusCode;
 use common::*;
 use serde_json::{json, Value};
 use tokio_util::sync::CancellationToken;
+use trss_anissia::Anime;
 use trss_collect::{
     commands::rule_archive::{self, work_folder::MovePolicy, Direction},
-    store::channels::{ChannelInput, ChannelWithRules, RuleInput, RuleState},
+    store::channels::{
+        ChannelInput, ChannelWithRules, NewSubscription, RuleInput, RuleState, SubtitleMode,
+    },
 };
 use trss_core::{
     commands::{Accepted, CommandState, CommandStore},
@@ -1213,13 +1216,29 @@ async fn a_subscriptions_start_receives_the_ticked_items_into_the_work_folder_th
     // carrying the ticked items in the order the confirm step sends them.
     let rule =
         s.h.channels
-            .create_rule(
+            .create_subscription_rule(
                 &c.channel.id,
                 RuleInput {
                     r#match: Some("Clevatess".to_owned()),
                     directory: "Clevatess/Season 02".to_owned(),
                     state: RuleState::Paused,
                     ..RuleInput::default()
+                },
+                NewSubscription {
+                    anime: Anime {
+                        anime_no: 7,
+                        subject: "Clevatess".to_owned(),
+                        original_subject: None,
+                        week: 4,
+                        air_time: Some("23:00".to_owned()),
+                        start_date: Some("2026-10-08".to_owned()),
+                        end_date: None,
+                        status: "ON".to_owned(),
+                        fetched_at: s.h.now(),
+                    },
+                    subtitles: SubtitleMode::Undecided,
+                    creator: None,
+                    subscribed_at: s.h.now(),
                 },
             )
             .await
@@ -1239,8 +1258,26 @@ async fn a_subscriptions_start_receives_the_ticked_items_into_the_work_folder_th
     };
 
     // One look moves the work folder, turns the rule on, and runs the two
-    // receives the start accepted after it.
-    assert_eq!(s.run().await, CommandsOutcome::Ran(3));
+    // receives the start accepted after it, one at a time: a subscription that
+    // has picked nothing decides its episode offset from the first item it
+    // receives, so the second waits for the first even while Transmission is
+    // slow to take it.
+    let adding = s.h.tr.hold("torrent-add");
+    let worker = s.worker();
+    let look = tokio::spawn(async move {
+        worker
+            .run_commands(&CancellationToken::new())
+            .await
+            .unwrap()
+    });
+    adding.wait_arrived().await;
+    let second = tokio::time::timeout(Duration::from_millis(300), adding.wait_arrived()).await;
+    assert!(
+        second.is_err(),
+        "the second receive went to Transmission beside the first"
+    );
+    adding.release_all();
+    assert_eq!(look.await.unwrap(), CommandsOutcome::Ran(3));
     let start = s.command(&start.id).await;
     assert_eq!(start["state"], "done", "{start}");
     assert_eq!(start["outcome"]["result"], "moved");

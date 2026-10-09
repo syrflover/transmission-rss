@@ -112,7 +112,7 @@ Transmission이 RPC로 하는 이름 바꾸기에는 fsync를 더할 수 없어�
 
 - `cargo fmt --all --check`는 깨끗하고, clippy에 새 경고가 없어요.
 - trss-collect의 fsync 테스트 하나는 fsync를 빼면 실패하는 것을 확인했어요.
-- 리뷰 뒤 고친 것을 합친 첫 실행에서 trss-worker `archive_move::a_subscriptions_start_receives_the_ticked_items_into_the_work_folder_that_came_over`가 한 번 실패했고, 다시 돌리면 통과했어요. 0104와 관계없이 한 규칙의 받기 둘이 함께 도는 결함이라 따로 고쳐요.
+- 리뷰 뒤 고친 것을 합친 첫 실행에서 trss-worker `archive_move::a_subscriptions_start_receives_the_ticked_items_into_the_work_folder_that_came_over`가 한 번 실패했고, 다시 돌리면 통과했어요. 0104와 관계없이 한 규칙의 받기 둘이 함께 도는 결함이라 [0130](0130-receive-a-rule-in-turn.md)으로 따로 고쳤어요.
 - 2026-10-09에 stora:reviewer가 열 커밋을 검토했어요. refactor 커밋에서 fsync하는 범위가 줄어든 곳, 오류 문구, 임시 파일 정리, `O_EXCL`과 `O_NOFOLLOW`, 권한, 다른 파일 시스템 대비, 오류 가르기를 봤고, 동작이 바뀐 곳은 찾지 못했어요. 지적 가운데 아래를 고쳐 해당 fix 커밋에 합쳤어요.
   - 서버 브라우저가 옮긴 뒤의 폴더 fsync 실패를 오류로 돌려주던 것을 위의 결정대로 고쳤어요.
   - 서버 브라우저가 대상 폴더를 새로 만들 때 그 폴더가 든 폴더를 fsync하지 않던 것을 `create_dir_all_synced`로 고쳤어요.

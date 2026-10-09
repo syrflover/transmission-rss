@@ -9,7 +9,8 @@
 //! oldest first, and starts each in its own task, up to
 //! [`MAX_COMMANDS_AT_ONCE`]; one that ends lets the next in. A command does
 //! not wait for a cycle, a reading of the watch folders, or another command,
-//! except where they touch the same folders or the removal of departed
+//! except where they touch the same folders or items, where they may decide
+//! the episode offset of the same rule, or while the removal of departed
 //! torrents is under way (below).
 //!
 //! The worker claims only while it holds the worker lock
@@ -28,8 +29,11 @@
 //! commands were claimed: `receive_once` and `receive_past` read the work
 //! folder of their rule and take their item alone
 //! ([`trss_core::folder_locks::Section::item`]: their add and rename must not
-//! meet a cycle's or another receive's of the same item, while receives of
-//! other items into the folder go on beside them), `rule_archive` writes the rule's work
+//! meet a cycle's or another receive's of the same item), a `receive_once`
+//! that may decide its rule's episode offset takes the rule alone too
+//! ([`trss_core::folder_locks::Section::rule`]: the first item a rule receives
+//! decides the offset, so those receives go in the order they were accepted),
+//! `rule_archive` writes the rule's work
 //! folder in the collect and the archive folder, `episode_undo` writes the
 //! rule's work folder, and `watch_rescan` reads its watch folder as every
 //! reading does. The command waits for its turn and runs; the command modules
