@@ -40,7 +40,11 @@ use url::Url;
 
 use super::{ApiError, AppState};
 use trss_collect::store::{channels::ChannelError, history::HistoryError, status::StatusError};
-use trss_core::{heartbeat::cycle_stalled, Millis};
+use trss_core::{
+    calendar::{date_text, DAY_MS},
+    heartbeat::cycle_stalled,
+    Millis,
+};
 
 #[cfg(test)]
 mod tests;
@@ -49,7 +53,6 @@ pub fn routes() -> Router<AppState> {
     Router::new().route("/collect/status", get(status))
 }
 
-const DAY_MS: i64 = 86_400_000;
 const DAYS: i64 = 7;
 /// The largest offset any place has (UTC+14), in minutes.
 const MAX_OFFSET_MINUTES: i64 = 14 * 60;
@@ -190,7 +193,7 @@ pub async fn board(state: &AppState, now: Millis, tz_offset: i64) -> Result<Boar
             .into_iter()
             .enumerate()
             .map(|(i, count)| Day {
-                date: civil_date(first_day + i as i64),
+                date: date_text(first_day + i as i64),
                 count,
             })
             .collect(),
@@ -237,35 +240,4 @@ pub async fn board(state: &AppState, now: Millis, tz_offset: i64) -> Result<Boar
         cycle,
         collect_folder_set,
     })
-}
-
-/// `YYYY-MM-DD` of a day counted from 1970-01-01 (proleptic Gregorian; the
-/// algorithm is Howard Hinnant's `civil_from_days`).
-fn civil_date(days_since_epoch: i64) -> String {
-    let z = days_since_epoch + 719_468;
-    let era = z.div_euclid(146_097);
-    let day_of_era = z.rem_euclid(146_097);
-    let year_of_era =
-        (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
-    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
-    let mp = (5 * day_of_year + 2) / 153;
-    let day = day_of_year - (153 * mp + 2) / 5 + 1;
-    let month = if mp < 10 { mp + 3 } else { mp - 9 };
-    let year = year_of_era + era * 400 + i64::from(month <= 2);
-    format!("{year:04}-{month:02}-{day:02}")
-}
-
-#[cfg(test)]
-mod date_tests {
-    use super::civil_date;
-
-    #[test]
-    fn days_since_the_epoch_become_calendar_dates() {
-        assert_eq!(civil_date(0), "1970-01-01");
-        assert_eq!(civil_date(-1), "1969-12-31");
-        assert_eq!(civil_date(19_723), "2024-01-01");
-        assert_eq!(civil_date(19_782), "2024-02-29");
-        assert_eq!(civil_date(19_783), "2024-03-01");
-        assert_eq!(civil_date(20_362), "2025-10-01");
-    }
 }

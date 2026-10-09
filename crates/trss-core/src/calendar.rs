@@ -77,6 +77,16 @@ mod tests {
     }
 
     #[test]
+    fn days_since_the_epoch_become_calendar_dates() {
+        assert_eq!(date_text(0), "1970-01-01");
+        assert_eq!(date_text(-1), "1969-12-31");
+        assert_eq!(date_text(19_723), "2024-01-01");
+        assert_eq!(date_text(19_782), "2024-02-29");
+        assert_eq!(date_text(19_783), "2024-03-01");
+        assert_eq!(date_text(20_362), "2025-10-01");
+    }
+
+    #[test]
     fn a_week_runs_from_monday_to_sunday() {
         // 2026-09-28 is a Monday and 2026-10-01 a Thursday.
         let monday = days_from_civil(2026, 9, 28);

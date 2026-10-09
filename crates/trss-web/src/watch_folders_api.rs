@@ -56,7 +56,10 @@ use axum::{
 use serde::{Deserialize, Serialize};
 
 use super::{commands_api::now_millis, ApiError, AppState};
-use trss_core::folder_check::{check_folder, overlap, Overlap, Problem};
+use trss_core::{
+    calendar::DAY_MS,
+    folder_check::{check_folder, overlap, Overlap, Problem},
+};
 use trss_library::{
     discovery,
     store::library::{FolderSummary, LibraryError, WatchFolder},
@@ -68,7 +71,6 @@ const ADD_ATTEMPTS: usize = 3;
 
 /// How long after it was found a work counts as newly found.
 pub const NEW_DAYS: i64 = 7;
-const DAY_MS: i64 = 24 * 60 * 60 * 1000;
 
 pub fn routes() -> Router<AppState> {
     Router::new()
