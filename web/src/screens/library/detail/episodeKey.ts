@@ -1,6 +1,6 @@
 /**
  * How an episode's text is shown and compared. Kept free of imports so the pure helpers and their tests
- * (`mapping.ts`) run without the app.
+ * run without the app.
  */
 
 /**

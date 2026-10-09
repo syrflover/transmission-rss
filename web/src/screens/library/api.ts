@@ -696,7 +696,14 @@ export interface CandidateMapping {
   version: number;
   /** The user's exceptions: one Anissia episode text to one season episode, or `null` for 받지 않음. */
   exceptions: MappingException[];
+  /** The one line the creator's group shows for the mapping (`직접 정함 · 13화 → 1화`, `자동 · <근거>`). */
+  line: string;
+  /** The default mapping the dialog opens on; `null` while the mapping is undecided. */
+  choice: MappingChoice | null;
 }
+
+/** The default mapping the user picks in `회차 대응 정하기`. */
+export type MappingChoice = "same" | "continue" | "custom";
 
 export interface MappingException {
   episode: string;
@@ -720,6 +727,51 @@ export function saveMapping(
   body: { version: number; offset: number; exceptions: MappingException[] },
 ): Promise<CandidateMapping> {
   return api<CandidateMapping>(mappingPath(id, season, sourceId), { method: "PUT", body });
+}
+
+/** One exception row of the dialog as typed: Anissia's episode, the season episode, or `받지 않음`. */
+export interface MappingRow {
+  episode: string;
+  target: string;
+  skip: boolean;
+}
+
+/** What the dialog holds: the choice made, the text of the offset box and the exception rows. */
+export interface MappingInput {
+  choice: MappingChoice | null;
+  custom: string;
+  exceptions: MappingRow[];
+}
+
+/** What the dialog shows for its input (`POST …/mapping/preview`), written by the server. */
+export interface MappingPreview {
+  /** Why `앞 시즌에 이어 셈` cannot be chosen; `null` when it can. */
+  continue_reason: string | null;
+  /** The text under each choice; empty when it has none. */
+  previews: { same: string; continue: string; custom: string };
+  /** The offset of the choice made, and with `exceptions` what `저장` sends; `null` while there is none. */
+  offset: number | null;
+  /** The sentence for an offset box that holds no usable offset. */
+  offset_problem: string | null;
+  /** The exceptions the rows say; empty while a row cannot be saved. */
+  exceptions: MappingException[];
+  /** The sentence for the first row that cannot be saved. */
+  exceptions_problem: string | null;
+  /** A season episode that two or more episodes land on. */
+  warnings: string[];
+  /** The episodes to offer as exceptions. */
+  to_add: string[];
+}
+
+/** What the dialog would show for `input`, without saving anything. */
+export function previewMapping(
+  id: string,
+  season: number,
+  sourceId: string,
+  input: MappingInput,
+  signal?: AbortSignal,
+): Promise<MappingPreview> {
+  return api<MappingPreview>(`${mappingPath(id, season, sourceId)}/preview`, { method: "POST", body: input, signal });
 }
 
 /** `자동으로 되돌리기`: drops the user's mapping so the app decides again. */

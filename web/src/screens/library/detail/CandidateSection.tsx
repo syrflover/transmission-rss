@@ -28,7 +28,6 @@ import {
   type CandidateGroup,
   type Kind,
 } from "./candidates";
-import { mappingText } from "./mapping.ts";
 import { MappingControls } from "./MappingDialog";
 import { FindSection } from "./FindSection";
 import type { EpisodeOrder } from "./model";
@@ -167,8 +166,8 @@ function GroupItem({
   /** A creator is being chosen (here or in another group). */
   choosing: boolean;
   onChoose: (creator: string) => void;
-  /** What the dialog needs of the season: the earlier seasons' episodes and its own count. */
-  facts: { previous: number | null | undefined; total: number | null | undefined };
+  /** What the dialog needs of the season: the episodes of the earlier seasons together. */
+  facts: { previous: number | null | undefined };
   /** The creator's mapping changed (`null`: it has none now). */
   onMapping: (mapping: CandidateMapping | null) => void;
   /** The most candidates one job takes. */
@@ -212,11 +211,7 @@ function GroupItem({
             </span>
             {mapping && (
               <span className="text-xs text-text-muted [overflow-wrap:anywhere]" data-testid="candidate-mapping">
-                {mappingText(
-                  mapping,
-                  group.rows.map((r) => r.candidate.episode),
-                  facts.total,
-                )}
+                {mapping.line}
               </span>
             )}
           </span>
@@ -275,10 +270,8 @@ function GroupItem({
               season,
               sourceId: group.sourceId,
               creator: group.creator,
-              episodes: group.rows.map((r) => r.candidate.episode),
               mapping,
               previous: facts.previous,
-              total: facts.total,
             }}
             onChanged={onMapping}
           />
@@ -512,7 +505,7 @@ export function CandidateSection({
                   follow={follow}
                   choosing={choosing}
                   onChoose={(creator) => void choose(creator)}
-                  facts={{ previous: list?.previous_episodes, total: list?.season_episodes }}
+                  facts={{ previous: list?.previous_episodes }}
                   onMapping={(next) => setMapping(group.sourceId, next)}
                   maxCandidates={list?.max_job_candidates ?? 0}
                 />

@@ -7,21 +7,16 @@ import { ApiError } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
 import { btnAction, btnNeutral, btnPrimary, hintClass, inputClass } from "../../collect/channels/styles";
-import { revertMapping, saveMapping, type CandidateMapping, type SourceMapping } from "../api";
 import {
-  choiceOf,
-  collisions,
-  continueReason,
-  exceptionsOf,
-  mappingText,
-  misfits,
-  offsetOf,
-  previewOf,
-  previewText,
-  rowsOf,
-  type Choice,
-  type ExceptionRow,
-} from "./mapping.ts";
+  revertMapping,
+  saveMapping,
+  type CandidateMapping,
+  type MappingChoice,
+  type MappingException,
+  type MappingRow,
+  type SourceMapping,
+} from "../api";
+import { useMappingPreview } from "./useMappingPreview";
 
 /** What the dialog and the buttons know about the season and the creator. */
 export interface MappingTarget {
@@ -29,17 +24,22 @@ export interface MappingTarget {
   season: number;
   sourceId: string;
   creator: string;
-  /** Anissia's episode texts of the creator's candidates. */
-  episodes: readonly string[];
   /** The creator's mapping now; `undefined` while it has none. */
   mapping: CandidateMapping | undefined;
   /** The episodes of the earlier seasons together when each is known. */
   previous: number | null | undefined;
-  /** The season's own episode count when it is known. */
-  total: number | null | undefined;
 }
 
 const CHANGED_FIRST = "다른 곳에서 먼저 바꿨어요.";
+
+/** The rows of the dialog for the exceptions a mapping has. */
+function rowsOf(exceptions: readonly MappingException[]): MappingRow[] {
+  return exceptions.map((e) => ({
+    episode: e.episode,
+    target: e.target === null ? "" : String(e.target),
+    skip: e.target === null,
+  }));
+}
 
 /** The mapping a `409` carries (`{ source_id, mapping }`), when it has that shape. */
 function currentOf(error: unknown): { mapping: CandidateMapping | null } | null {
@@ -61,10 +61,10 @@ function ChoiceOption({
   children,
 }: {
   name: string;
-  value: Choice;
+  value: MappingChoice;
   checked: boolean;
   disabled?: boolean;
-  onSelect: (value: Choice) => void;
+  onSelect: (value: MappingChoice) => void;
   title: string;
   children: React.ReactNode;
 }) {
@@ -87,42 +87,41 @@ function ChoiceOption({
   );
 }
 
-/** The preview of a choice: where the creator's episodes go under it, in one short text. */
-function Preview({ text }: { text: string }) {
-  return text === "" ? null : <span className="text-xs leading-snug text-text-secondary [overflow-wrap:anywhere]">{text}</span>;
+/** The preview of a choice: where the creator's episodes go under it, in one short text; dimmed while the next is asked. */
+function Preview({ text, stale }: { text: string; stale: boolean }) {
+  return text === "" ? null : (
+    <span className={cn("text-xs leading-snug text-text-secondary [overflow-wrap:anywhere]", stale && "opacity-60")}>{text}</span>
+  );
 }
 
 function Body({ target, onChanged, onClose }: { target: MappingTarget; onChanged: (mapping: CandidateMapping | null) => void; onClose: () => void }) {
-  const { workId, season, sourceId, episodes, mapping, previous, total } = target;
+  const { workId, season, sourceId, mapping, previous } = target;
   const radioName = useId();
-  // The auto result is the one preselected; a source with no basis has none, so nothing is saved by default.
-  const known = mapping && mapping.kind !== "undecided" ? mapping.offset : null;
-  const first = choiceOf(known, previous);
-  const [choice, setChoice] = useState<Choice | null>(first);
-  const [custom, setCustom] = useState(first === "custom" ? String(known) : "");
-  const [rows, setRows] = useState<ExceptionRow[]>(() => rowsOf(mapping?.exceptions ?? []));
+  // The choice the stored mapping already means is the one preselected (the server names it); a source with no
+  // basis has none, so nothing is saved by default.
+  const first = mapping?.choice ?? null;
+  const [choice, setChoice] = useState<MappingChoice | null>(first);
+  const [custom, setCustom] = useState(first === "custom" && mapping?.offset != null ? String(mapping.offset) : "");
+  const [rows, setRows] = useState<MappingRow[]>(() => rowsOf(mapping?.exceptions ?? []));
   const [version, setVersion] = useState(mapping?.version ?? 0);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const offset = choice === null ? null : offsetOf(choice, custom, previous);
-  const parsed = exceptionsOf(rows);
-  const exceptions = parsed.ok ? parsed.exceptions : [];
-  const reason = continueReason(previous);
-  const preview = (c: Choice) => previewText(previewOf(episodes, offsetOf(c, custom, previous), exceptions, total));
-  const warnings = collisions(previewOf(episodes, offset, exceptions, total));
-  const written = new Set(rows.map((r) => r.episode.trim()));
-  const toAdd = misfits(episodes, offset, exceptions, total).filter((e) => !written.has(e));
+  // What the dialog shows for its input comes from the server; it can be saved once the answer is for this input.
+  const { preview, fresh, failure } = useMappingPreview(workId, season, sourceId, { choice, custom, exceptions: rows });
+  const reason = preview?.continue_reason ?? null;
+  const stale = !fresh;
+  const saved = fresh && preview !== null && preview.offset !== null && preview.exceptions_problem === null ? preview : null;
 
-  const change = (index: number, part: Partial<ExceptionRow>) =>
+  const change = (index: number, part: Partial<MappingRow>) =>
     setRows((prev) => prev.map((row, i) => (i === index ? { ...row, ...part } : row)));
 
   const save = async () => {
-    if (busy || offset === null || !parsed.ok) return;
+    if (busy || saved === null || saved.offset === null) return;
     setBusy(true);
     setError(null);
     try {
-      onChanged(await saveMapping(workId, season, sourceId, { version, offset, exceptions: parsed.exceptions }));
+      onChanged(await saveMapping(workId, season, sourceId, { version, offset: saved.offset, exceptions: saved.exceptions }));
       onClose();
     } catch (e) {
       const current = currentOf(e);
@@ -131,7 +130,7 @@ function Body({ target, onChanged, onClose }: { target: MappingTarget; onChanged
         setVersion(current.mapping?.version ?? 0);
         onChanged(current.mapping);
         setError(
-          `${CHANGED_FIRST} 지금 저장된 대응은 ‘${current.mapping ? mappingText(current.mapping, episodes, total) : "없음"}’이에요. 입력은 그대로 두었어요. 그대로 저장하려면 다시 눌러 주세요.`,
+          `${CHANGED_FIRST} 지금 저장된 대응은 ‘${current.mapping ? current.mapping.line : "없음"}’이에요. 입력은 그대로 두었어요. 그대로 저장하려면 다시 눌러 주세요.`,
         );
       } else {
         setError(e instanceof ApiError ? e.message : "대응을 저장하지 못했어요. 잠시 뒤 다시 시도해 주세요.");
@@ -147,7 +146,7 @@ function Body({ target, onChanged, onClose }: { target: MappingTarget; onChanged
         <legend className="mb-1.5 p-0 text-[13px] font-semibold text-text-secondary">기본 대응</legend>
         <ChoiceOption name={radioName} value="same" checked={choice === "same"} onSelect={setChoice} title="같은 번호">
           <span className={hintClass}>Anissia의 회차 번호를 시즌의 회차 번호로 써요.</span>
-          <Preview text={preview("same")} />
+          <Preview text={preview?.previews.same ?? ""} stale={stale} />
         </ChoiceOption>
         <ChoiceOption
           name={radioName}
@@ -160,7 +159,7 @@ function Body({ target, onChanged, onClose }: { target: MappingTarget; onChanged
           <span className={hintClass}>
             {reason ?? `앞 시즌들의 ${previous}화에 이어 센 번호예요. 13화가 시즌의 1화가 되는 식이에요.`}
           </span>
-          {reason === null && <Preview text={preview("continue")} />}
+          {reason === null && <Preview text={preview?.previews.continue ?? ""} stale={stale} />}
         </ChoiceOption>
         <ChoiceOption name={radioName} value="custom" checked={choice === "custom"} onSelect={setChoice} title="직접 차이">
           <span className={hintClass}>Anissia의 회차에 더할 수를 써요. 12화를 빼려면 -12예요.</span>
@@ -176,12 +175,12 @@ function Body({ target, onChanged, onClose }: { target: MappingTarget; onChanged
             }}
             className={cn(inputClass, "w-28 max-w-full")}
           />
-          {choice === "custom" && offset === null && custom.trim() !== "" && (
+          {preview?.offset_problem && (
             <span role="alert" className="text-xs font-semibold text-urgent">
-              -9999에서 9999 사이의 정수를 써 주세요.
+              {preview.offset_problem}
             </span>
           )}
-          <Preview text={offsetOf("custom", custom, previous) === null ? "" : preview("custom")} />
+          <Preview text={preview?.previews.custom ?? ""} stale={stale} />
         </ChoiceOption>
       </fieldset>
 
@@ -235,25 +234,25 @@ function Body({ target, onChanged, onClose }: { target: MappingTarget; onChanged
             ))}
           </ul>
         )}
-        {warnings.length > 0 && (
-          <ul className="m-0 flex list-none flex-col gap-0.5 p-0" aria-label="확인해 주세요">
-            {warnings.map((warning) => (
+        {preview !== null && preview.warnings.length > 0 && (
+          <ul className={cn("m-0 flex list-none flex-col gap-0.5 p-0", stale && "opacity-60")} aria-label="확인해 주세요">
+            {preview.warnings.map((warning) => (
               <li key={warning} role="status" className="text-[13px] leading-relaxed font-semibold text-text-primary [overflow-wrap:anywhere]">
                 확인해 주세요. {warning}. 그대로 저장할 수도 있어요.
               </li>
             ))}
           </ul>
         )}
-        {!parsed.ok && (
+        {preview?.exceptions_problem && (
           <p role="alert" className="m-0 text-[13px] leading-relaxed font-semibold text-urgent">
-            {parsed.message}
+            {preview.exceptions_problem}
           </p>
         )}
-        {toAdd.length > 0 && (
+        {preview !== null && preview.to_add.length > 0 && (
           <div className="flex flex-col gap-1.5">
             <p className={hintClass}>기본 대응으로 시즌에 맞지 않는 회차예요. 눌러서 예외로 더해요.</p>
             <div className="flex flex-wrap gap-1.5">
-              {toAdd.map((episode) => (
+              {preview.to_add.map((episode) => (
                 <button
                   key={episode}
                   type="button"
@@ -277,6 +276,11 @@ function Body({ target, onChanged, onClose }: { target: MappingTarget; onChanged
       </section>
 
       <div className="flex flex-col gap-2 border-t border-hairline-soft pt-3">
+        {failure && !error && (
+          <p role="alert" className="m-0 text-[13px] leading-relaxed font-semibold text-urgent">
+            {failure}
+          </p>
+        )}
         {error && (
           <p role="alert" className="m-0 text-[13px] leading-relaxed font-semibold text-urgent">
             {error}
@@ -284,7 +288,7 @@ function Body({ target, onChanged, onClose }: { target: MappingTarget; onChanged
         )}
         {choice === null && <p className={hintClass}>기본 대응을 골라야 저장할 수 있어요.</p>}
         <div className="flex flex-wrap gap-2">
-          <Button type="button" variant="ghost" className={btnPrimary} disabled={busy || offset === null || !parsed.ok} onClick={() => void save()}>
+          <Button type="button" variant="ghost" className={btnPrimary} disabled={busy || saved === null} onClick={() => void save()}>
             {busy ? "저장하는 중…" : "저장"}
           </Button>
           <Button type="button" variant="ghost" className={btnNeutral} disabled={busy} onClick={onClose}>
