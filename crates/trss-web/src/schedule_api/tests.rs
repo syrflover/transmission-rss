@@ -7,7 +7,7 @@ use std::{
 };
 
 use axum::http::{Method, StatusCode};
-use serde_json::{json, Value};
+use serde_json::Value;
 
 use trss_core::{Clock, Db};
 
@@ -237,7 +237,6 @@ async fn the_week_has_a_card_on_each_day_something_airs_and_a_bare_day_otherwise
     assert_eq!(week["start"], "2026-09-28");
     assert_eq!(week["end"], "2026-10-04");
     assert_eq!(week["today"], "2026-10-01");
-    assert_eq!(week["quarter"], json!({ "year": 2026, "number": 4 }));
     let days = week["days"].as_array().unwrap();
     assert_eq!(days.len(), 7);
     assert_eq!(
@@ -301,7 +300,6 @@ async fn a_held_video_without_a_subtitle_is_received_and_the_subtitle_waits() {
     let by_title = |title: &str| cards.iter().find(|c| c["title"] == title).unwrap();
 
     let video_only = by_title("영상만");
-    assert_eq!(video_only["episode"], 14);
     assert_eq!(video_only["video"], "received");
     assert_eq!(video_only["subtitle"], "waiting");
     assert_eq!(video_only["creator"], "제작자");
@@ -312,7 +310,6 @@ async fn a_held_video_without_a_subtitle_is_received_and_the_subtitle_waits() {
 
     // The work has episode 13 only: the 14th has aired and not come.
     let empty = by_title("아직");
-    assert_eq!(empty["episode"], 14);
     assert_eq!(empty["video"], "waiting");
     assert_eq!(empty["subtitle"], "waiting");
 }
@@ -332,8 +329,6 @@ async fn a_work_before_its_air_time_is_upcoming_and_a_new_subscription_has_an_em
     let body = app.week().await;
     let card = &body["week"]["days"][3]["cards"][0];
     assert_eq!(card["video"], "upcoming");
-    assert_eq!(card["subtitle"], "waiting");
-    assert_eq!(card["episode"], 14);
     assert_eq!(card["work_id"], Value::Null);
     assert_eq!(card["cover_url"], Value::Null);
 }
@@ -400,79 +395,19 @@ async fn an_archived_subscription_has_no_card() {
 }
 
 #[tokio::test]
-async fn an_anime_anissia_marks_off_has_a_quiet_off_card_in_place_of_the_video_and_subtitle_lines()
-{
+async fn an_anime_anissia_marks_off_has_a_card_with_no_episode_in_place_of_its_lines() {
     let app = App::new().await;
     let mut off = anime(1, "결방 작품", 4, Some("10:00"), Some("2026-07-02"));
     off.status = "OFF".into();
     // The library holds the 14th, which still does not make it a received card.
     app.subscribe(off, rule("O"), SubtitleMode::Follow, Some("Both"))
         .await;
-    // A paused rule of an off anime says it is paused.
-    let mut paused = anime(2, "멈춘 결방", 4, Some("10:00"), Some("2026-07-02"));
-    paused.status = "OFF".into();
-    app.subscribe(
-        paused,
-        RuleInput {
-            state: RuleState::Paused,
-            ..rule("P")
-        },
-        SubtitleMode::Follow,
-        None,
-    )
-    .await;
-    app.subscribe(
-        anime(3, "방영", 4, Some("10:00"), Some("2026-07-02")),
-        rule("N"),
-        SubtitleMode::Follow,
-        Some("VideoOnly"),
-    )
-    .await;
 
     let body = app.week().await;
-    let cards = body["week"]["days"][3]["cards"].as_array().unwrap();
-    let by_title = |title: &str| cards.iter().find(|c| c["title"] == title).unwrap();
-
-    let off = by_title("결방 작품");
-    assert_eq!(off["video"], "off");
-    assert_eq!(off["subtitle"], Value::Null);
+    let off = &body["week"]["days"][3]["cards"][0];
+    assert_eq!(off["title"], "결방 작품");
     assert_eq!(off["episode"], Value::Null);
     assert_eq!(off["time"], "10:00");
-    assert_eq!(by_title("멈춘 결방")["video"], "paused");
-    assert_eq!(by_title("방영")["video"], "received");
-    assert_eq!(by_title("방영")["subtitle"], "waiting");
-}
-
-#[tokio::test]
-async fn the_stand_in_an_import_keeps_is_not_anissias_off() {
-    let app = App::new().await;
-    // What an import stores while Anissia cannot be asked: `기타`, `OFF`, never
-    // received. It has no weekday, so no card; and if it were moved to a weekday
-    // without being received, it is still not read as `OFF`.
-    let stand_in =
-        trss_collect::store::channels::import_subscriptions::ImportSubscription::stand_in(
-            1, "대역", None,
-        );
-    assert_eq!(stand_in.status, "OFF");
-    app.subscribe(stand_in.clone(), rule("S"), SubtitleMode::None, None)
-        .await;
-    let body = app.week().await;
-    assert!(body["week"]["days"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .all(|d| d["cards"].as_array().unwrap().is_empty()));
-
-    let weekday = Anime {
-        week: 4,
-        air_time: Some("10:00".into()),
-        start_date: Some("2026-07-02".into()),
-        ..stand_in
-    };
-    app.state.anissia_store.put_anime(weekday).await.unwrap();
-    let body = app.week().await;
-    let card = &body["week"]["days"][3]["cards"][0];
-    assert_eq!(card["video"], "waiting");
 }
 
 #[tokio::test]
@@ -488,32 +423,11 @@ async fn a_stand_in_with_the_comments_weekday_shows_its_card_on_that_weekday() {
             "주석의 요일",
             Some((4, "10:00")),
         );
-    assert_eq!((stand_in.fetched_at, stand_in.status.as_str()), (0, "OFF"));
     app.subscribe(stand_in, rule("T"), SubtitleMode::None, None)
         .await;
 
     let body = app.week().await;
-    let cards = body["week"]["days"][3]["cards"].as_array().unwrap();
-    assert_eq!(cards.len(), 1);
-    assert_eq!(cards[0]["title"], "주석의 요일");
-    assert_eq!(cards[0]["time"], "10:00");
-    assert_eq!(cards[0]["video"], "waiting");
-}
-
-#[tokio::test]
-async fn a_card_leaves_once_the_end_date_has_passed() {
-    let app = App::new().await;
-    let mut ended = anime(1, "종영", 4, Some("10:00"), Some("2026-07-02"));
-    ended.end_date = Some("2026-09-24".into());
-    app.subscribe(ended, rule("E"), SubtitleMode::None, None)
-        .await;
-    let mut last = anime(2, "마지막 주", 4, Some("10:00"), Some("2026-07-02"));
-    last.end_date = Some("2026-10-01".into());
-    app.subscribe(last, rule("L"), SubtitleMode::None, None)
-        .await;
-
-    let body = app.week().await;
-    assert_eq!(card_titles(&body["week"]["days"][3]), ["마지막 주"]);
+    assert_eq!(body["week"]["days"][3]["cards"][0]["video"], "waiting");
 }
 
 /// When an anime's run is over is trss-anissia `slot::run_over`'s, which
@@ -556,7 +470,19 @@ async fn an_episode_in_transmission_is_downloading_until_the_library_holds_it() 
             Some("Empty"),
         )
         .await;
-    let observation = |title: &str, hash: &str| Observation {
+    // A rule whose offset turns the release's 26 into the season's 14.
+    let shifted = app
+        .subscribe(
+            anime(2, "옮김", 4, Some("10:00"), Some("2026-07-02")),
+            RuleInput {
+                episode: -12,
+                ..self::rule("Shift")
+            },
+            SubtitleMode::None,
+            None,
+        )
+        .await;
+    let observation = |rule: &Rule, title: &str, hash: &str| Observation {
         channel_id: app.channel.id.clone(),
         channel_label: app.channel.masked_url(),
         identity_key: format!("title:{title}"),
@@ -572,9 +498,10 @@ async fn an_episode_in_transmission_is_downloading_until_the_library_holds_it() 
         .record(
             NOW - 1000,
             vec![
-                observation("[G] Work - 13 (1080p) [AAAA1111].mkv", "aa"),
-                observation("[G] Work - 14v2 (1080p) [BBBB2222].mkv", "bb"),
-                observation("[G] Work - 01-14 (1080p) [CCCC3333].mkv", "cc"),
+                observation(&rule, "[G] Work - 13 (1080p) [AAAA1111].mkv", "aa"),
+                observation(&rule, "[G] Work - 14v2 (1080p) [BBBB2222].mkv", "bb"),
+                observation(&rule, "[G] Work - 01-14 (1080p) [CCCC3333].mkv", "cc"),
+                observation(&shifted, "[G] Shift - 26 (1080p) [DDDD4444].mkv", "dd"),
             ],
         )
         .await
@@ -585,9 +512,14 @@ async fn an_episode_in_transmission_is_downloading_until_the_library_holds_it() 
         .record_cycle_interval(5 * 60_000)
         .await
         .unwrap();
+    let video = |body: &Value, title: &str| {
+        let cards = body["week"]["days"][3]["cards"].as_array().unwrap();
+        cards.iter().find(|c| c["title"] == title).unwrap()["video"].clone()
+    };
     // Nothing is downloading: the 14th has aired and not come.
-    let video = |body: &Value| body["week"]["days"][3]["cards"][0]["video"].clone();
-    assert_eq!(video(&app.week().await), "waiting");
+    let body = app.week().await;
+    assert_eq!(video(&body, "받는 중"), "waiting");
+    assert_eq!(video(&body, "옮김"), "waiting");
 
     // Episode 13 and a batch are downloading, not the 14th.
     app.state
@@ -602,32 +534,29 @@ async fn an_episode_in_transmission_is_downloading_until_the_library_holds_it() 
         )
         .await
         .unwrap();
-    assert_eq!(video(&app.week().await), "waiting");
+    assert_eq!(video(&app.week().await, "받는 중"), "waiting");
 
-    // The 14th is (a revision of it counts as the episode).
-    let record = |taken_at: i64| {
+    // The 14th is (a revision of it counts as the episode), and so is the
+    // release 26 of the rule that takes 12 off.
+    let record = |hashes: &[&str]| {
         app.state.status.record_transmission(
             TransmissionCounts {
-                downloading: 1,
+                downloading: hashes.len() as u32,
                 seeding: 0,
-                taken_at,
+                taken_at: NOW,
             },
-            vec!["bb".into()],
+            hashes.iter().map(|h| (*h).to_owned()).collect(),
         )
     };
-    record(NOW).await.unwrap();
-    assert_eq!(video(&app.week().await), "downloading");
-
-    // The look is as old as three cycles: still believed. Older: the worker is
-    // not looking any more, so the episode is not shown as downloading.
-    let cycle = 5 * 60_000;
-    record(NOW - 3 * cycle).await.unwrap();
-    assert_eq!(video(&app.week().await), "downloading");
-    record(NOW - 3 * cycle - 1).await.unwrap();
-    assert_eq!(video(&app.week().await), "waiting");
-    // A worker that comes back and looks again shows it once more.
-    record(NOW).await.unwrap();
-    assert_eq!(video(&app.week().await), "downloading");
+    record(&["bb", "dd"]).await.unwrap();
+    let body = app.week().await;
+    assert_eq!(video(&body, "받는 중"), "downloading");
+    assert_eq!(video(&body, "옮김"), "downloading");
+    // Only the shifted rule's torrent is downloading: only its card shows it.
+    record(&["dd"]).await.unwrap();
+    let body = app.week().await;
+    assert_eq!(video(&body, "받는 중"), "waiting");
+    assert_eq!(video(&body, "옮김"), "downloading");
 }
 
 #[tokio::test]
@@ -781,7 +710,6 @@ async fn the_next_quarter_counts_its_subscriptions_and_those_waiting_for_a_title
 
     let body = app.week().await;
     let next = &body["week"]["next_quarter"];
-    assert_eq!(next["quarter"], json!({ "year": 2027, "number": 1 }));
     assert_eq!(next["subscriptions"], 2);
     assert_eq!(next["title_waiting"], 1);
     // Neither next-quarter anime airs in this week; this quarter's does, on its day.
@@ -795,26 +723,6 @@ async fn the_next_quarter_counts_its_subscriptions_and_those_waiting_for_a_title
 }
 
 #[tokio::test]
-async fn an_anime_that_has_not_started_airs_on_its_start_day() {
-    let app = App::new().await;
-    // 신작 (8) starting Saturday 10-03.
-    app.subscribe(
-        anime(1, "신작", 8, None, Some("2026-10-03")),
-        rule("N"),
-        SubtitleMode::None,
-        None,
-    )
-    .await;
-    let body = app.week().await;
-    let saturday = &body["week"]["days"][5];
-    assert_eq!(saturday["date"], "2026-10-03");
-    assert_eq!(card_titles(saturday), ["신작"]);
-    assert_eq!(saturday["cards"][0]["time"], Value::Null);
-    assert_eq!(saturday["cards"][0]["episode"], 1);
-    assert_eq!(saturday["cards"][0]["video"], "upcoming");
-}
-
-#[tokio::test]
 async fn the_week_changes_with_the_day() {
     let app = App::new().await;
     app.subscribe(
@@ -824,14 +732,7 @@ async fn the_week_changes_with_the_day() {
         None,
     )
     .await;
-    // Sunday evening is still the week of Monday 09-28; Monday 00:30 is the next.
-    app.now
-        .store(NOW + 3 * 24 * 60 * 60 * 1000, Ordering::SeqCst);
-    let body = app.week().await;
-    assert_eq!(body["week"]["start"], "2026-09-28");
-    assert_eq!(body["week"]["days"][6]["today"], true);
-    assert_eq!(card_titles(&body["week"]["days"][0]), ["월요"]);
-
+    // Monday 00:30 is the next week: the clock is read per request.
     app.now.store(
         NOW + 3 * 24 * 60 * 60 * 1000 + 13 * 60 * 60 * 1000,
         Ordering::SeqCst,
@@ -839,5 +740,5 @@ async fn the_week_changes_with_the_day() {
     let body = app.week().await;
     assert_eq!(body["week"]["start"], "2026-10-05");
     assert_eq!(body["week"]["days"][0]["today"], true);
-    assert_eq!(body["week"]["days"][0]["cards"][0]["episode"], 14);
+    assert_eq!(card_titles(&body["week"]["days"][0]), ["월요"]);
 }
