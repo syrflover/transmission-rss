@@ -6,12 +6,12 @@
 //! clicks would download; the real one is tested by `trss-subtitles`'s ignored
 //! `find_sample`.
 
-use crate::Handles;
+use crate::{world::Base, Handles};
 use std::{
     collections::{HashSet, VecDeque},
     path::Path,
     sync::{
-        atomic::{AtomicBool, AtomicI64, AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
         Arc, Mutex,
     },
     time::Duration,
@@ -19,7 +19,7 @@ use std::{
 
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
-use trss_core::{Clock, Db, DbError};
+use trss_core::DbError;
 use trss_jobs::{
     area::ReceiveArea,
     runner::{find::FIND_NOTE, NO_AUTH_BROWSER},
@@ -209,42 +209,30 @@ struct Setup {
     shutdown: CancellationToken,
 }
 
-fn ticking_clock() -> Clock {
-    let now = Arc::new(AtomicI64::new(1_000));
-    Arc::new(move || now.fetch_add(10, Ordering::SeqCst))
-}
-
 async fn setup(with_browser: bool) -> Setup {
-    let dir = tempfile::tempdir().unwrap();
-    let db = Db::open(dir.path().join("app.db")).await.unwrap();
-    db.run::<_, DbError, _>(|c| {
-        c.execute(
-            "INSERT INTO subtitle_sources (id, anime_no, creator_name, created_at)
+    let base = Base::new().await;
+    base.db
+        .run::<_, DbError, _>(|c| {
+            c.execute(
+                "INSERT INTO subtitle_sources (id, anime_no, creator_name, created_at)
              VALUES ('src-maker', 3441, '메이커', 1)",
-            [],
-        )?;
-        Ok(())
-    })
-    .await
-    .unwrap();
-    let store = Handles::new(db.clone());
-    let area = ReceiveArea::in_app_data(dir.path());
+                [],
+            )?;
+            Ok(())
+        })
+        .await
+        .unwrap();
     let browser = Arc::new(FindBrowser::default());
-    let mut runner = Runner::new(
-        store.run.clone(),
-        Sources::none().with_fake(FakeSource),
-        area.clone(),
-        ticking_clock(),
-    );
+    let mut runner = base.runner(Sources::none().with_fake(FakeSource));
     if with_browser {
         runner = runner.with_auth(browser.clone());
     }
     Setup {
-        _dir: dir,
-        store,
-        screens: ScreenStore::new(db),
+        _dir: base.dir,
+        store: base.store,
+        screens: ScreenStore::new(base.db),
         runner,
-        area,
+        area: base.area,
         browser,
         wake: Arc::new(Notify::new()),
         shutdown: CancellationToken::new(),

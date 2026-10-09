@@ -6,20 +6,15 @@
 //! creator brings a revision of each (`/ok/Show-NNv2`) and waits for the
 //! person with twelve open plans.
 
-use crate::Handles;
-use std::{
-    os::unix::fs::PermissionsExt,
-    path::PathBuf,
-    sync::{
-        atomic::{AtomicI64, Ordering},
-        Arc,
-    },
+use crate::{
+    world::{Base, Shows},
+    Handles,
 };
+use std::{os::unix::fs::PermissionsExt, path::PathBuf};
 
 use tokio_util::sync::CancellationToken;
-use trss_core::{Clock, Db};
+use trss_core::Db;
 use trss_jobs::{
-    area::ReceiveArea,
     model::{Outcome, PlanState},
     place::replace::{
         records::{Decided, Decision, Plan},
@@ -83,11 +78,6 @@ impl Setup {
     }
 }
 
-fn ticking_clock() -> Clock {
-    let now = Arc::new(AtomicI64::new(1_000));
-    Arc::new(move || now.fetch_add(10, Ordering::SeqCst))
-}
-
 /// The video of the episode, beside which its subtitle goes.
 fn video(episode: u32) -> String {
     match episode == APART {
@@ -104,47 +94,19 @@ fn target(episode: u32) -> String {
 /// A library with the work `Show` (season 1) whose episodes 1 to 12 have a
 /// video.
 async fn setup() -> Setup {
-    let dir = tempfile::tempdir().unwrap();
-    let db = Db::open(dir.path().join("app.db")).await.unwrap();
-    let shows = dir.path().join("shows");
-    std::fs::create_dir_all(shows.join("Show/Season 01/Apart")).unwrap();
-    let mut sql = format!(
-        "INSERT INTO works (id, watch_folder_id, dir_name) VALUES ('{WORK}', 'f1', 'Show');
-         INSERT INTO seasons (work_id, number) VALUES ('{WORK}', 1);
-         INSERT INTO subtitle_sources (id, anime_no, creator_name, created_at)
-             VALUES ('src', 7, '{CREATOR}', 0);"
-    );
-    for episode in EPISODES {
-        std::fs::write(shows.join("Show").join(video(episode)), b"video").unwrap();
-        sql.push_str(&format!(
-            "INSERT INTO episodes (work_id, season, episode) VALUES ('{WORK}', 1, '{episode:02}');
-             INSERT INTO media_files (work_id, path, season, episode, kind)
-                 VALUES ('{WORK}', '{}', 1, '{episode:02}', 'video');",
-            video(episode)
-        ));
-    }
-    let path = shows.to_string_lossy().into_owned();
-    db.run(move |c| {
-        c.execute(
-            "INSERT INTO watch_folders (id, path, created_at) VALUES ('f1', ?1, 0)",
-            [path],
-        )?;
-        c.execute_batch(&sql).map_err(trss_core::DbError::from)
+    let base = Base::new().await;
+    base.library(&Shows {
+        episodes: EPISODES.collect(),
+        source: true,
+        apart: Some(APART),
+        ..Shows::default()
     })
-    .await
-    .unwrap();
-    let store = Handles::new(db.clone());
-    let area = ReceiveArea::in_app_data(dir.path());
-    let runner = Runner::new(
-        store.run.clone(),
-        Sources::none().with_fake(FakeSource),
-        area,
-        ticking_clock(),
-    );
+    .await;
+    let runner = base.runner(Sources::none().with_fake(FakeSource));
     Setup {
-        dir,
-        db,
-        store,
+        dir: base.dir,
+        db: base.db,
+        store: base.store,
         runner,
     }
 }

@@ -6,18 +6,18 @@
 //! The runner's clock ticks from `NOW`, so a receipt is `NOW` old to the
 //! millisecond; a pass of the recheck is given the time it is to run at.
 
-use crate::Handles;
-use std::sync::{
-    atomic::{AtomicI64, Ordering},
-    Arc,
+use crate::{
+    world::{fixed_clock as fixed, ticking_from, Base},
+    Handles,
 };
+use std::sync::Arc;
 
 use sha2::{Digest, Sha256};
 use tokio_util::sync::CancellationToken;
 use trss_collect::store::channels::{
     ChannelInput, ChannelStore, NewSubscription, Rule, RuleInput, SubtitleMode,
 };
-use trss_core::{Clock, Db, DbError};
+use trss_core::{Db, DbError};
 use trss_jobs::{
     area::ReceiveArea, recheck::Report, store::JobDetail, Created, Follow, ItemState, JobState,
     NewItem, NewJob, Recheck, Runner, Wait, AUTO,
@@ -57,16 +57,6 @@ struct World {
     rule: Rule,
 }
 
-/// A clock that shows `at`.
-fn fixed(at: i64) -> Clock {
-    Arc::new(move || at)
-}
-
-fn ticking_clock() -> Clock {
-    let now = Arc::new(AtomicI64::new(NOW));
-    Arc::new(move || now.fetch_add(10, Ordering::SeqCst))
-}
-
 /// Every item of the job is received. A package this build does not
 /// analyse yet (an archive) leaves the job waiting for it, an episode with
 /// no video leaves it waiting for the video, and one with a subtitle for a
@@ -88,8 +78,9 @@ fn assert_received(d: &JobDetail) {
 impl World {
     async fn new() -> World {
         let server = SourceServer::start().await;
-        let dir = tempfile::tempdir().unwrap();
-        let db = Db::open(dir.path().join("app.db")).await.unwrap();
+        let base = Base::new().await;
+        let dir = &base.dir;
+        let db = base.db.clone();
         // The work's folder, where what its jobs receive is stored.
         let media = dir.path().join("media");
         std::fs::create_dir_all(media.join("Show")).unwrap();
@@ -172,19 +163,13 @@ impl World {
             .with_tistory(server.source())
             .with_naver(server.naver())
             .with_erulabo(server.erulabo());
-        let jobs = Handles::new(db.clone());
-        let runner = Runner::new(
-            jobs.run.clone(),
-            sources.clone(),
-            ReceiveArea::in_app_data(dir.path()),
-            ticking_clock(),
-        );
+        let runner = base.runner_with(sources.clone(), ticking_from(NOW));
         World {
             follow: Follow::new(db.clone()),
             recheck: Recheck::new(db.clone(), sources.clone()),
-            _dir: dir,
             db,
-            jobs,
+            jobs: base.store,
+            _dir: base.dir,
             channels,
             runner,
             sources,
@@ -1516,7 +1501,7 @@ async fn an_erulabo_post_whose_modified_time_changed_raises_a_check_to_do_and_re
         w.jobs.run.clone(),
         w.sources.clone(),
         ReceiveArea::in_app_data(w._dir.path()),
-        ticking_clock(),
+        ticking_from(NOW),
     )
     .with_auth(Arc::new(CheckOnly));
     runner.run_ready(&CancellationToken::new()).await.unwrap();

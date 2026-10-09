@@ -3,7 +3,10 @@
 //! files are, a refused archive fails alone and stays in the receive area, and
 //! a worker killed while it unpacked unpacks again from what it received.
 
-use crate::Handles;
+use crate::{
+    world::{counting_clock, ticking_clock, Base, Shows},
+    Handles,
+};
 use std::{
     path::{Path, PathBuf},
     sync::{
@@ -14,7 +17,7 @@ use std::{
 
 use rusqlite::params;
 use tokio_util::sync::CancellationToken;
-use trss_core::{Clock, Db};
+use trss_core::Db;
 use trss_jobs::{
     area::ReceiveArea,
     model::{AssetKind, Outcome, PlanAction, StepKind},
@@ -66,12 +69,11 @@ impl Setup {
     /// A runner over the fake source with no program to unpack, at the
     /// times `now` gives (it ticks).
     fn bare_runner_at(&self, now: &Arc<AtomicI64>) -> Runner {
-        let now = now.clone();
         Runner::new(
             self.store.run.clone(),
             Sources::none().with_fake(FakeSource),
             self.area.clone(),
-            Arc::new(move || now.fetch_add(10, Ordering::SeqCst)),
+            counting_clock(now),
         )
     }
 
@@ -103,38 +105,15 @@ impl Setup {
     }
 }
 
-fn ticking_clock() -> Clock {
-    let now = Arc::new(AtomicI64::new(1_000));
-    Arc::new(move || now.fetch_add(10, Ordering::SeqCst))
-}
-
 /// A library with the work `Show` (season 1).
 async fn setup() -> Setup {
-    let dir = tempfile::tempdir().unwrap();
-    let db = Db::open(dir.path().join("app.db")).await.unwrap();
-    let shows = dir.path().join("shows");
-    std::fs::create_dir_all(shows.join("Show/Season 01")).unwrap();
-    let path = shows.to_string_lossy().into_owned();
-    db.run(move |c| {
-        c.execute(
-            "INSERT INTO watch_folders (id, path, created_at) VALUES ('f1', ?1, 0)",
-            [path],
-        )?;
-        c.execute_batch(&format!(
-            "INSERT INTO works (id, watch_folder_id, dir_name) VALUES ('{WORK}', 'f1', 'Show');
-             INSERT INTO seasons (work_id, number) VALUES ('{WORK}', 1);"
-        ))
-        .map_err(trss_core::DbError::from)
-    })
-    .await
-    .unwrap();
-    let store = Handles::new(db.clone());
-    let area = ReceiveArea::in_app_data(dir.path());
+    let base = Base::new().await;
+    base.library(&Shows::default()).await;
     Setup {
-        dir,
-        db,
-        store,
-        area,
+        dir: base.dir,
+        db: base.db,
+        store: base.store,
+        area: base.area,
     }
 }
 

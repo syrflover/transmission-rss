@@ -2,21 +2,20 @@
 //! (`docs/specs/subtitles.md`, 교체 비교와 승인 and 승인 증거와 반영 직전
 //! 검사; `docs/tickets/0068-replacement-approval.md`).
 
-use crate::Handles;
+use crate::{
+    world::{Base, Shows},
+    Handles,
+};
 use std::{
     os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
-    sync::{
-        atomic::{AtomicI64, Ordering},
-        Arc,
-    },
 };
 
 use rusqlite::params;
 use tokio_util::sync::CancellationToken;
-use trss_core::{Clock, Db};
+use trss_core::Db;
 use trss_jobs::{
-    area::{object_of, ReceiveArea},
+    area::object_of,
     model::{Chosen, Outcome, PathAction, PlanState},
     place::replace::{ADOPTED, AWAITING_APPROVAL},
     place::{
@@ -84,47 +83,19 @@ impl Setup {
     }
 }
 
-fn ticking_clock() -> Clock {
-    let now = Arc::new(AtomicI64::new(1_000));
-    Arc::new(move || now.fetch_add(10, Ordering::SeqCst))
-}
-
 /// A library with the work `Show` (season 1) whose episode 2 has a video.
 async fn setup() -> Setup {
-    let dir = tempfile::tempdir().unwrap();
-    let db = Db::open(dir.path().join("app.db")).await.unwrap();
-    let shows = dir.path().join("shows");
-    std::fs::create_dir_all(shows.join("Show/Season 01")).unwrap();
-    std::fs::write(shows.join("Show").join(VIDEO), b"video").unwrap();
-    let path = shows.to_string_lossy().into_owned();
-    db.run(move |c| {
-        c.execute(
-            "INSERT INTO watch_folders (id, path, created_at) VALUES ('f1', ?1, 0)",
-            [path],
-        )?;
-        c.execute_batch(&format!(
-            "INSERT INTO works (id, watch_folder_id, dir_name) VALUES ('{WORK}', 'f1', 'Show');
-             INSERT INTO seasons (work_id, number) VALUES ('{WORK}', 1);
-             INSERT INTO episodes (work_id, season, episode) VALUES ('{WORK}', 1, '02');
-             INSERT INTO media_files (work_id, path, season, episode, kind)
-                 VALUES ('{WORK}', '{VIDEO}', 1, '02', 'video');"
-        ))
-        .map_err(trss_core::DbError::from)
+    let base = Base::new().await;
+    base.library(&Shows {
+        episodes: vec![2],
+        ..Shows::default()
     })
-    .await
-    .unwrap();
-    let store = Handles::new(db.clone());
-    let area = ReceiveArea::in_app_data(dir.path());
-    let runner = Runner::new(
-        store.run.clone(),
-        Sources::none().with_fake(FakeSource),
-        area,
-        ticking_clock(),
-    );
+    .await;
+    let runner = base.runner(Sources::none().with_fake(FakeSource));
     Setup {
-        dir,
-        db,
-        store,
+        dir: base.dir,
+        db: base.db,
+        store: base.store,
         runner,
     }
 }

@@ -24,6 +24,7 @@ mod tistory;
 mod unpack;
 mod upload;
 mod winpng;
+mod world;
 
 use trss_core::Db;
 use trss_jobs::{JobRequests, JobRun, JobViews, PlaceStore};

@@ -3,10 +3,9 @@
 //! unpacks and analyses them for a person's 배치 확인, a refused or abandoned
 //! upload leaves no byte, and uploads wait for their turn.
 
-use crate::Handles;
+use crate::{world::Base, Handles};
 use std::time::Duration;
 
-use trss_core::Db;
 use trss_jobs::{
     upload::{Counts, Limits, UploadError, UploadRequest, UPLOAD_SLOTS},
     Finished, JobState, ReceiveArea, Uploads,
@@ -22,16 +21,13 @@ struct Setup {
 }
 
 async fn setup() -> Setup {
-    let dir = tempfile::tempdir().unwrap();
-    let db = Db::open(dir.path().join("app.db")).await.unwrap();
-    let store = Handles::new(db);
-    let area = ReceiveArea::in_app_data(dir.path());
-    let uploads = Uploads::new(store.requests.clone(), area.clone());
+    let base = Base::new().await;
+    let uploads = Uploads::new(base.store.requests.clone(), base.area.clone());
     Setup {
-        _dir: dir,
-        store,
+        _dir: base.dir,
+        store: base.store,
         uploads,
-        area,
+        area: base.area,
     }
 }
 

@@ -2,18 +2,12 @@
 //! Naver blog ([`trss_subtitles::testing`]), and once against the real site
 //! (ignored).
 
-use crate::Handles;
-use std::{
-    sync::{
-        atomic::{AtomicI64, Ordering},
-        Arc,
-    },
-    time::Duration,
-};
+use crate::{world::Base, Handles};
+use std::time::Duration;
 
 use sha2::{Digest, Sha256};
 use tokio_util::sync::CancellationToken;
-use trss_core::{Clock, Db, DbError};
+use trss_core::{Db, DbError};
 use trss_jobs::{
     area::{self, ReceiveArea},
     store::JobDetail,
@@ -35,29 +29,17 @@ struct Setup {
     server: SourceServer,
 }
 
-fn ticking_clock() -> Clock {
-    let now = Arc::new(AtomicI64::new(1_000));
-    Arc::new(move || now.fetch_add(10, Ordering::SeqCst))
-}
-
 async fn setup() -> Setup {
     let server = SourceServer::start().await;
-    let dir = tempfile::tempdir().unwrap();
-    let db = Db::open(dir.path().join("app.db")).await.unwrap();
-    let store = Handles::new(db);
-    let area = ReceiveArea::in_app_data(dir.path());
-    let runner = Runner::new(
-        store.run.clone(),
-        Sources::none().with_naver(server.naver()),
-        area.clone(),
-        ticking_clock(),
-    )
-    .with_retry_waits(vec![Duration::from_millis(10), Duration::from_millis(10)]);
+    let base = Base::new().await;
+    let runner = base
+        .runner(Sources::none().with_naver(server.naver()))
+        .with_retry_waits(vec![Duration::from_millis(10), Duration::from_millis(10)]);
     Setup {
-        _dir: dir,
-        store,
+        _dir: base.dir,
+        store: base.store,
         runner,
-        area,
+        area: base.area,
         server,
     }
 }

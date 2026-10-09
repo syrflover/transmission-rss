@@ -1,18 +1,10 @@
 //! The runner with the fake source, and its restarts from records left as a
 //! killed worker leaves them.
 
-use crate::Handles;
-use std::{
-    path::Path,
-    sync::{
-        atomic::{AtomicI64, Ordering},
-        Arc,
-    },
-    time::Duration,
-};
+use crate::{world::Base, Handles};
+use std::{path::Path, time::Duration};
 
 use tokio_util::sync::CancellationToken;
-use trss_core::{Clock, Db};
 use trss_jobs::{
     area::{self, ReceiveArea},
     store::{FileRow, JobDetail},
@@ -30,27 +22,14 @@ struct Setup {
     area: ReceiveArea,
 }
 
-fn ticking_clock() -> Clock {
-    let now = Arc::new(AtomicI64::new(1_000));
-    Arc::new(move || now.fetch_add(10, Ordering::SeqCst))
-}
-
 async fn setup() -> Setup {
-    let dir = tempfile::tempdir().unwrap();
-    let db = Db::open(dir.path().join("app.db")).await.unwrap();
-    let store = Handles::new(db);
-    let area = ReceiveArea::in_app_data(dir.path());
-    let runner = Runner::new(
-        store.run.clone(),
-        Sources::none().with_fake(FakeSource),
-        area.clone(),
-        ticking_clock(),
-    );
+    let base = Base::new().await;
+    let runner = base.runner(Sources::none().with_fake(FakeSource));
     Setup {
-        _dir: dir,
-        store,
+        _dir: base.dir,
+        store: base.store,
         runner,
-        area,
+        area: base.area,
     }
 }
 

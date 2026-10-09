@@ -5,7 +5,7 @@
 //! fake; the real one is tested by `trss-subtitles`'s ignored `auth_sample`
 //! and `trss-web`'s ignored `remote_screen_docker`.
 
-use crate::Handles;
+use crate::{world::Base, Handles};
 use std::{
     collections::HashSet,
     path::Path,
@@ -18,7 +18,7 @@ use std::{
 
 use tokio::sync::{mpsc, Notify};
 use tokio_util::sync::CancellationToken;
-use trss_core::{Clock, Db, DbError};
+use trss_core::{Db, DbError};
 use trss_jobs::{
     area::ReceiveArea,
     runner::{NO_AUTH_BROWSER, OTHER_CHECK_FIRST},
@@ -252,33 +252,20 @@ struct Setup {
     shutdown: CancellationToken,
 }
 
-fn ticking_clock() -> Clock {
-    let now = Arc::new(AtomicI64::new(1_000));
-    Arc::new(move || now.fetch_add(10, Ordering::SeqCst))
-}
-
 async fn setup(with_browser: bool) -> Setup {
-    let dir = tempfile::tempdir().unwrap();
-    let db = Db::open(dir.path().join("app.db")).await.unwrap();
-    let store = Handles::new(db.clone());
-    let area = ReceiveArea::in_app_data(dir.path());
+    let base = Base::new().await;
     let browser = FakeBrowser::new();
-    let mut runner = Runner::new(
-        store.run.clone(),
-        Sources::none().with_fake(FakeSource),
-        area.clone(),
-        ticking_clock(),
-    );
+    let mut runner = base.runner(Sources::none().with_fake(FakeSource));
     if with_browser {
         runner = runner.with_auth(browser.clone());
     }
     Setup {
-        _dir: dir,
-        store,
-        screens: ScreenStore::new(db.clone()),
-        db,
+        _dir: base.dir,
+        store: base.store,
+        screens: ScreenStore::new(base.db.clone()),
+        db: base.db,
         runner,
-        area,
+        area: base.area,
         browser,
         wake: Arc::new(Notify::new()),
         shutdown: CancellationToken::new(),

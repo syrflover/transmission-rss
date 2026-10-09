@@ -2,19 +2,17 @@
 //! source and Anissia's lines as the app stores what it observed
 //! (`docs/specs/subtitles.md`, 구독 제작자 자동 수신).
 
-use crate::Handles;
-use std::sync::{
-    atomic::{AtomicI64, Ordering},
-    Arc,
+use crate::{
+    world::{ticking_from, Base},
+    Handles,
 };
 
 use tokio_util::sync::CancellationToken;
 use trss_collect::store::channels::{
     ChannelInput, ChannelStore, NewSubscription, Rule, RuleInput, RuleState, SubtitleMode,
 };
-use trss_core::{Clock, Db, DbError};
+use trss_core::{Db, DbError};
 use trss_jobs::{
-    area::ReceiveArea,
     mapping::{Mapping, MappingKind, Saved, UserMapping},
     store::JobDetail,
     Created, Follow, JobState, NewItem, NewJob, Runner, Wait, AUTO,
@@ -102,19 +100,15 @@ fn at(first: &str, k: u32, plus_seconds: i64) -> i64 {
     ms(first) + i64::from(k - 1) * 7 * 86_400_000 + plus_seconds * 1000
 }
 
-fn ticking_clock() -> Clock {
-    let now = Arc::new(AtomicI64::new(NOW));
-    Arc::new(move || now.fetch_add(10, Ordering::SeqCst))
-}
-
 fn post(path: &str) -> String {
     format!("https://{}{path}", fake::HOST)
 }
 
 impl World {
     async fn new(sub: Sub) -> World {
-        let dir = tempfile::tempdir().unwrap();
-        let db = Db::open(dir.path().join("app.db")).await.unwrap();
+        let base = Base::new().await;
+        let dir = &base.dir;
+        let db = base.db.clone();
         let (season, count) = (sub.season, sub.count);
         let airing = serde_json::to_string(
             &sub.airing
@@ -230,18 +224,12 @@ impl World {
             .unwrap();
         }
 
-        let jobs = Handles::new(db.clone());
-        let runner = Runner::new(
-            jobs.run.clone(),
-            Sources::none().with_fake(FakeSource),
-            ReceiveArea::in_app_data(dir.path()),
-            ticking_clock(),
-        );
+        let runner = base.runner_with(Sources::none().with_fake(FakeSource), ticking_from(NOW));
         World {
             follow: Follow::new(db.clone()),
-            _dir: dir,
             db,
-            jobs,
+            jobs: base.store,
+            _dir: base.dir,
             channels,
             runner,
             rule,

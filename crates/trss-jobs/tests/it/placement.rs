@@ -3,18 +3,15 @@
 //! mapping, and nothing of them is kept until a person confirms the table;
 //! then the job keeps and applies what the person placed.
 
-use crate::Handles;
-use std::{
-    path::PathBuf,
-    sync::{
-        atomic::{AtomicI64, Ordering},
-        Arc,
-    },
+use crate::{
+    world::{ticking_clock, Base, Shows},
+    Handles,
 };
+use std::path::PathBuf;
 
 use rusqlite::params;
 use tokio_util::sync::CancellationToken;
-use trss_core::{Clock, Db};
+use trss_core::Db;
 use trss_jobs::{
     model::{AssetKind, Outcome, PlanAction, PlanState, StepKind, StepState},
     place::{
@@ -122,61 +119,35 @@ impl Setup {
     }
 }
 
-fn ticking_clock() -> Clock {
-    let now = Arc::new(AtomicI64::new(1_000));
-    Arc::new(move || now.fetch_add(10, Ordering::SeqCst))
-}
-
 /// A library with the work `Show`, whose season 2 has twelve episodes
 /// (AniList), each with its video, and the creator's source `src`.
 async fn setup() -> Setup {
-    let dir = tempfile::tempdir().unwrap();
-    let db = Db::open(dir.path().join("app.db")).await.unwrap();
-    let shows = dir.path().join("shows");
-    std::fs::create_dir_all(shows.join("Show/Season 02")).unwrap();
-    for n in 1..=12 {
-        std::fs::write(shows.join(format!("Show/{}", video(n))), b"video").unwrap();
-    }
-    let path = shows.to_string_lossy().into_owned();
-    db.run(move |c| {
-        c.execute(
-            "INSERT INTO watch_folders (id, path, created_at) VALUES ('f1', ?1, 0)",
-            [path],
-        )?;
-        c.execute_batch(&format!(
-            "INSERT INTO works (id, watch_folder_id, dir_name) VALUES ('{WORK}', 'f1', 'Show');
-             INSERT INTO seasons (work_id, number) VALUES ('{WORK}', 2);
-             INSERT OR IGNORE INTO season_info (work_id, season) VALUES ('{WORK}', 2);
-             INSERT INTO anilist_entries (id, format, episodes, fetched_at)
-                 VALUES (1, 'TV', 12, 1);
-             INSERT INTO season_entries (work_id, season, position, anilist_id)
-                 VALUES ('{WORK}', 2, 0, 1);
-             INSERT INTO subtitle_sources (id, anime_no, creator_name, created_at)
-                 VALUES ('src', 7, '{CREATOR}', 0);"
-        ))?;
-        for n in 1..=12 {
-            let episode = format!("{n:02}");
-            c.execute(
-                "INSERT INTO episodes (work_id, season, episode) VALUES (?1, 2, ?2)",
-                params![WORK, episode],
-            )?;
-            c.execute(
-                "INSERT INTO media_files (work_id, path, season, episode, kind)
-                 VALUES (?1, ?2, 2, ?3, 'video')",
-                params![WORK, video(n), episode],
-            )?;
-        }
-        Ok::<_, trss_core::DbError>(())
+    let base = Base::new().await;
+    base.library(&Shows {
+        season: 2,
+        episodes: (1..=12).collect(),
+        source: true,
+        ..Shows::default()
     })
-    .await
-    .unwrap();
-    let store = Handles::new(db.clone());
-    let area = ReceiveArea::in_app_data(dir.path());
+    .await;
+    base.db
+        .run(|c| {
+            c.execute_batch(&format!(
+                "INSERT OR IGNORE INTO season_info (work_id, season) VALUES ('{WORK}', 2);
+                 INSERT INTO anilist_entries (id, format, episodes, fetched_at)
+                     VALUES (1, 'TV', 12, 1);
+                 INSERT INTO season_entries (work_id, season, position, anilist_id)
+                     VALUES ('{WORK}', 2, 0, 1);"
+            ))
+            .map_err(trss_core::DbError::from)
+        })
+        .await
+        .unwrap();
     Setup {
-        dir,
-        db,
-        store,
-        area,
+        dir: base.dir,
+        db: base.db,
+        store: base.store,
+        area: base.area,
     }
 }
 

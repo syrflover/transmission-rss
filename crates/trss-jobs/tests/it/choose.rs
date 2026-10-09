@@ -5,22 +5,18 @@
 //! restored when a newer one is stored, or added beside the creator's applied
 //! copies; and the work's own order of the formats.
 
-use crate::Handles;
-use std::{
-    path::PathBuf,
-    sync::{
-        atomic::{AtomicI64, Ordering},
-        Arc,
-    },
+use crate::{
+    world::{Base, Shows},
+    Handles,
 };
+use std::path::PathBuf;
 
 use tokio_util::sync::CancellationToken;
 use trss_core::{
     settings::{policy::FormatOrder, SettingsStore},
-    Clock, Db,
+    Db,
 };
 use trss_jobs::{
-    area::ReceiveArea,
     model::{Chosen, Outcome, PathAction, PlanState, StepKind, StepState, SubtitleFormat},
     place::{
         records::{PlanRow, StoredChoice, ADD_REFUSED},
@@ -40,8 +36,6 @@ use trss_subtitles::{
 const WORK: &str = "w1";
 const CREATOR: &str = "제작자";
 const OTHER: &str = "다른 제작자";
-const VIDEO: &str = "Season 01/Show S01E02.mkv";
-const VIDEO_3: &str = "Season 01/Show S01E03.mkv";
 const TARGET: &str = "Season 01/Show S01E02.ass";
 const SRT: &str = "Season 01/Show S01E02.srt";
 const SMI: &str = "Season 01/Show S01E02.smi";
@@ -142,53 +136,21 @@ impl Setup {
     }
 }
 
-fn ticking_clock() -> Clock {
-    let now = Arc::new(AtomicI64::new(1_000));
-    Arc::new(move || now.fetch_add(10, Ordering::SeqCst))
-}
-
 /// A library with the work `Show` (season 1) whose episodes 2 and 3 have a
 /// video, and the subtitle source `src`.
 async fn setup() -> Setup {
-    let dir = tempfile::tempdir().unwrap();
-    let db = Db::open(dir.path().join("app.db")).await.unwrap();
-    let shows = dir.path().join("shows");
-    std::fs::create_dir_all(shows.join("Show/Season 01")).unwrap();
-    std::fs::write(shows.join("Show").join(VIDEO), b"video").unwrap();
-    std::fs::write(shows.join("Show").join(VIDEO_3), b"video").unwrap();
-    let path = shows.to_string_lossy().into_owned();
-    db.run(move |c| {
-        c.execute(
-            "INSERT INTO watch_folders (id, path, created_at) VALUES ('f1', ?1, 0)",
-            [path],
-        )?;
-        c.execute_batch(&format!(
-            "INSERT INTO works (id, watch_folder_id, dir_name) VALUES ('{WORK}', 'f1', 'Show');
-             INSERT INTO seasons (work_id, number) VALUES ('{WORK}', 1);
-             INSERT INTO subtitle_sources (id, anime_no, creator_name, created_at)
-                 VALUES ('src', 7, '{CREATOR}', 0);
-             INSERT INTO episodes (work_id, season, episode)
-                 VALUES ('{WORK}', 1, '02'), ('{WORK}', 1, '03');
-             INSERT INTO media_files (work_id, path, season, episode, kind)
-                 VALUES ('{WORK}', '{VIDEO}', 1, '02', 'video'),
-                        ('{WORK}', '{VIDEO_3}', 1, '03', 'video');"
-        ))
-        .map_err(trss_core::DbError::from)
+    let base = Base::new().await;
+    base.library(&Shows {
+        episodes: vec![2, 3],
+        source: true,
+        ..Shows::default()
     })
-    .await
-    .unwrap();
-    let store = Handles::new(db.clone());
-    let area = ReceiveArea::in_app_data(dir.path());
-    let runner = Runner::new(
-        store.run.clone(),
-        Sources::none().with_fake(FakeSource),
-        area,
-        ticking_clock(),
-    );
+    .await;
+    let runner = base.runner(Sources::none().with_fake(FakeSource));
     Setup {
-        dir,
-        db,
-        store,
+        dir: base.dir,
+        db: base.db,
+        store: base.store,
         runner,
     }
 }

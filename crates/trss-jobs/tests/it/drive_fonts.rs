@@ -4,18 +4,16 @@
 //! storing into a work's folder, with what the job's detail says of each font
 //! and the restarts around a font not received.
 
-use crate::Handles;
+use crate::{
+    world::{ticking_clock, Base, Shows},
+    Handles,
+};
 use std::{
     collections::HashMap,
     path::{Path, PathBuf},
-    sync::{
-        atomic::{AtomicI64, Ordering},
-        Arc,
-    },
     time::Duration,
 };
 
-use rusqlite::params;
 use tokio_util::sync::CancellationToken;
 use trss_core::{Clock, Db, DbError};
 use trss_jobs::{
@@ -51,11 +49,6 @@ struct Setup {
     /// One clock for every runner: receipts are ordered by when they were
     /// made.
     clock: Clock,
-}
-
-fn ticking_clock() -> Clock {
-    let now = Arc::new(AtomicI64::new(1_000));
-    Arc::new(move || now.fetch_add(10, Ordering::SeqCst))
 }
 
 impl Setup {
@@ -262,53 +255,17 @@ impl Setup {
 /// video.
 async fn setup() -> Setup {
     let server = SourceServer::start().await;
-    let dir = tempfile::tempdir().unwrap();
-    let db = Db::open(dir.path().join("app.db")).await.unwrap();
-    let shows = dir.path().join("shows");
-    std::fs::create_dir_all(shows.join("Show/Season 01")).unwrap();
-    for n in 1..=6 {
-        std::fs::write(
-            shows.join(format!("Show/Season 01/Show S01E0{n}.mkv")),
-            b"video",
-        )
-        .unwrap();
-    }
-    let path = shows.to_string_lossy().into_owned();
-    db.run(move |c| {
-        c.execute(
-            "INSERT INTO watch_folders (id, path, created_at) VALUES ('f1', ?1, 0)",
-            [path],
-        )?;
-        c.execute_batch(&format!(
-            "INSERT INTO works (id, watch_folder_id, dir_name) VALUES ('{WORK}', 'f1', 'Show');
-             INSERT INTO seasons (work_id, number) VALUES ('{WORK}', 1);"
-        ))?;
-        for n in 1..=6 {
-            c.execute(
-                "INSERT INTO episodes (work_id, season, episode) VALUES (?1, 1, ?2)",
-                params![WORK, format!("0{n}")],
-            )?;
-            c.execute(
-                "INSERT INTO media_files (work_id, path, season, episode, kind)
-                 VALUES (?1, ?2, 1, ?3, 'video')",
-                params![
-                    WORK,
-                    format!("Season 01/Show S01E0{n}.mkv"),
-                    format!("0{n}")
-                ],
-            )?;
-        }
-        Ok::<_, DbError>(())
+    let base = Base::new().await;
+    base.library(&Shows {
+        episodes: (1..=6).collect(),
+        ..Shows::default()
     })
-    .await
-    .unwrap();
-    let store = Handles::new(db.clone());
-    let area = ReceiveArea::in_app_data(dir.path());
+    .await;
     Setup {
-        dir,
-        db,
-        store,
-        area,
+        dir: base.dir,
+        db: base.db,
+        store: base.store,
+        area: base.area,
         server,
         clock: ticking_clock(),
     }

@@ -4,17 +4,13 @@
 //! script is tested against a real viewer (`trss-subtitles`'s ignored
 //! `winpng_sample`).
 
-use crate::Handles;
+use crate::{world::Base, Handles};
 use std::{
-    sync::{
-        atomic::{AtomicI64, Ordering},
-        Arc, Mutex,
-    },
+    sync::{Arc, Mutex},
     time::Duration,
 };
 
 use tokio_util::sync::CancellationToken;
-use trss_core::{Clock, Db};
 use trss_jobs::{
     area::ReceiveArea,
     store::{FileRow, JobDetail},
@@ -129,34 +125,22 @@ struct Setup {
     reader: Option<Arc<FakeReader>>,
 }
 
-fn ticking_clock() -> Clock {
-    let now = Arc::new(AtomicI64::new(1_000));
-    Arc::new(move || now.fetch_add(10, Ordering::SeqCst))
-}
-
 async fn setup(reader: Option<Arc<FakeReader>>) -> Setup {
     let server = SourceServer::start().await;
-    let dir = tempfile::tempdir().unwrap();
-    let db = Db::open(dir.path().join("app.db")).await.unwrap();
-    let store = Handles::new(db);
-    let area = ReceiveArea::in_app_data(dir.path());
-    let mut runner = Runner::new(
-        store.run.clone(),
-        Sources::none().with_tistory(server.source()),
-        area.clone(),
-        ticking_clock(),
-    )
-    .with_retry_waits(vec![Duration::from_millis(10), Duration::from_millis(10)]);
+    let base = Base::new().await;
+    let mut runner = base
+        .runner(Sources::none().with_tistory(server.source()))
+        .with_retry_waits(vec![Duration::from_millis(10), Duration::from_millis(10)]);
     if let Some(reader) = &reader {
         runner = runner.with_winpng(reader.clone());
     }
     // Every post of the tests has a picture and no attachment.
     server.post("blog", 1, vec![PostAnswer::Files(Vec::new())]);
     Setup {
-        _dir: dir,
-        store,
+        _dir: base.dir,
+        store: base.store,
         runner,
-        area,
+        area: base.area,
         server,
         reader,
     }
