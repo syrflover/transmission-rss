@@ -46,6 +46,7 @@ use crate::{
     commands::{
         episode_undo::{self, EpisodeUndo, Finished as UndoFinished, Retry as UndoRetry},
         receive_once::{self, Finished, ReceiveOnce, Retry},
+        receive_past::{self, ReceivePast},
         rule_archive::{
             self, work_folder::MovePolicy, Direction, Finished as ArchiveFinished,
             Retry as ArchiveRetry,
@@ -64,7 +65,7 @@ use crate::{
             ChannelInput, ChannelStore, ChannelWithRules, EpisodeMark, NewSubscription, Rule,
             RuleInput, RuleState, SubtitleMode,
         },
-        history::{HistoryItem, HistoryQuery, HistoryStore, MAX_PAGE_SIZE},
+        history::{identity_key, HistoryItem, HistoryQuery, HistoryStore, MAX_PAGE_SIZE},
         revisions::{Revision, RevisionStore},
     },
 };
@@ -762,13 +763,13 @@ impl World {
     /// [`Retry`] leaves the command running, to be run again.
     pub async fn run_command(&self, command: &Command) -> Result<Finished, Retry> {
         let clock = self.clock.clone();
-        let finished = receive_once::run(
-            &self.ctx.receive(),
-            command,
-            move || clock.load(Ordering::SeqCst),
-            &CancellationToken::new(),
-        )
-        .await?;
+        let now = move || clock.load(Ordering::SeqCst);
+        let cancel = CancellationToken::new();
+        let finished = if command.kind == receive_past::KIND {
+            receive_past::run(&self.ctx.receive(), command, now, &cancel).await?
+        } else {
+            receive_once::run(&self.ctx.receive(), command, now, &cancel).await?
+        };
         let (state, outcome) = (finished.state, finished.outcome.clone());
         let ended = if finished.add_unconfirmed {
             self.ctx
@@ -783,6 +784,40 @@ impl World {
         };
         ended.unwrap();
         Ok(finished)
+    }
+
+    /// The result of a past episode search that `rule` would receive: the
+    /// release `title` whose torrent has the hash `hash`, as the web names it
+    /// to the worker (key, title and link of the search's result).
+    pub fn past_result(&self, rule: &Rule, hash: &str, title: &str) -> ReceivePast {
+        ReceivePast {
+            rule_id: rule.id.clone(),
+            key: identity_key(Some(&format!("guid-{hash}")), None, None),
+            title: title.to_owned(),
+            link: magnet(hash, title),
+        }
+    }
+
+    /// Accepts `받기` of the search result `payload` as the command `id`, as
+    /// the web does, and claims it as the worker does.
+    pub async fn start_past(&self, payload: &ReceivePast, id: &str) -> Command {
+        let new = NewCommand {
+            id: id.to_owned(),
+            kind: receive_past::KIND.to_owned(),
+            payload: payload.canonical(),
+            subject: Some(payload.subject()),
+        };
+        match self.ctx.commands.accept(new, self.now()).await.unwrap() {
+            Accepted::Created(_) => {}
+            other => panic!("the command was not stored: {other:?}"),
+        }
+        self.claim().await
+    }
+
+    /// `받기` of the search result `payload` as the command `id`, run once.
+    pub async fn past(&self, payload: &ReceivePast, id: &str) -> Result<Finished, Retry> {
+        let command = self.start_past(payload, id).await;
+        self.run_command(&command).await
     }
 
     /// `다시 받기` of `item_id` as the command `id`, run once.

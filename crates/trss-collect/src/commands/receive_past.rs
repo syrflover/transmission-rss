@@ -576,3 +576,6 @@ fn duplicate(reason: &str) -> Finished {
         add_unconfirmed: false,
     }
 }
+
+#[cfg(test)]
+mod tests;

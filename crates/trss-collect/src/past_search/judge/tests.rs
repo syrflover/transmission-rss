@@ -109,6 +109,7 @@ fn another_season_a_batch_and_a_revision_are_told_apart() {
     assert!(v1.note.as_deref().unwrap().contains("v2"));
 
     assert_eq!(selected(&preview), (13..=24).collect::<Vec<u32>>());
+    assert_eq!(preview.missing, (13..=24).collect::<Vec<u32>>());
     assert_eq!(
         state_of(&preview, "- 13 ").folder.as_deref(),
         Some("S02E01")

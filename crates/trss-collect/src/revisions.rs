@@ -1893,6 +1893,8 @@ mod looks_tests;
 #[cfg(test)]
 mod magnet_tests;
 #[cfg(test)]
+mod past_tests;
+#[cfg(test)]
 mod replacing_tests;
 #[cfg(test)]
 mod retry_tests;

@@ -470,6 +470,7 @@ fn search_error(err: SearchError) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{fake::FakeNyaa, past_search::judge::State, test_world::World};
     use trss_core::Db;
 
     async fn service() -> (PastSearch, tempfile::TempDir) {
@@ -543,5 +544,175 @@ mod tests {
         let (fresh, _task) = entry(Duration::from_secs(1), Status::Done(Arc::new(outcome())));
         service.lock().searches.insert("fresh".into(), fresh);
         assert!(service.resolve("fresh", "r", "k").is_ok());
+    }
+
+    #[tokio::test]
+    async fn a_result_is_resolved_only_from_a_finished_search_of_its_rule() {
+        let (service, _dir) = service().await;
+        let (running, _task1) = entry(Duration::ZERO, Status::Running { sent: 0, needed: 0 });
+        let (failed, _task2) = entry(Duration::ZERO, Status::Failed("no".into()));
+        let (done, _task3) = entry(Duration::ZERO, Status::Done(Arc::new(outcome())));
+        {
+            let mut registry = service.lock();
+            registry.searches.insert("running".into(), running);
+            registry.searches.insert("failed".into(), failed);
+            registry.searches.insert("done".into(), done);
+        }
+
+        assert_eq!(service.resolve("none", "r", "k"), Err(Resolve::Gone));
+        assert_eq!(service.resolve("running", "r", "k"), Err(Resolve::Running));
+        assert_eq!(service.resolve("failed", "r", "k"), Err(Resolve::NoItem));
+        assert_eq!(
+            service.resolve("done", "other", "k"),
+            Err(Resolve::OtherRule)
+        );
+        assert_eq!(service.resolve("done", "r", "nope"), Err(Resolve::NoItem));
+        let stored = service.resolve("done", "r", "k").unwrap();
+        assert_eq!(stored.title, "Show - 01");
+        assert_eq!(stored.link, "magnet:?xt=urn:btih:a");
+        assert!(!stored.departed);
+    }
+
+    /// The spec of a search of the first rule of `world`, on the tracker at
+    /// `url`. The world holds the work folder, so it lives as long as the
+    /// search.
+    async fn spec_on(url: String, world: &World) -> Spec {
+        let channel = world
+            .ctx
+            .channels
+            .get_channel(&world.channel_id)
+            .await
+            .unwrap()
+            .unwrap();
+        Spec {
+            channel: Channel { url, ..channel },
+            rule: world.rule_of(0).await,
+            query: "[SubsPlease] Show 1080p".into(),
+            range: Range { from: 1, to: 2 },
+            save_path: world.season.clone(),
+            offset: 0,
+            season: Some(1),
+            settled: Vec::new(),
+            listing: None,
+            titles: Vec::new(),
+            history_cut: false,
+            redactor: Redactor::none(),
+        }
+    }
+
+    /// The end of the search `id`: it is polled until it is not running.
+    async fn finished(service: &PastSearch, id: &str) -> Status {
+        for _ in 0..400 {
+            match service.status(id) {
+                Some((_, Status::Running { .. })) => {
+                    tokio::time::sleep(Duration::from_millis(15)).await
+                }
+                Some((_, status)) => return status,
+                None => panic!("the search is gone"),
+            }
+        }
+        panic!("search hangs");
+    }
+
+    async fn serving() -> (PastSearch, tempfile::TempDir, FakeNyaa) {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Db::open(dir.path().join("app.db")).await.unwrap();
+        let service = PastSearch::new(SearchPace::new(db)).with_spacing(Duration::from_millis(5));
+        (service, dir, FakeNyaa::start().await)
+    }
+
+    #[tokio::test]
+    async fn a_new_search_of_a_rule_ends_the_one_before_it() {
+        let (service, _dir, nyaa) = serving().await;
+        nyaa.set_releases(&["[SubsPlease] Show - 01 (1080p) [AAAA0001].mkv".to_owned()]);
+        let world = World::new().await;
+        let rule_id = world.rule_of(0).await.id;
+
+        let first = service.start(spec_on(nyaa.url("token"), &world).await);
+        let second = service.start(spec_on(nyaa.url("token"), &world).await);
+
+        assert_ne!(first, second);
+        assert!(service.status(&first).is_none());
+        assert_eq!(service.resolve(&first, &rule_id, "k"), Err(Resolve::Gone));
+        let Status::Done(outcome) = finished(&service, &second).await else {
+            panic!("the second search did not finish");
+        };
+        // The result of the search that ended is the later one's, of its rule.
+        assert_eq!(outcome.rule_id, rule_id);
+        assert_eq!(
+            service.resolve(&second, "another rule", "k"),
+            Err(Resolve::OtherRule)
+        );
+        assert_eq!(
+            service.resolve(&second, &rule_id, "no such key"),
+            Err(Resolve::NoItem)
+        );
+    }
+
+    /// The sentence a tracker's `Retry-After` becomes ([`search_error`]), end
+    /// to end from the answer: `client` tests the wait and the block.
+    #[tokio::test]
+    async fn a_tracker_that_asks_to_wait_fails_the_search_and_says_for_how_long() {
+        let (service, _dir, nyaa) = serving().await;
+        nyaa.refuse(Some((429, Some(30))));
+        let world = World::new().await;
+
+        let id = service.start(spec_on(nyaa.url("token"), &world).await);
+
+        let Status::Failed(sentence) = finished(&service, &id).await else {
+            panic!("the search did not fail");
+        };
+        assert!(sentence.contains("30초"), "{sentence}");
+        assert_eq!(nyaa.queries().len(), 1);
+    }
+
+    /// The video of an episode the work folder holds is told by its CRC32
+    /// from the file itself ([`file_crc32`]), whatever the revision's name
+    /// says of its own.
+    #[tokio::test]
+    async fn a_video_of_unknown_version_is_told_by_the_crc_of_its_file_in_the_work_folder() {
+        let (service, _dir, nyaa) = serving().await;
+        let world = World::new().await;
+        let old = b"episode 14, the video in the folder";
+        std::fs::write(world.season.join("Show S01E14.mkv"), old).unwrap();
+        let other = crate::test_world::crc(b"episode 14, a revision of another file");
+        let v2 = |crc: &str| format!("[SubsPlease] Show - 14v2 (1080p) [{crc}].mkv");
+        let v1 = format!(
+            "[SubsPlease] Show - 14 (1080p) [{}].mkv",
+            crate::test_world::crc(old)
+        );
+        let fifteen = "[SubsPlease] Show - 15 (1080p) [AAAA0015].mkv".to_owned();
+
+        // (what the tracker lists, the state of the revision, whether the
+        // search selects it)
+        let searches = [
+            (vec![v2(&other), fifteen], State::VersionUnknown, false),
+            (
+                vec![v2(&crate::test_world::crc(b"new")), v1],
+                State::Replace,
+                false,
+            ),
+            (vec![v2(&crate::test_world::crc(old))], State::Have, false),
+        ];
+        for (titles, state, selected) in searches {
+            nyaa.set_releases(&titles);
+            let mut spec = spec_on(nyaa.url("token"), &world).await;
+            spec.range = Range { from: 14, to: 15 };
+            let id = service.start(spec);
+            let Status::Done(outcome) = finished(&service, &id).await else {
+                panic!("the search did not finish");
+            };
+            let revision = outcome
+                .preview
+                .items
+                .iter()
+                .find(|item| item.title.contains("14v2"))
+                .expect("the revision is listed");
+            assert_eq!(
+                (revision.state, revision.selected),
+                (state, selected),
+                "{titles:?}: {revision:?}"
+            );
+        }
     }
 }

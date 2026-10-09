@@ -230,7 +230,14 @@ pub async fn run(
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use super::*;
+    use crate::{
+        fake::FakeNyaa, past_search::judge::Present, release_name::Episode,
+        store::search_pace::SearchPace,
+    };
+    use trss_core::Db;
 
     fn item(key: &str, title: &str) -> FeedItem {
         FeedItem {
@@ -285,5 +292,153 @@ mod tests {
         ];
         assert_eq!(common_notation(&titles), Some(Notation::Dash { width: 4 }));
         assert_eq!(common_notation(&["Show Movie"]), None);
+    }
+
+    /// A channel on the fake tracker, a client with a short spacing, and the
+    /// database whose pace it keeps.
+    async fn tracker(spacing: Duration) -> (FakeNyaa, Channel, SearchClient, tempfile::TempDir) {
+        let nyaa = FakeNyaa::start().await;
+        let channel = Channel {
+            id: "c".into(),
+            position: 0,
+            version: 1,
+            url: nyaa.url("token"),
+            excludes: Vec::new(),
+            secret_query: Vec::new(),
+            past_search: None,
+            name: None,
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let pace = SearchPace::new(Db::open(dir.path().join("app.db")).await.unwrap());
+        let client = SearchClient::new(pace).unwrap().with_spacing(spacing);
+        (nyaa, channel, client, dir)
+    }
+
+    fn there() -> Present {
+        Present {
+            file: Some("/media/Show/Season 21/a video.mkv".into()),
+            records: Vec::new(),
+            in_transmission: false,
+        }
+    }
+
+    /// Row 5 of the ticket's table: a first result of 75 (a long series), then
+    /// spaced searches of the missing episodes, merged without loss or repeat.
+    #[tokio::test]
+    async fn a_full_first_page_is_followed_by_spaced_searches_of_the_missing_episodes_merged_without_loss_or_repeat(
+    ) {
+        let spacing = Duration::from_millis(100);
+        let (nyaa, channel, client, _dir) = tracker(spacing).await;
+        // Episodes 1001 to 1100, newest first: the tracker returns the newest 75.
+        let titles: Vec<String> = (1001..=1100)
+            .rev()
+            .map(|n| {
+                format!(
+                    "[SubsPlease] One Piece - {n} (1080p) [{:08X}].mkv",
+                    0xB000_0000u32 + n
+                )
+            })
+            .collect();
+        nyaa.set_releases(&titles);
+        // The work has 1005 and 1090: 1005 is not searched for again.
+        let mut world = World::default();
+        for n in [1005, 1090] {
+            world.present.insert(Episode::whole(n), there());
+        }
+        let sent = std::sync::Mutex::new(Vec::new());
+
+        let found = run(
+            &client,
+            &channel,
+            &Redactor::none(),
+            "[SubsPlease] One Piece 1080p",
+            "One Piece",
+            Range {
+                from: 1001,
+                to: 1100,
+            },
+            &world,
+            &|title| title.contains("One Piece"),
+            Limits::default(),
+            &|sent_so_far, needed| sent.lock().unwrap().push((sent_so_far, needed)),
+        )
+        .await
+        .unwrap();
+
+        assert!(found.first_full);
+        // 1001 to 1025 are missing from the first 75 (1026 to 1100), and 1005
+        // is in the work: 24 episodes in groups of ten.
+        assert_eq!((found.extra_needed, found.extra_sent), (3, 3));
+        let queries = nyaa.queries();
+        assert_eq!(queries.len(), 4, "{queries:?}");
+        assert_eq!(queries[0], "[SubsPlease] One Piece 1080p");
+        assert_eq!(
+            queries[1],
+            "[SubsPlease] One Piece - (1001|1002|1003|1004|1006|1007|1008|1009|1010|1011) 1080p"
+        );
+        assert_eq!(
+            queries[3],
+            "[SubsPlease] One Piece - (1022|1023|1024|1025) 1080p"
+        );
+        // One after the other, with the spacing between them. The gap is
+        // measured where the request arrives, so scheduling noise moves it by
+        // a few milliseconds either way; with no spacing the gaps would be
+        // near zero.
+        for gap in nyaa.gaps() {
+            assert!(gap >= spacing - Duration::from_millis(60), "{gap:?}");
+        }
+        // The progress is told before each extra search and at the end.
+        assert_eq!(*sent.lock().unwrap(), [(0, 3), (1, 3), (2, 3), (3, 3)]);
+
+        // All but the one the work has, once each.
+        assert_eq!(found.items.len(), 99);
+        let mut numbers: Vec<u32> = found
+            .items
+            .iter()
+            .map(|item| match ReleaseName::read(&item.title).kind {
+                Kind::Episode(episode) => episode.number,
+                other => panic!("{other:?}"),
+            })
+            .collect();
+        numbers.sort_unstable();
+        let wanted: Vec<u32> = (1001..=1100).filter(|n| *n != 1005).collect();
+        assert_eq!(numbers, wanted);
+        let keys: HashSet<&str> = found
+            .items
+            .iter()
+            .map(|item| item.identity_key.as_str())
+            .collect();
+        assert_eq!(keys.len(), 99);
+        assert!(found.notes.is_empty(), "{:?}", found.notes);
+    }
+
+    /// A first page that is not full needs no more searches.
+    #[tokio::test]
+    async fn a_first_page_that_is_not_full_ends_the_search() {
+        let (nyaa, channel, client, _dir) = tracker(Duration::from_millis(10)).await;
+        nyaa.set_releases(&[
+            "[SubsPlease] Show - 03 (1080p) [AAAA0003].mkv".to_owned(),
+            "[SubsPlease] Show - 01 (1080p) [AAAA0001].mkv".to_owned(),
+        ]);
+
+        let found = run(
+            &client,
+            &channel,
+            &Redactor::none(),
+            "[SubsPlease] Show 1080p",
+            "Show",
+            Range { from: 1, to: 12 },
+            &World::default(),
+            &|_| true,
+            Limits::default(),
+            &|_, _| panic!("no extra search is planned"),
+        )
+        .await
+        .unwrap();
+
+        assert!(!found.first_full);
+        assert_eq!((found.extra_needed, found.extra_sent), (0, 0));
+        assert_eq!(found.items.len(), 2);
+        assert_eq!(nyaa.queries().len(), 1);
     }
 }
