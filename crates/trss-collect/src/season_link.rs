@@ -344,3 +344,6 @@ pub async fn link_seasons(ctx: &LinkContext) -> Linked {
     }
     done
 }
+
+#[cfg(test)]
+mod tests;

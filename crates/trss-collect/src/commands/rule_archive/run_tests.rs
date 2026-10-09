@@ -7,14 +7,19 @@
 //! Every case runs through [`World::archive_of`] against the fake Transmission
 //! and real temporary folders.
 
-use std::{fs, time::Duration};
+use std::{fs, path::Path, time::Duration};
 
 use trss_core::commands::{CommandState, MAX_ATTEMPTS};
+
+use trss_library::{
+    discovery,
+    store::library::{WatchFolder, WorkRecord},
+};
 
 use super::*;
 use crate::{
     store::channels::RuleInput,
-    test_world::{files, write, World},
+    test_world::{entry, files, write, World},
 };
 
 fn rule(phrase: &str, directory: &str) -> RuleInput {
@@ -427,4 +432,237 @@ async fn a_resume_moves_an_archived_work_in_and_turns_the_rule_on_from_when_it_w
         s.tr.torrent(&crate::test_world::show_hash(1)).download_dir,
         s.media.join("Solo/Season 01").to_str().unwrap()
     );
+}
+
+// --- the library follows the move -------------------------------------------------
+
+/// Both folders registered as watch folders, as saving the settings leaves
+/// them, each read once.
+async fn watching(s: &World) -> (WatchFolder, WatchFolder) {
+    let mut folders = Vec::new();
+    for path in [&s.media, &s.archive] {
+        let registered = s.ctx.library.folders().await.unwrap();
+        let scan = discovery::scan(path).unwrap();
+        let (folder, _) = s
+            .ctx
+            .library
+            .add_folder(
+                path.to_str().unwrap().to_owned(),
+                scan,
+                s.now(),
+                &registered,
+            )
+            .await
+            .unwrap();
+        folders.push(folder);
+    }
+    let archive = folders.pop().unwrap();
+    (folders.pop().unwrap(), archive)
+}
+
+/// The worker's next reading of the watch folders.
+async fn read_again(s: &World, folders: &[&WatchFolder]) {
+    for folder in folders {
+        let scan = discovery::scan(Path::new(&folder.path)).unwrap();
+        s.advance(1_000);
+        s.ctx
+            .library
+            .record_scan(&folder.id, Ok(scan), s.now())
+            .await
+            .unwrap();
+    }
+}
+
+async fn work_in(s: &World, folder: &WatchFolder, name: &str) -> Option<WorkRecord> {
+    s.ctx
+        .library
+        .works(&folder.id)
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|w| w.dir_name == name)
+}
+
+async fn work_of(s: &World, folder: &WatchFolder, name: &str) -> WorkRecord {
+    work_in(s, folder, name)
+        .await
+        .unwrap_or_else(|| panic!("no work {name}"))
+}
+
+#[tokio::test]
+async fn archiving_a_work_keeps_its_id_under_the_archive_folder_and_merges_into_a_work_already_there(
+) {
+    let s = world(vec![
+        rule("Clevatess", "Clevatess/Season 02"),
+        rule("Solo", "Solo/Season 01"),
+    ])
+    .await;
+    write(
+        &s.media.join("Clevatess/Season 02/Clevatess S02E01.mkv"),
+        "x",
+    );
+    write(
+        &s.media.join("Clevatess/Season 02/Clevatess S02E02.mkv"),
+        "x",
+    );
+    write(&s.media.join("Solo/Season 01/Solo S01E01.mkv"), "x");
+    // The archive already has the earlier season of Clevatess.
+    write(
+        &s.archive.join("Clevatess/Season 01/Clevatess S01E01.mkv"),
+        "x",
+    );
+    let (collect, archive) = watching(&s).await;
+    let solo = work_of(&s, &collect, "Solo").await;
+    assert_eq!(solo.episodes.len(), 1);
+    let moved = work_of(&s, &collect, "Clevatess").await;
+    let kept = work_of(&s, &archive, "Clevatess").await;
+    assert_ne!(moved.id, kept.id);
+
+    // A work only the collect folder has: the same ID, now under the archive
+    // folder, with nothing left behind.
+    let done = s.archive_of(&s.rule_of(1).await, Direction::Archive).await;
+    assert_eq!(done.outcome.result, MOVED, "{done:?}");
+    assert!(work_in(&s, &collect, "Solo").await.is_none());
+    let now_archived = work_of(&s, &archive, "Solo").await;
+    assert_eq!(now_archived.id, solo.id);
+    assert_eq!(now_archived.episodes, solo.episodes);
+    assert_eq!(now_archived.first_seen_at, solo.first_seen_at);
+
+    // A work both folders have: it merges into the destination's ID.
+    s.advance(1);
+    let done = s.archive_of(&s.rule_of(0).await, Direction::Archive).await;
+    assert_eq!(done.outcome.result, MOVED, "{done:?}");
+    assert!(work_in(&s, &collect, "Clevatess").await.is_none());
+    let merged = work_of(&s, &archive, "Clevatess").await;
+    assert_eq!(merged.id, kept.id);
+    assert_eq!(merged.seasons, [1, 2]);
+    assert_eq!(merged.episodes.len(), 3);
+
+    // The next reading of the folders finds the same works, one row each.
+    read_again(&s, &[&collect, &archive]).await;
+    let read = work_of(&s, &archive, "Solo").await;
+    assert_eq!(read.id, solo.id);
+    assert!(!read.missing);
+    let read = work_of(&s, &archive, "Clevatess").await;
+    assert_eq!(
+        (read.id.as_str(), read.episodes.len()),
+        (kept.id.as_str(), 3)
+    );
+    let rows = s.ctx.library.works(&archive.id).await.unwrap();
+    assert_eq!(rows.iter().filter(|w| w.dir_name == "Clevatess").count(), 1);
+    assert!(s
+        .ctx
+        .library
+        .works(&collect.id)
+        .await
+        .unwrap()
+        .iter()
+        .all(|w| w.dir_name != "Solo" && w.dir_name != "Clevatess" || w.missing));
+}
+
+#[tokio::test]
+async fn starting_a_rule_for_an_archived_work_keeps_its_id_and_its_season_link_under_the_collect_folder(
+) {
+    let paused = |phrase: &str, directory: &str| RuleInput {
+        state: RuleState::Paused,
+        ..rule(phrase, directory)
+    };
+    let s = world(vec![
+        paused("Mushoku", "Mushoku/Season 02"),
+        paused("Clevatess S03", "Clevatess/Season 03"),
+    ])
+    .await;
+    write(&s.archive.join("Mushoku/Season 01/Mushoku S01E01.mkv"), "x");
+    write(&s.archive.join("Mushoku/Season 01/Mushoku S01E02.mkv"), "x");
+    // Clevatess is in both folders.
+    write(
+        &s.archive.join("Clevatess/Season 01/Clevatess S01E01.mkv"),
+        "x",
+    );
+    write(
+        &s.media.join("Clevatess/Season 02/Clevatess S02E01.mkv"),
+        "x",
+    );
+    let (collect, archive) = watching(&s).await;
+    let mushoku = work_of(&s, &archive, "Mushoku").await;
+    assert_eq!(mushoku.episodes.len(), 2);
+    // What the user chose for the work before: season 1 linked.
+    s.ctx
+        .seasons
+        .put_entry(entry(166873, Some(2)))
+        .await
+        .unwrap();
+    let link = s.ctx.seasons.link(&mushoku.id, 1).await.unwrap();
+    let linked = s
+        .ctx
+        .seasons
+        .set_links(&mushoku.id, 1, link.version, vec![166873])
+        .await
+        .unwrap();
+
+    // An archived work: the same ID, now under the collect folder, with what
+    // was chosen for it, and nothing left behind.
+    let done = s.archive_of(&s.rule_of(0).await, Direction::Start).await;
+    assert_eq!(done.outcome.result, MOVED, "{done:?}");
+    assert!(work_in(&s, &archive, "Mushoku").await.is_none());
+    let moved = work_of(&s, &collect, "Mushoku").await;
+    assert_eq!(moved.id, mushoku.id);
+    assert_eq!(moved.episodes, mushoku.episodes);
+    assert_eq!(moved.first_seen_at, mushoku.first_seen_at);
+    assert_eq!(s.ctx.seasons.link(&mushoku.id, 1).await.unwrap(), linked);
+
+    // A work in both folders: the archive's records merge into the collect
+    // folder's ID.
+    let kept = work_of(&s, &collect, "Clevatess").await;
+    let from_archive = work_of(&s, &archive, "Clevatess").await;
+    assert_ne!(kept.id, from_archive.id);
+    s.advance(1);
+    let done = s.archive_of(&s.rule_of(1).await, Direction::Start).await;
+    assert_eq!(done.outcome.result, MOVED, "{done:?}");
+    assert!(work_in(&s, &archive, "Clevatess").await.is_none());
+    let merged = work_of(&s, &collect, "Clevatess").await;
+    assert_eq!(merged.id, kept.id);
+    assert_eq!(merged.seasons, [1, 2]);
+    assert_eq!(merged.episodes.len(), 2);
+
+    // The next reading finds the same works, one row each.
+    read_again(&s, &[&collect, &archive]).await;
+    let read = work_of(&s, &collect, "Mushoku").await;
+    assert_eq!(read.id, mushoku.id);
+    assert!(!read.missing);
+    assert_eq!(s.ctx.seasons.link(&mushoku.id, 1).await.unwrap(), linked);
+    let read = work_of(&s, &collect, "Clevatess").await;
+    assert_eq!(
+        (read.id.as_str(), read.episodes.len()),
+        (kept.id.as_str(), 2)
+    );
+    let rows = s.ctx.library.works(&collect.id).await.unwrap();
+    assert_eq!(rows.iter().filter(|w| w.dir_name == "Clevatess").count(), 1);
+}
+
+#[tokio::test]
+async fn a_start_of_a_rule_saved_into_an_archived_work_folder_moves_the_work_and_keeps_when_the_rule_began_collecting(
+) {
+    let s = world(vec![rule("Mushoku", "Mushoku/Season 02")]).await;
+    write(&s.archive.join("Mushoku/Season 01/Mushoku S01E02.mkv"), "x");
+    // Collecting since 777 until the edit into the archived folder paused it.
+    s.resumed(0, 777).await;
+    let rule = s.rule_of(0).await;
+    s.ctx
+        .channels
+        .set_rule_state(&rule.id, RuleState::Paused, 800)
+        .await
+        .unwrap();
+
+    let done = s.archive_of(&s.rule_of(0).await, Direction::Start).await;
+    assert_eq!(done.outcome.result, MOVED, "{done:?}");
+
+    let stored = s.stored_rule(&rule).await;
+    assert_eq!(stored.state, RuleState::Active);
+    assert_eq!(stored.resumed_at, Some(777));
+    assert!(!s.archive.join("Mushoku").exists());
+    assert!(s
+        .media
+        .join("Mushoku/Season 01/Mushoku S01E02.mkv")
+        .exists());
 }

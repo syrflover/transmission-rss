@@ -185,4 +185,89 @@ mod tests {
         assert!(ask(&commands, 3320, 1_600).await.unwrap());
         assert!(commands.get("captions-3320-1600").await.unwrap().is_some());
     }
+
+    fn command(payload: &str) -> Command {
+        Command {
+            id: "refresh-0001".to_owned(),
+            kind: KIND.to_owned(),
+            payload: payload.to_owned(),
+            subject: None,
+            state: CommandState::Running,
+            attempts: 1,
+            created_at: 0,
+            updated_at: 0,
+            finished_at: None,
+            outcome: None,
+            add_unconfirmed: false,
+            original_name: None,
+        }
+    }
+
+    /// The command ends by how Anissia answered: `read` when the lines were
+    /// observed, and `failed` with a sentence of its own when Anissia failed or
+    /// asked to wait. What a failed read does not reach is left as it was.
+    #[tokio::test]
+    async fn the_command_ends_read_when_anissia_answered_and_failed_with_a_sentence_when_it_did_not(
+    ) {
+        use std::{sync::Arc, time::Duration};
+
+        use serde_json::json;
+        use trss_anissia::{fake::Fake, Anissia};
+
+        use crate::store::anissia::AnissiaStore;
+
+        let db = trss_core::Db::open_blocking(":memory:").unwrap();
+        let fake = Fake::start().await;
+        let clock: trss_core::Clock = Arc::new(|| 1_790_942_400_000);
+        let anissia = Anissia::new(db.clone(), fake.config(), clock).with_spacing(Duration::ZERO);
+        let store = AnissiaStore::new(db);
+        let observer = CaptionObserver::new(anissia, store.clone());
+        let refresh = command(r#"{"anime_no":3492}"#);
+        fake.set_captions(
+            3492,
+            vec![json!({"episode": "3", "updDt": "2026-10-02 21:00:00",
+                        "website": "https://a.test/3", "name": "에루샤"})],
+        );
+
+        let read = run(&observer, &refresh).await;
+        assert_eq!(read.state, CommandState::Done);
+        assert_eq!(read.outcome.result, READ);
+        assert_eq!(read.outcome.reason, None);
+        assert_eq!(fake.count("/anime/caption/animeNo/3492"), 1);
+        assert_eq!(store.candidates(3492, Vec::new()).await.unwrap().len(), 1);
+
+        // Anissia fails: the command says so, and the candidates stay as they were.
+        fake.state.lock().unwrap().failing = 1;
+        let failed = run(&observer, &refresh).await;
+        assert_eq!(failed.state, CommandState::Failed);
+        assert_eq!(failed.outcome.result, FAILED);
+        assert!(failed.outcome.reason.unwrap().contains("읽지 못했어요"));
+        assert_eq!(store.candidates(3492, Vec::new()).await.unwrap().len(), 1);
+
+        // Anissia asks to wait: also a failed command, with a sentence of its own.
+        {
+            let mut state = fake.state.lock().unwrap();
+            state.rate_limited = 1;
+            state.retry_after = Some(120);
+        }
+        let busy = run(&observer, &refresh).await;
+        assert_eq!(busy.state, CommandState::Failed);
+        assert!(busy
+            .outcome
+            .reason
+            .unwrap()
+            .contains("잠시 요청을 받지 않아요"));
+        assert_eq!(store.candidates(3492, Vec::new()).await.unwrap().len(), 1);
+
+        // A payload that cannot be read asks Anissia nothing.
+        let asked = fake.requests().len();
+        let bad = run(&observer, &command(r#"{"anime_no":"x"}"#)).await;
+        assert_eq!(bad.state, CommandState::Failed);
+        assert!(bad
+            .outcome
+            .reason
+            .unwrap()
+            .contains("요청 내용을 읽지 못했어요"));
+        assert_eq!(fake.requests().len(), asked);
+    }
 }

@@ -334,7 +334,8 @@ async fn a_season_linked_to_another_anime_is_not_taken_by_a_subscription_and_say
         .unwrap()
         .is_empty());
 
-    // The user cuts the link: the note goes, and the rule connects next time.
+    // The user cuts the link: the note goes (the rule's version goes up once),
+    // and the rule connects next time.
     env.channels
         .set_season_anime(&env.work, 2, 1, None)
         .await
@@ -342,6 +343,25 @@ async fn a_season_linked_to_another_anime_is_not_taken_by_a_subscription_and_say
     assert_eq!(
         env.channels.release_unheld_seasons().await.unwrap(),
         vec![rule.id.clone()]
+    );
+    let released = env.channels.get_rule(&rule.id).await.unwrap().unwrap();
+    assert!(released.version > noted.version);
+    assert_eq!(released.subscription.unwrap().season_blocked, None);
+    // Once cleared it stays as it is.
+    assert!(env
+        .channels
+        .release_unheld_seasons()
+        .await
+        .unwrap()
+        .is_empty());
+    assert_eq!(
+        env.channels
+            .get_rule(&rule.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .version,
+        released.version
     );
     assert_eq!(env.channels.season_holder(&season).await.unwrap(), None);
     assert_eq!(
