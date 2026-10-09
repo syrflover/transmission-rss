@@ -13,6 +13,7 @@ use trss_core::{
 };
 
 use crate::{release_name::ReleaseName, store::history::HistoryItem};
+use trss_anissia::Anime;
 
 /// How two spellings of a work are told to be one: case and runs of spaces do
 /// not count.
@@ -132,6 +133,31 @@ impl Quarter {
         let year: i32 = parts.next()?.parse().ok()?;
         let month: u32 = parts.next()?.parse().ok()?;
         Quarter::of_month(year, month)
+    }
+
+    /// The quarter after this one.
+    pub fn next(self) -> Quarter {
+        if self.number >= 4 {
+            Quarter {
+                year: self.year + 1,
+                number: 1,
+            }
+        } else {
+            Quarter {
+                year: self.year,
+                number: self.number + 1,
+            }
+        }
+    }
+
+    /// The quarter an anime belongs to: the one it started in, or, without a
+    /// start date Anissia gave (or a readable one), the one the subscription
+    /// began in.
+    pub fn of_anime(anime: Option<&Anime>, subscribed_at: Millis) -> Quarter {
+        anime
+            .and_then(|a| a.start_date.as_deref())
+            .and_then(Quarter::of_date)
+            .unwrap_or_else(|| Quarter::at(subscribed_at))
     }
 }
 

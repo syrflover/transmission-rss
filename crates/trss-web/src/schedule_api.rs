@@ -73,7 +73,7 @@ use serde::Serialize;
 use super::{
     artwork_api::image_url,
     setup_api::{self, FirstRunView},
-    subscriptions_api::{quarter_of, QuarterView},
+    subscriptions_api::QuarterView,
     ApiError, AppState,
 };
 use trss_anissia::{
@@ -243,21 +243,6 @@ fn release_episode(title: &str) -> Option<i64> {
     ReleaseName::read(title).whole_episode().map(i64::from)
 }
 
-/// The quarter after `quarter`.
-fn next_of(quarter: Quarter) -> Quarter {
-    if quarter.number >= 4 {
-        Quarter {
-            year: quarter.year + 1,
-            number: 1,
-        }
-    } else {
-        Quarter {
-            year: quarter.year,
-            number: quarter.number + 1,
-        }
-    }
-}
-
 /// A subscription that airs in the week, before its card is made.
 struct Airing<'a> {
     rule: &'a Rule,
@@ -331,7 +316,7 @@ pub async fn week_at(state: &AppState, now: Millis) -> Result<WeekView, ApiError
     let today = day_of(now);
     let start = week_start(today);
     let current = Quarter::at(now);
-    let next = next_of(current);
+    let next = current.next();
 
     let all = state
         .channels
@@ -361,7 +346,7 @@ pub async fn week_at(state: &AppState, now: Millis) -> Result<WeekView, ApiError
             continue;
         };
         let anime = animes.get(&subscription.anissia_anime_no);
-        if quarter_of(anime, subscription.subscribed_at) > current {
+        if Quarter::of_anime(anime, subscription.subscribed_at) > current {
             coming += 1;
             if rule.r#match.is_none() {
                 title_waiting += 1;

@@ -172,17 +172,8 @@ pub fn subscription_brief(
         season_id: subscription.season_id.clone(),
         subscribed_at: subscription.subscribed_at,
         anime: anime.map(AnimeView::from),
-        quarter: quarter_of(anime, subscription.subscribed_at).into(),
+        quarter: Quarter::of_anime(anime, subscription.subscribed_at).into(),
     }
-}
-
-/// The quarter an anime belongs to: the one it started in, or, without a start
-/// date, the one the subscription began in.
-pub(super) fn quarter_of(anime: Option<&Anime>, subscribed_at: Millis) -> Quarter {
-    anime
-        .and_then(|a| a.start_date.as_deref())
-        .and_then(Quarter::of_date)
-        .unwrap_or_else(|| Quarter::at(subscribed_at))
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -447,7 +438,7 @@ async fn list(State(state): State<AppState>) -> Result<Json<SubscriptionList>, A
                 continue;
             }
             let anime = animes.get(&subscription.anissia_anime_no);
-            let quarter = quarter_of(anime, subscription.subscribed_at);
+            let quarter = Quarter::of_anime(anime, subscription.subscribed_at);
             items.push(SubscriptionItem {
                 rule_id: rule.id.clone(),
                 state: rule.state.as_str(),

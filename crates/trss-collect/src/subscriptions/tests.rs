@@ -116,3 +116,49 @@ fn a_quarter_is_read_in_seoul_time_and_from_the_dates_anissia_gives() {
         }
     );
 }
+
+#[test]
+fn the_quarter_after_one_rolls_over_the_year() {
+    let q = |year, number| Quarter { year, number };
+    assert_eq!(q(2026, 1).next(), q(2026, 2));
+    assert_eq!(q(2026, 3).next(), q(2026, 4));
+    assert_eq!(q(2026, 4).next(), q(2027, 1));
+}
+
+#[test]
+fn an_anime_belongs_to_the_quarter_it_started_in_else_to_the_one_the_subscription_began_in() {
+    let anime = |start_date: Option<&str>| Anime {
+        anime_no: 1,
+        subject: "Show".into(),
+        original_subject: None,
+        week: 1,
+        air_time: None,
+        start_date: start_date.map(str::to_owned),
+        end_date: None,
+        status: "ON".into(),
+        fetched_at: 0,
+    };
+    // 2026-09-30 15:00 UTC is already 4분기 in Seoul.
+    let subscribed_at = 1_790_780_400_000;
+    let q = |year, number| Quarter { year, number };
+
+    // The start date decides, whenever the subscription began.
+    assert_eq!(
+        Quarter::of_anime(Some(&anime(Some("2027-01-05"))), subscribed_at),
+        q(2027, 1)
+    );
+    assert_eq!(
+        Quarter::of_anime(Some(&anime(Some("2026-07"))), subscribed_at),
+        q(2026, 3)
+    );
+    // Without a readable start date, or without the anime, the subscription's.
+    assert_eq!(
+        Quarter::of_anime(Some(&anime(None)), subscribed_at),
+        q(2026, 4)
+    );
+    assert_eq!(
+        Quarter::of_anime(Some(&anime(Some("soon"))), subscribed_at),
+        q(2026, 4)
+    );
+    assert_eq!(Quarter::of_anime(None, subscribed_at), q(2026, 4));
+}
