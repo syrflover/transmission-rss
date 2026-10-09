@@ -75,10 +75,16 @@ pub fn extract(
     let job = Job::new(limits, out, outer_size);
     let split = parts.len() > 1 || is_volume_name(name);
     unpack(&job, parts, name, split).map_err(|error| job.resolve(error))?;
-    File::open(out)
-        .and_then(|folder| folder.sync_all())
-        .map_err(ExtractError::write)?;
+    sync_dir(out).map_err(ExtractError::write)?;
     Ok(job.into_members())
+}
+
+/// Syncs a folder, so what was made or renamed in it outlives a power loss.
+/// The worker's folder syncs live in `trss_core::files`; this crate (and
+/// `trss-probe`, which depends on it) does not depend on `trss-core`, so the
+/// one call is kept here for the two of them.
+pub fn sync_dir(path: &Path) -> std::io::Result<()> {
+    File::open(path)?.sync_all()
 }
 
 /// Unpacks the archive `parts` hold into the job: the outer one or a nested one.
@@ -123,5 +129,18 @@ fn unpack(job: &Job, parts: &[PathBuf], name: &str, split: bool) -> Result<(), E
             )
         }
         Some(Format::Tar) => stream::extract_tar(job, &mut reader()?),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_folder_is_synced_and_a_missing_one_is_the_error() {
+        let dir = tempfile::tempdir().unwrap();
+        sync_dir(dir.path()).unwrap();
+        let err = sync_dir(&dir.path().join("none")).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
     }
 }

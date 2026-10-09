@@ -181,10 +181,6 @@ fn fsync_file(path: &Path, contents: &[u8]) -> io::Result<()> {
     file.sync_all()
 }
 
-fn fsync_dir(dir: &Path) -> io::Result<()> {
-    File::open(dir)?.sync_all()
-}
-
 fn result_text(result: io::Result<()>) -> (bool, String) {
     match result {
         Ok(()) => (true, "ok".to_owned()),
@@ -201,7 +197,7 @@ pub fn same_filesystem(r: &mut Report, label: &str, dir: &Path, owner: Owner) {
     if !ok {
         return;
     }
-    let (ok, text) = result_text(fsync_dir(dir));
+    let (ok, text) = result_text(trss_archive::sync_dir(dir));
     r.check(ok, &format!("{label}: fsync the folder"), text);
     check_owner(r, &format!("{label}: owner of a new file"), &a, owner);
     check_owner(r, &format!("{label}: owner of the test folder"), dir, owner);
@@ -241,7 +237,7 @@ pub fn same_filesystem(r: &mut Report, label: &str, dir: &Path, owner: Owner) {
             return;
         }
     }
-    let (ok, text) = result_text(fsync_dir(dir));
+    let (ok, text) = result_text(trss_archive::sync_dir(dir));
     r.check(
         ok,
         &format!("{label}: fsync the folder after the rename"),
@@ -319,7 +315,7 @@ pub fn staging(r: &mut Report, label: &str, dir: &Path, sub: &str, final_name: &
     let target = dir.join(final_name);
     let made = fs::create_dir(&sub_dir)
         .and_then(|()| fsync_file(&temp, b"staged"))
-        .and_then(|()| fsync_dir(&sub_dir));
+        .and_then(|()| trss_archive::sync_dir(&sub_dir));
     let (ok, text) = result_text(made);
     r.check(
         ok,
@@ -358,7 +354,7 @@ pub fn staging(r: &mut Report, label: &str, dir: &Path, sub: &str, final_name: &
             &format!("{label}: dev:inode stays the same across it"),
             format!("{:?} -> {:?}", before.as_ref().ok(), after.as_ref().ok()),
         );
-        let (ok, text) = result_text(fsync_dir(dir));
+        let (ok, text) = result_text(trss_archive::sync_dir(dir));
         r.check(ok, &format!("{label}: fsync the folder above"), text);
     }
 }
