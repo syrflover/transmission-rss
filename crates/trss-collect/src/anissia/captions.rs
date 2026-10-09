@@ -51,10 +51,12 @@ use std::{
 use tokio_util::sync::CancellationToken;
 
 use trss_anissia::{Anissia, AnissiaError, CaptionLine};
-use trss_core::{queue::run_item, CycleLock, LockFile, Millis};
+use trss_core::{
+    queue::{run_item, Queue, LOCK_RETRY, POLL},
+    LockFile, Millis,
+};
 
 use crate::store::anissia::{AnissiaStore, Line, Observed};
-use trss_library::artwork::queue::{LOCK_RETRY, POLL};
 
 /// The queue's name in its log lines.
 pub(crate) const QUEUE: &str = "Anissia caption observation";
@@ -358,32 +360,8 @@ impl CaptionObserver {
     /// worker may hold it) and reads whenever the period is up. A reading cut
     /// short by the shutdown is due again at the next start.
     pub async fn run_queue(&self, lock_path: PathBuf, cancel: CancellationToken) {
-        loop {
-            let lock = match CycleLock::try_acquire(&lock_path) {
-                Ok(lock) => lock,
-                Err(e) => {
-                    eprintln!("{QUEUE}: cannot take {}: {e}", lock_path.display());
-                    None
-                }
-            };
-            let Some(_lock) = lock else {
-                tokio::select! {
-                    _ = cancel.cancelled() => return,
-                    _ = tokio::time::sleep(LOCK_RETRY) => continue,
-                }
-            };
-            loop {
-                let ran = tokio::select! {
-                    _ = cancel.cancelled() => return,
-                    ran = self.run_due() => ran,
-                };
-                if ran.is_none() {
-                    tokio::select! {
-                        _ = cancel.cancelled() => return,
-                        _ = tokio::time::sleep(POLL) => {}
-                    }
-                }
-            }
-        }
+        Queue::new(QUEUE, lock_path, POLL, LOCK_RETRY)
+            .run(&cancel, || self.run_due())
+            .await;
     }
 }

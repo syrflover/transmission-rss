@@ -19,7 +19,10 @@ use std::{path::PathBuf, time::Duration};
 
 use tokio_util::sync::CancellationToken;
 
-use trss_core::{queue::run_item, CycleLock, LockFile};
+use trss_core::{
+    queue::{run_item, Queue, LOCK_RETRY, POLL},
+    LockFile,
+};
 
 use crate::{
     artwork::{files, ActionError, Artwork},
@@ -32,12 +35,8 @@ use trss_anilist::{
 
 /// The queue's name in its log lines.
 pub(crate) const QUEUE: &str = "Artwork queue";
-/// How often an idle queue looks for new jobs.
-pub const POLL: Duration = Duration::from_secs(5);
 /// How often the queue recovers interrupted publishes and cleans up.
 pub const TIDY_EVERY: Duration = Duration::from_secs(10 * 60);
-/// How long a queue that finds another process running it waits to look again.
-pub const LOCK_RETRY: Duration = Duration::from_secs(60);
 /// The waits after the first, second and third failed attempt; after that the
 /// job is given up with [`Note::Failed`] and waits for the user.
 pub const RETRY_DELAYS: [Duration; 3] = [
@@ -286,38 +285,8 @@ impl Artwork {
     /// Runs the queue until `cancel` fires (see the module docs). A job cut
     /// short by the shutdown stays in the database and runs at the next start.
     pub async fn run_queue(&self, lock_path: PathBuf, cancel: CancellationToken) {
-        loop {
-            let lock = match CycleLock::try_acquire(&lock_path) {
-                Ok(lock) => lock,
-                Err(e) => {
-                    eprintln!("{QUEUE}: cannot take {}: {e}", lock_path.display());
-                    None
-                }
-            };
-            let Some(_lock) = lock else {
-                tokio::select! {
-                    _ = cancel.cancelled() => return,
-                    _ = tokio::time::sleep(LOCK_RETRY) => continue,
-                }
-            };
-            self.maintain().await;
-            let mut tidied = tokio::time::Instant::now();
-            loop {
-                if tidied.elapsed() >= TIDY_EVERY {
-                    self.maintain().await;
-                    tidied = tokio::time::Instant::now();
-                }
-                let ran = tokio::select! {
-                    _ = cancel.cancelled() => return,
-                    ran = self.run_next() => ran,
-                };
-                if ran.is_none() {
-                    tokio::select! {
-                        _ = cancel.cancelled() => return,
-                        _ = tokio::time::sleep(POLL) => {}
-                    }
-                }
-            }
-        }
+        Queue::new(QUEUE, lock_path, POLL, LOCK_RETRY)
+            .run_with_upkeep(&cancel, TIDY_EVERY, || self.maintain(), || self.run_next())
+            .await;
     }
 }
