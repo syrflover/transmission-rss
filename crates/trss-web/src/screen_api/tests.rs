@@ -22,7 +22,7 @@ use tokio::net::TcpListener;
 use tokio_tungstenite::tungstenite::{self, client::IntoClientRequest, Message as WsMessage};
 use tokio_util::sync::CancellationToken;
 use trss_core::{Db, DbError};
-use trss_jobs::{Created, JobStore, NewItem, NewJob, ScreenStore};
+use trss_jobs::{Created, JobRequests, NewItem, NewJob, ScreenStore};
 use url::Url;
 
 use super::*;
@@ -488,7 +488,7 @@ async fn setup_with(
     // screen's routes.
     let web = serve(crate::router(dir.path(), state.clone())).await;
 
-    let job = match JobStore::new(db.clone())
+    let job = match JobRequests::new(db.clone())
         .create(
             NewJob {
                 command_id: "c1".to_owned(),
@@ -538,7 +538,6 @@ impl Setup {
     async fn bound_to(&self, run: &str, target: &str, at: i64) {
         let job = self.job.clone();
         self.state
-            .jobs
             .db()
             .run::<_, DbError, _>(move |c| {
                 c.execute(
@@ -648,7 +647,6 @@ impl Setup {
     async fn input_at(&self) -> Option<i64> {
         let job = self.job.clone();
         self.state
-            .jobs
             .db()
             .run::<_, DbError, _>(move |c| {
                 Ok(c.query_row(

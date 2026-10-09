@@ -5,6 +5,7 @@
 //! fake; the real one is tested by `trss-subtitles`'s ignored `auth_sample`
 //! and `trss-web`'s ignored `remote_screen_docker`.
 
+use crate::Handles;
 use std::{
     collections::HashSet,
     path::Path,
@@ -23,8 +24,8 @@ use trss_jobs::{
     runner::{NO_AUTH_BROWSER, OTHER_CHECK_FIRST},
     screen::{CHECK_PREPARED_AGAIN, FILE_REFUSED, RESTARTED_CHECK, RUN_ENDED, WORKER_RESTARTED},
     store::JobDetail,
-    Created, FileState, Format, ItemState, JobState, JobStore, NewItem, NewJob, Runner,
-    ScreenState, ScreenStore, StepKind, StepState, Wait,
+    Created, FileState, Format, ItemState, JobState, NewItem, NewJob, Runner, ScreenState,
+    ScreenStore, StepKind, StepState, Wait,
 };
 use trss_subtitles::{
     auth::{AuthBrowser, BoxFuture, PrepareRequest, Prepared, Waited},
@@ -71,7 +72,7 @@ struct FakeBrowser {
     under_way: AtomicBool,
     /// With a store: the state of the job at each release, to tell whether
     /// the job was put back in line before its run ended.
-    store: Mutex<Option<JobStore>>,
+    store: Mutex<Option<Handles>>,
     states_at_release: Mutex<Vec<JobState>>,
 }
 
@@ -187,7 +188,7 @@ impl AuthBrowser for FakeBrowser {
         Box::pin(async move {
             let store = self.store.lock().unwrap().clone();
             if let Some(store) = store {
-                let state = store.detail(job).await.unwrap().unwrap().row.state;
+                let state = store.views.detail(job).await.unwrap().unwrap().row.state;
                 self.states_at_release.lock().unwrap().push(state);
             }
             self.released.lock().unwrap().push(job.to_owned());
@@ -241,7 +242,7 @@ impl AuthBrowser for FakeBrowser {
 struct Setup {
     _dir: tempfile::TempDir,
     db: Db,
-    store: JobStore,
+    store: Handles,
     screens: ScreenStore,
     runner: Runner,
     area: ReceiveArea,
@@ -259,11 +260,11 @@ fn ticking_clock() -> Clock {
 async fn setup(with_browser: bool) -> Setup {
     let dir = tempfile::tempdir().unwrap();
     let db = Db::open(dir.path().join("app.db")).await.unwrap();
-    let store = JobStore::new(db.clone());
+    let store = Handles::new(db.clone());
     let area = ReceiveArea::in_app_data(dir.path());
     let browser = FakeBrowser::new();
     let mut runner = Runner::new(
-        store.clone(),
+        store.run.clone(),
         Sources::none().with_fake(FakeSource),
         area.clone(),
         ticking_clock(),
@@ -307,7 +308,7 @@ async fn make(s: &Setup, posts: &[&str]) -> String {
             })
             .collect(),
     };
-    match s.store.create(job, 900).await.unwrap() {
+    match s.store.requests.create(job, 900).await.unwrap() {
         Created::Created(id) => id,
         other => panic!("created: {other:?}"),
     }
@@ -320,7 +321,7 @@ async fn run(s: &Setup) {
 }
 
 async fn detail(s: &Setup, id: &str) -> JobDetail {
-    s.store.detail(id).await.unwrap().unwrap()
+    s.store.views.detail(id).await.unwrap().unwrap()
 }
 
 fn step(d: &JobDetail, kind: StepKind) -> Option<StepState> {
@@ -492,8 +493,8 @@ async fn opening_the_page_of_a_live_run_starts_nothing_and_counts_as_use() {
     // nothing and asks for nothing.
     for _ in 0..3 {
         s.screens.screen(&id).await.unwrap();
-        s.store.auth_waits().await.unwrap();
-        s.store.open_jobs().await.unwrap();
+        s.store.views.auth_waits().await.unwrap();
+        s.store.views.open_jobs().await.unwrap();
     }
     assert!(s.screens.prepare_requests().await.unwrap().is_empty());
     tend(&s).await;
@@ -758,6 +759,7 @@ async fn a_file_that_comes_for_an_item_that_settled_is_removed() {
         .await
         .unwrap();
     s.store
+        .run
         .set_item(
             item,
             ItemState::Failed,
@@ -946,6 +948,7 @@ async fn a_refusal_that_comes_after_its_binding_changed_is_kept_or_removed_with_
         .await
         .unwrap();
     s.store
+        .run
         .set_item(
             item,
             ItemState::Failed,

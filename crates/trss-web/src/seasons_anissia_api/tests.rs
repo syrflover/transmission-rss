@@ -1115,8 +1115,7 @@ async fn a_fix_of_a_received_post_is_a_revision_and_each_candidate_says_how_its_
 
     // Once it is received, the fix of the same post revises it.
     let item = app.state.jobs.items(&job).await.unwrap()[0].id;
-    app.state
-        .jobs
+    trss_jobs::JobRun::new(app.state.db().clone())
         .set_item(item, trss_jobs::ItemState::Done, None, None, NOW)
         .await
         .unwrap();

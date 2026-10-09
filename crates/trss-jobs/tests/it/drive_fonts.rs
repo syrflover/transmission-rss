@@ -4,6 +4,7 @@
 //! storing into a work's folder, with what the job's detail says of each font
 //! and the restarts around a font not received.
 
+use crate::Handles;
 use std::{
     collections::HashMap,
     path::{Path, PathBuf},
@@ -24,8 +25,7 @@ use trss_jobs::{
         ARCHIVE_LATER,
     },
     store::{FileRow, JobDetail},
-    Created, FileState, ItemState, JobState, JobStore, NewItem, NewJob, ReceiveArea, Runner,
-    Unpacker, Wait,
+    Created, FileState, ItemState, JobState, NewItem, NewJob, ReceiveArea, Runner, Unpacker, Wait,
 };
 use trss_subtitles::{
     fake,
@@ -45,7 +45,7 @@ const OTHER_FONT: &[u8] = b"\x00\x01\x00\x00font two, longer";
 struct Setup {
     dir: tempfile::TempDir,
     db: Db,
-    store: JobStore,
+    store: Handles,
     area: ReceiveArea,
     server: SourceServer,
     /// One clock for every runner: receipts are ordered by when they were
@@ -71,7 +71,7 @@ impl Setup {
     /// program that unpacks archives or without.
     fn runner(&self, unpacks: bool) -> Runner {
         let runner = Runner::new(
-            self.store.clone(),
+            self.store.run.clone(),
             Sources::none()
                 .with_blogger(self.server.blogger())
                 .with_naver(self.server.naver()),
@@ -95,7 +95,7 @@ impl Setup {
     }
 
     async fn detail(&self, id: &str) -> JobDetail {
-        self.store.detail(id).await.unwrap().unwrap()
+        self.store.views.detail(id).await.unwrap().unwrap()
     }
 
     async fn one<T: rusqlite::types::FromSql + Send + 'static>(&self, sql: String) -> T {
@@ -133,6 +133,7 @@ impl Setup {
             .collect();
         let made: HashMap<i64, bool> = self
             .store
+            .place
             .plan_paths(id)
             .await
             .unwrap()
@@ -141,6 +142,7 @@ impl Setup {
             .collect();
         let mut said: Vec<(String, &'static str)> = self
             .store
+            .place
             .plan(id)
             .await
             .unwrap()
@@ -226,7 +228,7 @@ impl Setup {
                 found_at: 500,
             }],
         };
-        match self.store.create(job, 900).await.unwrap() {
+        match self.store.requests.create(job, 900).await.unwrap() {
             Created::Created(id) => id,
             other => panic!("created: {other:?}"),
         }
@@ -300,7 +302,7 @@ async fn setup() -> Setup {
     })
     .await
     .unwrap();
-    let store = JobStore::new(db.clone());
+    let store = Handles::new(db.clone());
     let area = ReceiveArea::in_app_data(dir.path());
     Setup {
         dir,
@@ -385,7 +387,7 @@ async fn the_next_episodes_unchanged_drive_font_is_not_received_and_its_font_is_
     assert!(receipt.unchanged_asset.is_some());
     // The font is the first job's, linked to the new subtitle as well.
     assert_eq!(s.fonts_kept().await, 1);
-    let plan = s.store.plan(&second).await.unwrap();
+    let plan = s.store.place.plan(&second).await.unwrap();
     let row = plan.iter().find(|r| r.name == "Font.ttf").unwrap();
     assert_eq!(row.asset_id, receipt.unchanged_asset);
     let entries: i64 = s
@@ -560,9 +562,10 @@ async fn a_zip_whose_font_is_kept_is_received_whole_and_adds_no_font() {
         [("Font.ttf".to_owned(), "same")]
     );
     assert_eq!(s.fonts_kept().await, 1);
-    let plan = s.store.plan(&id).await.unwrap();
+    let plan = s.store.place.plan(&id).await.unwrap();
     let made: HashMap<i64, bool> = s
         .store
+        .place
         .plan_paths(&id)
         .await
         .unwrap()
@@ -667,6 +670,7 @@ async fn a_font_a_cleanup_removed_is_received_with_no_head() {
     );
     let entry = s
         .store
+        .place
         .work_files(WORK)
         .await
         .unwrap()
@@ -678,6 +682,7 @@ async fn a_font_a_cleanup_removed_is_received_with_no_head() {
     assert_eq!(assets.len(), 2, "the subtitle and its font");
     assert!(matches!(
         s.store
+            .place
             .clean_stored(WORK, &entry.id, assets, 60_000)
             .await
             .unwrap(),
@@ -771,7 +776,11 @@ async fn episode_2_waiting(s: &Setup) -> String {
 /// The job of [`skipped_and_waiting`] taken up again: the font it did not
 /// receive went away meanwhile, so it receives it, kept as `kept`.
 async fn received_instead(s: &Setup, id: &str, kept: &str) {
-    s.store.requeue_waiting_for_sources(5_000).await.unwrap();
+    s.store
+        .run
+        .requeue_waiting_for_sources(5_000)
+        .await
+        .unwrap();
     s.run().await;
     let d = s.detail(id).await;
     assert_eq!(d.row.state, JobState::Done, "{:?}", d.row.note);
@@ -842,6 +851,7 @@ async fn a_cleanup_keeps_the_font_a_job_did_not_receive_until_it_stores_it() {
     // episode 9 leaves it.
     let entry = s
         .store
+        .place
         .work_files(WORK)
         .await
         .unwrap()
@@ -860,6 +870,7 @@ async fn a_cleanup_keeps_the_font_a_job_did_not_receive_until_it_stores_it() {
     let assets: Vec<String> = entry.with.iter().map(|f| f.id.clone()).collect();
     assert!(matches!(
         s.store
+            .place
             .clean_stored(WORK, &entry.id, assets, 60_000)
             .await
             .unwrap(),
@@ -869,7 +880,11 @@ async fn a_cleanup_keeps_the_font_a_job_did_not_receive_until_it_stores_it() {
     assert_eq!(s.fonts_kept().await, 1);
 
     // The job goes on with the font, still not received.
-    s.store.requeue_waiting_for_sources(5_000).await.unwrap();
+    s.store
+        .run
+        .requeue_waiting_for_sources(5_000)
+        .await
+        .unwrap();
     s.run().await;
     let d = s.detail(&id).await;
     assert_eq!(d.row.state, JobState::Done, "{:?}", d.row.note);

@@ -12,13 +12,15 @@ use super::{Changes, Received, Todo, TodoError, WorkRef};
 use crate::{
     follow::{EpisodeCheck, Follow},
     model::PlanState,
-    store::{JobRow, JobStore},
+    place::PlaceStore,
+    store::{JobRow, JobViews},
     ItemState, Wait,
 };
 
 /// The stores the to-dos are read from.
 pub struct Sources<'a> {
-    pub jobs: &'a JobStore,
+    pub jobs: &'a JobViews,
+    pub place: &'a PlaceStore,
     pub follow: &'a Follow,
     pub library: &'a LibraryStore,
     pub artwork: &'a ArtworkStore,
@@ -143,7 +145,7 @@ pub(super) async fn replacements(sources: &Sources<'_>) -> Result<Vec<Todo>, Tod
         let mut received = Received::default();
         for row in &rows {
             let plans = sources
-                .jobs
+                .place
                 .replacements(&row.id)
                 .await
                 .map_err(TodoError::read)?;
@@ -195,7 +197,7 @@ pub(super) async fn placement_checks(sources: &Sources<'_>) -> Result<Vec<Todo>,
         // An upload's or a find job's table is confirmed as a whole: its
         // note says what it waits for, not one file's question.
         let Some((asked, whole)) = sources
-            .jobs
+            .place
             .placeable(&row.id)
             .await
             .map_err(TodoError::read)?

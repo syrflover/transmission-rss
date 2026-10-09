@@ -9,7 +9,7 @@ use trss_subtitles::upload::Archive;
 use super::{
     create::{earlier, Created, UploadedFile},
     rows::{dropped_rows, found_note, items, upload_note, upload_summary},
-    DroppedRow, FileRow, JobError, JobStore, FIND,
+    DroppedRow, FileRow, JobError, JobRequests, JobRun, FIND,
 };
 use crate::model::{FileState, JobState};
 
@@ -38,7 +38,7 @@ pub struct Found {
     pub dropped: Vec<DroppedRow>,
 }
 
-/// What a person's request to finish a find job did ([`JobStore::ask_finish`]).
+/// What a person's request to finish a find job did ([`JobRequests::ask_finish`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AskedFinish {
     /// No such job.
@@ -55,9 +55,7 @@ pub enum AskedFinish {
 /// The note of a find job that ended with no file kept.
 pub const NOTHING_FOUND: &str = "받은 파일 없음";
 
-impl JobStore {
-    // What the web asks for.
-
+impl JobRequests {
     /// Stores a find job as `pending`, unless its command ID is known. The
     /// check and the insert are one write transaction, so two deliveries at
     /// once store one job.
@@ -67,9 +65,9 @@ impl JobStore {
 
     /// A person asked the find job to finish receiving. The request is
     /// written and nothing else: the worker ends the job
-    /// ([`JobStore::end_find`]), since only it sees a download a run left in
+    /// ([`JobRun::end_find`]), since only it sees a download a run left in
     /// the job's folder (a restart cut its watch short) and whether one is
-    /// on its way. Until then the job is finishing ([`JobRow::finishing`]).
+    /// on its way. Until then the job is finishing ([`super::JobRow::finishing`]).
     pub async fn ask_finish(&self, job_id: &str, now: Millis) -> Result<AskedFinish, JobError> {
         let id = job_id.to_owned();
         self.db
@@ -98,9 +96,9 @@ impl JobStore {
             })
             .await
     }
+}
 
-    // What the worker does.
-
+impl JobRun {
     /// What the find job has received so far, or `None` when it has no item.
     pub async fn found(&self, job_id: &str) -> Result<Option<Found>, JobError> {
         let id = job_id.to_owned();
@@ -205,7 +203,7 @@ impl JobStore {
             .await
     }
 
-    /// Whether a person asked the find job to finish ([`JobStore::ask_finish`]).
+    /// Whether a person asked the find job to finish ([`JobRequests::ask_finish`]).
     pub async fn finish_asked(&self, job_id: &str) -> Result<bool, JobError> {
         let id = job_id.to_owned();
         self.db
@@ -341,7 +339,7 @@ fn create_find(c: &mut Connection, find: &NewFind, now: Millis) -> Result<Create
     Ok(Created::Created(id))
 }
 
-/// Ends the find job `id` in `tx` (see [`JobStore::end_find`]). Whether it
+/// Ends the find job `id` in `tx` (see [`JobRun::end_find`]). Whether it
 /// ended now.
 fn end_find(tx: &Connection, id: &str, run: Option<&str>, now: Millis) -> Result<bool, JobError> {
     let open: Option<JobState> = tx

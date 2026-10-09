@@ -635,7 +635,6 @@ async fn a_stopped_revision_of_a_rule_whose_folder_changed_says_why_and_its_requ
     let item = w.stopped_v2().await;
     let rule_id = w.rule.id.clone();
     w.state
-        .jobs
         .db()
         .run::<_, trss_core::DbError, _>(move |c| {
             c.execute(

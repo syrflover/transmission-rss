@@ -790,7 +790,7 @@ async fn detail(
                 .map(move |f| (f.id.as_str(), item.episode.as_str()))
         })
         .collect();
-    let members = state.jobs.members(&id).await.map_err(|e| internal(&e))?;
+    let members = state.place.members(&id).await.map_err(|e| internal(&e))?;
     let mut unpacked: Unpacked<'_> = HashMap::new();
     for m in &members {
         unpacked.entry(m.file_id.as_str()).or_default().push(m);
@@ -805,9 +805,9 @@ async fn detail(
         .flat_map(|item| item.files.iter())
         .map(|f| (f.id.as_str(), f))
         .collect();
-    let plan = state.jobs.plan(&id).await.map_err(|e| internal(&e))?;
+    let plan = state.place.plan(&id).await.map_err(|e| internal(&e))?;
     let paths: HashMap<i64, trss_jobs::place::records::RowPaths> = state
-        .jobs
+        .place
         .plan_paths(&id)
         .await
         .map_err(|e| internal(&e))?
@@ -1019,7 +1019,7 @@ async fn create(
             .collect(),
     };
     match state
-        .jobs
+        .job_requests
         .create(job, now_millis())
         .await
         .map_err(|e| internal(&e))?
@@ -1119,7 +1119,7 @@ async fn create_find(
         post_url: newest.post_url.clone(),
     };
     match state
-        .jobs
+        .job_requests
         .create_find(find, now_millis())
         .await
         .map_err(|e| internal(&e))?
@@ -1144,7 +1144,7 @@ async fn finish(
     Path(id): Path<String>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let asked = state
-        .jobs
+        .job_requests
         .ask_finish(&id, now_millis())
         .await
         .map_err(|e| internal(&e))?;

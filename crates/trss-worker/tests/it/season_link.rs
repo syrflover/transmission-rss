@@ -664,13 +664,13 @@ async fn followed_subscription(scene: &mut Scene) -> Rule {
 #[tokio::test]
 async fn connecting_a_followed_subscription_to_its_season_makes_the_creators_jobs_in_that_cycle() {
     use std::sync::Arc;
-    use trss_jobs::{area::ReceiveArea, JobStore, Runner};
+    use trss_jobs::{area::ReceiveArea, JobRun, JobViews, Runner};
     use trss_subtitles::{fake::FakeSource, Sources};
 
     let mut scene = Scene::new().await;
-    let jobs = JobStore::new(scene.h.db.clone());
+    let jobs = JobViews::new(scene.h.db.clone());
     scene.worker = scene.h.worker().with_jobs(Runner::new(
-        jobs.clone(),
+        JobRun::new(scene.h.db.clone()),
         Sources::none().with_fake(FakeSource),
         ReceiveArea::in_app_data(scene.h.dir.path()),
         Arc::new(|| 2_000),
@@ -693,7 +693,7 @@ async fn a_start_or_resume_that_turns_a_followed_subscription_on_makes_the_creat
     use trss_collect::commands::rule_archive::{ask_start, Direction};
     use trss_collect::store::channels::RuleState;
     use trss_core::commands::CommandStore;
-    use trss_jobs::{area::ReceiveArea, JobStore, Runner};
+    use trss_jobs::{area::ReceiveArea, JobRun, JobViews, Runner};
     use trss_subtitles::{fake::FakeSource, Sources};
     use trss_worker::CommandsOutcome;
 
@@ -711,9 +711,9 @@ async fn a_start_or_resume_that_turns_a_followed_subscription_on_makes_the_creat
             .set_rule_state(&rule.id, RuleState::Paused, 1)
             .await
             .unwrap();
-        let jobs = JobStore::new(scene.h.db.clone());
+        let jobs = JobViews::new(scene.h.db.clone());
         scene.worker = scene.h.worker().with_jobs(Runner::new(
-            jobs.clone(),
+            JobRun::new(scene.h.db.clone()),
             Sources::none().with_fake(FakeSource),
             ReceiveArea::in_app_data(scene.h.dir.path()),
             Arc::new(|| 2_000),

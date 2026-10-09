@@ -340,7 +340,6 @@ async fn waiting_relocation(state: &crate::AppState) -> String {
     )
     .await;
     let remapped = state
-        .jobs
         .db()
         .run(|c| {
             Ok::<_, trss_core::DbError>(trss_jobs::place::relocate::reevaluate_in(

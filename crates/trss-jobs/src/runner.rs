@@ -67,7 +67,7 @@
 //!   a receipt the answer's status, media type and size.
 //! - An item of a job that receives a revision (`revision_of`) whose files
 //!   are, by key, the same bytes (SHA-256) as the earlier receipt's records
-//!   that there is nothing to replace ([`JobStore::finish_item`]); no
+//!   that there is nothing to replace ([`JobRun::finish_item`]); no
 //!   replacement is to be approved for it.
 //!
 //! # One receipt
@@ -102,7 +102,7 @@
 //! # Restart
 //!
 //! A worker that dies leaves its job `running`; the next one to hold the
-//! worker lock claims it again ([`JobStore::claim_next`]). The lock is the
+//! worker lock claims it again ([`JobRun::claim_next`]). The lock is the
 //! kernel's and goes with the process, so no earlier worker still writes.
 //! Before receiving a file again the runner compares its unfinished receipt
 //! with the disk ([`Runner::recover`]):
@@ -157,10 +157,11 @@ use url::Url;
 use crate::{
     area::{self, ReceiveArea},
     model::{FileState, ItemState, JobState, StepKind, StepState, Wait},
-    place::{files::remove_known, Placement, Placer},
+    place::{files::remove_known, PlaceStore, Placement, Placer},
     screen::{self, Arrival, ScreenStore},
     store::{
-        snapshot_json, FileProblem, FileRow, ItemRow, JobError, JobStore, FIND, RELOCATE, UPLOAD,
+        snapshot_json, FileProblem, FileRow, ItemRow, JobError, JobRun, JobViews, FIND, RELOCATE,
+        UPLOAD,
     },
 };
 
@@ -192,7 +193,11 @@ pub const RETRY_WAITS: [Duration; 2] = [Duration::from_secs(2), Duration::from_s
 /// Carries out jobs. Cheap to clone.
 #[derive(Clone)]
 pub struct Runner {
-    store: JobStore,
+    store: JobRun,
+    /// What the runner reads of the job's items.
+    views: JobViews,
+    /// The outcome note of a relocation job ([`PlaceStore::relocation_note`]).
+    place: PlaceStore,
     /// Stores and applies what the items received ([`crate::place`]).
     placer: Placer,
     sources: Sources,
@@ -327,7 +332,7 @@ enum ItemEnd {
 }
 
 impl Runner {
-    pub fn new(store: JobStore, sources: Sources, area: ReceiveArea, clock: Clock) -> Runner {
+    pub fn new(store: JobRun, sources: Sources, area: ReceiveArea, clock: Clock) -> Runner {
         Runner {
             placer: Placer::new(store.clone(), area.clone(), clock.clone()),
             sources,
@@ -341,6 +346,8 @@ impl Runner {
             rearming: Arc::default(),
             find_takes: Arc::default(),
             video_seen: Arc::default(),
+            views: JobViews::new(store.db().clone()),
+            place: PlaceStore::new(store.db().clone()),
             store,
         }
     }
@@ -464,7 +471,7 @@ impl Runner {
         resumed: bool,
         cancel: &CancellationToken,
     ) -> Result<bool, JobError> {
-        let items = self.store.items(id).await?;
+        let items = self.views.items(id).await?;
         let received = !items
             .iter()
             .any(|i| matches!(i.state, ItemState::Pending | ItemState::Running));
@@ -524,7 +531,7 @@ impl Runner {
         };
         // A relocation's note says what came of the copies it moved.
         if relocation {
-            received.note = self.store.relocation_note(id).await?;
+            received.note = self.place.relocation_note(id).await?;
         }
         self.settle(id, received, placement).await?;
         Ok(true)
@@ -2293,7 +2300,7 @@ impl Runner {
     /// whose files were received when it was made, with its receiving step
     /// left as it was written then (what it kept and dropped).
     async fn received(&self, job: &str, kept: Option<String>) -> Result<Received, JobError> {
-        let items = self.store.items(job).await?;
+        let items = self.views.items(job).await?;
         // The file of a settled item's check is not needed any more.
         for item in items.iter().filter(|i| {
             matches!(
@@ -2419,7 +2426,7 @@ impl Runner {
         } = received;
         let now = self.now();
         let (done, total, again) = {
-            let items = self.store.items(job).await?;
+            let items = self.views.items(job).await?;
             let done = items.iter().filter(|i| i.state == ItemState::Done).count();
             // An item the placement put back in line: a font it did not
             // receive went away before it was stored
@@ -2542,7 +2549,7 @@ impl Runner {
                 } else {
                     // A partial receipt stays partial: its rows waiting for a
                     // video go on when it comes
-                    // ([`JobStore::requeue_awaiting_video`]).
+                    // ([`JobRun::requeue_awaiting_video`]).
                     (state, wait, note, message)
                 }
             }

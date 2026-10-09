@@ -49,8 +49,8 @@ use trss_browser::{
 };
 use trss_core::Db;
 use trss_jobs::{
-    Created, FileState, Format, JobState, JobStore, NewItem, NewJob, ReceiveArea, Runner,
-    ScreenState, StepKind, StepState, Wait,
+    Created, FileState, Format, JobRequests, JobRun, JobState, JobViews, NewItem, NewJob,
+    ReceiveArea, Runner, ScreenState, StepKind, StepState, Wait,
 };
 use trss_subtitles::{
     auth::BrowserAuth,
@@ -181,7 +181,11 @@ async fn a_tap_relayed_through_the_remote_screen_passes_the_check_and_the_file_i
 
     // The worker's side.
     let db = Db::open(dir.path().join("app.db")).await.unwrap();
-    let store = JobStore::new(db.clone());
+    let (views, requests, run) = (
+        JobViews::new(db.clone()),
+        JobRequests::new(db.clone()),
+        JobRun::new(db.clone()),
+    );
     let config = PoolConfig::new(base.clone(), TOKEN, &downloads).with_activity(
         trss_browser::ActivitySource::new({
             let screens = trss_jobs::ScreenStore::new(db.clone());
@@ -200,13 +204,13 @@ async fn a_tap_relayed_through_the_remote_screen_passes_the_check_and_the_file_i
     .unwrap();
     let area = ReceiveArea::in_app_data(dir.path());
     let runner = Runner::new(
-        store.clone(),
+        run.clone(),
         Sources::none().with_fake(FakeSource),
         area.clone(),
         trss_core::system_clock(),
     )
     .with_auth(BrowserAuth::shared(pool.clone()));
-    let job = match store
+    let job = match requests
         .create(
             NewJob {
                 command_id: "c1".to_owned(),
@@ -236,7 +240,7 @@ async fn a_tap_relayed_through_the_remote_screen_passes_the_check_and_the_file_i
     };
     let cancel = CancellationToken::new();
     runner.run_ready(&cancel).await.unwrap();
-    let detail = store.detail(&job).await.unwrap().unwrap();
+    let detail = views.detail(&job).await.unwrap().unwrap();
     assert_eq!(
         (detail.row.state, detail.row.wait),
         (JobState::Waiting, Some(Wait::Auth)),
@@ -377,10 +381,10 @@ async fn a_tap_relayed_through_the_remote_screen_passes_the_check_and_the_file_i
     until(
         Duration::from_secs(30),
         "the job received the file",
-        || async { store.detail(&job).await.unwrap().unwrap().row.state == JobState::Done },
+        || async { views.detail(&job).await.unwrap().unwrap().row.state == JobState::Done },
     )
     .await;
-    let detail = store.detail(&job).await.unwrap().unwrap();
+    let detail = views.detail(&job).await.unwrap().unwrap();
     let step = |kind| {
         detail
             .steps
@@ -684,7 +688,7 @@ struct FindWorld {
     _dir: tempfile::TempDir,
     _container: Container,
     base: Url,
-    store: JobStore,
+    store: JobViews,
     pool: BrowserPool,
     screens: trss_jobs::ScreenStore,
     job: String,
@@ -711,7 +715,11 @@ async fn find_world(test: &str) -> FindWorld {
     })
     .await
     .unwrap();
-    let store = JobStore::new(db.clone());
+    let (views, requests, run) = (
+        JobViews::new(db.clone()),
+        JobRequests::new(db.clone()),
+        JobRun::new(db.clone()),
+    );
     let pool = BrowserPool::new(
         PoolConfig::new(base.clone(), TOKEN, &downloads),
         trss_core::system_clock(),
@@ -721,13 +729,13 @@ async fn find_world(test: &str) -> FindWorld {
     .unwrap();
     let area = ReceiveArea::in_app_data(dir.path());
     let runner = Runner::new(
-        store.clone(),
+        run.clone(),
         Sources::none().with_fake(FakeSource),
         area,
         trss_core::system_clock(),
     )
     .with_auth(BrowserAuth::shared(pool.clone()));
-    let job = match store
+    let job = match requests
         .create_find(
             trss_jobs::NewFind {
                 command_id: "find-1".to_owned(),
@@ -781,7 +789,7 @@ async fn find_world(test: &str) -> FindWorld {
         _dir: dir,
         _container: container,
         base,
-        store,
+        store: views,
         pool,
         screens: runner.screens().clone(),
         job,

@@ -1,7 +1,11 @@
 //! The job records: what the web asks for, what the runner writes as it goes,
 //! and what the screens read.
 //!
-//! Files group by feature, each with the records and the SQL of its feature:
+//! Files group by feature, each with the records and the SQL of its feature;
+//! the types group by who calls: [`JobViews`] for what the web reads,
+//! [`JobRequests`] for what makes a job and a person's requests on it, and
+//! [`JobRun`] for what the worker writes. The three are handles over one
+//! database, and no function is on two of them.
 //!
 //! - [`create`]: making a job (a pick, an app-made job, an upload).
 //! - [`find`]: a find job, from its creation to the end of its 받기.
@@ -58,15 +62,45 @@ pub const FIND: &str = "find";
 /// ([`crate::place::relocate`]).
 pub const RELOCATE: &str = "relocate";
 
-/// Async access to the job records. Cheap to clone.
+/// What the web and the to-do gatherer read of the jobs: the lists, a job's
+/// detail and the candidates the jobs took. Cheap to clone.
 #[derive(Clone)]
-pub struct JobStore {
+pub struct JobViews {
     db: Db,
 }
 
-impl JobStore {
-    pub fn new(db: Db) -> JobStore {
-        JobStore { db }
+impl JobViews {
+    pub fn new(db: Db) -> JobViews {
+        JobViews { db }
+    }
+}
+
+/// What makes a job, and a person's requests on one: the web, the uploads, the
+/// subscribed creator's receipts and the recheck. Cheap to clone.
+#[derive(Clone)]
+pub struct JobRequests {
+    db: Db,
+}
+
+impl JobRequests {
+    pub fn new(db: Db) -> JobRequests {
+        JobRequests { db }
+    }
+}
+
+/// What the worker writes as a job goes: claiming it, its state, items, steps
+/// and log, the find job's end and the file receipts. Only the worker's
+/// [`crate::Runner`] and the parts it drives (and the code that tests them)
+/// hold one; the web holds [`JobViews`], [`JobRequests`] and
+/// [`crate::place::PlaceStore`]. Cheap to clone.
+#[derive(Clone)]
+pub struct JobRun {
+    db: Db,
+}
+
+impl JobRun {
+    pub fn new(db: Db) -> JobRun {
+        JobRun { db }
     }
 
     pub fn db(&self) -> &Db {

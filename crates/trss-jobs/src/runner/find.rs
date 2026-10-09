@@ -18,7 +18,7 @@
 //! a person reopening the screen puts the job back in line and its next run
 //! opens the same post anew.
 //!
-//! A person ends the job (`받기 끝내기`, [`JobStore::ask_finish`]): the web
+//! A person ends the job (`받기 끝내기`, [`crate::JobRequests::ask_finish`]): the web
 //! only writes the request, since a download a run left in the job's folder
 //! is seen by the worker alone. The watch ends a job with a run once no
 //! download of the run is on its way: a download under way is waited for (it
@@ -59,7 +59,7 @@ impl Runner {
         id: &str,
         cancel: &CancellationToken,
     ) -> Result<bool, JobError> {
-        let Some(item) = self.store.items(id).await?.into_iter().next() else {
+        let Some(item) = self.views.items(id).await?.into_iter().next() else {
             return Ok(false);
         };
         {

@@ -251,7 +251,7 @@ pub(super) async fn views(
     job_id: &str,
 ) -> Result<Vec<ReplacementView>, ApiError> {
     let plans = state
-        .jobs
+        .place
         .replacements(job_id)
         .await
         .map_err(|e| internal(&e))?;
@@ -371,7 +371,7 @@ pub(super) async fn lines(
     Path((id, plan)): Path<(String, String)>,
 ) -> Result<Response, ApiError> {
     match state
-        .jobs
+        .place
         .replacement_lines(&id, &plan)
         .await
         .map_err(|e| internal(&e))?
@@ -405,7 +405,7 @@ pub(super) async fn decide(
         _ => return Err(ApiError::invalid("결정은 replace나 keep이어야 해요.")),
     };
     let decided = state
-        .jobs
+        .place
         .decide_replacement(&id, &plan, request.version, replace, now_millis())
         .await
         .map_err(|e| internal(&e))?;
@@ -479,7 +479,7 @@ pub(super) async fn decide_many(
         });
     }
     let decided = state
-        .jobs
+        .place
         .decide_replacements(&id, decisions, now_millis())
         .await
         .map_err(|e| internal(&e))?;

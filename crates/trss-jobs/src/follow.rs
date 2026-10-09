@@ -41,7 +41,7 @@
 //! receives, and the replacement comparison (`교체 비교와 승인`) does not exist
 //! yet, which is where "nothing to replace" would be recorded.
 //!
-//! Each is one job of one candidate, made like a pick ([`JobStore::create`])
+//! Each is one job of one candidate, made like a pick ([`JobRequests::create`])
 //! with origin [`AUTO`] and the request ID `auto:<observation id>`: a second
 //! look at the same observation (the same line read twice, a repeated
 //! evaluation, a restart) finds that job and makes none. A line whose update
@@ -85,7 +85,7 @@ use trss_library::{
 
 use crate::{
     mapping::{self, whole, Mapped, Mapping},
-    store::{JobError, JobStore, MappingStamp, NewItem, NewJob, Pick, AUTO},
+    store::{JobError, JobRequests, JobViews, MappingStamp, NewItem, NewJob, Pick, AUTO},
     Created, ItemState,
 };
 
@@ -331,7 +331,8 @@ fn to_receive<'a>(g: &Grounds<'a>) -> Vec<Receipt<'a>> {
 #[derive(Clone)]
 pub struct Follow {
     db: Db,
-    jobs: JobStore,
+    requests: JobRequests,
+    views: JobViews,
     channels: ChannelStore,
     seasons: SeasonStore,
     library: LibraryStore,
@@ -341,7 +342,8 @@ pub struct Follow {
 impl Follow {
     pub fn new(db: Db) -> Follow {
         Follow {
-            jobs: JobStore::new(db.clone()),
+            requests: JobRequests::new(db.clone()),
+            views: JobViews::new(db.clone()),
             channels: ChannelStore::new(db.clone()),
             seasons: SeasonStore::new(db.clone()),
             library: LibraryStore::new(db.clone()),
@@ -567,7 +569,7 @@ impl Follow {
             .library
             .attributed_subtitles(&sub.work_id, sub.season)
             .await?;
-        let picks = self.jobs.picks_of_anime(sub.anime_no).await?;
+        let picks = self.views.picks_of_anime(sub.anime_no).await?;
         let grounds = Grounds {
             source_id: &source_id,
             observed: &observed,
@@ -622,7 +624,7 @@ impl Follow {
                 version: own.map_or(0, |m| m.version),
             };
             if let Some(Created::Created(id)) =
-                self.jobs.create_under_mapping(job, now, under).await?
+                self.requests.create_under_mapping(job, now, under).await?
             {
                 made.push(id);
             }

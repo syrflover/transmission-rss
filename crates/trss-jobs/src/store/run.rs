@@ -5,18 +5,15 @@ use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 use trss_core::Millis;
 use trss_subtitles::FailureKind;
 
-use super::{
-    rows::{items, steps},
-    ItemRow, JobError, JobStore, StepRow,
-};
+use super::{rows::steps, JobError, JobRun, StepRow};
 use crate::model::{ItemState, JobState, StepKind, StepState, Wait};
 
 /// The note of a job a decision on its replacement put back in line
 /// ([`crate::place::replace::records::decide`]), and the note and log line
-/// of one decided on while it ran ([`JobStore::settle`]).
+/// of one decided on while it ran ([`JobRun::settle`]).
 pub const DECIDED: &str = "결정한 교체를 이어가요";
 
-impl JobStore {
+impl JobRun {
     /// Whether a job is ready to run: `pending`, or `running` from a start
     /// that did not finish.
     pub async fn has_ready(&self) -> Result<bool, JobError> {
@@ -206,11 +203,6 @@ impl JobStore {
                 Ok((generation, requeued.len()))
             })
             .await
-    }
-
-    pub async fn items(&self, job_id: &str) -> Result<Vec<ItemRow>, JobError> {
-        let id = job_id.to_owned();
-        self.db.run(move |c| items(c, &id)).await
     }
 
     pub async fn set_item(
@@ -527,7 +519,7 @@ impl JobStore {
             .await
     }
 
-    /// How the job was asked for (`pick`, [`AUTO`], [`UPLOAD`], [`FIND`]), or
+    /// How the job was asked for (`pick`, [`super::AUTO`], [`super::UPLOAD`], [`super::FIND`]), or
     /// `None` when there is no such job.
     pub async fn origin(&self, job_id: &str) -> Result<Option<String>, JobError> {
         let id = job_id.to_owned();
@@ -560,7 +552,7 @@ impl JobStore {
 
 /// The earlier receipt's job when the done item `item_id` of a revision job
 /// has the same files, by key, with the same SHA-256 as that receipt
-/// ([`JobStore::finish_item`]).
+/// ([`JobRun::finish_item`]).
 fn unchanged_from(tx: &Connection, item_id: i64) -> Result<Option<String>, JobError> {
     let revised: Option<i64> = tx
         .prepare_cached(

@@ -58,7 +58,7 @@ use trss_subtitles::upload::{
 
 use crate::{
     area::{self, ReceiveArea},
-    store::{Created, JobError, JobStore, NewUpload, UploadedFile},
+    store::{Created, JobError, JobRequests, NewUpload, UploadedFile},
 };
 
 /// How many uploads are taken in at once. Each streams to disk and holds no
@@ -176,7 +176,7 @@ fn check_staging_item(name: &str) -> Option<i64> {
 /// The uploads of a process: the turns, the limits, and where files go.
 #[derive(Clone)]
 pub struct Uploads {
-    store: JobStore,
+    store: JobRequests,
     area: ReceiveArea,
     slots: Arc<Semaphore>,
     waiting: Arc<AtomicUsize>,
@@ -193,7 +193,7 @@ impl Drop for Waiting {
 }
 
 impl Uploads {
-    pub fn new(store: JobStore, area: ReceiveArea) -> Uploads {
+    pub fn new(store: JobRequests, area: ReceiveArea) -> Uploads {
         Uploads {
             store,
             area,

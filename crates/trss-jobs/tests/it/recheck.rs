@@ -6,6 +6,7 @@
 //! The runner's clock ticks from `NOW`, so a receipt is `NOW` old to the
 //! millisecond; a pass of the recheck is given the time it is to run at.
 
+use crate::Handles;
 use std::sync::{
     atomic::{AtomicI64, Ordering},
     Arc,
@@ -19,7 +20,7 @@ use trss_collect::store::channels::{
 use trss_core::{Clock, Db, DbError};
 use trss_jobs::{
     area::ReceiveArea, recheck::Report, store::JobDetail, Created, Follow, ItemState, JobState,
-    JobStore, NewItem, NewJob, Recheck, Runner, Wait, AUTO,
+    NewItem, NewJob, Recheck, Runner, Wait, AUTO,
 };
 use trss_subtitles::{
     auth::{self, Answered, AuthBrowser, BoxFuture, PrepareRequest, Prepared, Waited},
@@ -47,7 +48,7 @@ struct World {
     _dir: tempfile::TempDir,
     db: Db,
     follow: Follow,
-    jobs: JobStore,
+    jobs: Handles,
     channels: ChannelStore,
     runner: Runner,
     recheck: Recheck,
@@ -171,9 +172,9 @@ impl World {
             .with_tistory(server.source())
             .with_naver(server.naver())
             .with_erulabo(server.erulabo());
-        let jobs = JobStore::new(db.clone());
+        let jobs = Handles::new(db.clone());
         let runner = Runner::new(
-            jobs.clone(),
+            jobs.run.clone(),
             sources.clone(),
             ReceiveArea::in_app_data(dir.path()),
             ticking_clock(),
@@ -288,7 +289,7 @@ impl World {
     }
 
     async fn detail(&self, id: &str) -> JobDetail {
-        self.jobs.detail(id).await.unwrap().unwrap()
+        self.jobs.views.detail(id).await.unwrap().unwrap()
     }
 
     async fn job_count(&self) -> i64 {
@@ -999,7 +1000,7 @@ async fn only_the_subscribed_creators_receipts_are_read_while_the_subscription_t
             .await;
         let mut job = pick(creator, episode, &format!("pick-{episode}"), blogger(path));
         job.items[0].observation_id = Some(observation);
-        let Created::Created(id) = w.jobs.create(job, NOW).await.unwrap() else {
+        let Created::Created(id) = w.jobs.requests.create(job, NOW).await.unwrap() else {
             panic!("created");
         };
         picked.push(id);
@@ -1050,6 +1051,7 @@ async fn an_upload_of_the_subscribed_creator_is_never_read_again() {
     // Uploaded as the subscribed creator's: no observation, so no post to read.
     let made = w
         .jobs
+        .requests
         .create_upload(
             trss_jobs::store::NewUpload {
                 id: "up1".to_owned(),
@@ -1511,7 +1513,7 @@ async fn an_erulabo_post_whose_modified_time_changed_raises_a_check_to_do_and_re
     // The job opens the post and stops at the site's check: a to-do for a
     // person (`인증 필요`), which the person passes on the remote screen.
     let runner = Runner::new(
-        w.jobs.clone(),
+        w.jobs.run.clone(),
         w.sources.clone(),
         ReceiveArea::in_app_data(w._dir.path()),
         ticking_clock(),
@@ -1528,7 +1530,7 @@ async fn an_erulabo_post_whose_modified_time_changed_raises_a_check_to_do_and_re
         (ItemState::Waiting, Some(Wait::Auth))
     );
     assert!(d.items[0].files.is_empty());
-    let waits = w.jobs.auth_waits().await.unwrap();
+    let waits = w.jobs.views.auth_waits().await.unwrap();
     assert_eq!(
         waits.iter().map(|j| j.id.as_str()).collect::<Vec<_>>(),
         [report.jobs[0].as_str()]
@@ -1625,7 +1627,7 @@ async fn a_changed_drive_file_with_the_post_as_it_was_is_only_recorded_and_the_i
     );
     // No to-do, no job, nothing received.
     assert_eq!(w.job_count().await, jobs);
-    assert!(w.jobs.auth_waits().await.unwrap().is_empty());
+    assert!(w.jobs.views.auth_waits().await.unwrap().is_empty());
     assert_eq!(w.library().await, library);
 
     // The next day's observation replaces it.

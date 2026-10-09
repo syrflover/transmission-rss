@@ -24,3 +24,28 @@ mod tistory;
 mod unpack;
 mod upload;
 mod winpng;
+
+use trss_core::Db;
+use trss_jobs::{JobRequests, JobRun, JobViews, PlaceStore};
+
+/// The handles over one database that the tests reach the job records with:
+/// the code under test holds one or two of them, and a test that sets up or
+/// checks the records reaches any.
+#[derive(Clone)]
+pub struct Handles {
+    pub views: JobViews,
+    pub requests: JobRequests,
+    pub run: JobRun,
+    pub place: PlaceStore,
+}
+
+impl Handles {
+    pub fn new(db: Db) -> Handles {
+        Handles {
+            views: JobViews::new(db.clone()),
+            requests: JobRequests::new(db.clone()),
+            run: JobRun::new(db.clone()),
+            place: PlaceStore::new(db),
+        }
+    }
+}

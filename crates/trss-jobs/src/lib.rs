@@ -3,7 +3,8 @@
 //!
 //! - [`store`]: the records (`subtitle_jobs` and the tables beside it, see
 //!   `migrations/jobs/schema.sql` in `trss-core`). The web makes jobs
-//!   ([`JobStore::create`]) and reads them; the worker writes how they go.
+//!   ([`JobRequests::create`]) and reads them ([`JobViews`]); the worker
+//!   writes how they go ([`JobRun`]).
 //! - [`runner`]: carrying a job out, a file at a time, with the checkpoints
 //!   that let a restarted worker reuse what it received or hold what it cannot
 //!   vouch for.
@@ -25,10 +26,10 @@
 //! - [`upload`]: the subtitles and fonts a person uploads, made into a job
 //!   whose files are received, and the same judging for the files a find
 //!   job's browser run downloads.
-//! - A find job ([`FIND`], [`JobStore::create_find`]): a person browses a
+//! - A find job ([`FIND`], [`JobRequests::create_find`]): a person browses a
 //!   creator's posts on the job's remote screen and every download becomes a
 //!   file of its one package, until they finish its 받기
-//!   ([`JobStore::ask_finish`]).
+//!   ([`JobRequests::ask_finish`]).
 //! - Both wait for the person's 배치 확인 before anything they received is
 //!   kept ([`place`], [`place::records::confirm_placement`]).
 //!
@@ -49,12 +50,13 @@ pub mod upload;
 pub use area::ReceiveArea;
 pub use follow::{Follow, FollowError};
 pub use model::{FileState, ItemState, JobState, StepKind, StepState, Wait};
+pub use place::PlaceStore;
 pub use recheck::Recheck;
 pub use runner::Runner;
 pub use screen::{Screen, ScreenState, ScreenStore};
 pub use store::{
-    AskedFinish, Created, FileProblem, JobError, JobStore, MappingStamp, NewFind, NewItem, NewJob,
-    AUTO, FIND, NOTHING_FOUND, RELOCATE, UPLOAD,
+    AskedFinish, Created, FileProblem, JobError, JobRequests, JobRun, JobViews, MappingStamp,
+    NewFind, NewItem, NewJob, AUTO, FIND, NOTHING_FOUND, RELOCATE, UPLOAD,
 };
 pub use trss_archive::run::Unpacker;
 pub use trss_subtitles::{verify::Format, FailureKind};

@@ -2,6 +2,7 @@
 //! Tistory ([`trss_subtitles::testing`]), and once against the real site
 //! (ignored).
 
+use crate::Handles;
 use std::{
     sync::{
         atomic::{AtomicI64, Ordering},
@@ -16,8 +17,8 @@ use trss_core::{Clock, Db, DbError};
 use trss_jobs::{
     area::{self, ReceiveArea},
     store::JobDetail,
-    Created, FailureKind, FileState, Format, ItemState, JobState, JobStore, NewItem, NewJob,
-    Runner, StepKind, StepState, Wait,
+    Created, FailureKind, FileState, Format, ItemState, JobState, NewItem, NewJob, Runner,
+    StepKind, StepState, Wait,
 };
 use trss_subtitles::{
     testing::{spec, FileAnswer, PostAnswer, SourceServer, BODY_OPEN, CDN},
@@ -29,7 +30,7 @@ const SRT: &[u8] = b"1\n00:00:01,000 --> 00:00:02,000\nHello\n";
 
 struct Setup {
     _dir: tempfile::TempDir,
-    store: JobStore,
+    store: Handles,
     runner: Runner,
     area: ReceiveArea,
     server: SourceServer,
@@ -44,10 +45,10 @@ async fn setup() -> Setup {
     let server = SourceServer::start().await;
     let dir = tempfile::tempdir().unwrap();
     let db = Db::open(dir.path().join("app.db")).await.unwrap();
-    let store = JobStore::new(db);
+    let store = Handles::new(db);
     let area = ReceiveArea::in_app_data(dir.path());
     let runner = Runner::new(
-        store.clone(),
+        store.run.clone(),
         Sources::none().with_tistory(server.source()),
         area.clone(),
         ticking_clock(),
@@ -63,7 +64,7 @@ async fn setup() -> Setup {
 }
 
 /// Makes a job of `posts` (episode, address).
-async fn make(store: &JobStore, command: &str, posts: &[(&str, String)]) -> String {
+async fn make(store: &Handles, command: &str, posts: &[(&str, String)]) -> String {
     let job = NewJob {
         command_id: command.to_owned(),
         request: "{}".to_owned(),
@@ -85,7 +86,7 @@ async fn make(store: &JobStore, command: &str, posts: &[(&str, String)]) -> Stri
             })
             .collect(),
     };
-    match store.create(job, 900).await.unwrap() {
+    match store.requests.create(job, 900).await.unwrap() {
         Created::Created(id) => id,
         other => panic!("created: {other:?}"),
     }
@@ -96,7 +97,7 @@ async fn run(s: &Setup) {
 }
 
 async fn detail(s: &Setup, id: &str) -> JobDetail {
-    s.store.detail(id).await.unwrap().unwrap()
+    s.store.views.detail(id).await.unwrap().unwrap()
 }
 
 fn step(d: &JobDetail, kind: StepKind) -> Option<StepState> {
@@ -509,6 +510,7 @@ async fn no_signed_address_reaches_the_records_or_the_log() {
     // Every text of every job table, joined.
     let dump: String = s
         .store
+        .run
         .db()
         .run::<_, DbError, _>(|c| {
             let mut all = String::new();
@@ -550,10 +552,10 @@ async fn no_signed_address_reaches_the_records_or_the_log() {
 async fn a_real_tistory_post_is_received() {
     let dir = tempfile::tempdir().unwrap();
     let db = Db::open(dir.path().join("app.db")).await.unwrap();
-    let store = JobStore::new(db);
+    let store = Handles::new(db);
     let area = ReceiveArea::in_app_data(dir.path());
     let runner = Runner::new(
-        store.clone(),
+        store.run.clone(),
         Sources::none().with_tistory(TistorySource::new(trss_subtitles::drive::Drive::new())),
         area.clone(),
         trss_core::system_clock(),
@@ -566,7 +568,7 @@ async fn a_real_tistory_post_is_received() {
     .await;
     runner.run_ready(&CancellationToken::new()).await.unwrap();
 
-    let d = store.detail(&id).await.unwrap().unwrap();
+    let d = store.views.detail(&id).await.unwrap().unwrap();
     for e in d.events.iter().rev() {
         println!("{} {}", e.message, e.detail.as_deref().unwrap_or_default());
     }
@@ -584,7 +586,7 @@ async fn a_real_tistory_post_is_received() {
 async fn a_file_past_its_byte_limit_fails_as_not_a_file_and_leaves_no_bytes() {
     let s = setup().await;
     let runner = Runner::new(
-        s.store.clone(),
+        s.store.run.clone(),
         Sources::none().with_tistory(s.server.source_with(trss_subtitles::tistory::Limits {
             spacing: Duration::ZERO,
             max_file: 2048,

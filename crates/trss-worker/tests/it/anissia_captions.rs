@@ -379,13 +379,13 @@ impl Env {
 
     /// A worker that runs the jobs, with the fake source, and polls for
     /// nothing in a test's time.
-    fn job_worker(&self) -> (Worker, trss_jobs::JobStore) {
-        use trss_jobs::{area::ReceiveArea, JobStore, Runner};
+    fn job_worker(&self) -> (Worker, trss_jobs::JobViews) {
+        use trss_jobs::{area::ReceiveArea, JobRun, JobViews, Runner};
         use trss_subtitles::{fake::FakeSource, Sources};
 
-        let jobs = JobStore::new(self.h.db.clone());
+        let jobs = JobViews::new(self.h.db.clone());
         let runner = Runner::new(
-            jobs.clone(),
+            JobRun::new(self.h.db.clone()),
             Sources::none().with_fake(FakeSource),
             ReceiveArea::in_app_data(self.h.dir.path()),
             Arc::new(|| 2_000),
@@ -399,7 +399,7 @@ impl Env {
 }
 
 /// Whether the subscribed creator's job is done within a few seconds.
-async fn auto_job_done(jobs: &trss_jobs::JobStore) -> bool {
+async fn auto_job_done(jobs: &trss_jobs::JobViews) -> bool {
     let done = || async {
         let page = jobs.done_page(None, 10).await.unwrap();
         page.items.len() == 1 && page.items[0].origin == trss_jobs::AUTO

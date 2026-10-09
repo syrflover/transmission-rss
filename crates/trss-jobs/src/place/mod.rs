@@ -48,7 +48,7 @@
 //!    a subtitle, or with another job's apply under way, keeps it and the
 //!    row is stored only; a row whose episode has no video waits for it
 //!    (`영상 대기`) and is applied when the job runs again once the library
-//!    records the video ([`crate::JobStore::requeue_awaiting_video`]); a row
+//!    records the video ([`crate::JobRun::requeue_awaiting_video`]); a row
 //!    whose episode a person has to say waits for them (`회차 확인 필요`). An
 //!    earlier applied copy recorded at the path is recorded as removed: the
 //!    rename replaced nothing, so a person removed it.
@@ -131,8 +131,9 @@ use crate::{
         AssetKind, Chosen, EffectKind, EffectState, FileState, ItemState, Outcome, PlanAction,
         PlanState, StepKind, StepState, SubtitleFormat,
     },
-    store::{FileRow, ItemRow, JobError, JobStore, AUTO, FIND, RELOCATE, UPLOAD},
+    store::{FileRow, ItemRow, JobError, JobRun, JobViews, AUTO, FIND, RELOCATE, UPLOAD},
 };
+pub use api::PlaceStore;
 use files::{Copied, Published};
 use package::extension;
 use records::{Effect, JobFacts, Kept, NewApplied, NewStored, PlanRow, Role};
@@ -352,7 +353,9 @@ fn joined(dir: &str, name: &str) -> String {
 #[derive(Clone)]
 pub struct Placer {
     db: Db,
-    store: JobStore,
+    store: JobRun,
+    /// What the placer reads of the job's items.
+    views: JobViews,
     area: ReceiveArea,
     clock: Clock,
     follow: Follow,
@@ -361,11 +364,12 @@ pub struct Placer {
 }
 
 impl Placer {
-    pub fn new(store: JobStore, area: ReceiveArea, clock: Clock) -> Placer {
+    pub fn new(store: JobRun, area: ReceiveArea, clock: Clock) -> Placer {
         let db = store.db().clone();
         Placer {
             follow: Follow::new(db.clone()),
             db,
+            views: JobViews::new(store.db().clone()),
             store,
             area,
             clock,
@@ -433,7 +437,7 @@ impl Placer {
             Some(UPLOAD | FIND) | None => None,
             Some(_) if rows.is_empty() => None,
             Some(_) => self
-                .store
+                .views
                 .items(job)
                 .await?
                 .into_iter()
@@ -516,7 +520,7 @@ impl Placer {
         let (Some(work_id), Some(season)) = (facts.work_id.clone(), facts.season) else {
             return Ok(Some(Placement::default()));
         };
-        let items = self.store.items(job).await?;
+        let items = self.views.items(job).await?;
 
         let id = job.to_owned();
         let mut plans: Vec<String> = Vec::new();
@@ -1441,7 +1445,7 @@ impl Placer {
         // A post with an item to receive again (a font not received whose
         // font went away, [`unchanged`]) links once that file is stored.
         let again: Vec<String> = self
-            .store
+            .views
             .items(job)
             .await?
             .into_iter()

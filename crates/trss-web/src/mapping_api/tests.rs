@@ -29,7 +29,6 @@ struct App {
 
 async fn sql(state: &AppState, sql: String) {
     state
-        .jobs
         .db()
         .run::<_, DbError, _>(move |c| Ok(c.execute_batch(&sql)?))
         .await

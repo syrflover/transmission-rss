@@ -4,10 +4,10 @@ use rusqlite::{params, Connection};
 
 use super::{
     rows::{dropped_rows, items, rows, steps},
-    DonePage, EventRow, JobDetail, JobError, JobRow, JobStore, Pick,
+    DonePage, EventRow, ItemRow, JobDetail, JobError, JobRow, JobViews, Pick,
 };
 
-impl JobStore {
+impl JobViews {
     /// The jobs that are not done, oldest first.
     pub async fn open_jobs(&self) -> Result<Vec<JobRow>, JobError> {
         self.db
@@ -74,6 +74,11 @@ impl JobStore {
     pub async fn detail(&self, id: &str) -> Result<Option<JobDetail>, JobError> {
         let id = id.to_owned();
         self.db.run(move |c| detail(c, &id)).await
+    }
+
+    pub async fn items(&self, job_id: &str) -> Result<Vec<ItemRow>, JobError> {
+        let id = job_id.to_owned();
+        self.db.run(move |c| items(c, &id)).await
     }
 
     /// The candidates the jobs of Anissia anime `anime_no` took, in the order

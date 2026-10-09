@@ -1,6 +1,7 @@
 //! Storing and applying what a candidate's job received (ticket 0063,
 //! `trss_jobs::place`), with the restarts a killed worker leaves.
 
+use crate::Handles;
 use std::{
     os::unix::fs::MetadataExt,
     path::{Path, PathBuf},
@@ -17,7 +18,7 @@ use trss_jobs::{
     area::{object_of, ReceiveArea},
     model::{Chosen, Outcome, PlanAction},
     store::JobDetail,
-    Created, JobState, JobStore, NewItem, NewJob, Runner, StepKind, StepState, Wait,
+    Created, JobState, NewItem, NewJob, Runner, StepKind, StepState, Wait,
 };
 use trss_subtitles::{
     fake::{self, FakeSource},
@@ -31,7 +32,7 @@ const VIDEO: &str = "Season 01/Show S01E02.mkv";
 struct Setup {
     dir: tempfile::TempDir,
     db: Db,
-    store: JobStore,
+    store: Handles,
     runner: Runner,
     area: ReceiveArea,
 }
@@ -95,10 +96,10 @@ async fn setup() -> Setup {
     })
     .await
     .unwrap();
-    let store = JobStore::new(db.clone());
+    let store = Handles::new(db.clone());
     let area = ReceiveArea::in_app_data(dir.path());
     let runner = Runner::new(
-        store.clone(),
+        store.run.clone(),
         Sources::none().with_fake(FakeSource),
         area.clone(),
         ticking_clock(),
@@ -133,7 +134,7 @@ async fn make(s: &Setup, command: &str, episode: &str, path: &str, source: bool)
             found_at: 500,
         }],
     };
-    match s.store.create(job, 900).await.unwrap() {
+    match s.store.requests.create(job, 900).await.unwrap() {
         Created::Created(id) => id,
         other => panic!("created: {other:?}"),
     }
@@ -144,7 +145,7 @@ async fn run(s: &Setup) {
 }
 
 async fn detail(s: &Setup, id: &str) -> JobDetail {
-    s.store.detail(id).await.unwrap().unwrap()
+    s.store.views.detail(id).await.unwrap().unwrap()
 }
 
 fn step(d: &JobDetail, kind: StepKind) -> Option<StepState> {
@@ -192,7 +193,7 @@ async fn a_received_subtitle_is_stored_applied_beside_its_video_and_leaves_the_r
     assert_eq!(names(&s.work().join(".trss/tmp")), Vec::<String>::new());
     assert!(!s.area.at(&id).exists());
 
-    let plan = s.store.plan(&id).await.unwrap();
+    let plan = s.store.place.plan(&id).await.unwrap();
     assert_eq!(plan.len(), 1);
     assert_eq!(plan[0].outcome, Some(Outcome::Applied));
     assert_eq!(plan[0].placed.as_ref().map(|p| p.episode), Some(2));
@@ -272,7 +273,7 @@ async fn a_file_whose_name_says_another_episode_is_stored_but_not_applied() {
     let d = detail(&s, &id).await;
     assert_eq!(d.row.state, JobState::Waiting);
     assert_eq!(d.row.wait, Some(Wait::Placement));
-    let plan = s.store.plan(&id).await.unwrap();
+    let plan = s.store.place.plan(&id).await.unwrap();
     assert!(
         plan[0].question.as_deref().unwrap().contains("13화"),
         "{plan:?}"
@@ -315,7 +316,7 @@ async fn a_name_taken_by_other_bytes_is_numbered_and_the_same_bytes_are_one_file
     assert_eq!(names(&s.stored_dir()).len(), 2);
     assert_eq!(s.count("subtitle_assets").await, 1);
     assert_eq!(s.count("subtitle_stored").await, 1);
-    let plan = s.store.plan(&again).await.unwrap();
+    let plan = s.store.place.plan(&again).await.unwrap();
     assert_eq!(plan[0].outcome, Some(Outcome::Existing));
 }
 
@@ -331,7 +332,7 @@ async fn an_episode_with_a_subtitle_waits_for_approval_and_one_without_a_video_f
         (d.row.state, d.row.wait),
         (JobState::Waiting, Some(Wait::Approval))
     );
-    assert_eq!(s.store.plan(&id).await.unwrap()[0].outcome, None);
+    assert_eq!(s.store.place.plan(&id).await.unwrap()[0].outcome, None);
     assert_eq!(s.count("subtitle_replacements").await, 1);
     assert_eq!(std::fs::read(&smi).unwrap(), b"<SAMI></SAMI>");
     assert!(!s.work().join("Season 01/Show S01E02.ass").exists());
@@ -349,7 +350,7 @@ async fn an_episode_with_a_subtitle_waits_for_approval_and_one_without_a_video_f
             Some(trss_jobs::place::AWAITING_VIDEO)
         )
     );
-    let plan = s.store.plan(&id).await.unwrap();
+    let plan = s.store.place.plan(&id).await.unwrap();
     assert_eq!(plan[0].outcome, Some(Outcome::NoVideo));
     assert_eq!(plan[0].action, PlanAction::Apply);
     assert!(s.stored_dir().join("Show-03.ass").exists());
@@ -413,7 +414,7 @@ async fn a_subtitle_waiting_for_its_video_is_applied_once_the_library_has_it() {
     assert_eq!(d.row.state, JobState::Done, "{:?}", d.row.note);
     assert_eq!(step(&d, StepKind::Apply), Some(StepState::Done));
     assert_eq!(
-        s.store.plan(&id).await.unwrap()[0].outcome,
+        s.store.place.plan(&id).await.unwrap()[0].outcome,
         Some(Outcome::Applied)
     );
     assert!(s.work().join("Season 01/Show S01E03.ass").exists());
@@ -425,7 +426,7 @@ async fn a_subtitle_waiting_for_its_video_is_applied_once_the_library_has_it() {
 /// Whether the work's stored subtitle of episode 3 is told as waiting for its
 /// video.
 async fn awaiting(s: &Setup) -> bool {
-    let stored = s.store.stored_only(WORK).await.unwrap();
+    let stored = s.store.place.stored_only(WORK).await.unwrap();
     stored
         .iter()
         .find(|x| x.episode == 3)
@@ -457,7 +458,7 @@ async fn with_episode_4(s: &Setup, post: &str) -> String {
             item("4", post.to_owned()),
         ],
     };
-    match s.store.create(job, 900).await.unwrap() {
+    match s.store.requests.create(job, 900).await.unwrap() {
         Created::Created(id) => id,
         other => panic!("created: {other:?}"),
     }
@@ -474,7 +475,7 @@ async fn a_partly_received_job_stays_partial_and_applies_once_the_video_comes() 
     assert_eq!(d.row.state, JobState::Partial, "{:?}", d.row.note);
     assert!(d.row.note.as_deref().unwrap().contains("받지 못했어요"));
     assert_eq!(
-        s.store.plan(&id).await.unwrap()[0].outcome,
+        s.store.place.plan(&id).await.unwrap()[0].outcome,
         Some(Outcome::NoVideo)
     );
     assert!(awaiting(&s).await);
@@ -486,7 +487,7 @@ async fn a_partly_received_job_stays_partial_and_applies_once_the_video_comes() 
     assert_eq!(d.row.state, JobState::Partial);
     assert!(d.row.finished_at.is_some());
     assert_eq!(
-        s.store.plan(&id).await.unwrap()[0].outcome,
+        s.store.place.plan(&id).await.unwrap()[0].outcome,
         Some(Outcome::Applied)
     );
     assert!(s.work().join("Season 01/Show S01E03.ass").exists());
@@ -513,7 +514,7 @@ async fn a_job_waiting_for_a_source_applies_once_the_video_comes() {
         (JobState::Waiting, Some(Wait::Subtitle))
     );
     assert_eq!(
-        s.store.plan(&id).await.unwrap()[0].outcome,
+        s.store.place.plan(&id).await.unwrap()[0].outcome,
         Some(Outcome::Applied)
     );
 }
@@ -606,7 +607,7 @@ async fn a_subtitle_that_came_with_the_video_waits_for_approval() {
         (d.row.state, d.row.wait),
         (JobState::Waiting, Some(Wait::Approval))
     );
-    assert_eq!(s.store.plan(&id).await.unwrap()[0].outcome, None);
+    assert_eq!(s.store.place.plan(&id).await.unwrap()[0].outcome, None);
     assert_eq!(std::fs::read(&smi).unwrap(), b"<SAMI></SAMI>");
     assert!(!s.work().join("Season 01/Show S01E03.ass").exists());
 }
@@ -638,7 +639,7 @@ async fn received_away(s: &Setup, command: &str, path: &str) -> String {
         d.row.note
     );
     assert_eq!(step(&d, StepKind::Store), None);
-    assert_eq!(s.store.plan(&id).await.unwrap().len(), 1);
+    assert_eq!(s.store.place.plan(&id).await.unwrap().len(), 1);
     std::fs::rename(&hidden, &work).unwrap();
     id
 }
@@ -845,7 +846,7 @@ async fn stored_not_applied(s: &Setup) -> String {
     let id = make(s, "c1", "2", "/ok/Show-02", false).await;
     run(s).await;
     assert_eq!(
-        s.store.plan(&id).await.unwrap()[0].outcome,
+        s.store.place.plan(&id).await.unwrap()[0].outcome,
         Some(Outcome::NoVideo)
     );
     std::fs::write(&video, b"video").unwrap();
@@ -959,7 +960,7 @@ async fn an_applied_copy_a_person_removed_is_applied_again_by_a_later_job() {
     let d = detail(&s, &again).await;
     assert_eq!(d.row.state, JobState::Done, "{:?}", d.row.note);
     assert_eq!(
-        s.store.plan(&again).await.unwrap()[0].outcome,
+        s.store.place.plan(&again).await.unwrap()[0].outcome,
         Some(Outcome::Applied)
     );
     assert!(applied.exists());
@@ -1011,11 +1012,11 @@ async fn a_name_another_jobs_store_is_about_to_take_is_taken_whatever_its_case()
     assert_eq!(s.count("subtitle_assets").await, 2);
     // B came first and applied its copy; A's found the episode's subtitle.
     assert_eq!(
-        s.store.plan(&b).await.unwrap()[0].outcome,
+        s.store.place.plan(&b).await.unwrap()[0].outcome,
         Some(Outcome::Applied)
     );
     assert_eq!(
-        s.store.plan(&a).await.unwrap()[0].outcome,
+        s.store.place.plan(&a).await.unwrap()[0].outcome,
         Some(Outcome::Existing)
     );
 }
@@ -1043,12 +1044,12 @@ async fn an_episode_another_jobs_apply_is_about_to_take_keeps_it() {
     last_in_line(&s, &a).await;
     run(&s).await;
 
-    let plan = s.store.plan(&b).await.unwrap();
+    let plan = s.store.place.plan(&b).await.unwrap();
     assert_eq!(plan[0].outcome, Some(Outcome::Existing), "{plan:?}");
     let d = detail(&s, &a).await;
     assert_eq!(d.row.state, JobState::Done, "{:?}", d.row.note);
     assert_eq!(
-        s.store.plan(&a).await.unwrap()[0].outcome,
+        s.store.place.plan(&a).await.unwrap()[0].outcome,
         Some(Outcome::Applied)
     );
     assert_eq!(s.count("subtitle_applied").await, 1);
@@ -1087,7 +1088,7 @@ async fn a_job_held_after_its_starts_holds_its_effects_and_frees_their_names() {
 
     let d = detail(&s, &id).await;
     assert_eq!(d.row.state, JobState::Held);
-    let plan = s.store.plan(&id).await.unwrap();
+    let plan = s.store.place.plan(&id).await.unwrap();
     assert_eq!(plan[0].outcome, Some(Outcome::Held));
     let state: String =
         s.db.run(|c| {
@@ -1124,7 +1125,7 @@ async fn a_row_only_stored_is_settled_by_its_store() {
 
     let d = detail(&s, &id).await;
     assert_eq!(d.row.state, JobState::Done, "{:?}", d.row.note);
-    let plan = s.store.plan(&id).await.unwrap();
+    let plan = s.store.place.plan(&id).await.unwrap();
     assert_eq!(plan[0].outcome, Some(Outcome::Stored));
     assert!(plan[0].stored_id.is_some());
     assert_eq!(names(&s.work().join("Season 01")), ["Show S01E02.mkv"]);
@@ -1154,14 +1155,14 @@ async fn a_file_two_posts_share_is_planned_once_and_shared_again_once_stored() {
             })
             .collect(),
     };
-    let Created::Created(id) = s.store.create(job, 900).await.unwrap() else {
+    let Created::Created(id) = s.store.requests.create(job, 900).await.unwrap() else {
         panic!("not created");
     };
     run(&s).await;
 
     // The second post's receipt is the first's: one row, and both lost
     // their bytes when it was stored.
-    assert_eq!(s.store.plan(&id).await.unwrap().len(), 1);
+    assert_eq!(s.store.place.plan(&id).await.unwrap().len(), 1);
     let d = detail(&s, &id).await;
     let files: Vec<_> = d.items.iter().flat_map(|i| i.files.iter()).collect();
     assert_eq!(files.len(), 2);
@@ -1192,7 +1193,7 @@ async fn a_file_two_posts_share_is_planned_once_and_shared_again_once_stored() {
             .all(|f| f.state == trss_jobs::FileState::Done && f.cleared_at.is_some()),
         "{files:?}"
     );
-    assert_eq!(s.store.plan(&id).await.unwrap().len(), 1);
+    assert_eq!(s.store.place.plan(&id).await.unwrap().len(), 1);
 }
 
 #[tokio::test]
@@ -1277,7 +1278,7 @@ async fn make_pack(
             found_at: 500,
         }],
     };
-    match s.store.create(job, 900).await.unwrap() {
+    match s.store.requests.create(job, 900).await.unwrap() {
         Created::Created(id) => id,
         other => panic!("created: {other:?}"),
     }
@@ -1326,7 +1327,7 @@ async fn the_candidates_file_of_a_package_is_applied_and_the_other_episodes_stor
         std::fs::read(s.work().join("Season 01/Show S01E02.ass")).unwrap(),
         fake::bytes_of("Show - 02.ass")
     );
-    let plan = s.store.plan(&id).await.unwrap();
+    let plan = s.store.place.plan(&id).await.unwrap();
     assert_eq!(plan.len(), 5);
     for row in &plan {
         let n = episode_of(row).unwrap();
@@ -1429,7 +1430,7 @@ async fn the_first_format_of_the_order_is_applied_and_the_other_stored() {
         names(&s.work().join("Season 01")),
         ["Show S01E02.ass", "Show S01E02.mkv"]
     );
-    let plan = s.store.plan(&id).await.unwrap();
+    let plan = s.store.place.plan(&id).await.unwrap();
     let srt = plan.iter().find(|r| r.name.ends_with(".srt")).unwrap();
     assert_eq!(srt.outcome, Some(Outcome::Stored));
     assert_eq!(episode_of(srt), Some(2));
@@ -1465,20 +1466,21 @@ async fn alternatives_of_one_format_wait_for_a_person_and_none_is_applied() {
     assert_eq!(names(&s.work().join("Season 01")), ["Show S01E02.mkv"]);
     // Both are stored, for the person to choose from.
     assert_eq!(names(&s.stored_dir()).len(), 2);
-    let plan = s.store.plan(&id).await.unwrap();
+    let plan = s.store.place.plan(&id).await.unwrap();
     assert!(plan
         .iter()
         .all(|r| r.question.is_some() && r.stored_id.is_some()));
 
     // Choosing one on the episode's line answers the question: it is applied
     // and the other is stored only.
-    let only = s.store.stored_only(WORK).await.unwrap();
+    let only = s.store.place.stored_only(WORK).await.unwrap();
     let sign = only
         .iter()
         .find(|o| o.name == "Show - 02 [sign].ass")
         .unwrap();
     assert!(matches!(
         s.store
+            .place
             .choose_stored(WORK, &sign.id, Chosen::Apply, 5_000)
             .await
             .unwrap(),
@@ -1491,7 +1493,7 @@ async fn alternatives_of_one_format_wait_for_a_person_and_none_is_applied() {
         std::fs::read(s.work().join("Season 01/Show S01E02.ass")).unwrap(),
         fake::bytes_of("Show - 02 [sign].ass")
     );
-    let plan = s.store.plan(&id).await.unwrap();
+    let plan = s.store.place.plan(&id).await.unwrap();
     let tv = plan
         .iter()
         .find(|r| r.name == "Show - 02 [TV].ass")
@@ -1522,10 +1524,11 @@ async fn another_format_chosen_on_the_episode_line_answers_its_alternatives() {
     .await;
     run(&s).await;
     assert_eq!(detail(&s, &id).await.row.wait, Some(Wait::Placement));
-    let only = s.store.stored_only(WORK).await.unwrap();
+    let only = s.store.place.stored_only(WORK).await.unwrap();
     let srt = only.iter().find(|o| o.name == "Show - 02.srt").unwrap();
     assert!(matches!(
         s.store
+            .place
             .choose_stored(WORK, &srt.id, Chosen::Apply, 5_000)
             .await
             .unwrap(),
@@ -1538,7 +1541,7 @@ async fn another_format_chosen_on_the_episode_line_answers_its_alternatives() {
         names(&s.work().join("Season 01")),
         ["Show S01E02.mkv", "Show S01E02.srt"]
     );
-    let plan = s.store.plan(&id).await.unwrap();
+    let plan = s.store.place.plan(&id).await.unwrap();
     assert!(plan.iter().all(|r| r.question.is_none()), "{plan:?}");
     assert_eq!(
         plan.iter()
@@ -1567,7 +1570,7 @@ async fn another_seasons_file_and_an_executable_are_told_apart() {
     run(&s).await;
     let d = detail(&s, &id).await;
     assert_eq!(d.row.state, JobState::Done, "{:?}", d.row.note);
-    let plan = s.store.plan(&id).await.unwrap();
+    let plan = s.store.place.plan(&id).await.unwrap();
     let other = plan.iter().find(|r| r.name == "Show S03E01.ass").unwrap();
     assert_eq!(other.placed, None);
     assert_eq!(other.outcome, Some(Outcome::Stored));
@@ -1671,7 +1674,7 @@ async fn the_subscribed_creators_package_applies_its_other_episodes() {
     // Episode 4 has a subtitle, which stays until a person approves
     // replacing it.
     assert!(!s.work().join("Season 01/Show S01E04.ass").exists());
-    let plan = s.store.plan(&id).await.unwrap();
+    let plan = s.store.place.plan(&id).await.unwrap();
     let four = plan.iter().find(|r| episode_of(r) == Some(4)).unwrap();
     assert_eq!(four.outcome, None);
     assert_eq!(s.count("subtitle_replacements").await, 1);
@@ -1708,7 +1711,7 @@ async fn a_stored_only_episode_is_applied_when_a_person_asks() {
     run(&s).await;
     assert_eq!(detail(&s, &id).await.row.state, JobState::Done);
     assert!(!s.work().join("Season 01/Show S01E03.ass").exists());
-    let only = s.store.stored_only(WORK).await.unwrap();
+    let only = s.store.place.stored_only(WORK).await.unwrap();
     assert_eq!(only.len(), 1);
     assert_eq!(
         (only[0].episode, only[0].job_id.as_deref()),
@@ -1717,6 +1720,7 @@ async fn a_stored_only_episode_is_applied_when_a_person_asks() {
 
     let chosen = s
         .store
+        .place
         .choose_stored(WORK, &only[0].id, Chosen::Apply, 5_000)
         .await
         .unwrap();
@@ -1751,12 +1755,13 @@ async fn a_stored_only_episode_is_applied_when_a_person_asks() {
         std::fs::read(s.work().join("Season 01/Show S01E03.ass")).unwrap(),
         fake::bytes_of("Show - 03.ass")
     );
-    assert!(s.store.stored_only(WORK).await.unwrap().is_empty());
+    assert!(s.store.place.stored_only(WORK).await.unwrap().is_empty());
     // Nothing was received again.
     assert_eq!(s.count("subtitle_job_files").await, 2);
     // Asked again, it is applied already.
     assert_eq!(
         s.store
+            .place
             .choose_stored(WORK, &only[0].id, Chosen::Apply, 6_000)
             .await
             .unwrap(),

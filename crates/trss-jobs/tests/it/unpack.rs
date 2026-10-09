@@ -3,6 +3,7 @@
 //! files are, a refused archive fails alone and stays in the receive area, and
 //! a worker killed while it unpacked unpacks again from what it received.
 
+use crate::Handles;
 use std::{
     path::{Path, PathBuf},
     sync::{
@@ -20,7 +21,7 @@ use trss_jobs::{
     place::records::{Confirmed, RowPlacing},
     place::unpack::{UNPACK_AGAIN, UNPACK_RETRY_AFTER},
     store::{FileRow, JobDetail},
-    Created, JobState, JobStore, NewItem, NewJob, Runner, Unpacker, Wait,
+    Created, JobState, NewItem, NewJob, Runner, Unpacker, Wait,
 };
 use trss_subtitles::{
     fake::{self, FakeSource},
@@ -33,7 +34,7 @@ const CREATOR: &str = "제작자";
 struct Setup {
     dir: tempfile::TempDir,
     db: Db,
-    store: JobStore,
+    store: Handles,
     area: ReceiveArea,
 }
 
@@ -49,7 +50,7 @@ impl Setup {
     /// A runner over the fake source, with the unpacking program or without.
     fn runner(&self, unpacks: bool) -> Runner {
         let runner = Runner::new(
-            self.store.clone(),
+            self.store.run.clone(),
             Sources::none().with_fake(FakeSource),
             self.area.clone(),
             ticking_clock(),
@@ -67,7 +68,7 @@ impl Setup {
     fn bare_runner_at(&self, now: &Arc<AtomicI64>) -> Runner {
         let now = now.clone();
         Runner::new(
-            self.store.clone(),
+            self.store.run.clone(),
             Sources::none().with_fake(FakeSource),
             self.area.clone(),
             Arc::new(move || now.fetch_add(10, Ordering::SeqCst)),
@@ -88,7 +89,7 @@ impl Setup {
     }
 
     async fn detail(&self, id: &str) -> JobDetail {
-        self.store.detail(id).await.unwrap().unwrap()
+        self.store.views.detail(id).await.unwrap().unwrap()
     }
 
     async fn count(&self, table: &'static str) -> i64 {
@@ -127,7 +128,7 @@ async fn setup() -> Setup {
     })
     .await
     .unwrap();
-    let store = JobStore::new(db.clone());
+    let store = Handles::new(db.clone());
     let area = ReceiveArea::in_app_data(dir.path());
     Setup {
         dir,
@@ -194,7 +195,7 @@ async fn make(s: &Setup, command: &str, posts: &[(&str, &str)]) -> String {
             })
             .collect(),
     };
-    match s.store.create(job, 900).await.unwrap() {
+    match s.store.requests.create(job, 900).await.unwrap() {
         Created::Created(id) => id,
         other => panic!("created: {other:?}"),
     }
@@ -273,6 +274,7 @@ async fn replace_bytes(s: &Setup, file: &FileRow, bytes: &[u8]) {
 async fn confirm_as_planned(s: &Setup, id: &str) -> Confirmed {
     let placings = s
         .store
+        .place
         .plan(id)
         .await
         .unwrap()
@@ -285,6 +287,7 @@ async fn confirm_as_planned(s: &Setup, id: &str) -> Confirmed {
         })
         .collect();
     s.store
+        .place
         .confirm_placement(id, placings, Vec::new(), None, 5_000)
         .await
         .unwrap()
@@ -316,7 +319,7 @@ async fn the_candidates_episode_of_a_season_zip_is_applied_and_the_rest_stored()
         std::fs::read(s.work().join("Season 01/Show S01E04.ass")).unwrap(),
         fake::bytes_of("Show - 04.ass")
     );
-    let plan = s.store.plan(&id).await.unwrap();
+    let plan = s.store.place.plan(&id).await.unwrap();
     assert_eq!(plan.len(), 12);
     for row in &plan {
         assert_eq!(row.member.as_deref(), Some(row.name.as_str()), "{row:?}");
@@ -362,7 +365,7 @@ async fn members_in_folders_are_placed_and_one_that_is_no_file_is_dropped_with_w
     let d = s.detail(&id).await;
     assert_eq!(d.row.state, JobState::Done, "{:?}", d.row.note);
     assert_eq!(names(&s.stored_dir()), ["A.ttf", "Show - 02.ass"]);
-    let plan = s.store.plan(&id).await.unwrap();
+    let plan = s.store.place.plan(&id).await.unwrap();
     let page = plan
         .iter()
         .find(|r| r.member.as_deref() == Some("Show/page.html"))
@@ -395,7 +398,7 @@ async fn an_archive_whose_member_leaves_it_fails_and_stays_received() {
         .any(|(m, detail)| m == "evil.zip: 압축 파일을 풀지 못했어요"
             && detail.as_deref() == Some(reason.as_str())));
     assert_eq!(s.count("subtitle_job_members").await, 0);
-    assert!(s.store.plan(&id).await.unwrap().is_empty());
+    assert!(s.store.place.plan(&id).await.unwrap().is_empty());
 
     // Only the archive is in the receive area, and nothing reached the work.
     let received = file.path.clone().unwrap();
@@ -410,7 +413,11 @@ async fn an_archive_whose_member_leaves_it_fails_and_stays_received() {
     // own reason being no machine's failure.
     assert_eq!((file.unpack_tries, file.unpack_retry_at), (0, None));
     let again = s.count("subtitle_job_events").await;
-    s.store.requeue_waiting_for_sources(5_000).await.unwrap();
+    s.store
+        .run
+        .requeue_waiting_for_sources(5_000)
+        .await
+        .unwrap();
     s.run().await;
     assert_eq!(s.count("subtitle_job_events").await, again);
     assert!(s.area.at(&received).is_file());
@@ -482,7 +489,11 @@ async fn an_archive_waits_for_the_program_and_a_killed_unpacking_starts_anew() {
     std::fs::write(folder.join("7"), b"another run's").unwrap();
 
     // The worker starts again, now with the program.
-    s.store.requeue_waiting_for_sources(5_000).await.unwrap();
+    s.store
+        .run
+        .requeue_waiting_for_sources(5_000)
+        .await
+        .unwrap();
     s.run().await;
     let d = s.detail(&id).await;
     assert_eq!(d.row.state, JobState::Done, "{:?}", d.row.note);
@@ -590,6 +601,7 @@ async fn an_archive_this_machine_failed_to_unpack_is_tried_again_from_its_receip
     // A worker without the program starts: it lets the try go but cannot
     // make it, and says so.
     s.store
+        .run
         .requeue_waiting_for_sources(now.load(Ordering::SeqCst))
         .await
         .unwrap();
@@ -607,6 +619,7 @@ async fn an_archive_this_machine_failed_to_unpack_is_tried_again_from_its_receip
     // A worker with it starts, the disk still full: the second try, at
     // once, which fails as well and waits its own hour.
     s.store
+        .run
         .requeue_waiting_for_sources(now.load(Ordering::SeqCst))
         .await
         .unwrap();
@@ -741,7 +754,11 @@ async fn a_split_archive_is_tried_again_as_one() {
     }
     let now = Arc::new(AtomicI64::new(1_000));
     let go = CancellationToken::new();
-    s.store.requeue_waiting_for_sources(1_000).await.unwrap();
+    s.store
+        .run
+        .requeue_waiting_for_sources(1_000)
+        .await
+        .unwrap();
     s.runner_at(full_disk(), &now).run_ready(&go).await.unwrap();
 
     let d = s.detail(&id).await;
@@ -759,6 +776,7 @@ async fn a_split_archive_is_tried_again_as_one() {
     assert_eq!(two.volume_of.as_deref(), Some(one.id.as_str()));
 
     s.store
+        .run
         .requeue_waiting_for_sources(now.load(Ordering::SeqCst))
         .await
         .unwrap();
@@ -795,7 +813,7 @@ async fn an_uploads_archive_is_tried_again_before_its_placement_is_confirmed() {
     unpacks.run_ready(&go).await.unwrap();
     let d = s.detail(&id).await;
     assert_eq!(d.row.wait, Some(Wait::Placement), "{:?}", d.row.note);
-    assert_eq!(s.store.members(&id).await.unwrap().len(), 3);
+    assert_eq!(s.store.place.members(&id).await.unwrap().len(), 3);
 }
 
 // The third try this machine fails leaves the archive not unpacked: the job
@@ -818,6 +836,7 @@ async fn the_third_failed_try_leaves_the_archive_not_unpacked() {
     // Two worker starts, each trying it again at once.
     for _ in 0..2 {
         s.store
+            .run
             .requeue_waiting_for_sources(now.load(Ordering::SeqCst))
             .await
             .unwrap();
@@ -850,6 +869,7 @@ async fn the_third_failed_try_leaves_the_archive_not_unpacked() {
     now.fetch_add(10 * UNPACK_RETRY_AFTER, Ordering::SeqCst);
     assert_eq!(full.requeue_unpack_retries().await.unwrap(), 0);
     s.store
+        .run
         .requeue_waiting_for_sources(now.load(Ordering::SeqCst))
         .await
         .unwrap();
@@ -876,7 +896,11 @@ async fn an_empty_archive_is_not_tried_again() {
         .unwrap();
     let folder_only = zip.finish().unwrap().into_inner();
     replace_bytes(&s, &d.items[0].files[0], &folder_only).await;
-    s.store.requeue_waiting_for_sources(5_000).await.unwrap();
+    s.store
+        .run
+        .requeue_waiting_for_sources(5_000)
+        .await
+        .unwrap();
     s.run().await;
 
     let d = s.detail(&id).await;
@@ -917,7 +941,11 @@ async fn the_volumes_of_a_split_archive_are_unpacked_and_cleared_together() {
         let file = d.items[0].files.iter().find(|f| f.name == name).unwrap();
         replace_bytes(&s, file, bytes).await;
     }
-    s.store.requeue_waiting_for_sources(5_000).await.unwrap();
+    s.store
+        .run
+        .requeue_waiting_for_sources(5_000)
+        .await
+        .unwrap();
     s.run().await;
 
     let d = s.detail(&id).await;
@@ -987,7 +1015,11 @@ async fn volumes_of_one_name_in_two_folders_are_two_sets() {
         let fixture = fixtures().join(file.name.replace("Show", "split"));
         replace_bytes(&s, file, &std::fs::read(fixture).unwrap()).await;
     }
-    s.store.requeue_waiting_for_sources(5_000).await.unwrap();
+    s.store
+        .run
+        .requeue_waiting_for_sources(5_000)
+        .await
+        .unwrap();
     s.run().await;
 
     let d = s.detail(&id).await;
@@ -1050,7 +1082,7 @@ async fn a_split_set_without_its_first_volume_says_why() {
 async fn uploaded_archives_of_each_format_are_unpacked_by_the_worker() {
     let s = setup().await;
     let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
-    let uploads = trss_jobs::Uploads::new(s.store.clone(), s.area.clone());
+    let uploads = trss_jobs::Uploads::new(s.store.requests.clone(), s.area.clone());
     let mut staging = uploads.begin().await.unwrap();
     let names = [
         "pack.rar",
@@ -1097,7 +1129,7 @@ async fn uploaded_archives_of_each_format_are_unpacked_by_the_worker() {
     assert_eq!(receive_note(&d).as_deref(), Some("압축 파일 5개"));
     let files = &d.items[0].files;
     let by_name = |n: &str| files.iter().find(|f| f.name == n).unwrap();
-    let members = s.store.members(&id).await.unwrap();
+    let members = s.store.place.members(&id).await.unwrap();
     for archive in ["pack.rar", "pack.7z", "pack.tar.xz", "split.part1.rar"] {
         let file = by_name(archive);
         assert!(
@@ -1126,7 +1158,7 @@ async fn uploaded_archives_of_each_format_are_unpacked_by_the_worker() {
     );
     // Nothing is kept before the 배치 확인: the archives and their members
     // stay received.
-    let plan = s.store.plan(&id).await.unwrap();
+    let plan = s.store.place.plan(&id).await.unwrap();
     assert_eq!(plan.len(), 12);
     assert!(plan.iter().all(|r| !r.kept() && r.outcome.is_none()));
     assert!(!s.work().join(".trss").exists());
@@ -1168,7 +1200,11 @@ async fn an_upload_waits_for_the_program_and_keeps_what_it_kept() {
     assert_eq!(d.row.note.as_deref(), Some(trss_jobs::place::ARCHIVE_LATER));
     assert_eq!(receive_note(&d), received);
 
-    s.store.requeue_waiting_for_sources(5_000).await.unwrap();
+    s.store
+        .run
+        .requeue_waiting_for_sources(5_000)
+        .await
+        .unwrap();
     s.run().await;
     let d = s.detail(&id).await;
     assert_eq!(d.row.wait, Some(Wait::Placement), "{:?}", d.row.note);
@@ -1179,12 +1215,12 @@ async fn an_upload_waits_for_the_program_and_keeps_what_it_kept() {
     assert_eq!(receive_note(&d), received);
     let file = &d.items[0].files[0];
     assert!(file.unpacked_at.is_some(), "{:?}", file.unpack_error);
-    assert_eq!(s.store.members(&id).await.unwrap().len(), 3);
+    assert_eq!(s.store.place.members(&id).await.unwrap().len(), 3);
 }
 
 /// Makes an upload job of the files `files` (name, bytes) and returns its ID.
 async fn upload(s: &Setup, command: &str, files: &[(&str, Vec<u8>)]) -> (String, Vec<String>) {
-    let uploads = trss_jobs::Uploads::new(s.store.clone(), s.area.clone());
+    let uploads = trss_jobs::Uploads::new(s.store.requests.clone(), s.area.clone());
     let mut staging = uploads.begin().await.unwrap();
     for (name, bytes) in files {
         staging.start(name).await.unwrap();

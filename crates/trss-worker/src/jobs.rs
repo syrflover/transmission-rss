@@ -311,7 +311,10 @@ mod tests {
     use std::sync::Arc;
 
     use trss_core::Db;
-    use trss_jobs::{area::ReceiveArea, Created, JobStore, NewItem, NewJob, Runner, ScreenStore};
+    use trss_jobs::{
+        area::ReceiveArea, Created, JobRequests, JobRun, JobViews, NewItem, NewJob, PlaceStore,
+        Runner, ScreenStore,
+    };
     use trss_subtitles::Sources;
 
     use crate::{Worker, WorkerEnv};
@@ -321,7 +324,7 @@ mod tests {
     async fn with_a_bound_screen() -> (tempfile::TempDir, Worker, Db) {
         let dir = tempfile::tempdir().unwrap();
         let db = Db::open(dir.path().join("app.db")).await.unwrap();
-        let store = JobStore::new(db.clone());
+        let requests = JobRequests::new(db.clone());
         let job = NewJob {
             command_id: "c1".to_owned(),
             request: "{}".to_owned(),
@@ -340,10 +343,16 @@ mod tests {
                 found_at: 500,
             }],
         };
-        let Created::Created(id) = store.create(job, 900).await.unwrap() else {
+        let Created::Created(id) = requests.create(job, 900).await.unwrap() else {
             panic!("the job was not created");
         };
-        let item = store.detail(&id).await.unwrap().unwrap().items[0].id;
+        let item = JobViews::new(db.clone())
+            .detail(&id)
+            .await
+            .unwrap()
+            .unwrap()
+            .items[0]
+            .id;
         ScreenStore::new(db.clone())
             .bind(&id, item, "run-1", "target-1", 1_000)
             .await
@@ -356,7 +365,7 @@ mod tests {
             .unwrap()
             .with_clock(Arc::new(|| 2_000))
             .with_jobs(Runner::new(
-                store,
+                JobRun::new(db.clone()),
                 Sources::none(),
                 ReceiveArea::in_app_data(dir.path()),
                 Arc::new(|| 2_000),
@@ -369,7 +378,7 @@ mod tests {
     async fn with_a_job_waiting_for_a_video() -> (tempfile::TempDir, Worker, Db, String) {
         let dir = tempfile::tempdir().unwrap();
         let db = Db::open(dir.path().join("app.db")).await.unwrap();
-        let store = JobStore::new(db.clone());
+        let requests = JobRequests::new(db.clone());
         let job = NewJob {
             command_id: "c1".to_owned(),
             request: "{}".to_owned(),
@@ -388,7 +397,7 @@ mod tests {
                 found_at: 500,
             }],
         };
-        let Created::Created(id) = store.create(job, 900).await.unwrap() else {
+        let Created::Created(id) = requests.create(job, 900).await.unwrap() else {
             panic!("the job was not created");
         };
         let shows = dir.path().join("shows").to_string_lossy().into_owned();
@@ -434,7 +443,7 @@ mod tests {
             .unwrap()
             .with_clock(Arc::new(|| 2_000))
             .with_jobs(Runner::new(
-                store,
+                JobRun::new(db.clone()),
                 Sources::none(),
                 ReceiveArea::in_app_data(dir.path()),
                 Arc::new(|| 2_000),
@@ -536,7 +545,7 @@ mod tests {
             .unwrap()
             .with_clock(Arc::new(|| 2_000))
             .with_jobs(Runner::new(
-                JobStore::new(db.clone()),
+                JobRun::new(db.clone()),
                 Sources::none(),
                 ReceiveArea::in_app_data(dir.path()),
                 Arc::new(|| 2_000),
@@ -548,15 +557,14 @@ mod tests {
     async fn a_confirmed_cleanup_is_carried_out_when_no_job_is_ready() {
         // Also what a worker started after the confirmation does.
         let (dir, worker, db) = with_a_stored_subtitle().await;
-        let store = JobStore::new(db.clone());
-        let asked = store
+        let asked = PlaceStore::new(db.clone())
             .clean_stored("w1", "s1", vec!["a1".to_owned()], 1_000)
             .await
             .unwrap();
         let trss_jobs::place::cleanup::Asked::Asked(cleanup) = asked else {
             panic!("not asked: {asked:?}");
         };
-        assert!(!store.has_ready().await.unwrap());
+        assert!(!JobRun::new(db.clone()).has_ready().await.unwrap());
 
         let cancel = tokio_util::sync::CancellationToken::new();
         worker.run_jobs_once(&cancel).await.unwrap();

@@ -1,6 +1,7 @@
 //! The runner with the fake source, and its restarts from records left as a
 //! killed worker leaves them.
 
+use crate::Handles;
 use std::{
     path::Path,
     sync::{
@@ -15,8 +16,7 @@ use trss_core::{Clock, Db};
 use trss_jobs::{
     area::{self, ReceiveArea},
     store::{FileRow, JobDetail},
-    Created, FileState, ItemState, JobState, JobStore, NewItem, NewJob, Runner, StepKind,
-    StepState, Wait,
+    Created, FileState, ItemState, JobState, NewItem, NewJob, Runner, StepKind, StepState, Wait,
 };
 use trss_subtitles::{
     fake::{self, FakeSource},
@@ -25,7 +25,7 @@ use trss_subtitles::{
 
 struct Setup {
     _dir: tempfile::TempDir,
-    store: JobStore,
+    store: Handles,
     runner: Runner,
     area: ReceiveArea,
 }
@@ -38,10 +38,10 @@ fn ticking_clock() -> Clock {
 async fn setup() -> Setup {
     let dir = tempfile::tempdir().unwrap();
     let db = Db::open(dir.path().join("app.db")).await.unwrap();
-    let store = JobStore::new(db);
+    let store = Handles::new(db);
     let area = ReceiveArea::in_app_data(dir.path());
     let runner = Runner::new(
-        store.clone(),
+        store.run.clone(),
         Sources::none().with_fake(FakeSource),
         area.clone(),
         ticking_clock(),
@@ -83,7 +83,13 @@ fn job(command: &str, posts: &[(&str, &str)]) -> NewJob {
 }
 
 async fn make(s: &Setup, command: &str, posts: &[(&str, &str)]) -> String {
-    match s.store.create(job(command, posts), 900).await.unwrap() {
+    match s
+        .store
+        .requests
+        .create(job(command, posts), 900)
+        .await
+        .unwrap()
+    {
         Created::Created(id) => id,
         other => panic!("created: {other:?}"),
     }
@@ -94,7 +100,7 @@ async fn run(s: &Setup) {
 }
 
 async fn detail(s: &Setup, id: &str) -> JobDetail {
-    s.store.detail(id).await.unwrap().unwrap()
+    s.store.views.detail(id).await.unwrap().unwrap()
 }
 
 fn step(d: &JobDetail, kind: StepKind) -> Option<StepState> {
@@ -211,6 +217,7 @@ async fn a_site_check_and_an_unknown_site_wait_for_different_things() {
     let auth = make(&s, "c1", &[("1", "/auth/1"), ("2", "/ok/2")]).await;
     let unknown = s
         .store
+        .requests
         .create(
             NewJob {
                 revision_of: None,
@@ -243,7 +250,7 @@ async fn a_site_check_and_an_unknown_site_wait_for_different_things() {
     );
     assert_eq!(step(&d, StepKind::Auth), Some(StepState::Waiting));
     assert_eq!(d.items[1].state, ItemState::Done);
-    assert_eq!(s.store.auth_waits().await.unwrap().len(), 1);
+    assert_eq!(s.store.views.auth_waits().await.unwrap().len(), 1);
 
     let d = detail(&s, &unknown).await;
     assert_eq!(
@@ -264,17 +271,19 @@ async fn the_same_browser_id_finds_its_job_and_another_request_with_it_is_refuse
     let id = make(&s, "c1", &[("1", "/ok/1")]).await;
     let again = s
         .store
+        .requests
         .create(job("c1", &[("1", "/ok/1")]), 901)
         .await
         .unwrap();
     assert_eq!(again, Created::Existing(id.clone()));
     let other = s
         .store
+        .requests
         .create(job("c1", &[("1", "/ok/1"), ("2", "/ok/2")]), 902)
         .await
         .unwrap();
     assert_eq!(other, Created::Mismatch(id));
-    assert_eq!(s.store.open_jobs().await.unwrap().len(), 1);
+    assert_eq!(s.store.views.open_jobs().await.unwrap().len(), 1);
 }
 
 #[tokio::test]
@@ -285,12 +294,12 @@ async fn done_jobs_come_newest_first_a_page_at_a_time() {
     }
     run(&s).await;
 
-    let first = s.store.done_page(None, 5).await.unwrap();
+    let first = s.store.views.done_page(None, 5).await.unwrap();
     assert_eq!((first.items.len(), first.total), (5, 23));
     let mut seen: Vec<i64> = first.items.iter().map(|j| j.seq).collect();
     let mut next = first.next;
     while let Some(after) = next {
-        let page = s.store.done_page(Some(after), 5).await.unwrap();
+        let page = s.store.views.done_page(Some(after), 5).await.unwrap();
         seen.extend(page.items.iter().map(|j| j.seq));
         next = page.next;
     }
@@ -343,9 +352,10 @@ async fn a_shutdown_in_the_middle_of_a_file_leaves_the_job_running_and_the_next_
 /// worker that died while receiving its file leaves it.
 async fn killed(s: &Setup, path: &str) -> (String, i64) {
     let id = make(s, "c1", &[("1", path)]).await;
-    s.store.claim_next(950).await.unwrap().unwrap();
-    let item = s.store.items(&id).await.unwrap()[0].id;
+    s.store.run.claim_next(950).await.unwrap().unwrap();
+    let item = s.store.views.items(&id).await.unwrap()[0].id;
     s.store
+        .run
         .set_item(item, ItemState::Running, None, None, 960)
         .await
         .unwrap();
@@ -396,8 +406,8 @@ async fn intended(
         unpack_retry_at: None,
         unchanged_asset: None,
     };
-    s.store.file_intend(row.clone()).await.unwrap();
-    s.store.file_expect(&id, expected, 971).await.unwrap();
+    s.store.run.file_intend(row.clone()).await.unwrap();
+    s.store.run.file_expect(&id, expected, 971).await.unwrap();
     if let Some(bytes) = bytes {
         let dir = s.area.at(row.temp_dir.as_deref().unwrap());
         std::fs::create_dir_all(&dir).unwrap();
@@ -412,6 +422,7 @@ async fn fetched(s: &Setup, row: &FileRow, path: &str) {
     let temp = s.area.at(row.temp_dir.as_deref().unwrap()).join(&row.name);
     let (size, sha, object) = area::read_facts(&temp).unwrap();
     s.store
+        .run
         .file_fetched(&row.id, size, sha, object, path.to_owned(), 972)
         .await
         .unwrap();
@@ -567,6 +578,7 @@ async fn a_fetched_file_is_published_but_a_copy_with_the_same_bytes_at_its_path_
 async fn mounted_again(s: &Setup, row: &FileRow) {
     let id = row.id.clone();
     s.store
+        .run
         .db()
         .run(move |c| {
             c.execute(
@@ -624,12 +636,14 @@ async fn a_done_file_is_reused_after_its_bytes_are_checked_and_held_when_they_ch
             std::fs::write(&path, b"other bytes").unwrap();
         }
         // As if the worker died after the file was done, before the item was.
-        let item = s.store.items(&id).await.unwrap()[0].id;
+        let item = s.store.views.items(&id).await.unwrap()[0].id;
         s.store
+            .run
             .set_item(item, ItemState::Running, None, None, 2_000)
             .await
             .unwrap();
         s.store
+            .run
             .settle(&id, JobState::Running, None, None, 2_000)
             .await
             .unwrap();
@@ -706,11 +720,12 @@ async fn an_empty_temporary_file_is_no_bytes_even_when_nothing_was_announced() {
 async fn an_item_with_an_abandoned_attempt_still_records_the_shared_file() {
     let s = setup().await;
     let id = make(&s, "c1", &[("11", "/shared/s/11"), ("12", "/shared/s/12")]).await;
-    s.store.claim_next(950).await.unwrap().unwrap();
-    let items = s.store.items(&id).await.unwrap();
+    s.store.run.claim_next(950).await.unwrap().unwrap();
+    let items = s.store.views.items(&id).await.unwrap();
     // Item 12 had started the shared file and left no bytes; item 11 is
     // still to run.
     s.store
+        .run
         .set_item(items[1].id, ItemState::Running, None, None, 960)
         .await
         .unwrap();
@@ -738,12 +753,14 @@ async fn a_job_started_too_many_times_is_held_instead_of_blocking_the_line() {
     // Each start died before it ended, in the middle of the first item.
     let item = detail(&s, &stuck).await.items[0].id;
     for _ in 0..trss_jobs::runner::MAX_STARTS {
-        s.store.claim_next(950).await.unwrap().unwrap();
+        s.store.run.claim_next(950).await.unwrap().unwrap();
         s.store
+            .run
             .set_item(item, ItemState::Running, None, None, 950)
             .await
             .unwrap();
         s.store
+            .run
             .begin_step(&stuck, StepKind::Open, 950)
             .await
             .unwrap();
@@ -763,6 +780,7 @@ async fn a_job_that_ends_each_run_waiting_for_a_source_is_never_held_for_its_sta
     let s = setup().await;
     let waits = s
         .store
+        .requests
         .create(
             NewJob {
                 revision_of: None,
@@ -882,6 +900,7 @@ async fn failed_keeping_path(s: &Setup, row: &FileRow) {
         size: None,
     };
     s.store
+        .run
         .file_fail(&row.id, FileState::Failed, problem, 973)
         .await
         .unwrap();
@@ -1008,12 +1027,14 @@ async fn bytes_that_cannot_be_removed_hold_the_receipt_instead_of_counting_as_go
 async fn a_jobs_failure_class_is_its_first_failed_items_even_when_that_has_none() {
     let s = setup().await;
     let id = make(&s, "c1", &[("1", "/ok/a"), ("2", "/ok/b")]).await;
-    let items = s.store.items(&id).await.unwrap();
+    let items = s.store.views.items(&id).await.unwrap();
     s.store
+        .run
         .fail_item(items[0].id, "디스크가 가득 찼어요".into(), None, 960)
         .await
         .unwrap();
     s.store
+        .run
         .fail_item(
             items[1].id,
             "받은 파일이 비어 있어요".into(),
@@ -1026,8 +1047,9 @@ async fn a_jobs_failure_class_is_its_first_failed_items_even_when_that_has_none(
 
     let s = setup().await;
     let id = make(&s, "c1", &[("1", "/ok/a"), ("2", "/ok/b")]).await;
-    let items = s.store.items(&id).await.unwrap();
+    let items = s.store.views.items(&id).await.unwrap();
     s.store
+        .run
         .fail_item(
             items[1].id,
             "받은 파일이 비어 있어요".into(),

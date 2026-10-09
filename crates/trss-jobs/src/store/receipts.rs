@@ -7,7 +7,7 @@ use trss_subtitles::{verify::Format, FailureKind};
 
 use super::{
     rows::{file_row, FILE_COLUMNS},
-    FileRow, JobError, JobStore,
+    FileRow, JobError, JobRun,
 };
 use crate::model::FileState;
 
@@ -85,7 +85,7 @@ pub fn snapshot_json(snapshot: &trss_subtitles::Snapshot) -> Option<String> {
     Some(serde_json::to_string(&pairs).expect("strings serialize"))
 }
 
-impl JobStore {
+impl JobRun {
     /// The receipts of `file_key` in the job, oldest first.
     pub async fn files_for_key(
         &self,
@@ -337,7 +337,7 @@ impl JobStore {
 
     /// Ends a receipt `failed`, or `abandoned` when it is to be tried again,
     /// for `problem`. The answer's facts it does not have stay as recorded.
-    /// A planned path stays until its bytes are gone ([`JobStore::file_clear_path`]):
+    /// A planned path stays until its bytes are gone ([`JobRun::file_clear_path`]):
     /// a crash in between leaves a record that still names them.
     pub async fn file_fail(
         &self,

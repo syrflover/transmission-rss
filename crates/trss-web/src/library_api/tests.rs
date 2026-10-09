@@ -268,7 +268,7 @@ async fn an_empty_library_answers_an_empty_page() {
 async fn waiting(state: &AppState, n: usize, work: Option<&str>, wait: &'static str) {
     use trss_jobs::{Created, NewItem, NewJob};
     let made = state
-        .jobs
+        .job_requests
         .create(
             NewJob {
                 command_id: format!("c{n}"),
@@ -294,7 +294,6 @@ async fn waiting(state: &AppState, n: usize, work: Option<&str>, wait: &'static 
         .unwrap();
     let Created::Created(id) = made else { panic!() };
     state
-        .jobs
         .db()
         .run::<_, trss_core::DbError, _>(move |c| {
             c.execute(

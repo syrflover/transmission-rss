@@ -3,6 +3,7 @@
 //! with a job that takes a file up meanwhile, and the restarts a killed
 //! worker leaves.
 
+use crate::Handles;
 use std::{
     path::{Path, PathBuf},
     sync::{
@@ -20,7 +21,7 @@ use trss_jobs::{
         cleanup::{self, Asked, CleanKind, Cleanable},
         records::StoredChoice,
     },
-    Created, JobState, JobStore, NewItem, NewJob, ReceiveArea, Runner, Wait,
+    Created, JobState, NewItem, NewJob, ReceiveArea, Runner, Wait,
 };
 use trss_subtitles::{
     fake::{self, FakeSource},
@@ -34,7 +35,7 @@ const VIDEO: &str = "Season 01/Show S01E02.mkv";
 struct Setup {
     dir: tempfile::TempDir,
     db: Db,
-    store: JobStore,
+    store: Handles,
     runner: Runner,
 }
 
@@ -69,7 +70,7 @@ impl Setup {
     }
 
     async fn cleanable(&self) -> Vec<Cleanable> {
-        self.store.work_files(WORK).await.unwrap().cleanable
+        self.store.place.work_files(WORK).await.unwrap().cleanable
     }
 
     /// The cleanable entry of the stored file `name`.
@@ -87,6 +88,7 @@ impl Setup {
         let assets = entry.with.iter().map(|f| f.id.clone()).collect();
         match self
             .store
+            .place
             .clean_stored(WORK, &entry.id, assets, 60_000)
             .await
             .unwrap()
@@ -193,10 +195,10 @@ async fn setup() -> Setup {
     })
     .await
     .unwrap();
-    let store = JobStore::new(db.clone());
+    let store = Handles::new(db.clone());
     let area = ReceiveArea::in_app_data(dir.path());
     let runner = Runner::new(
-        store.clone(),
+        store.run.clone(),
         Sources::none().with_fake(FakeSource),
         area,
         ticking_clock(),
@@ -241,7 +243,7 @@ async fn make_pack_by(
             found_at: 500,
         }],
     };
-    match s.store.create(job, 900).await.unwrap() {
+    match s.store.requests.create(job, 900).await.unwrap() {
         Created::Created(id) => id,
         other => panic!("created: {other:?}"),
     }
@@ -305,7 +307,7 @@ fn kept_names(entry: &Cleanable) -> Vec<(&str, &str)> {
 async fn waiting_alone(s: &Setup) -> String {
     let id = make_pack(s, "c7", "7", &["Show - 07.ass", "Solo.ttf", "readme.txt"]).await;
     s.run().await;
-    let d = s.store.detail(&id).await.unwrap().unwrap();
+    let d = s.store.views.detail(&id).await.unwrap().unwrap();
     assert_eq!(
         (d.row.state, d.row.wait),
         (JobState::Waiting, Some(Wait::Video)),
@@ -324,16 +326,24 @@ async fn past_alone(s: &Setup, font: &str) -> String {
     s.run().await;
     let second = make_pack(s, "c2", "2", &["Show - 02 [v2].ass"]).await;
     s.run().await;
-    let d = s.store.detail(&second).await.unwrap().unwrap();
+    let d = s.store.views.detail(&second).await.unwrap().unwrap();
     assert_eq!(d.row.wait, Some(Wait::Approval), "{:?}", d.row.note);
-    let plan = s.store.replacements(&second).await.unwrap().remove(0).plan;
+    let plan = s
+        .store
+        .place
+        .replacements(&second)
+        .await
+        .unwrap()
+        .remove(0)
+        .plan;
     s.store
+        .place
         .decide_replacement(&second, &plan.id, plan.version, true, 50_000)
         .await
         .unwrap();
     s.run().await;
     for id in [&first, &second] {
-        let d = s.store.detail(id).await.unwrap().unwrap();
+        let d = s.store.views.detail(id).await.unwrap().unwrap();
         assert_eq!(d.row.state, JobState::Done, "{:?}", d.row.note);
     }
     assert_eq!(
@@ -365,7 +375,7 @@ async fn cleaning_one_of_two_revisions_sharing_a_font_keeps_the_font_for_the_oth
     .await;
     s.run().await;
     for id in [&first, &second] {
-        let d = s.store.detail(id).await.unwrap().unwrap();
+        let d = s.store.views.detail(id).await.unwrap().unwrap();
         assert_eq!(d.row.state, JobState::Done, "{:?}", d.row.note);
     }
     assert_eq!(
@@ -415,6 +425,7 @@ async fn cleaning_one_of_two_revisions_sharing_a_font_keeps_the_font_for_the_oth
     let other = s.entry("Show - 05 [v2].ass").await;
     let choice = s
         .store
+        .place
         .choose_stored(WORK, &other.id, Chosen::Apply, 70_000)
         .await
         .unwrap();
@@ -426,7 +437,7 @@ async fn cleaning_one_of_two_revisions_sharing_a_font_keeps_the_font_for_the_oth
         }
     );
     s.run().await;
-    let d = s.store.detail(&second).await.unwrap().unwrap();
+    let d = s.store.views.detail(&second).await.unwrap().unwrap();
     assert_eq!(d.row.state, JobState::Done, "{:?}", d.row.note);
     assert_eq!(
         std::fs::read(s.work().join("Season 01/Show S01E05.ass")).unwrap(),
@@ -460,7 +471,7 @@ async fn cleaning_a_revision_alone_with_its_font_and_attachment_removes_all_thre
     assert!(entry.kept.is_empty());
     let size =
         |names: &[&str]| -> u64 { names.iter().map(|n| fake::bytes_of(n).len() as u64).sum() };
-    let total = s.store.work_files(WORK).await.unwrap().total;
+    let total = s.store.place.work_files(WORK).await.unwrap().total;
     assert_eq!(
         total,
         size(&[
@@ -494,10 +505,10 @@ async fn cleaning_a_revision_alone_with_its_font_and_attachment_removes_all_thre
         ]
     );
     assert_eq!(
-        s.store.work_files(WORK).await.unwrap().total,
+        s.store.place.work_files(WORK).await.unwrap().total,
         size(&["Show - 02 [v2].ass"])
     );
-    let storage = s.store.storage().await.unwrap();
+    let storage = s.store.place.storage().await.unwrap();
     assert_eq!(storage.len(), 1);
     assert_eq!(storage[0].total, size(&["Show - 02 [v2].ass"]));
     assert_eq!(storage[0].cleanable, 0);
@@ -526,6 +537,7 @@ async fn a_stored_subtitle_a_running_or_held_job_uses_is_not_cleanable() {
         assert_eq!(s.entry("Show - 05.ass").await.blocked, Some(reason));
         let asked = s
             .store
+            .place
             .clean_stored(WORK, &entry.id, assets.clone(), 60_000)
             .await
             .unwrap();
@@ -560,6 +572,7 @@ async fn a_stored_subtitle_a_running_or_held_job_uses_is_not_cleanable() {
     .await;
     let asked = s
         .store
+        .place
         .clean_stored(WORK, &entry.id, Vec::new(), 60_000)
         .await
         .unwrap();
@@ -570,6 +583,7 @@ async fn a_stored_subtitle_a_running_or_held_job_uses_is_not_cleanable() {
         .await;
     assert_eq!(
         s.store
+            .place
             .clean_stored(WORK, &applied, Vec::new(), 60_000)
             .await
             .unwrap(),
@@ -577,6 +591,7 @@ async fn a_stored_subtitle_a_running_or_held_job_uses_is_not_cleanable() {
     );
     assert_eq!(
         s.store
+            .place
             .clean_stored(WORK, "nope", Vec::new(), 60_000)
             .await
             .unwrap(),
@@ -605,7 +620,7 @@ async fn a_font_a_new_job_takes_up_after_the_confirmation_stays() {
     video(&s, "05").await;
     let next = make_pack(&s, "c5", "5", &["Show - 05.ass", "Race.ttf"]).await;
     s.run().await;
-    let d = s.store.detail(&next).await.unwrap().unwrap();
+    let d = s.store.views.detail(&next).await.unwrap().unwrap();
     assert_eq!(d.row.state, JobState::Done, "{:?}", d.row.note);
     assert_eq!(
         s.one::<i64>(
@@ -693,7 +708,7 @@ async fn a_font_a_job_cut_before_its_links_kept_stays() {
 
     // The job's next run links its subtitle to the font, which is there.
     s.run().await;
-    let d = s.store.detail(&next).await.unwrap().unwrap();
+    let d = s.store.views.detail(&next).await.unwrap().unwrap();
     assert_eq!(d.row.state, JobState::Done, "{:?}", d.row.note);
     assert_eq!(
         s.one::<i64>(format!(
@@ -840,7 +855,7 @@ async fn a_file_changed_on_disk_is_held_and_left_as_it_is() {
     // The others were removed; the cleanup shows as held.
     assert!(s.removed("Show - 02.ass").await);
     assert!(s.removed("readme.txt").await);
-    let cleaning = s.store.work_files(WORK).await.unwrap().cleaning;
+    let cleaning = s.store.place.work_files(WORK).await.unwrap().cleaning;
     assert_eq!(cleaning.len(), 1);
     assert_eq!(cleaning[0].state, "held");
     assert_eq!(cleaning[0].name, "Show - 02.ass");
@@ -879,6 +894,7 @@ async fn nothing_is_cleaned_while_the_work_folder_is_away() {
     let assets = entry.with.iter().map(|f| f.id.clone()).collect();
     let asked = s
         .store
+        .place
         .clean_stored(WORK, &entry.id, assets, 60_000)
         .await
         .unwrap();
@@ -895,12 +911,12 @@ async fn nothing_is_cleaned_while_the_work_folder_is_away() {
         .await,
         0
     );
-    assert_eq!(s.store.storage().await.unwrap()[0].cleanable, 0);
+    assert_eq!(s.store.place.storage().await.unwrap()[0].cleanable, 0);
 
     // Back: cleanable again.
     std::fs::rename(&moved, s.work()).unwrap();
     assert_eq!(s.entry("Show - 02.ass").await.blocked, None);
-    assert_eq!(s.store.storage().await.unwrap()[0].cleanable, 1);
+    assert_eq!(s.store.place.storage().await.unwrap()[0].cleanable, 1);
 }
 
 // The same subtitle and font received in two posts are one stored subtitle
@@ -942,7 +958,7 @@ async fn a_subtitle_received_twice_is_cleaned_with_its_font() {
     // Both jobs waited for the video of the one copy: they settle.
     s.run().await;
     for id in [&first, &second] {
-        let d = s.store.detail(id).await.unwrap().unwrap();
+        let d = s.store.views.detail(id).await.unwrap().unwrap();
         assert_eq!(d.row.state, JobState::Done, "{:?}", d.row.note);
     }
 }
@@ -958,7 +974,7 @@ async fn a_font_of_a_fonts_only_package_stays() {
     s.run().await;
     let fonts = make_pack(&s, "c3", "7", &["Dup.ttf"]).await;
     s.run().await;
-    let d = s.store.detail(&fonts).await.unwrap().unwrap();
+    let d = s.store.views.detail(&fonts).await.unwrap().unwrap();
     assert_eq!(d.row.state, JobState::Partial, "{:?}", d.row.note);
     assert_eq!(
         s.one::<i64>(
@@ -1008,10 +1024,10 @@ async fn a_subtitle_waiting_for_its_video_is_cleaned_and_its_job_settles() {
     );
     assert!(entry.kept.is_empty(), "{:?}", entry.kept);
     let cleanup = s.ask("Show - 07.ass").await;
-    let d = s.store.detail(&id).await.unwrap().unwrap();
+    let d = s.store.views.detail(&id).await.unwrap().unwrap();
     assert_eq!(d.row.state, JobState::Pending);
     assert_eq!(d.row.note.as_deref(), Some(cleanup::REFLECT));
-    let plan = s.store.plan(&id).await.unwrap();
+    let plan = s.store.place.plan(&id).await.unwrap();
     let row = plan.iter().find(|r| r.name == "Show - 07.ass").unwrap();
     assert_eq!(row.outcome, Some(Outcome::Stored));
     assert_eq!(row.note.as_deref(), Some(cleanup::CLEANED_WHILE_WAITING));
@@ -1032,7 +1048,7 @@ async fn a_subtitle_waiting_for_its_video_is_cleaned_and_its_job_settles() {
     assert!(!s.files_dir().parent().unwrap().exists());
     assert!(s.dir.path().join("subtitle-files").is_dir());
     s.run().await;
-    let d = s.store.detail(&id).await.unwrap().unwrap();
+    let d = s.store.views.detail(&id).await.unwrap().unwrap();
     assert_eq!(
         (d.row.state, d.row.wait),
         (JobState::Done, None),
@@ -1046,11 +1062,11 @@ async fn a_subtitle_waiting_for_its_video_is_cleaned_and_its_job_settles() {
     s.run().await;
     assert!(!s.work().join("Season 01/Show S01E07.ass").exists());
     assert_eq!(
-        s.store.detail(&id).await.unwrap().unwrap().row.state,
+        s.store.views.detail(&id).await.unwrap().unwrap().row.state,
         JobState::Done
     );
     // And no list shows it.
-    assert!(s.store.stored_only(WORK).await.unwrap().is_empty());
+    assert!(s.store.place.stored_only(WORK).await.unwrap().is_empty());
     assert!(s.cleanable().await.is_empty());
 }
 
@@ -1066,7 +1082,7 @@ async fn a_removed_path_takes_a_new_file_of_the_same_name() {
     // applied.
     let id = make_pack(&s, "c6b", "2", &["Show - 02.ass", "Solo.ttf", "readme.txt"]).await;
     s.run().await;
-    let d = s.store.detail(&id).await.unwrap().unwrap();
+    let d = s.store.views.detail(&id).await.unwrap().unwrap();
     assert_eq!(d.row.wait, Some(Wait::Approval), "{:?}", d.row.note);
     assert_eq!(
         names(&s.stored_dir()),
@@ -1102,13 +1118,13 @@ async fn a_row_of_a_cleaned_copy_back_in_line_ends_stored_not_failed() {
 
     s.run().await;
 
-    let d = s.store.detail(&first).await.unwrap().unwrap();
+    let d = s.store.views.detail(&first).await.unwrap().unwrap();
     assert_eq!(d.row.state, JobState::Done, "{:?}", d.row.note);
-    let plan = s.store.plan(&first).await.unwrap();
+    let plan = s.store.place.plan(&first).await.unwrap();
     let row = plan.iter().find(|r| r.name == "Show - 02.ass").unwrap();
     assert_eq!(row.outcome, Some(Outcome::Stored));
     assert_eq!(row.note.as_deref(), Some(cleanup::NOT_APPLIED));
-    assert!(s.store.replacements(&first).await.unwrap().is_empty());
+    assert!(s.store.place.replacements(&first).await.unwrap().is_empty());
     assert_eq!(
         std::fs::read(s.work().join("Season 01/Show S01E02.ass")).unwrap(),
         fake::bytes_of("Show - 02 [v2].ass")

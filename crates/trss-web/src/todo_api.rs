@@ -516,6 +516,7 @@ async fn follow_suggestions(
 pub async fn todo_list(state: &AppState) -> Result<TodoList, ApiError> {
     Ok(trss_jobs::todo::list(&Sources {
         jobs: &state.jobs,
+        place: &state.place,
         follow: &state.follow,
         library: &state.library,
         artwork: &state.artwork.store,

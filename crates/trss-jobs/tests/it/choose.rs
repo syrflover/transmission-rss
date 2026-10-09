@@ -5,6 +5,7 @@
 //! restored when a newer one is stored, or added beside the creator's applied
 //! copies; and the work's own order of the formats.
 
+use crate::Handles;
 use std::{
     path::PathBuf,
     sync::{
@@ -29,7 +30,7 @@ use trss_jobs::{
         },
     },
     store::JobDetail,
-    Created, JobState, JobStore, NewItem, NewJob, Runner, Wait,
+    Created, JobState, NewItem, NewJob, Runner, Wait,
 };
 use trss_subtitles::{
     fake::{self, FakeSource},
@@ -52,7 +53,7 @@ const MINE_SMI: &str = "<SAMI><BODY><SYNC Start=1000><P>내 자막</BODY></SAMI>
 struct Setup {
     dir: tempfile::TempDir,
     db: Db,
-    store: JobStore,
+    store: Handles,
     runner: Runner,
 }
 
@@ -134,6 +135,7 @@ impl Setup {
 
     async fn choose(&self, stored: &str, mode: Chosen) -> StoredChoice {
         self.store
+            .place
             .choose_stored(WORK, stored, mode, 5_000_000)
             .await
             .unwrap()
@@ -175,10 +177,10 @@ async fn setup() -> Setup {
     })
     .await
     .unwrap();
-    let store = JobStore::new(db.clone());
+    let store = Handles::new(db.clone());
     let area = ReceiveArea::in_app_data(dir.path());
     let runner = Runner::new(
-        store.clone(),
+        store.run.clone(),
         Sources::none().with_fake(FakeSource),
         area,
         ticking_clock(),
@@ -223,7 +225,7 @@ async fn make_at(
             found_at: 500,
         }],
     };
-    match s.store.create(job, 900).await.unwrap() {
+    match s.store.requests.create(job, 900).await.unwrap() {
         Created::Created(id) => id,
         other => panic!("created: {other:?}"),
     }
@@ -234,7 +236,7 @@ async fn run(s: &Setup) {
 }
 
 async fn detail(s: &Setup, id: &str) -> JobDetail {
-    s.store.detail(id).await.unwrap().unwrap()
+    s.store.views.detail(id).await.unwrap().unwrap()
 }
 
 fn done(d: &JobDetail) {
@@ -259,7 +261,7 @@ fn waiting_for_approval(d: &JobDetail) {
 
 /// The job's one latest plan.
 async fn view(s: &Setup, job: &str) -> PlanView {
-    let mut views = s.store.replacements(job).await.unwrap();
+    let mut views = s.store.place.replacements(job).await.unwrap();
     assert_eq!(views.len(), 1, "{views:?}");
     views.remove(0)
 }
@@ -267,6 +269,7 @@ async fn view(s: &Setup, job: &str) -> PlanView {
 async fn decide(s: &Setup, job: &str, plan: &Plan, replace: bool) {
     let decided = s
         .store
+        .place
         .decide_replacement(job, &plan.id, plan.version, replace, 5_000_000)
         .await
         .unwrap();
@@ -288,7 +291,7 @@ fn actions(plan: &Plan) -> Vec<(&str, PathAction)> {
 
 /// What a row of the job's plan was chosen as.
 async fn chosen_of(s: &Setup, job: &str, stored: &str) -> Option<Chosen> {
-    let rows = s.store.plan(job).await.unwrap();
+    let rows = s.store.place.plan(job).await.unwrap();
     rows.iter()
         .find(|r| r.stored_id.as_deref() == Some(stored))
         .expect("the row")
@@ -498,7 +501,7 @@ async fn a_newer_revision_still_keeps_a_row_nobody_chose_stored_only() {
     ))
     .await;
     run(&s).await;
-    let rows = s.store.plan(&first).await.unwrap();
+    let rows = s.store.place.plan(&first).await.unwrap();
     assert!(rows.iter().all(|r| r.chosen.is_none()));
     assert_eq!(
         s.count(format!(
@@ -751,11 +754,11 @@ async fn a_works_own_order_decides_its_first_apply_and_going_back_restores_the_c
     // Another work follows the common order.
     let formats = |order: Vec<SubtitleFormat>| order.iter().map(|f| f.code()).collect::<Vec<_>>();
     assert_eq!(
-        formats(s.store.format_order(WORK).await.unwrap()),
+        formats(s.store.place.format_order(WORK).await.unwrap()),
         ["srt", "ass", "smi"]
     );
     assert_eq!(
-        formats(s.store.format_order("other").await.unwrap()),
+        formats(s.store.place.format_order("other").await.unwrap()),
         ["ass", "srt", "smi"]
     );
 
@@ -777,7 +780,7 @@ async fn a_works_own_order_decides_its_first_apply_and_going_back_restores_the_c
     assert!(settings.delete_work_format_order(WORK).await.unwrap());
     assert!(settings.work_format_order(WORK).await.unwrap().is_none());
     assert_eq!(
-        formats(s.store.format_order(WORK).await.unwrap()),
+        formats(s.store.place.format_order(WORK).await.unwrap()),
         ["ass", "srt", "smi"]
     );
     let job = make_at(
@@ -801,6 +804,7 @@ async fn a_works_own_order_decides_its_first_apply_and_going_back_restores_the_c
 /// The row of the job's plan that keeps `stored`.
 async fn row_of(s: &Setup, job: &str, stored: &str) -> PlanRow {
     s.store
+        .place
         .plan(job)
         .await
         .unwrap()
@@ -967,7 +971,7 @@ async fn an_identical_file_is_not_recorded_as_applied_when_the_stored_file_is_go
 
 /// The stored subtitle of the job's first plan row.
 async fn row_of_first(s: &Setup, job: &str) -> String {
-    s.store.plan(job).await.unwrap()[0]
+    s.store.place.plan(job).await.unwrap()[0]
         .stored_id
         .clone()
         .expect("stored")

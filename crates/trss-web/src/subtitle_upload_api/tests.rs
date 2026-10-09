@@ -39,7 +39,6 @@ impl Setup {
 
 async fn sql(state: &AppState, sql: &'static str) {
     state
-        .jobs
         .db()
         .run::<_, DbError, _>(move |c| Ok(c.execute_batch(sql)?))
         .await
@@ -53,7 +52,7 @@ async fn setup_with(limits: Option<Limits>) -> Setup {
     let area = ReceiveArea::new(dir.path().join("receive"));
     let mut state = AppState::new(Db::open_blocking(":memory:").unwrap()).with_receive_area(&area);
     if let Some(limits) = limits {
-        let uploads = Uploads::new(state.jobs.clone(), area.clone()).with_limits(limits);
+        let uploads = Uploads::new(state.job_requests.clone(), area.clone()).with_limits(limits);
         state = state.with_uploads(uploads);
     }
     sql(

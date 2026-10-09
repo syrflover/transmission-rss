@@ -10,7 +10,7 @@ use tower::ServiceExt;
 use super::*;
 use trss_collect::store::history::{HistoryResult, Observation};
 use trss_core::{Db, DbError};
-use trss_jobs::{ItemState, JobStore};
+use trss_jobs::{ItemState, JobRun};
 
 const ANIME: i64 = 3424;
 
@@ -49,7 +49,6 @@ pub(super) async fn get(router: &Router, uri: &str) -> (StatusCode, Value) {
 
 pub(super) async fn sql(state: &AppState, sql: &'static str) {
     state
-        .jobs
         .db()
         .run::<_, DbError, _>(move |c| Ok(c.execute_batch(sql)?))
         .await
@@ -199,14 +198,15 @@ async fn a_pick_makes_one_job_per_browser_id_of_one_creators_candidates() {
 /// Makes a job of `items` (post paths) and leaves it as `state` with each
 /// item as given.
 async fn job_in(
-    jobs: &JobStore,
+    app: &AppState,
     n: usize,
     state: JobState,
     wait: Option<Wait>,
     items: &[(ItemState, Option<&str>)],
     at: i64,
 ) -> String {
-    let made = jobs
+    let made = app
+        .job_requests
         .create(
             NewJob {
                 command_id: format!("c{n}"),
@@ -235,11 +235,12 @@ async fn job_in(
         .await
         .unwrap();
     let Created::Created(id) = made else { panic!() };
-    for (item, (item_state, reason)) in jobs.items(&id).await.unwrap().iter().zip(items) {
+    let run = JobRun::new(app.db().clone());
+    for (item, (item_state, reason)) in app.jobs.items(&id).await.unwrap().iter().zip(items) {
         let item_wait = (*item_state == ItemState::Waiting)
             .then_some(wait)
             .flatten();
-        jobs.set_item(
+        run.set_item(
             item.id,
             *item_state,
             item_wait,
@@ -250,7 +251,7 @@ async fn job_in(
         .unwrap();
     }
     if state != JobState::Pending {
-        jobs.settle(&id, state, wait, None, at).await.unwrap();
+        run.settle(&id, state, wait, None, at).await.unwrap();
     }
     id
 }
@@ -259,7 +260,6 @@ async fn job_in(
 async fn the_groups_put_failures_first_and_page_the_done_jobs_five_then_more() {
     let (state, router) = app();
     linked_season(&state).await;
-    let jobs = &state.jobs;
     let ok = [(ItemState::Done, None)];
     let failed = [(ItemState::Failed, Some("게시물이 없어요 (404)"))];
     let mut n = 0;
@@ -268,12 +268,12 @@ async fn the_groups_put_failures_first_and_page_the_done_jobs_five_then_more() {
         n
     };
     for i in 0..115 {
-        job_in(jobs, next(), JobState::Done, None, &ok, 10_000 + i).await;
+        job_in(&state, next(), JobState::Done, None, &ok, 10_000 + i).await;
     }
-    let old_failure = job_in(jobs, next(), JobState::Failed, None, &failed, 100).await;
-    let new_failure = job_in(jobs, next(), JobState::Partial, None, &ok, 200).await;
+    let old_failure = job_in(&state, next(), JobState::Failed, None, &failed, 100).await;
+    let new_failure = job_in(&state, next(), JobState::Partial, None, &ok, 200).await;
     let pending = job_in(
-        jobs,
+        &state,
         next(),
         JobState::Pending,
         None,
@@ -282,7 +282,7 @@ async fn the_groups_put_failures_first_and_page_the_done_jobs_five_then_more() {
     )
     .await;
     let held = job_in(
-        jobs,
+        &state,
         next(),
         JobState::Held,
         None,
@@ -291,7 +291,7 @@ async fn the_groups_put_failures_first_and_page_the_done_jobs_five_then_more() {
     )
     .await;
     let subtitle = job_in(
-        jobs,
+        &state,
         next(),
         JobState::Waiting,
         Some(Wait::Subtitle),
@@ -303,7 +303,7 @@ async fn the_groups_put_failures_first_and_page_the_done_jobs_five_then_more() {
     for _ in 0..2 {
         auth.push(
             job_in(
-                jobs,
+                &state,
                 next(),
                 JobState::Waiting,
                 Some(Wait::Auth),
@@ -314,7 +314,7 @@ async fn the_groups_put_failures_first_and_page_the_done_jobs_five_then_more() {
         );
     }
     let running = job_in(
-        jobs,
+        &state,
         next(),
         JobState::Running,
         None,
@@ -381,7 +381,7 @@ async fn a_job_with_one_of_three_failed_shows_each_episode_with_its_reason() {
     let (state, router) = app();
     linked_season(&state).await;
     let id = job_in(
-        &state.jobs,
+        &state,
         1,
         JobState::Partial,
         None,
@@ -410,7 +410,7 @@ async fn an_unfinished_file_is_receiving_only_while_its_episode_runs() {
     let (state, router) = app();
     linked_season(&state).await;
     let id = job_in(
-        &state.jobs,
+        &state,
         1,
         JobState::Held,
         None,
@@ -421,44 +421,43 @@ async fn an_unfinished_file_is_receiving_only_while_its_episode_runs() {
         100,
     )
     .await;
+    let run = JobRun::new(state.db().clone());
     for (n, item) in state.jobs.items(&id).await.unwrap().iter().enumerate() {
-        state
-            .jobs
-            .file_intend(trss_jobs::store::FileRow {
-                id: format!("a{n}"),
-                item_id: item.id,
-                file_key: format!("k{n}"),
-                name: format!("{n}.ass"),
-                state: trss_jobs::FileState::Intended,
-                same_as: None,
-                temp_dir: Some(format!(".tmp/a{n}")),
-                expected_size: None,
-                size: None,
-                sha256: None,
-                object: None,
-                path: None,
-                reason: None,
-                created_at: 100,
-                format: None,
-                failure: None,
-                http_status: None,
-                content_type: None,
-                response_size: None,
-                snapshot: None,
-                kind: None,
-                archive: None,
-                folder: None,
-                cleared_at: None,
-                volume_of: None,
-                unpacked_at: None,
-                unpack_error: None,
-                unpack_tries: 0,
-                unpack_failure: None,
-                unpack_retry_at: None,
-                unchanged_asset: None,
-            })
-            .await
-            .unwrap();
+        run.file_intend(trss_jobs::store::FileRow {
+            id: format!("a{n}"),
+            item_id: item.id,
+            file_key: format!("k{n}"),
+            name: format!("{n}.ass"),
+            state: trss_jobs::FileState::Intended,
+            same_as: None,
+            temp_dir: Some(format!(".tmp/a{n}")),
+            expected_size: None,
+            size: None,
+            sha256: None,
+            object: None,
+            path: None,
+            reason: None,
+            created_at: 100,
+            format: None,
+            failure: None,
+            http_status: None,
+            content_type: None,
+            response_size: None,
+            snapshot: None,
+            kind: None,
+            archive: None,
+            folder: None,
+            cleared_at: None,
+            volume_of: None,
+            unpacked_at: None,
+            unpack_error: None,
+            unpack_tries: 0,
+            unpack_failure: None,
+            unpack_retry_at: None,
+            unchanged_asset: None,
+        })
+        .await
+        .unwrap();
     }
     let (_, detail) = get(&router, &format!("/api/subtitle-jobs/{id}")).await;
     let items = detail["items"].as_array().unwrap();
@@ -471,7 +470,7 @@ async fn a_site_check_comes_before_a_receive_failure_and_the_badge_counts_both()
     let (state, router) = app();
     linked_season(&state).await;
     job_in(
-        &state.jobs,
+        &state,
         1,
         JobState::Waiting,
         Some(Wait::Auth),
@@ -544,7 +543,7 @@ async fn a_tistory_receipt_shows_its_format_and_failures_by_class_and_no_signed_
     server.file("p", vec![FileAnswer::Page]);
     server.file("x", vec![FileAnswer::Refused]);
     let made = state
-        .jobs
+        .job_requests
         .create(
             NewJob {
                 command_id: "t1".into(),
@@ -571,7 +570,7 @@ async fn a_tistory_receipt_shows_its_format_and_failures_by_class_and_no_signed_
     let Created::Created(id) = made else { panic!() };
     let dir = tempfile::tempdir().unwrap();
     trss_jobs::Runner::new(
-        state.jobs.clone(),
+        JobRun::new(state.db().clone()),
         trss_subtitles::Sources::none().with_tistory(server.source()),
         trss_jobs::ReceiveArea::new(dir.path()),
         std::sync::Arc::new(|| 1_000),
@@ -626,7 +625,7 @@ async fn an_automatic_revision_of_a_named_subtitle_says_so_with_no_earlier_job()
     let (state, router) = app();
     linked_season(&state).await;
     let made = state
-        .jobs
+        .job_requests
         .create(
             NewJob {
                 command_id: "auto:1".into(),
@@ -652,7 +651,7 @@ async fn an_automatic_revision_of_a_named_subtitle_says_so_with_no_earlier_job()
         .unwrap();
     let Created::Created(id) = made else { panic!() };
     let plain = job_in(
-        &state.jobs,
+        &state,
         2,
         JobState::Pending,
         None,
@@ -827,7 +826,10 @@ async fn finishing_a_find_job_asks_the_worker_and_never_ends_it_here() {
     assert_eq!(detail["finishing"], true);
 
     // Once the worker ended it, the answer says so.
-    state.jobs.end_find(&id, None, 20_000).await.unwrap();
+    JobRun::new(state.db().clone())
+        .end_find(&id, None, 20_000)
+        .await
+        .unwrap();
     let (status, answer) = call(&router, Method::POST, &finish, None).await;
     assert_eq!(
         (status, &answer),
@@ -887,7 +889,7 @@ async fn a_find_job_waits_among_the_ordinary_waits_not_with_the_checks() {
     )
     .await;
     let subtitle = job_in(
-        &state.jobs,
+        &state,
         1,
         JobState::Waiting,
         Some(Wait::Subtitle),
@@ -896,7 +898,7 @@ async fn a_find_job_waits_among_the_ordinary_waits_not_with_the_checks() {
     )
     .await;
     let check = job_in(
-        &state.jobs,
+        &state,
         2,
         JobState::Waiting,
         Some(Wait::Auth),

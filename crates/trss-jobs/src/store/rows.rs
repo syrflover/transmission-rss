@@ -17,7 +17,7 @@ use crate::model::{FileState, ItemState, JobState, StepKind, StepState, Wait};
 pub struct JobRow {
     pub seq: i64,
     pub id: String,
-    /// How it was asked for (`pick`, [`AUTO`]).
+    /// How it was asked for (`pick`, [`super::AUTO`]).
     pub origin: String,
     /// For a revision: the observation whose subtitle was received before, and
     /// the latest job that received it.
@@ -52,7 +52,7 @@ pub struct JobRow {
     /// For a find job: a person asked it to finish and its 받기 has not
     /// ended yet.
     pub finishing: bool,
-    /// For a find job: its 받기 has not ended ([`JobStore::end_find`] makes
+    /// For a find job: its 받기 has not ended ([`super::JobRun::end_find`] makes
     /// its item done), so its remote screen and `받기 끝내기` still apply.
     pub receiving: bool,
 }
@@ -163,7 +163,7 @@ pub struct FileRow {
     pub content_type: Option<String>,
     pub response_size: Option<u64>,
     /// What the source read about the file, as a JSON array of `[name,
-    /// value]` pairs ([`snapshot_json`]).
+    /// value]` pairs ([`super::snapshot_json`]).
     pub snapshot: Option<String>,
     /// For a file a person uploaded: what its content check judged it to be.
     pub kind: Option<Kind>,

@@ -21,7 +21,7 @@ use trss_collect::store::{
     revisions::{NewRevision, Revision, RevisionState, Step},
 };
 use trss_core::{Db, DbError};
-use trss_jobs::{area::ReceiveArea, Runner};
+use trss_jobs::{area::ReceiveArea, JobRun, Runner};
 use trss_subtitles::{fake::FakeSource, Sources};
 
 const ANIME: i64 = 3424;
@@ -39,7 +39,6 @@ struct App {
 
 async fn sql(state: &AppState, sql: String) {
     state
-        .jobs
         .db()
         .run::<_, DbError, _>(move |c| Ok(c.execute_batch(&sql)?))
         .await
@@ -108,7 +107,7 @@ impl App {
         let rule = state.channels.get_rule(&rule.id).await.unwrap().unwrap();
         let dir = tempfile::tempdir().unwrap();
         let runner = Runner::new(
-            state.jobs.clone(),
+            JobRun::new(state.db().clone()),
             Sources::none().with_fake(FakeSource),
             ReceiveArea::in_app_data(dir.path()),
             Arc::new(|| 2_000),

@@ -8,7 +8,7 @@ use trss_collect::{
     store::anissia::AnissiaStore,
 };
 use trss_core::{access::check_app_data, db::DB_PATH_ENV, lock_path_for, wake::wake_path_for, Db};
-use trss_jobs::{place::unpack, JobStore, ReceiveArea, Runner, Unpacker};
+use trss_jobs::{place::unpack, JobRun, ReceiveArea, Runner, Unpacker};
 use trss_library::{
     artwork::{self, AppData, Artwork},
     seasons::{self, Seasons},
@@ -105,7 +105,7 @@ async fn run() -> Result<(), String> {
         None => (None, None),
     };
     let jobs = Runner::new(
-        JobStore::new(db.clone()),
+        JobRun::new(db.clone()),
         sources,
         ReceiveArea::in_app_data(app_data.root()),
         trss_core::system_clock(),

@@ -3,6 +3,7 @@
 //! mapping, and nothing of them is kept until a person confirms the table;
 //! then the job keeps and applies what the person placed.
 
+use crate::Handles;
 use std::{
     path::PathBuf,
     sync::{
@@ -23,7 +24,7 @@ use trss_jobs::{
     },
     store::JobDetail,
     upload::UploadRequest,
-    Created, Finished, JobState, JobStore, NewItem, NewJob, ReceiveArea, Runner, Uploads, Wait,
+    Created, Finished, JobState, NewItem, NewJob, ReceiveArea, Runner, Uploads, Wait,
 };
 use trss_subtitles::{
     fake::{self, FakeSource},
@@ -36,7 +37,7 @@ const CREATOR: &str = "제작자";
 struct Setup {
     dir: tempfile::TempDir,
     db: Db,
-    store: JobStore,
+    store: Handles,
     area: ReceiveArea,
 }
 
@@ -47,7 +48,7 @@ impl Setup {
 
     async fn run(&self) {
         Runner::new(
-            self.store.clone(),
+            self.store.run.clone(),
             Sources::none().with_fake(FakeSource),
             self.area.clone(),
             ticking_clock(),
@@ -58,11 +59,11 @@ impl Setup {
     }
 
     async fn detail(&self, id: &str) -> JobDetail {
-        self.store.detail(id).await.unwrap().unwrap()
+        self.store.views.detail(id).await.unwrap().unwrap()
     }
 
     async fn plan(&self, id: &str) -> Vec<PlanRow> {
-        self.store.plan(id).await.unwrap()
+        self.store.place.plan(id).await.unwrap()
     }
 
     async fn sql(&self, sql: &'static str) {
@@ -92,10 +93,11 @@ impl Setup {
 
     /// Decides the job's one live replacement plan.
     async fn decide(&self, id: &str, replace: bool) -> Decided {
-        let mut views = self.store.replacements(id).await.unwrap();
+        let mut views = self.store.place.replacements(id).await.unwrap();
         let plan = views.pop().unwrap().plan;
         assert_eq!(plan.state, PlanState::Open, "{plan:?}");
         self.store
+            .place
             .decide_replacement(id, &plan.id, plan.version, replace, 5_000_000)
             .await
             .unwrap()
@@ -113,6 +115,7 @@ impl Setup {
             })
             .collect();
         self.store
+            .place
             .confirm_placement(id, placings, Vec::new(), Some(12), 50_000)
             .await
             .unwrap()
@@ -167,7 +170,7 @@ async fn setup() -> Setup {
     })
     .await
     .unwrap();
-    let store = JobStore::new(db.clone());
+    let store = Handles::new(db.clone());
     let area = ReceiveArea::in_app_data(dir.path());
     Setup {
         dir,
@@ -213,7 +216,7 @@ async fn upload_files(
     files: &[(String, Vec<u8>)],
     creator: bool,
 ) -> String {
-    let uploads = Uploads::new(s.store.clone(), s.area.clone());
+    let uploads = Uploads::new(s.store.requests.clone(), s.area.clone());
     let mut staging = uploads.begin().await.unwrap();
     for (name, bytes) in files {
         staging.start(name).await.unwrap();
@@ -255,7 +258,7 @@ async fn pick(s: &Setup, command: &str, episode: &str, path: &str) -> String {
             found_at: 500,
         }],
     };
-    match s.store.create(job, 900).await.unwrap() {
+    match s.store.requests.create(job, 900).await.unwrap() {
         Created::Created(id) => id,
         other => panic!("created: {other:?}"),
     }
@@ -394,13 +397,17 @@ async fn an_upload_of_an_unknown_creator_waits_with_its_names_and_holds_one_outs
     // Nothing is written before the person confirms: one to-do asks for it.
     assert!(!s.work().join(".trss").exists());
     assert_eq!(tree(&s.work()), videos());
-    let waits = s.store.placement_waits().await.unwrap();
+    let waits = s.store.views.placement_waits().await.unwrap();
     assert_eq!(waits.len(), 1);
     assert_eq!(waits[0].id, id);
 
     // Left alone, it stays so: no restart's look takes it back in line.
     assert_eq!(
-        s.store.requeue_waiting_for_sources(60_000).await.unwrap(),
+        s.store
+            .run
+            .requeue_waiting_for_sources(60_000)
+            .await
+            .unwrap(),
         0
     );
     s.run().await;
@@ -435,7 +442,7 @@ async fn the_confirmed_table_applies_its_episodes_and_stores_the_one_not_applied
         Some((StepState::Done, Some("적용 12개 · 보관만 1개".to_owned())))
     );
     assert!(s.plan(&id).await.iter().all(|r| r.question.is_none()));
-    assert!(s.store.placement_waits().await.unwrap().is_empty());
+    assert!(s.store.views.placement_waits().await.unwrap().is_empty());
 
     s.run().await;
     let d = s.detail(&id).await;
@@ -569,6 +576,7 @@ async fn a_table_that_cannot_be_kept_is_refused_and_one_of_other_rows_is_stale()
     );
     assert_eq!(
         s.store
+            .place
             .confirm_placement("missing", Vec::new(), Vec::new(), Some(12), 1)
             .await
             .unwrap(),
@@ -638,11 +646,11 @@ async fn the_migration_puts_received_uploads_and_find_jobs_back_in_line() {
             ("u".to_owned(), "pending".to_owned(), false, again),
         ]
     );
-    let store = JobStore::new(db);
-    let f = store.detail("f").await.unwrap().unwrap();
+    let store = Handles::new(db);
+    let f = store.views.detail("f").await.unwrap().unwrap();
     // The find job's 받기 had ended: it goes on to its placement.
     assert!(!f.row.receiving && !f.row.finishing);
-    assert!(!store.placement_confirmed("u").await.unwrap());
+    assert!(!store.run.placement_confirmed("u").await.unwrap());
 }
 
 #[tokio::test]
@@ -662,6 +670,7 @@ async fn a_package_of_fonts_alone_is_confirmed_with_no_row_and_then_kept() {
 
     assert_eq!(
         s.store
+            .place
             .confirm_placement(&id, Vec::new(), Vec::new(), Some(12), 50_000)
             .await
             .unwrap(),
@@ -1123,6 +1132,7 @@ async fn rows_of_one_stored_subtitle_placed_together_move_it_as_one() {
         .collect();
     assert!(matches!(
         s.store
+            .place
             .confirm_placement(&id, placings, Vec::new(), Some(12), 50_000)
             .await
             .unwrap(),

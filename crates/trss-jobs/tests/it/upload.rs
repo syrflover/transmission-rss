@@ -3,19 +3,20 @@
 //! unpacks and analyses them for a person's 배치 확인, a refused or abandoned
 //! upload leaves no byte, and uploads wait for their turn.
 
+use crate::Handles;
 use std::time::Duration;
 
 use trss_core::Db;
 use trss_jobs::{
     upload::{Counts, Limits, UploadError, UploadRequest, UPLOAD_SLOTS},
-    Finished, JobState, JobStore, ReceiveArea, Uploads,
+    Finished, JobState, ReceiveArea, Uploads,
 };
 
 const ASS: &[u8] = b"[Script Info]\nTitle: x\n";
 
 struct Setup {
     _dir: tempfile::TempDir,
-    store: JobStore,
+    store: Handles,
     uploads: Uploads,
     area: ReceiveArea,
 }
@@ -23,9 +24,9 @@ struct Setup {
 async fn setup() -> Setup {
     let dir = tempfile::tempdir().unwrap();
     let db = Db::open(dir.path().join("app.db")).await.unwrap();
-    let store = JobStore::new(db);
+    let store = Handles::new(db);
     let area = ReceiveArea::in_app_data(dir.path());
-    let uploads = Uploads::new(store.clone(), area.clone());
+    let uploads = Uploads::new(store.requests.clone(), area.clone());
     Setup {
         _dir: dir,
         store,
@@ -91,9 +92,16 @@ async fn an_upload_is_a_received_job_that_waits_for_the_worker() {
 
     // The worker takes it next, to analyse it for its 배치 확인; a
     // restart's look at the waiting jobs leaves it as it is.
-    assert!(s.store.has_ready().await.unwrap());
-    assert_eq!(s.store.requeue_waiting_for_sources(6_000).await.unwrap(), 0);
-    let detail = s.store.detail(&job_id).await.unwrap().unwrap();
+    assert!(s.store.run.has_ready().await.unwrap());
+    assert_eq!(
+        s.store
+            .run
+            .requeue_waiting_for_sources(6_000)
+            .await
+            .unwrap(),
+        0
+    );
+    let detail = s.store.views.detail(&job_id).await.unwrap().unwrap();
     assert_eq!(detail.row.state, JobState::Pending);
     assert_eq!(detail.row.finished_at, None);
     assert_eq!(detail.row.origin, "upload");
@@ -117,7 +125,12 @@ async fn an_upload_is_a_received_job_that_waits_for_the_worker() {
     assert_eq!(file.object.as_deref(), Some(object.as_str()));
     assert_eq!(tmp_entries(&s.area), 0);
     assert_eq!(
-        s.store.claim_next(6_000).await.unwrap().map(|(id, ..)| id),
+        s.store
+            .run
+            .claim_next(6_000)
+            .await
+            .unwrap()
+            .map(|(id, ..)| id),
         Some(job_id)
     );
 }
@@ -177,7 +190,7 @@ async fn a_repeat_or_another_upload_under_the_same_id_stores_no_second_package()
     assert_eq!(folders, std::slice::from_ref(&job_id));
     assert_eq!(tmp_entries(&s.area), 0);
     // The store itself answers the same.
-    assert_eq!(s.store.open_jobs().await.unwrap().len(), 1);
+    assert_eq!(s.store.views.open_jobs().await.unwrap().len(), 1);
 }
 
 #[tokio::test]
@@ -251,7 +264,7 @@ async fn finishing_goes_on_when_the_request_is_dropped_and_leaves_no_orphan() {
     let mut done = None;
     for _ in 0..100 {
         tokio::time::sleep(Duration::from_millis(20)).await;
-        if let Some(job) = s.store.open_jobs().await.unwrap().first() {
+        if let Some(job) = s.store.views.open_jobs().await.unwrap().first() {
             done = Some(job.id.clone());
             break;
         }
@@ -308,7 +321,7 @@ async fn the_sweep_removes_only_old_orphans_of_a_uuid_name() {
     }
     make_old(&s.area.at(&job_id));
     s.store
-        .db()
+        .run.db()
         .run::<_, trss_core::DbError, _>(move |c| {
             c.execute_batch(&format!(
                 "INSERT INTO subtitle_job_files (id, job_id, item_id, file_key, name, state, created_at, updated_at)
@@ -336,7 +349,10 @@ async fn the_sweep_removes_only_old_orphans_of_a_uuid_name() {
     }
     // A second pass finds nothing more, and a missing area is no error.
     assert_eq!(s.uploads.sweep(Duration::from_secs(3600)).await.unwrap(), 0);
-    let none = Uploads::new(s.store.clone(), ReceiveArea::new("/nonexistent/receive"));
+    let none = Uploads::new(
+        s.store.requests.clone(),
+        ReceiveArea::new("/nonexistent/receive"),
+    );
     assert_eq!(none.sweep(Duration::from_secs(1)).await.unwrap(), 0);
 }
 
@@ -391,12 +407,13 @@ async fn the_sweep_removes_an_old_check_folder_whose_item_settled_and_keeps_an_o
             })
             .collect(),
     };
-    let Created::Created(job) = s.store.create(job, 900).await.unwrap() else {
+    let Created::Created(job) = s.store.requests.create(job, 900).await.unwrap() else {
         panic!("not created");
     };
-    let items = s.store.items(&job).await.unwrap();
+    let items = s.store.views.items(&job).await.unwrap();
     let (open, settled) = (items[0].id, items[1].id);
     s.store
+        .run
         .set_item(settled, ItemState::Failed, None, None, 1_000)
         .await
         .unwrap();
@@ -657,7 +674,7 @@ async fn archives_of_every_format_are_kept_whole_and_one_that_is_none_is_dropped
         ))
     );
     // Each is stored byte for byte and records its format.
-    let detail = s.store.detail(job_id).await.unwrap().unwrap();
+    let detail = s.store.views.detail(job_id).await.unwrap().unwrap();
     let stored = &detail.items[0].files;
     assert_eq!(stored.len(), 8);
     for ((name, bytes, archive), file) in files.iter().zip(stored) {
@@ -678,7 +695,7 @@ async fn archives_of_every_format_are_kept_whole_and_one_that_is_none_is_dropped
     assert_eq!(detail.row.state, JobState::Pending);
     assert_eq!(detail.row.finished_at, None);
     assert_eq!(
-        s.store.claim_next(2_000).await.unwrap(),
+        s.store.run.claim_next(2_000).await.unwrap(),
         Some((job_id.clone(), false, 1))
     );
 }
@@ -690,6 +707,7 @@ async fn only_an_upload_has_items_without_an_episode() {
     // A picked candidate whose episode Anissia wrote as an empty text keeps it.
     let made = s
         .store
+        .requests
         .create(
             NewJob {
                 command_id: "pick1".to_owned(),
@@ -716,7 +734,7 @@ async fn only_an_upload_has_items_without_an_episode() {
     let Created::Created(id) = made else {
         panic!("{made:?}")
     };
-    let row = s.store.detail(&id).await.unwrap().unwrap().row;
+    let row = s.store.views.detail(&id).await.unwrap().unwrap().row;
     assert_eq!(row.episodes, [String::new()]);
 }
 
@@ -738,7 +756,7 @@ async fn archive_types(
     let Finished::Created { job_id, .. } = made else {
         panic!("{made:?}");
     };
-    let detail = s.store.detail(job_id).await.unwrap().unwrap();
+    let detail = s.store.views.detail(job_id).await.unwrap().unwrap();
     detail.items[0]
         .files
         .iter()

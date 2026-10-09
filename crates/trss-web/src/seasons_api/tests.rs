@@ -796,7 +796,6 @@ async fn saving_the_links_of_a_subscribed_creators_season_makes_the_creators_job
         .await
         .unwrap();
     env.state
-        .jobs
         .db()
         .run::<_, trss_core::DbError, _>(|c| {
             c.execute_batch(

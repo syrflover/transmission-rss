@@ -484,7 +484,7 @@ pub struct Decision {
 /// A job waiting for the approval goes back in line; one that waits for
 /// something else (held, a check, a site) keeps waiting and carries the
 /// decision out once it runs again, and a run under way ends `pending` and
-/// runs again ([`crate::store::JobStore::settle`]). With its log line. One
+/// runs again ([`crate::store::JobRun::settle`]). With its log line. One
 /// synced transaction. [`decide_all`] with one decision.
 pub fn decide(
     c: &mut Connection,

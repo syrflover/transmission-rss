@@ -61,7 +61,7 @@ pub(super) async fn view(
         return Ok(None);
     };
     let Some((asked, whole)) = state
-        .jobs
+        .place
         .placeable(&row.id)
         .await
         .map_err(|e| internal(&e))?
@@ -86,7 +86,7 @@ pub(super) async fn view(
         .map_err(|e| internal(&e))?
         .total;
     let files = state
-        .jobs
+        .place
         .season_files(&work_id, season)
         .await
         .map_err(|e| internal(&e))?;
@@ -156,7 +156,7 @@ pub(super) async fn relocations(
         return Ok(Vec::new());
     }
     let removals = state
-        .jobs
+        .place
         .removals(&row.id)
         .await
         .map_err(|e| internal(&e))?;
@@ -229,7 +229,7 @@ pub(super) async fn confirm(
         })
         .collect();
     let confirmed = state
-        .jobs
+        .place
         .confirm_placement(&id, placings, request.removals, total, now_millis())
         .await
         .map_err(|e| internal(&e))?;

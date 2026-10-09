@@ -989,23 +989,23 @@ async fn show(
     let mut seasons = seasons;
     attach_revisions(&mut seasons, revisions, FsPath::new(&folder_path), offers);
     let stored = state
-        .jobs
+        .place
         .stored_only(&work.id)
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
     attach_stored(&mut seasons, stored);
     let files = state
-        .jobs
+        .place
         .work_files(&work.id)
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
     let copies = state
-        .jobs
+        .place
         .work_copies(&work.id)
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
     let order = state
-        .jobs
+        .place
         .format_order(&work.id)
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
@@ -1090,7 +1090,7 @@ async fn apply_stored(
     };
     let now = super::commands_api::now_millis();
     match state
-        .jobs
+        .place
         .choose_stored(&id, &stored_id, mode, now)
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?
@@ -1195,7 +1195,7 @@ async fn clean_stored(
     let Json(body) = parsed.map_err(|_| ApiError::invalid(BAD_BODY))?;
     let now = super::commands_api::now_millis();
     match state
-        .jobs
+        .place
         .clean_stored(&id, &stored_id, body.assets, now)
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?
@@ -1258,7 +1258,7 @@ async fn cover_size(state: &AppState, relative: &str) -> u64 {
 
 async fn storage(State(state): State<AppState>) -> Result<Json<StorageList>, ApiError> {
     let kept = state
-        .jobs
+        .place
         .storage()
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;

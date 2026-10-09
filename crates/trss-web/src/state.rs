@@ -15,7 +15,7 @@ use trss_core::{
     app_data::RECEIVE_DIR, commands::CommandStore, heartbeat::HeartbeatStore,
     settings::SettingsStore, Db,
 };
-use trss_jobs::{Follow, JobStore, ReceiveArea, ScreenStore, Uploads};
+use trss_jobs::{Follow, JobRequests, JobViews, PlaceStore, ReceiveArea, ScreenStore, Uploads};
 use trss_library::{
     artwork::Artwork,
     seasons::Seasons,
@@ -59,8 +59,13 @@ pub struct AppState {
     /// Where the worker hears that a command was accepted
     /// ([`trss_core::wake`]); `None`: it finds the command at its own next look.
     pub worker_wake: Option<PathBuf>,
-    /// The subtitle jobs the worker carries out.
-    pub jobs: JobStore,
+    /// The subtitle jobs the worker carries out, as the lists and a job's
+    /// detail show them.
+    pub jobs: JobViews,
+    /// What makes a job, and a person's requests on one.
+    pub job_requests: JobRequests,
+    /// What the jobs placed and stored, and a person's decisions on it.
+    pub place: PlaceStore,
     /// The subscribed creators' receipts and the `자막 구독` suggestions.
     pub follow: Follow,
     /// The receive area the worker puts the jobs' files in, for the paths the
@@ -98,10 +103,12 @@ impl AppState {
             revisions: RevisionStore::new(db.clone()),
             past_search: PastSearch::new(SearchPace::new(db.clone())),
             worker_wake: None,
-            jobs: JobStore::new(db.clone()),
+            jobs: JobViews::new(db.clone()),
+            job_requests: JobRequests::new(db.clone()),
+            place: PlaceStore::new(db.clone()),
             follow: Follow::new(db.clone()),
             receive_root: PathBuf::from(RECEIVE_DIR),
-            uploads: Uploads::new(JobStore::new(db.clone()), ReceiveArea::new(RECEIVE_DIR)),
+            uploads: Uploads::new(JobRequests::new(db.clone()), ReceiveArea::new(RECEIVE_DIR)),
             screens: ScreenStore::new(db.clone()),
             remote: None,
             // No app data folder: covers can be read and changed but no image
@@ -109,6 +116,13 @@ impl AppState {
             artwork,
             web_hosts: AllowedHosts::default(),
         }
+    }
+
+    /// The database the stores work on, for a test to set up or look at rows
+    /// the handlers do not reach.
+    #[cfg(test)]
+    pub(crate) fn db(&self) -> &Db {
+        self.channels.db()
     }
 
     /// Answers requests for `hosts` too, besides IP addresses and `localhost`.
@@ -133,7 +147,7 @@ impl AppState {
     /// Shows the jobs' files in `area` (the app data folder's).
     pub fn with_receive_area(mut self, area: &ReceiveArea) -> Self {
         self.receive_root = area.root().to_owned();
-        self.uploads = Uploads::new(self.jobs.clone(), area.clone());
+        self.uploads = Uploads::new(self.job_requests.clone(), area.clone());
         self
     }
 

@@ -141,7 +141,6 @@ async fn a_subtitle_file_tells_whether_it_is_an_applied_copy_and_of_whom() {
     stored_only(&state, &id, &[1]).await;
     let work = id.clone();
     state
-        .jobs
         .db()
         .run(move |c| {
             c.execute(
@@ -322,7 +321,6 @@ async fn stored_only(state: &AppState, work: &str, episodes: &[i64]) {
     let work = work.to_owned();
     let episodes = episodes.to_vec();
     state
-        .jobs
         .db()
         .run(move |c| {
             c.execute_batch(&format!(
@@ -395,7 +393,7 @@ async fn an_episode_lists_its_stored_only_subtitles_and_one_is_applied_on_reques
         (body["job_id"].as_str(), body["compare"].as_bool()),
         (Some("j1"), Some(false))
     );
-    let plan = state.jobs.plan("j1").await.unwrap();
+    let plan = state.place.plan("j1").await.unwrap();
     let row = plan
         .iter()
         .find(|r| r.stored_id.as_deref() == Some("s2"))
@@ -425,7 +423,6 @@ async fn a_stored_subtitle_waiting_for_its_video_says_so() {
     // Episode 5 has no file: its row waits for the video.
     stored_only(&state, &id, &[2, 5]).await;
     state
-        .jobs
         .db()
         .run(|c| {
             c.execute_batch(
@@ -453,7 +450,6 @@ async fn a_stored_subtitle_waiting_for_a_replacement_names_its_job() {
     stored_only(&state, &id, &[1, 2]).await;
     let work = id.clone();
     state
-        .jobs
         .db()
         .run(move |c| {
             c.execute_batch(&format!(
@@ -594,7 +590,6 @@ async fn a_stored_subtitle_a_held_job_uses_says_why_it_cannot_be_cleaned() {
     let (state, id, _dir) = state_with_work_on_disk().await;
     stored_only(&state, &id, &[2]).await;
     state
-        .jobs
         .db()
         .run(|c| {
             c.execute_batch("UPDATE subtitle_jobs SET state = 'held' WHERE id = 'j1';")?;
@@ -678,7 +673,6 @@ async fn the_storage_list_shows_each_works_kinds_cover_and_cleanable_count() {
         (other.clone(), "covers/o.jpg"),
     ];
     state
-        .jobs
         .db()
         .run(move |c| {
             c.execute_batch(
@@ -728,7 +722,6 @@ async fn the_storage_list_shows_each_works_kinds_cover_and_cleanable_count() {
 
     // A held job uses both: neither can be cleaned now.
     state
-        .jobs
         .db()
         .run(|c| {
             c.execute_batch("UPDATE subtitle_jobs SET state = 'held' WHERE id = 'j1';")?;
@@ -826,7 +819,7 @@ async fn send(
 /// What a person chose of the stored subtitle's row.
 async fn chosen_of(state: &AppState, stored: &str) -> Option<trss_jobs::model::Chosen> {
     state
-        .jobs
+        .place
         .plan("j1")
         .await
         .unwrap()
@@ -911,7 +904,6 @@ async fn a_stored_subtitle_is_chosen_with_a_mode_and_a_bad_one_changes_nothing()
 async fn more_on_episode_two(state: &AppState, work: &str) {
     let work = work.to_owned();
     state
-        .jobs
         .db()
         .run(move |c| {
             c.execute_batch(&format!(
@@ -1059,7 +1051,6 @@ async fn the_subtitles_card_groups_stored_copies_by_creator_with_what_choosing_e
 
     // Every job running: nothing but the applied copy is blocked on it.
     state
-        .jobs
         .db()
         .run(|c| {
             c.execute("UPDATE subtitle_jobs SET state = 'running'", [])?;
@@ -1081,7 +1072,6 @@ async fn the_subtitles_card_groups_stored_copies_by_creator_with_what_choosing_e
 
     // A copy a person cleaned is not on the card.
     state
-        .jobs
         .db()
         .run(|c| {
             c.execute(
@@ -1135,7 +1125,6 @@ async fn the_creators_other_format_is_added_beside_the_applied_copy_on_request()
     // plans its replacement, which the person compares.
     let work = id.clone();
     state
-        .jobs
         .db()
         .run(move |c| {
             c.execute(
@@ -1288,7 +1277,6 @@ async fn a_works_own_format_order_is_set_listed_in_the_policy_and_taken_away() {
     // millisecond would tie.
     let set_back = || async {
         state
-            .jobs
             .db()
             .run(|c| {
                 c.execute(

@@ -4,6 +4,7 @@
 //! script is tested against a real viewer (`trss-subtitles`'s ignored
 //! `winpng_sample`).
 
+use crate::Handles;
 use std::{
     sync::{
         atomic::{AtomicI64, Ordering},
@@ -17,8 +18,8 @@ use trss_core::{Clock, Db};
 use trss_jobs::{
     area::ReceiveArea,
     store::{FileRow, JobDetail},
-    Created, FailureKind, FileState, Format, ItemState, JobState, JobStore, NewItem, NewJob,
-    Runner, StepKind, StepState, Wait,
+    Created, FailureKind, FileState, Format, ItemState, JobState, NewItem, NewJob, Runner,
+    StepKind, StepState, Wait,
 };
 use trss_subtitles::{
     testing::{PostAnswer, SourceServer},
@@ -121,7 +122,7 @@ impl WinpngReader for FakeReader {
 
 struct Setup {
     _dir: tempfile::TempDir,
-    store: JobStore,
+    store: Handles,
     runner: Runner,
     area: ReceiveArea,
     server: SourceServer,
@@ -137,10 +138,10 @@ async fn setup(reader: Option<Arc<FakeReader>>) -> Setup {
     let server = SourceServer::start().await;
     let dir = tempfile::tempdir().unwrap();
     let db = Db::open(dir.path().join("app.db")).await.unwrap();
-    let store = JobStore::new(db);
+    let store = Handles::new(db);
     let area = ReceiveArea::in_app_data(dir.path());
     let mut runner = Runner::new(
-        store.clone(),
+        store.run.clone(),
         Sources::none().with_tistory(server.source()),
         area.clone(),
         ticking_clock(),
@@ -180,7 +181,7 @@ async fn make(s: &Setup) -> String {
             found_at: 500,
         }],
     };
-    match s.store.create(job, 900).await.unwrap() {
+    match s.store.requests.create(job, 900).await.unwrap() {
         Created::Created(id) => id,
         other => panic!("created: {other:?}"),
     }
@@ -191,7 +192,7 @@ async fn run(s: &Setup) {
 }
 
 async fn detail(s: &Setup, id: &str) -> JobDetail {
-    s.store.detail(id).await.unwrap().unwrap()
+    s.store.views.detail(id).await.unwrap().unwrap()
 }
 
 fn step(d: &JobDetail, kind: StepKind) -> Option<StepState> {
@@ -484,15 +485,17 @@ async fn a_restart_publishes_a_file_that_came_whole_under_its_folder_and_reads_i
     let id = make(&s).await;
     // A worker that died after the bytes of a file came whole, before it
     // published them: the job `running`, the receipt `intended`.
-    s.store.claim_next(950).await.unwrap().unwrap();
-    let item = s.store.items(&id).await.unwrap()[0].id;
+    s.store.run.claim_next(950).await.unwrap().unwrap();
+    let item = s.store.views.items(&id).await.unwrap()[0].id;
     s.store
+        .run
         .set_item(item, ItemState::Running, None, None, 960)
         .await
         .unwrap();
     let attempt = uuid::Uuid::new_v4().to_string();
     let temp_rel = ReceiveArea::temp_dir(&attempt);
     s.store
+        .run
         .file_intend(FileRow {
             id: attempt.clone(),
             item_id: item,
@@ -529,6 +532,7 @@ async fn a_restart_publishes_a_file_that_came_whole_under_its_folder_and_reads_i
         .await
         .unwrap();
     s.store
+        .run
         .file_expect(&attempt, Some(SMI.len() as u64), 971)
         .await
         .unwrap();

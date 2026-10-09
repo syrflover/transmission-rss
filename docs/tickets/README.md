@@ -179,7 +179,7 @@
 | [0104](0104-durable-file-writes-in-core.md) | 파일을 안전하게 쓰는 일을 trss-core로 모아요 | 완료 | 0092 |
 | [0105](0105-episode-mapping-in-library.md) | 회차 대응의 계산과 까닭 문구를 trss-library로 옮겨요 | 완료 | 0095 |
 | [0106](0106-todo-aggregation-in-jobs.md) | 할 일 집계를 trss-jobs로 옮기고 화면은 서버의 값을 보여줘요 | 완료 | 0092 |
-| [0107](0107-split-job-store.md) | 작업 저장소를 쓰임에 따라 나눠요 | 대기 | 0092 |
+| [0107](0107-split-job-store.md) | 작업 저장소를 쓰임에 따라 나눠요 | 완료 | 0092 |
 | [0108](0108-split-job-runner.md) | 작업 실행기에서 원격 화면 돌보기와 받기·게시·복구를 떼요 | 대기 | 0092 |
 | [0109](0109-shared-aside-and-remove.md) | 교체와 재배치의 "옆으로 옮기고 확인한 뒤 되돌리거나 지우기"를 한 구현으로 해요 | 대기 | 0094, 0104 |
 | [0110](0110-job-line-tests.md) | 자막 작업 줄기의 테스트를 나누고 작업·자막 명세에 검증 표를 둬요 | 대기 | 0105–0109 |

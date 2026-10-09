@@ -6,6 +6,7 @@
 //! clicks would download; the real one is tested by `trss-subtitles`'s ignored
 //! `find_sample`.
 
+use crate::Handles;
 use std::{
     collections::{HashSet, VecDeque},
     path::Path,
@@ -25,7 +26,7 @@ use trss_jobs::{
     screen::{FIND_PREPARED_AGAIN, RESTARTED_FIND, RUN_ENDED},
     store::JobDetail,
     upload::Kind,
-    AskedFinish, Created, FileState, ItemState, JobState, JobStore, NewFind, Runner, ScreenState,
+    AskedFinish, Created, FileState, ItemState, JobState, NewFind, Runner, ScreenState,
     ScreenStore, StepKind, StepState, Wait, FIND, NOTHING_FOUND,
 };
 use trss_subtitles::{
@@ -199,7 +200,7 @@ impl AuthBrowser for FindBrowser {
 
 struct Setup {
     _dir: tempfile::TempDir,
-    store: JobStore,
+    store: Handles,
     screens: ScreenStore,
     runner: Runner,
     area: ReceiveArea,
@@ -226,11 +227,11 @@ async fn setup(with_browser: bool) -> Setup {
     })
     .await
     .unwrap();
-    let store = JobStore::new(db.clone());
+    let store = Handles::new(db.clone());
     let area = ReceiveArea::in_app_data(dir.path());
     let browser = Arc::new(FindBrowser::default());
     let mut runner = Runner::new(
-        store.clone(),
+        store.run.clone(),
         Sources::none().with_fake(FakeSource),
         area.clone(),
         ticking_clock(),
@@ -264,7 +265,7 @@ async fn make(s: &Setup) -> String {
         creator: "메이커".to_owned(),
         post_url: POST.to_owned(),
     };
-    match s.store.create_find(find, 900).await.unwrap() {
+    match s.store.requests.create_find(find, 900).await.unwrap() {
         Created::Created(id) => id,
         other => panic!("created: {other:?}"),
     }
@@ -279,7 +280,7 @@ async fn tend(s: &Setup) {
 }
 
 async fn detail(s: &Setup, id: &str) -> JobDetail {
-    s.store.detail(id).await.unwrap().unwrap()
+    s.store.views.detail(id).await.unwrap().unwrap()
 }
 
 fn step(d: &JobDetail, kind: StepKind) -> Option<StepState> {
@@ -340,7 +341,7 @@ async fn a_find_job_opens_the_creators_post_and_keeps_what_a_persons_click_downl
     assert_eq!(screen.state, ScreenState::Ready);
     assert_eq!(screen.run_id.as_deref(), Some("run-1"));
     // A find job is no site's check to pass from the 할 일 cards.
-    assert!(s.store.auth_waits().await.unwrap().is_empty());
+    assert!(s.store.views.auth_waits().await.unwrap().is_empty());
 
     // A person went to a past post and clicked its attachment.
     s.browser
@@ -376,7 +377,7 @@ async fn two_downloads_are_two_files_of_one_package_and_finishing_hands_them_to_
     until(2, || async { kept(&s, &id).await == 2 }).await;
 
     assert_eq!(
-        s.store.ask_finish(&id, 9_000).await.unwrap(),
+        s.store.requests.ask_finish(&id, 9_000).await.unwrap(),
         AskedFinish::Asked
     );
     assert!(detail(&s, &id).await.row.finishing);
@@ -401,7 +402,7 @@ async fn two_downloads_are_two_files_of_one_package_and_finishing_hands_them_to_
     assert!(s.screens.screen(&id).await.unwrap().is_none());
     // Asked again, it is the same.
     assert_eq!(
-        s.store.ask_finish(&id, 9_500).await.unwrap(),
+        s.store.requests.ask_finish(&id, 9_500).await.unwrap(),
         AskedFinish::Ended
     );
 
@@ -419,7 +420,7 @@ async fn two_downloads_are_two_files_of_one_package_and_finishing_hands_them_to_
     );
     assert_eq!(step(&d, StepKind::Placement), Some(StepState::Waiting));
     assert_eq!(step(&d, StepKind::Store), None);
-    let plan = s.store.plan(&id).await.unwrap();
+    let plan = s.store.place.plan(&id).await.unwrap();
     assert_eq!(plan.len(), 2);
     assert!(plan.iter().all(|r| r.outcome.is_none()));
     assert!(!d.row.receiving);
@@ -432,7 +433,7 @@ async fn two_downloads_are_two_files_of_one_package_and_finishing_hands_them_to_
     let ended = d.events.iter().filter(|e| e.message == "받기를 끝냈어요");
     assert_eq!(ended.count(), 1);
     assert_eq!(
-        s.store.ask_finish(&id, 9_900).await.unwrap(),
+        s.store.requests.ask_finish(&id, 9_900).await.unwrap(),
         AskedFinish::Ended
     );
 }
@@ -441,7 +442,7 @@ async fn two_downloads_are_two_files_of_one_package_and_finishing_hands_them_to_
 async fn finishing_with_nothing_received_ends_as_nothing_found() {
     let s = setup(true).await;
     let id = browsing(&s).await;
-    s.store.ask_finish(&id, 9_000).await.unwrap();
+    s.store.requests.ask_finish(&id, 9_000).await.unwrap();
     until(3, || async {
         detail(&s, &id).await.row.state == JobState::Done
     })
@@ -461,7 +462,7 @@ async fn finishing_waits_for_a_download_under_way_and_keeps_it() {
     let id = browsing(&s).await;
     s.browser.under_way.store(true, Ordering::SeqCst);
     assert_eq!(
-        s.store.ask_finish(&id, 9_000).await.unwrap(),
+        s.store.requests.ask_finish(&id, 9_000).await.unwrap(),
         AskedFinish::Asked
     );
     tokio::time::sleep(Duration::from_millis(1_200)).await;
@@ -494,7 +495,7 @@ async fn a_download_that_lands_as_the_watch_ends_the_job_is_kept() {
 
     s.browser.under_way.store(true, Ordering::SeqCst);
     assert_eq!(
-        s.store.ask_finish(&id, 9_000).await.unwrap(),
+        s.store.requests.ask_finish(&id, 9_000).await.unwrap(),
         AskedFinish::Asked
     );
     // The download lands without the watch's wait reporting it, which had
@@ -554,7 +555,7 @@ async fn a_download_that_is_no_subtitle_is_dropped_with_why() {
     })
     .await;
 
-    s.store.ask_finish(&id, 9_000).await.unwrap();
+    s.store.requests.ask_finish(&id, 9_000).await.unwrap();
     until(3, || async {
         detail(&s, &id).await.row.state == JobState::Done
     })
@@ -674,7 +675,7 @@ async fn finishing_a_job_whose_run_closed_is_ended_by_the_workers_next_look() {
     .await;
     // The web only asks: the job is finishing until the worker ends it.
     assert_eq!(
-        s.store.ask_finish(&id, 9_000).await.unwrap(),
+        s.store.requests.ask_finish(&id, 9_000).await.unwrap(),
         AskedFinish::Asked
     );
     let d = detail(&s, &id).await;
@@ -694,7 +695,7 @@ async fn a_finish_asked_while_the_run_was_bound_ends_the_job_once_the_run_ends()
     // A download under way holds the watch's finish back.
     s.browser.under_way.store(true, Ordering::SeqCst);
     assert_eq!(
-        s.store.ask_finish(&id, 9_000).await.unwrap(),
+        s.store.requests.ask_finish(&id, 9_000).await.unwrap(),
         AskedFinish::Asked
     );
     tokio::time::sleep(Duration::from_millis(700)).await;
@@ -733,7 +734,7 @@ async fn a_file_a_restart_left_in_the_folder_is_received_when_the_job_is_finishe
 
     // A person finishes before reopening the screen.
     assert_eq!(
-        s.store.ask_finish(&id, 9_000).await.unwrap(),
+        s.store.requests.ask_finish(&id, 9_000).await.unwrap(),
         AskedFinish::Asked
     );
     assert_eq!(detail(&s, &id).await.row.state, JobState::Waiting);
@@ -755,7 +756,7 @@ async fn two_takers_of_the_same_left_files_take_each_once() {
     std::fs::create_dir_all(&staging).unwrap();
     std::fs::write(staging.join("maker-1.srt"), fake::srt("maker-1")).unwrap();
     std::fs::write(staging.join("maker-2.srt"), fake::srt("maker-2")).unwrap();
-    s.store.ask_finish(&id, 9_000).await.unwrap();
+    s.store.requests.ask_finish(&id, 9_000).await.unwrap();
 
     // Two looks at once both find the job to end.
     let (a, b) = tokio::join!(
@@ -791,7 +792,7 @@ async fn a_finish_after_the_screen_failed_to_open_leaves_no_step_waiting_nor_fol
     std::fs::create_dir_all(&staging).unwrap();
     std::fs::write(staging.join(".answer"), b"{}").unwrap();
 
-    s.store.ask_finish(&id, 9_000).await.unwrap();
+    s.store.requests.ask_finish(&id, 9_000).await.unwrap();
     tend(&s).await;
     let d = detail(&s, &id).await;
     assert_eq!(d.row.state, JobState::Done);
@@ -819,7 +820,7 @@ async fn a_finish_after_a_later_screen_failed_to_open_keeps_the_post_opened() {
         step(&detail(&s, &id).await, StepKind::Open),
         Some(StepState::Waiting)
     );
-    s.store.ask_finish(&id, 9_000).await.unwrap();
+    s.store.requests.ask_finish(&id, 9_000).await.unwrap();
     tend(&s).await;
     let d = detail(&s, &id).await;
     assert_eq!(d.row.state, JobState::Done);
@@ -1033,6 +1034,7 @@ async fn the_worker_never_asks_the_browser_to_close_the_first_page() {
     // The web does not write such a request; one that reaches the row anyway
     // (written by hand here) is not asked of the browser.
     s.store
+        .run
         .db()
         .run::<_, DbError, _>(|c| {
             Ok(c.execute(
@@ -1099,7 +1101,7 @@ async fn without_a_server_browser_a_find_job_waits_and_the_worker_ends_it_when_f
     );
     assert_eq!(d.row.note.as_deref(), Some(NO_AUTH_BROWSER));
     assert_eq!(
-        s.store.ask_finish(&id, 9_000).await.unwrap(),
+        s.store.requests.ask_finish(&id, 9_000).await.unwrap(),
         AskedFinish::Asked
     );
     assert!(detail(&s, &id).await.row.finishing);
@@ -1115,7 +1117,7 @@ async fn a_finish_asked_before_the_run_opened_ends_the_job_without_opening_it() 
     let s = setup(true).await;
     let id = make(&s).await;
     assert_eq!(
-        s.store.ask_finish(&id, 950).await.unwrap(),
+        s.store.requests.ask_finish(&id, 950).await.unwrap(),
         AskedFinish::Asked
     );
     run(&s).await;
@@ -1140,7 +1142,11 @@ async fn a_find_job_command_is_made_once_and_other_jobs_cannot_be_finished() {
         post_url: POST.to_owned(),
     };
     assert_eq!(
-        s.store.create_find(again.clone(), 1_000).await.unwrap(),
+        s.store
+            .requests
+            .create_find(again.clone(), 1_000)
+            .await
+            .unwrap(),
         Created::Existing(id.clone())
     );
     let other = NewFind {
@@ -1148,11 +1154,11 @@ async fn a_find_job_command_is_made_once_and_other_jobs_cannot_be_finished() {
         ..again
     };
     assert_eq!(
-        s.store.create_find(other, 1_000).await.unwrap(),
+        s.store.requests.create_find(other, 1_000).await.unwrap(),
         Created::Mismatch(id)
     );
     assert_eq!(
-        s.store.ask_finish("nope", 1_000).await.unwrap(),
+        s.store.requests.ask_finish("nope", 1_000).await.unwrap(),
         AskedFinish::Missing
     );
 }
@@ -1169,12 +1175,13 @@ async fn a_watchs_finish_waits_for_the_run_that_bound_it_to_settle_the_job() {
     let item = detail(&s, &id).await.items[0].id;
     // The job's run, as `run_find` writes it: claimed, bound, its item
     // waiting for the person.
-    s.store.claim_next(950).await.unwrap().unwrap();
+    s.store.run.claim_next(950).await.unwrap().unwrap();
     s.screens
         .bind(&id, item, "run-1", "t-1", 960)
         .await
         .unwrap();
     s.store
+        .run
         .set_item(
             item,
             ItemState::Waiting,
@@ -1185,12 +1192,13 @@ async fn a_watchs_finish_waits_for_the_run_that_bound_it_to_settle_the_job() {
         .await
         .unwrap();
     assert_eq!(
-        s.store.ask_finish(&id, 975).await.unwrap(),
+        s.store.requests.ask_finish(&id, 975).await.unwrap(),
         AskedFinish::Asked
     );
     // The watch's finish comes before the run settled the job.
-    assert!(!s.store.end_find(&id, Some("run-1"), 980).await.unwrap());
+    assert!(!s.store.run.end_find(&id, Some("run-1"), 980).await.unwrap());
     s.store
+        .run
         .settle(
             &id,
             JobState::Waiting,
@@ -1207,7 +1215,12 @@ async fn a_watchs_finish_waits_for_the_run_that_bound_it_to_settle_the_job() {
     );
     assert!(d.row.receiving && d.row.finishing);
     // The next watch of the run ends it.
-    assert!(s.store.end_find(&id, Some("run-1"), 1_000).await.unwrap());
+    assert!(s
+        .store
+        .run
+        .end_find(&id, Some("run-1"), 1_000)
+        .await
+        .unwrap());
     let d = detail(&s, &id).await;
     assert_eq!(d.row.state, JobState::Done);
     assert_eq!(d.row.note.as_deref(), Some(NOTHING_FOUND));

@@ -2,6 +2,7 @@
 //! (`docs/specs/subtitles.md`, 교체 비교와 승인 and 승인 증거와 반영 직전
 //! 검사; `docs/tickets/0068-replacement-approval.md`).
 
+use crate::Handles;
 use std::{
     os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
@@ -23,7 +24,7 @@ use trss_jobs::{
         replace::records::{Compared, Decided, Plan, PlanView},
     },
     store::{JobDetail, DECIDED},
-    Created, JobState, JobStore, NewItem, NewJob, Runner, StepKind, StepState, Wait,
+    Created, JobState, NewItem, NewJob, Runner, StepKind, StepState, Wait,
 };
 use trss_subtitles::{
     fake::{self, FakeSource},
@@ -43,7 +44,7 @@ const MINE: &str =
 struct Setup {
     dir: tempfile::TempDir,
     db: Db,
-    store: JobStore,
+    store: Handles,
     runner: Runner,
 }
 
@@ -112,10 +113,10 @@ async fn setup() -> Setup {
     })
     .await
     .unwrap();
-    let store = JobStore::new(db.clone());
+    let store = Handles::new(db.clone());
     let area = ReceiveArea::in_app_data(dir.path());
     let runner = Runner::new(
-        store.clone(),
+        store.run.clone(),
         Sources::none().with_fake(FakeSource),
         area,
         ticking_clock(),
@@ -149,7 +150,7 @@ async fn make(s: &Setup, command: &str, creator: &str, path: &str) -> String {
             found_at: 500,
         }],
     };
-    match s.store.create(job, 900).await.unwrap() {
+    match s.store.requests.create(job, 900).await.unwrap() {
         Created::Created(id) => id,
         other => panic!("created: {other:?}"),
     }
@@ -160,7 +161,7 @@ async fn run(s: &Setup) {
 }
 
 async fn detail(s: &Setup, id: &str) -> JobDetail {
-    s.store.detail(id).await.unwrap().unwrap()
+    s.store.views.detail(id).await.unwrap().unwrap()
 }
 
 fn names(dir: &Path) -> Vec<String> {
@@ -187,13 +188,14 @@ fn waiting_for_approval(d: &JobDetail) {
 
 /// The job's one latest plan.
 async fn view(s: &Setup, job: &str) -> PlanView {
-    let mut views = s.store.replacements(job).await.unwrap();
+    let mut views = s.store.place.replacements(job).await.unwrap();
     assert_eq!(views.len(), 1, "{views:?}");
     views.remove(0)
 }
 
 async fn decide(s: &Setup, job: &str, plan: &Plan, replace: bool) -> Decided {
     s.store
+        .place
         .decide_replacement(job, &plan.id, plan.version, replace, 5_000_000)
         .await
         .unwrap()
@@ -296,7 +298,7 @@ async fn a_revision_waits_for_approval_then_replaces_and_the_earlier_stored_copy
     assert_eq!(v.new.as_ref().unwrap().creator.as_deref(), Some(CREATOR));
     assert_eq!(v.applied.len(), 1);
     // The row waits, the job's other steps are done, nothing changed yet.
-    assert_eq!(s.store.plan(&job).await.unwrap()[0].outcome, None);
+    assert_eq!(s.store.place.plan(&job).await.unwrap()[0].outcome, None);
     assert_eq!(s.read(TARGET), fake::ass("Show-02"));
 
     // Looked at again with nothing changed: the same plan.
@@ -328,7 +330,7 @@ async fn a_revision_waits_for_approval_then_replaces_and_the_earlier_stored_copy
     );
     assert_eq!(s.read(TARGET), fake::ass("Show-02v2"));
     assert_eq!(
-        s.store.plan(&job).await.unwrap()[0].outcome,
+        s.store.place.plan(&job).await.unwrap()[0].outcome,
         Some(Outcome::Applied)
     );
     assert_eq!(versions(&s, &job).await[0].1, PlanState::Done);
@@ -372,7 +374,7 @@ async fn keeping_the_current_subtitle_leaves_the_file_and_ends_the_job() {
     assert_eq!(d.row.state, JobState::Done, "{:?}", d.row.note);
     assert_eq!(s.read(TARGET), fake::ass("Show-02"));
     assert_eq!(
-        s.store.plan(&job).await.unwrap()[0].outcome,
+        s.store.place.plan(&job).await.unwrap()[0].outcome,
         Some(Outcome::Existing)
     );
     // The new stored copy stays, to be chosen later.
@@ -390,6 +392,7 @@ async fn a_decision_on_a_plan_that_is_not_the_rows_to_decide_is_refused() {
     let other = make(&s, "c9", OTHER, "/ok/Other-02").await;
     assert_eq!(
         s.store
+            .place
             .decide_replacement(&job, &plan.id, plan.version + 1, true, 1)
             .await
             .unwrap(),
@@ -397,6 +400,7 @@ async fn a_decision_on_a_plan_that_is_not_the_rows_to_decide_is_refused() {
     );
     assert_eq!(
         s.store
+            .place
             .decide_replacement(&other, &plan.id, plan.version, true, 1)
             .await
             .unwrap(),
@@ -404,6 +408,7 @@ async fn a_decision_on_a_plan_that_is_not_the_rows_to_decide_is_refused() {
     );
     assert_eq!(
         s.store
+            .place
             .decide_replacement(&job, "nothing", 1, true, 1)
             .await
             .unwrap(),
@@ -477,7 +482,7 @@ async fn a_jobs_first_apply_beside_the_same_bytes_records_that_file_as_the_appli
     );
     // The file is the stored copy's applied copy, the row says so, and the
     // job's apply step has nothing else to say.
-    let rows = s.store.plan(&job).await.unwrap();
+    let rows = s.store.place.plan(&job).await.unwrap();
     assert_eq!(rows[0].outcome, Some(Outcome::Applied));
     assert_eq!(rows[0].note.as_deref(), Some(ADOPTED));
     assert_eq!(
@@ -536,14 +541,14 @@ async fn an_imported_copy_on_an_episode_with_a_subtitle_is_compared_then_put_bac
 {
     let s = setup().await;
     let (job, imported) = imported_by_a_replacement(&s).await;
-    let replaced = s.store.plan(&job).await.unwrap()[0]
+    let replaced = s.store.place.plan(&job).await.unwrap()[0]
         .stored_id
         .clone()
         .unwrap();
 
     // The 자막 card offers it a comparison, as any stored copy, and the
     // episode's row offers it too.
-    let copies = s.store.work_copies(WORK).await.unwrap();
+    let copies = s.store.place.work_copies(WORK).await.unwrap();
     let copy = copies.iter().find(|c| c.id == imported).expect("listed");
     assert_eq!(
         (
@@ -553,7 +558,7 @@ async fn an_imported_copy_on_an_episode_with_a_subtitle_is_compared_then_put_bac
         ),
         (None, false, &Ok(true))
     );
-    let only = s.store.stored_only(WORK).await.unwrap();
+    let only = s.store.place.stored_only(WORK).await.unwrap();
     let only = only.iter().find(|c| c.id == imported).expect("listed");
     assert_eq!(
         (only.job_id.as_deref(), only.compare),
@@ -563,6 +568,7 @@ async fn an_imported_copy_on_an_episode_with_a_subtitle_is_compared_then_put_bac
     // Choosing it asks the job that imported it for a comparison.
     assert_eq!(
         s.store
+            .place
             .choose_stored(WORK, &imported, Chosen::Apply, 5_000_000)
             .await
             .unwrap(),
@@ -573,11 +579,11 @@ async fn an_imported_copy_on_an_episode_with_a_subtitle_is_compared_then_put_bac
     );
     run(&s).await;
     waiting_for_approval(&detail(&s, &job).await);
-    let rows = s.store.plan(&job).await.unwrap();
+    let rows = s.store.place.plan(&job).await.unwrap();
     assert_eq!(rows.len(), 2, "the import's row joined the job's plan");
     assert_eq!(rows[1].chosen, Some(Chosen::Apply));
     // While the job waits for the approval, the copy is not offered again.
-    let copies = s.store.work_copies(WORK).await.unwrap();
+    let copies = s.store.place.work_copies(WORK).await.unwrap();
     let copy = copies.iter().find(|c| c.id == imported).expect("listed");
     assert_eq!(
         copy.options.apply,
@@ -587,6 +593,7 @@ async fn an_imported_copy_on_an_episode_with_a_subtitle_is_compared_then_put_bac
     // nothing beside the video changed yet.
     let v = s
         .store
+        .place
         .replacements(&job)
         .await
         .unwrap()
@@ -614,7 +621,7 @@ async fn an_imported_copy_on_an_episode_with_a_subtitle_is_compared_then_put_bac
         s.read(".trss/subtitles/제작자/Show-02.ass"),
         fake::ass("Show-02")
     );
-    let copies = s.store.work_copies(WORK).await.unwrap();
+    let copies = s.store.place.work_copies(WORK).await.unwrap();
     let find = |id: &str| copies.iter().find(|c| c.id == id).expect("listed");
     assert!(find(&imported).options.applied);
     assert_eq!(find(&imported).applied.len(), 1);
@@ -639,11 +646,12 @@ async fn an_imported_copy_on_an_episode_with_no_subtitle_is_applied_at_once() {
         .await;
     let plans = s.count("SELECT count(*) FROM subtitle_replacements").await;
 
-    let copies = s.store.work_copies(WORK).await.unwrap();
+    let copies = s.store.place.work_copies(WORK).await.unwrap();
     let copy = copies.iter().find(|c| c.id == imported).expect("listed");
     assert_eq!(copy.options.apply, Ok(false));
     assert_eq!(
         s.store
+            .place
             .choose_stored(WORK, &imported, Chosen::Apply, 5_000_000)
             .await
             .unwrap(),
@@ -667,7 +675,7 @@ async fn an_imported_copy_on_an_episode_with_no_subtitle_is_applied_at_once() {
         plans,
         "no comparison"
     );
-    let copies = s.store.work_copies(WORK).await.unwrap();
+    let copies = s.store.place.work_copies(WORK).await.unwrap();
     let copy = copies.iter().find(|c| c.id == imported).expect("listed");
     assert!(copy.options.applied);
     assert_eq!(copy.applied.len(), 1);
@@ -679,7 +687,7 @@ async fn an_imported_copy_whose_job_is_gone_stays_blocked_with_the_reason() {
     let (_, imported) = imported_by_a_replacement(&s).await;
     s.sql("UPDATE subtitle_stored SET job_id = NULL WHERE creator IS NULL".to_owned())
         .await;
-    let copies = s.store.work_copies(WORK).await.unwrap();
+    let copies = s.store.place.work_copies(WORK).await.unwrap();
     let copy = copies.iter().find(|c| c.id == imported).expect("listed");
     assert_eq!(
         copy.options.apply,
@@ -687,6 +695,7 @@ async fn an_imported_copy_whose_job_is_gone_stays_blocked_with_the_reason() {
     );
     assert_eq!(
         s.store
+            .place
             .choose_stored(WORK, &imported, Chosen::Apply, 5_000_000)
             .await
             .unwrap(),
@@ -697,6 +706,7 @@ async fn an_imported_copy_whose_job_is_gone_stays_blocked_with_the_reason() {
 /// The plan of `stored` that `job` waits on a person for.
 async fn plan_of(s: &Setup, job: &str, stored: &str) -> Plan {
     s.store
+        .place
         .replacements(job)
         .await
         .unwrap()
@@ -713,6 +723,7 @@ async fn a_copy_kept_off_the_episode_leaves_its_row_until_chosen_again_or_the_su
     let on_row = |only: &[StoredOnly]| only.iter().find(|c| c.id == imported).cloned();
     let choose = || {
         s.store
+            .place
             .choose_stored(WORK, &imported, Chosen::Apply, 5_000_000)
     };
 
@@ -727,8 +738,11 @@ async fn a_copy_kept_off_the_episode_leaves_its_row_until_chosen_again_or_the_su
     );
     run(&s).await;
     assert_eq!(s.read(TARGET), fake::ass("Show-02"));
-    assert_eq!(on_row(&s.store.stored_only(WORK).await.unwrap()), None);
-    let copies = s.store.work_copies(WORK).await.unwrap();
+    assert_eq!(
+        on_row(&s.store.place.stored_only(WORK).await.unwrap()),
+        None
+    );
+    let copies = s.store.place.work_copies(WORK).await.unwrap();
     let copy = copies.iter().find(|c| c.id == imported).expect("listed");
     assert_eq!(copy.options.apply, Ok(true));
 
@@ -736,7 +750,7 @@ async fn a_copy_kept_off_the_episode_leaves_its_row_until_chosen_again_or_the_su
     choose().await.unwrap();
     run(&s).await;
     waiting_for_approval(&detail(&s, &job).await);
-    let row = on_row(&s.store.stored_only(WORK).await.unwrap()).expect("on the row");
+    let row = on_row(&s.store.place.stored_only(WORK).await.unwrap()).expect("on the row");
     assert_eq!(row.awaiting_approval.as_deref(), Some(job.as_str()));
 
     // Kept again, then the episode loses its subtitle: nothing is kept over
@@ -747,11 +761,14 @@ async fn a_copy_kept_off_the_episode_leaves_its_row_until_chosen_again_or_the_su
         Decided::Done(PlanState::Kept)
     );
     run(&s).await;
-    assert_eq!(on_row(&s.store.stored_only(WORK).await.unwrap()), None);
+    assert_eq!(
+        on_row(&s.store.place.stored_only(WORK).await.unwrap()),
+        None
+    );
     std::fs::remove_file(s.at(TARGET)).unwrap();
     s.sql("UPDATE subtitle_applied SET removed_at = 1".to_owned())
         .await;
-    let row = on_row(&s.store.stored_only(WORK).await.unwrap()).expect("on the row");
+    let row = on_row(&s.store.place.stored_only(WORK).await.unwrap()).expect("on the row");
     assert!(!row.compare);
 }
 
@@ -1037,7 +1054,7 @@ async fn no_room_for_the_copies_stops_before_anything_beside_the_video_changes()
     assert_eq!(s.read(TARGET), fake::ass("Show-02"));
     assert_eq!(s.temps(), Vec::<String>::new());
     assert_eq!(
-        s.store.plan(&job).await.unwrap()[0].outcome,
+        s.store.place.plan(&job).await.unwrap()[0].outcome,
         Some(Outcome::Failed)
     );
     assert_eq!(
@@ -1095,6 +1112,7 @@ async fn a_decision_made_while_the_job_runs_is_carried_out_by_its_next_run() {
         assert_eq!(detail(&s, &job).await.row.state, JobState::Running);
         let back = s
             .store
+            .run
             .settle(
                 &job,
                 JobState::Waiting,
@@ -1125,6 +1143,7 @@ async fn a_job_that_still_has_a_plan_to_decide_waits_for_it() {
     let (job, _) = revision_waiting(&s).await;
     let back = s
         .store
+        .run
         .settle(
             &job,
             JobState::Waiting,
@@ -1276,7 +1295,7 @@ async fn two_files_to_take_off_differing_in_case_leave_the_subtitle_stored_only(
         d.events
     );
     assert_eq!(
-        s.store.plan(&job).await.unwrap()[0].outcome,
+        s.store.place.plan(&job).await.unwrap()[0].outcome,
         Some(Outcome::Existing)
     );
     assert_eq!(
@@ -1341,7 +1360,7 @@ async fn a_second_video_after_approval_leaves_the_subtitle_stored_only() {
     let d = detail(&s, &job).await;
     assert_eq!(d.row.state, JobState::Done, "{:?}", d.row.note);
     assert_eq!(
-        s.store.plan(&job).await.unwrap()[0].outcome,
+        s.store.place.plan(&job).await.unwrap()[0].outcome,
         Some(Outcome::Stored)
     );
     assert_eq!(s.read(TARGET), fake::ass("Show-02"));
@@ -1645,12 +1664,13 @@ async fn a_job_held_before_its_clean_up_keeps_its_replacement_done() {
     let (job, plan) = revision_approved(&s).await;
     let left = done_before_clean_up(&s, &plan).await;
     s.store
+        .run
         .hold_stuck(&job, "여러 번 끊겼어요".to_owned(), 9)
         .await
         .unwrap();
     assert_eq!(versions(&s, &job).await[0].1, PlanState::Done);
     assert_eq!(
-        s.store.plan(&job).await.unwrap()[0].outcome,
+        s.store.place.plan(&job).await.unwrap()[0].outcome,
         Some(Outcome::Applied)
     );
     assert_eq!(
@@ -1861,6 +1881,7 @@ async fn a_job_held_while_its_old_copy_is_aside_holds_the_plan_and_its_effects()
     let (job, plan) = revision_approved(&s).await;
     killed(&s, &plan, "prepared", "set_aside").await;
     s.store
+        .run
         .hold_stuck(&job, "여러 번 끊겼어요".to_owned(), 9)
         .await
         .unwrap();
@@ -1871,7 +1892,7 @@ async fn a_job_held_while_its_old_copy_is_aside_holds_the_plan_and_its_effects()
         2
     );
     assert_eq!(
-        s.store.plan(&job).await.unwrap()[0].outcome,
+        s.store.place.plan(&job).await.unwrap()[0].outcome,
         Some(Outcome::Held)
     );
 }
@@ -1975,6 +1996,7 @@ fn not_made(v: &PlanView) -> &str {
 /// The stored lines of the plan's difference.
 async fn lines_of(s: &Setup, job: &str, plan: &Plan) -> Option<serde_json::Value> {
     s.store
+        .place
         .replacement_lines(job, &plan.id)
         .await
         .unwrap()
@@ -2169,7 +2191,7 @@ async fn a_plan_made_again_after_a_change_has_a_comparison_of_its_own() {
     let s = setup().await;
     let (job, plan) = revision_approved(&s).await;
     assert!(matches!(
-        s.store.replacements(&job).await.unwrap()[0].comparison,
+        s.store.place.replacements(&job).await.unwrap()[0].comparison,
         Some(trss_jobs::place::replace::records::Comparison {
             result: Compared::Diff(_),
             ..

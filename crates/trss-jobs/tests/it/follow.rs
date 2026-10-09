@@ -2,6 +2,7 @@
 //! source and Anissia's lines as the app stores what it observed
 //! (`docs/specs/subtitles.md`, 구독 제작자 자동 수신).
 
+use crate::Handles;
 use std::sync::{
     atomic::{AtomicI64, Ordering},
     Arc,
@@ -16,7 +17,7 @@ use trss_jobs::{
     area::ReceiveArea,
     mapping::{Mapping, MappingKind, Saved, UserMapping},
     store::JobDetail,
-    Created, Follow, JobState, JobStore, NewItem, NewJob, Runner, Wait, AUTO,
+    Created, Follow, JobState, NewItem, NewJob, Runner, Wait, AUTO,
 };
 use trss_subtitles::{
     fake::{self, FakeSource},
@@ -31,7 +32,7 @@ struct World {
     _dir: tempfile::TempDir,
     db: Db,
     follow: Follow,
-    jobs: JobStore,
+    jobs: Handles,
     channels: ChannelStore,
     runner: Runner,
     rule: Rule,
@@ -229,9 +230,9 @@ impl World {
             .unwrap();
         }
 
-        let jobs = JobStore::new(db.clone());
+        let jobs = Handles::new(db.clone());
         let runner = Runner::new(
-            jobs.clone(),
+            jobs.run.clone(),
             Sources::none().with_fake(FakeSource),
             ReceiveArea::in_app_data(dir.path()),
             ticking_clock(),
@@ -446,7 +447,7 @@ impl World {
     }
 
     async fn detail(&self, id: &str) -> JobDetail {
-        self.jobs.detail(id).await.unwrap().unwrap()
+        self.jobs.views.detail(id).await.unwrap().unwrap()
     }
 
     async fn job_count(&self) -> i64 {
@@ -1035,6 +1036,7 @@ async fn a_revision_of_a_received_episode_that_conflicts_is_received() {
     assert_eq!(w.conflicts(1, "에루샤").await.len(), 1);
     let Created::Created(picked) = w
         .jobs
+        .requests
         .create(
             NewJob {
                 command_id: "pick-13.5".to_owned(),
@@ -2120,7 +2122,7 @@ async fn a_job_decided_under_a_mapping_the_user_has_since_saved_is_not_made() {
     // The user saves after the follower read the mapping and before its job is stored.
     let saved = user_sets(&w, 1, "에루샤", 3, &[]).await;
     assert!(saved.version > read.version);
-    let jobs = trss_jobs::JobStore::new(w.db.clone());
+    let jobs = Handles::new(w.db.clone());
     let job = |command: &str| trss_jobs::NewJob {
         command_id: command.to_owned(),
         request: "{}".to_owned(),
@@ -2147,12 +2149,14 @@ async fn a_job_decided_under_a_mapping_the_user_has_since_saved_is_not_made() {
     };
     let before = w.job_count().await;
     let refused = jobs
+        .requests
         .create_under_mapping(job("auto:stale"), NOW, stamp(read.version))
         .await
         .unwrap();
     assert!(refused.is_none());
     assert_eq!(w.job_count().await, before);
     let made = jobs
+        .requests
         .create_under_mapping(job("auto:current"), NOW, stamp(saved.version))
         .await
         .unwrap();

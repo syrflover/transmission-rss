@@ -6,6 +6,7 @@
 //! creator brings a revision of each (`/ok/Show-NNv2`) and waits for the
 //! person with twelve open plans.
 
+use crate::Handles;
 use std::{
     os::unix::fs::PermissionsExt,
     path::PathBuf,
@@ -25,7 +26,7 @@ use trss_jobs::{
         NEW_REVISION,
     },
     store::{JobDetail, DECIDED},
-    Created, JobState, JobStore, NewItem, NewJob, Runner, Wait,
+    Created, JobState, NewItem, NewJob, Runner, Wait,
 };
 use trss_subtitles::{
     fake::{self, FakeSource},
@@ -46,7 +47,7 @@ const EDITED: &str =
 struct Setup {
     dir: tempfile::TempDir,
     db: Db,
-    store: JobStore,
+    store: Handles,
     runner: Runner,
 }
 
@@ -132,10 +133,10 @@ async fn setup() -> Setup {
     })
     .await
     .unwrap();
-    let store = JobStore::new(db.clone());
+    let store = Handles::new(db.clone());
     let area = ReceiveArea::in_app_data(dir.path());
     let runner = Runner::new(
-        store.clone(),
+        store.run.clone(),
         Sources::none().with_fake(FakeSource),
         area,
         ticking_clock(),
@@ -172,7 +173,7 @@ async fn make(s: &Setup, command: &str, episodes: &[u32], suffix: &str) -> Strin
             })
             .collect(),
     };
-    match s.store.create(job, 900).await.unwrap() {
+    match s.store.requests.create(job, 900).await.unwrap() {
         Created::Created(id) => id,
         other => panic!("created: {other:?}"),
     }
@@ -183,7 +184,7 @@ async fn run(s: &Setup) {
 }
 
 async fn detail(s: &Setup, id: &str) -> JobDetail {
-    s.store.detail(id).await.unwrap().unwrap()
+    s.store.views.detail(id).await.unwrap().unwrap()
 }
 
 fn waiting_for_approval(d: &JobDetail) {
@@ -200,6 +201,7 @@ fn waiting_for_approval(d: &JobDetail) {
 async fn latest_plans(s: &Setup, job: &str) -> Vec<Plan> {
     let mut plans: Vec<Plan> = s
         .store
+        .place
         .replacements(job)
         .await
         .unwrap()
@@ -223,6 +225,7 @@ fn decisions(plans: &[Plan], replace: bool) -> Vec<Decision> {
 
 async fn decide_all(s: &Setup, job: &str, decisions: Vec<Decision>) -> Vec<Decided> {
     s.store
+        .place
         .decide_replacements(job, decisions, DECIDED_AT)
         .await
         .unwrap()
@@ -249,7 +252,7 @@ async fn rows(s: &Setup, job: &str) -> Vec<(i64, i64, PlanState, Option<String>,
 
 /// Each placement row's outcome and note, in plan order.
 async fn outcomes(s: &Setup, job: &str) -> Vec<(Option<Outcome>, Option<String>)> {
-    let rows = s.store.plan(job).await.unwrap();
+    let rows = s.store.place.plan(job).await.unwrap();
     rows.into_iter().map(|r| (r.outcome, r.note)).collect()
 }
 
@@ -397,6 +400,7 @@ async fn a_new_revision_of_one_episode_leaves_it_to_compare_again_and_the_others
     );
     let outcomes: Vec<_> = s
         .store
+        .place
         .plan(&job)
         .await
         .unwrap()
@@ -468,6 +472,7 @@ async fn keeping_one_episode_and_approving_the_rest_in_a_batch() {
     // Episode 2 alone, as before.
     let single = s
         .store
+        .place
         .decide_replacement(&job, &two.id, two.version, false, DECIDED_AT)
         .await
         .unwrap();
@@ -493,6 +498,7 @@ async fn keeping_one_episode_and_approving_the_rest_in_a_batch() {
     }
     let row = s
         .store
+        .place
         .plan(&job)
         .await
         .unwrap()
@@ -526,7 +532,7 @@ async fn a_mixed_batch_settles_the_kept_rows_at_once_and_the_run_replaces_the_re
     assert_eq!(decided, expected);
     // Before any run, the kept episodes' rows are stored only and the
     // approved ones are left to the run.
-    for row in s.store.plan(&job).await.unwrap() {
+    for row in s.store.place.plan(&job).await.unwrap() {
         let episode = row.placed.as_ref().map(|p| p.episode).unwrap();
         match kept.contains(&episode) {
             true => assert_eq!(
@@ -570,6 +576,7 @@ async fn keeping_every_episode_in_a_batch_leaves_the_files_and_settles_the_rows(
     }
     let outcomes: Vec<_> = s
         .store
+        .place
         .plan(&job)
         .await
         .unwrap()
@@ -614,7 +621,7 @@ async fn one_episode_that_cannot_be_carried_out_fails_alone_and_the_job_is_parti
             ),
         }
     }
-    let plan_rows = s.store.plan(&job).await.unwrap();
+    let plan_rows = s.store.place.plan(&job).await.unwrap();
     for row in plan_rows {
         let episode = row.placed.as_ref().map(|p| p.episode).unwrap();
         match episode == failing {

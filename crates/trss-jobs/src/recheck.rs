@@ -153,7 +153,7 @@ use url::Url;
 
 use crate::{
     follow::{Follow, FollowError, Subscribed},
-    store::{JobError, JobStore, NewItem, NewJob, AUTO},
+    store::{JobError, JobRequests, JobRun, NewItem, NewJob, AUTO},
     Created, ItemState,
 };
 
@@ -330,7 +330,8 @@ enum Asked {
 #[derive(Clone)]
 pub struct Recheck {
     db: Db,
-    jobs: JobStore,
+    requests: JobRequests,
+    run: JobRun,
     follow: Follow,
     sources: Sources,
 }
@@ -340,7 +341,8 @@ impl Recheck {
     /// is shared).
     pub fn new(db: Db, sources: Sources) -> Recheck {
         Recheck {
-            jobs: JobStore::new(db.clone()),
+            requests: JobRequests::new(db.clone()),
+            run: JobRun::new(db.clone()),
             follow: Follow::new(db.clone()),
             db,
             sources,
@@ -1019,7 +1021,7 @@ impl Recheck {
                 found_at: item.found_at,
             }],
         };
-        match self.jobs.create(job, now).await? {
+        match self.requests.create(job, now).await? {
             Created::Created(id) => {
                 let (message, detail) = match post {
                     Some((was, new)) => (
@@ -1031,7 +1033,7 @@ impl Recheck {
                         changes.iter().map(describe).collect::<Vec<_>>().join(" · "),
                     ),
                 };
-                self.jobs
+                self.run
                     .event(&id, message.to_owned(), Some(detail), now)
                     .await?;
                 Ok((id, true))

@@ -3,9 +3,9 @@
 
 use std::collections::HashSet;
 
-use trss_core::Millis;
+use trss_core::{Db, Millis};
 
-use crate::store::{JobError, JobStore};
+use crate::store::JobError;
 
 /// Whether the work folder `folder` keeps its stored subtitles on disk now:
 /// its `.trss/subtitles` is a folder. The work folder alone is not enough,
@@ -25,7 +25,19 @@ async fn folder_is_dir(folder: Option<String>) -> bool {
     }
 }
 
-impl JobStore {
+/// What the web reads of what a job placed and stored, and the decisions a
+/// person makes on it, over the same database as the job records. Cheap to
+/// clone.
+#[derive(Clone)]
+pub struct PlaceStore {
+    db: Db,
+}
+
+impl PlaceStore {
+    pub fn new(db: Db) -> PlaceStore {
+        PlaceStore { db }
+    }
+
     /// The latest replacement plan of each row of the job, for its detail
     /// ([`crate::place::replace`]).
     pub async fn replacements(
@@ -33,7 +45,7 @@ impl JobStore {
         job_id: &str,
     ) -> Result<Vec<crate::place::replace::records::PlanView>, JobError> {
         let id = job_id.to_owned();
-        self.db()
+        self.db
             .run(move |c| Ok(crate::place::replace::records::views(c, &id)?))
             .await
     }
@@ -48,7 +60,7 @@ impl JobStore {
         plan_id: &str,
     ) -> Result<Option<String>, JobError> {
         let (job, plan) = (job_id.to_owned(), plan_id.to_owned());
-        self.db()
+        self.db
             .run(move |c| {
                 Ok(crate::place::replace::records::comparison_lines(
                     c, &job, &plan,
@@ -68,7 +80,7 @@ impl JobStore {
         now: Millis,
     ) -> Result<crate::place::replace::records::Decided, JobError> {
         let (job, plan) = (job_id.to_owned(), plan_id.to_owned());
-        self.db()
+        self.db
             .run(move |c| {
                 crate::place::replace::records::decide(c, &job, &plan, version, replace, now)
             })
@@ -84,7 +96,7 @@ impl JobStore {
         now: Millis,
     ) -> Result<Vec<crate::place::replace::records::Decided>, JobError> {
         let job = job_id.to_owned();
-        self.db()
+        self.db
             .run(move |c| crate::place::replace::records::decide_all(c, &job, &decisions, now))
             .await
     }
@@ -95,7 +107,7 @@ impl JobStore {
         job_id: &str,
     ) -> Result<Vec<crate::place::records::PlanRow>, JobError> {
         let id = job_id.to_owned();
-        self.db()
+        self.db
             .run(move |c| Ok(crate::place::records::plan(c, &id)?))
             .await
     }
@@ -107,7 +119,7 @@ impl JobStore {
         job_id: &str,
     ) -> Result<Vec<crate::place::unpack::MemberRow>, JobError> {
         let id = job_id.to_owned();
-        self.db()
+        self.db
             .run(move |c| Ok(crate::place::unpack::job_members(c, &id)?))
             .await
     }
@@ -118,7 +130,7 @@ impl JobStore {
         work_id: &str,
     ) -> Result<Vec<crate::place::records::StoredOnly>, JobError> {
         let id = work_id.to_owned();
-        self.db()
+        self.db
             .run(move |c| Ok(crate::place::records::stored_only(c, &id)?))
             .await
     }
@@ -130,7 +142,7 @@ impl JobStore {
         work_id: &str,
     ) -> Result<Vec<crate::place::records::StoredCopy>, JobError> {
         let id = work_id.to_owned();
-        self.db()
+        self.db
             .run(move |c| Ok(crate::place::records::work_copies(c, &id)?))
             .await
     }
@@ -142,7 +154,7 @@ impl JobStore {
         work_id: &str,
     ) -> Result<Vec<crate::model::SubtitleFormat>, JobError> {
         let id = work_id.to_owned();
-        self.db()
+        self.db
             .run(move |c| Ok(crate::place::records::format_order(c, &id)?))
             .await
     }
@@ -157,7 +169,7 @@ impl JobStore {
         now: Millis,
     ) -> Result<crate::place::records::StoredChoice, JobError> {
         let (work, stored) = (work_id.to_owned(), stored_id.to_owned());
-        self.db()
+        self.db
             .run(move |c| crate::place::records::choose_stored(c, &work, &stored, mode, now))
             .await
     }
@@ -171,7 +183,7 @@ impl JobStore {
         use crate::place::cleanup;
         let there = self.work_folder_there(work_id).await?;
         let id = work_id.to_owned();
-        self.db()
+        self.db
             .run(move |c| {
                 Ok(cleanup::WorkFiles {
                     total: cleanup::total(c, &id)?,
@@ -195,7 +207,7 @@ impl JobStore {
         // that goes away before the worker's pass holds the cleanup there.
         let there = self.work_folder_there(work_id).await?;
         let (work, stored) = (work_id.to_owned(), stored_id.to_owned());
-        self.db()
+        self.db
             .run(move |c| crate::place::cleanup::ask(c, &work, &stored, &assets, there, now))
             .await
     }
@@ -205,7 +217,7 @@ impl JobStore {
     async fn work_folder_there(&self, work_id: &str) -> Result<bool, JobError> {
         let id = work_id.to_owned();
         let folder = self
-            .db()
+            .db
             .run(move |c| Ok::<_, JobError>(crate::place::records::work_folder(c, &id)?))
             .await?;
         Ok(folder_is_dir(folder).await)
@@ -216,7 +228,7 @@ impl JobStore {
     pub async fn storage(&self) -> Result<Vec<crate::place::cleanup::WorkStorage>, JobError> {
         use crate::place::cleanup;
         let folders = self
-            .db()
+            .db
             .run(|c| Ok::<_, JobError>(cleanup::work_folders(c)?))
             .await?;
         let mut there = HashSet::new();
@@ -225,7 +237,7 @@ impl JobStore {
                 there.insert(work);
             }
         }
-        self.db()
+        self.db
             .run(move |c| Ok(cleanup::storage(c, &|work| there.contains(work))?))
             .await
     }
@@ -236,7 +248,7 @@ impl JobStore {
         job_id: &str,
     ) -> Result<Vec<(i64, crate::place::records::RowPaths)>, JobError> {
         let id = job_id.to_owned();
-        self.db()
+        self.db
             .run(move |c| Ok(crate::place::records::row_paths(c, &id)?))
             .await
     }
@@ -249,7 +261,7 @@ impl JobStore {
         job_id: &str,
     ) -> Result<Option<(Vec<crate::place::records::PlanRow>, bool)>, JobError> {
         let id = job_id.to_owned();
-        self.db()
+        self.db
             .run(move |c| {
                 let Some(facts) = crate::place::records::job_facts(c, &id)? else {
                     return Ok(None);
@@ -278,7 +290,7 @@ impl JobStore {
         now: Millis,
     ) -> Result<crate::place::records::Confirmed, JobError> {
         let id = job_id.to_owned();
-        self.db()
+        self.db
             .run(move |c| {
                 crate::place::records::confirm_placement(c, &id, &placings, &removals, total, now)
             })
@@ -292,7 +304,7 @@ impl JobStore {
         job_id: &str,
     ) -> Result<Vec<crate::place::relocate::Removal>, JobError> {
         let id = job_id.to_owned();
-        self.db()
+        self.db
             .run(move |c| Ok(crate::place::relocate::removals(c, &id)?))
             .await
     }
@@ -301,7 +313,7 @@ impl JobStore {
     /// ([`crate::place::relocate::outcome_note`]).
     pub async fn relocation_note(&self, job_id: &str) -> Result<Option<String>, JobError> {
         let id = job_id.to_owned();
-        self.db()
+        self.db
             .run(move |c| Ok(crate::place::relocate::outcome_note(c, &id)?))
             .await
     }
@@ -315,7 +327,7 @@ impl JobStore {
     ) -> Result<std::collections::BTreeMap<i64, crate::place::records::EpisodeFiles>, JobError>
     {
         let id = work_id.to_owned();
-        self.db()
+        self.db
             .run(move |c| Ok(crate::place::records::season_files(c, &id, season)?))
             .await
     }

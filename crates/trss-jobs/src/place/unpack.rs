@@ -32,8 +32,8 @@
 //!   archive's: the archive is tried again from what was received, up to
 //!   [`UNPACK_TRIES`] tries with the first (사용자 결정, 2026-10-05). The next
 //!   try goes [`UNPACK_RETRY_AFTER`] after the failure, or at a worker's
-//!   start if that comes first ([`crate::JobStore::requeue_waiting_for_sources`]
-//!   lets it go, [`crate::JobStore::requeue_unpack_retries`] puts the job back
+//!   start if that comes first ([`crate::JobRun::requeue_waiting_for_sources`]
+//!   lets it go, [`crate::JobRun::requeue_unpack_retries`] puts the job back
 //!   in line when its hour is up): freeing the disk needs no restart, and
 //!   changing the memory limit comes with a deploy. Until then the package
 //!   waits ([`UNPACK_AGAIN`], `자막 대기`), and the failure is logged with
@@ -346,7 +346,7 @@ impl Placer {
         let Some(unpacker) = self.unpacker.clone() else {
             return Ok(Some(()));
         };
-        let items = self.store.items(job).await?;
+        let items = self.views.items(job).await?;
         // The volumes of a set are one post's, in one folder of it.
         let mut sets: Vec<(Vec<&FileRow>, Option<String>)> = Vec::new();
         for item in &items {

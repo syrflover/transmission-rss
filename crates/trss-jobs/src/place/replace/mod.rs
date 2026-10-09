@@ -37,7 +37,7 @@
 //! The person keeps the current subtitle (the row is stored only) or
 //! approves the plan ([`records::decide`]); either puts the job waiting for
 //! it back in line, and a job running meanwhile goes back in line as its run
-//! ends ([`crate::store::JobStore::settle`]).
+//! ends ([`crate::store::JobRun::settle`]).
 //! Each run looks at an open plan again ([`Placer::changed`]): one whose
 //! evidence no longer holds goes `stale` and the row's next plan is made, so
 //! the person compares again. A file is still the one the plan saw by its
@@ -747,7 +747,7 @@ impl Placer {
 
     /// The plan goes stale for `reason`, so the row is looked at anew;
     /// whether it did (a person may have decided on it meanwhile, which the
-    /// job's next run goes on with, see [`crate::store::JobStore::settle`]).
+    /// job's next run goes on with, see [`crate::store::JobRun::settle`]).
     async fn stale(&self, row: &PlanRow, plan: &Plan, reason: &str) -> Result<bool, JobError> {
         let (id, from, r, now) = (plan.id.clone(), plan.state, reason.to_owned(), self.now());
         let moved = self

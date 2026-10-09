@@ -15,7 +15,7 @@ use tower::ServiceExt;
 
 use crate::AppState;
 use trss_core::{Db, DbError};
-use trss_jobs::{area::ReceiveArea, Created, NewItem, NewJob, Runner};
+use trss_jobs::{area::ReceiveArea, Created, JobRun, NewItem, NewJob, Runner};
 use trss_subtitles::{
     fake::{self, FakeSource},
     Sources,
@@ -44,7 +44,6 @@ impl App {
         }
         let path = shows.to_string_lossy().into_owned();
         state
-            .jobs
             .db()
             .run::<_, DbError, _>(move |c| {
                 c.execute(
@@ -70,7 +69,7 @@ impl App {
             .await
             .unwrap();
         let runner = Runner::new(
-            state.jobs.clone(),
+            JobRun::new(state.db().clone()),
             Sources::none().with_fake(FakeSource),
             ReceiveArea::in_app_data(dir.path()),
             Arc::new(|| 2_000),
@@ -97,7 +96,7 @@ impl App {
     async fn job_of(&self, command: &str, creator: &str, posts: &[(&str, &str)]) -> String {
         let made = self
             .state
-            .jobs
+            .job_requests
             .create(
                 NewJob {
                     command_id: command.to_owned(),
@@ -138,7 +137,6 @@ impl App {
 
     async fn sql(&self, sql: String) {
         self.state
-            .jobs
             .db()
             .run::<_, DbError, _>(move |c| Ok(c.execute_batch(&sql)?))
             .await

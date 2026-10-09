@@ -10,7 +10,7 @@ use trss_subtitles::{
     verify::Format,
 };
 
-use super::{rows::upload_note, JobError, JobStore, AUTO, UPLOAD};
+use super::{rows::upload_note, JobError, JobRequests, AUTO, UPLOAD};
 use crate::model::JobState;
 
 /// A job to make: the candidates a person picked, or the one the app takes
@@ -91,7 +91,7 @@ pub struct UploadedFile {
     pub archive: Option<Archive>,
 }
 
-/// What [`JobStore::create`] did, with the job's ID.
+/// What [`JobRequests::create`] did, with the job's ID.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Created {
     Created(String),
@@ -101,7 +101,7 @@ pub enum Created {
     Mismatch(String),
 }
 
-/// The mapping version a job was decided under ([`JobStore::create_under_mapping`]).
+/// The mapping version a job was decided under ([`JobRequests::create_under_mapping`]).
 #[derive(Debug, Clone)]
 pub struct MappingStamp {
     pub work_id: String,
@@ -111,7 +111,7 @@ pub struct MappingStamp {
     pub version: i64,
 }
 
-impl JobStore {
+impl JobRequests {
     /// Stores `job` as `pending` with its `found` step done at `now`, unless
     /// its browser ID is known. The check and the insert are one write
     /// transaction, so two deliveries at once store one job.
@@ -120,7 +120,7 @@ impl JobStore {
         Ok(made.unwrap_or_else(|| unreachable!("a job with no stamp is never refused")))
     }
 
-    /// [`JobStore::create`] for a job made under a source's episode mapping:
+    /// [`JobRequests::create`] for a job made under a source's episode mapping:
     /// the mapping's version is checked in the same write transaction as the
     /// insert, and `None` (nothing stored) says the mapping changed since
     /// `under` was read, so the job was decided under a mapping that no longer

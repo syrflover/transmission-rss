@@ -3,6 +3,7 @@
 //! (`docs/specs/library.md`, 자막의 회차 대응; ticket 0071,
 //! `trss_jobs::place::relocate`).
 
+use crate::Handles;
 use std::{
     path::{Path, PathBuf},
     sync::{
@@ -22,7 +23,7 @@ use trss_jobs::{
         replace::AWAITING_APPROVAL,
     },
     store::{JobDetail, JobError},
-    Created, Follow, JobState, JobStore, NewItem, NewJob, Runner, Wait,
+    Created, Follow, JobState, NewItem, NewJob, Runner, Wait,
 };
 use trss_subtitles::{
     fake::{self, FakeSource},
@@ -47,7 +48,7 @@ fn copy(episode: u32) -> String {
 struct Setup {
     dir: tempfile::TempDir,
     db: Db,
-    store: JobStore,
+    store: Handles,
     follow: Follow,
     runner: Runner,
 }
@@ -185,9 +186,9 @@ async fn unmapped() -> Setup {
     })
     .await
     .unwrap();
-    let store = JobStore::new(db.clone());
+    let store = Handles::new(db.clone());
     let runner = Runner::new(
-        store.clone(),
+        store.run.clone(),
         Sources::none().with_fake(FakeSource),
         trss_jobs::ReceiveArea::in_app_data(dir.path()),
         ticking_clock(),
@@ -243,7 +244,7 @@ async fn make(s: &Setup, command: &str, episode: &str, path: &str, source: bool)
             found_at: 500,
         }],
     };
-    match s.store.create(job, 900).await.unwrap() {
+    match s.store.requests.create(job, 900).await.unwrap() {
         Created::Created(id) => id,
         other => panic!("created: {other:?}"),
     }
@@ -277,16 +278,16 @@ async fn run(s: &Setup) {
 }
 
 async fn detail(s: &Setup, id: &str) -> JobDetail {
-    s.store.detail(id).await.unwrap().unwrap()
+    s.store.views.detail(id).await.unwrap().unwrap()
 }
 
 async fn removals(s: &Setup, job: &str) -> Vec<Removal> {
-    s.store.removals(job).await.unwrap()
+    s.store.place.removals(job).await.unwrap()
 }
 
 /// The person's 배치 확인 of the relocation, as the table shows it.
 async fn confirm(s: &Setup, job: &str) -> Confirmed {
-    let (asked, whole) = s.store.placeable(job).await.unwrap().unwrap();
+    let (asked, whole) = s.store.place.placeable(job).await.unwrap().unwrap();
     assert!(whole);
     let placings = asked
         .iter()
@@ -303,6 +304,7 @@ async fn confirm(s: &Setup, job: &str) -> Confirmed {
         .map(|r| r.id)
         .collect();
     s.store
+        .place
         .confirm_placement(job, placings, planned, None, 3_000_000)
         .await
         .unwrap()
@@ -360,7 +362,7 @@ async fn a_mapping_change_plans_a_relocation_and_moves_nothing() {
         d.row.note.as_deref(),
         Some("회차 대응이 바뀌어 적용본 1개를 옮길 계획을 확인해 주세요")
     );
-    let (asked, whole) = s.store.placeable(&job).await.unwrap().unwrap();
+    let (asked, whole) = s.store.place.placeable(&job).await.unwrap().unwrap();
     assert!(whole);
     assert_eq!(asked.len(), 1);
     assert_eq!(asked[0].placed.as_ref().map(|p| p.episode), Some(3));
@@ -379,6 +381,7 @@ async fn a_mapping_change_plans_a_relocation_and_moves_nothing() {
     // It waits for a person (`회차 확인 필요`) among the placement waits.
     assert!(s
         .store
+        .views
         .placement_waits()
         .await
         .unwrap()
@@ -430,7 +433,7 @@ async fn confirming_the_relocation_takes_the_copy_off_and_applies_it_on_the_new_
     );
     assert_eq!(removals(&s, &job).await[0].state, RemovalState::Done);
     assert!(s.temps().is_empty(), "{:?}", s.temps());
-    let plan = s.store.plan(&job).await.unwrap();
+    let plan = s.store.place.plan(&job).await.unwrap();
     assert_eq!(plan[0].outcome, Some(Outcome::Applied));
 }
 
@@ -457,7 +460,7 @@ async fn a_new_episode_with_a_subtitle_waits_for_a_replacements_approval() {
     // The old copy is gone; the episode's subtitle waits for the approval.
     assert_eq!(s.read(&copy(2)), None);
     assert_eq!(s.read(&copy(3)), Some(MINE.as_bytes().to_vec()));
-    let plans = s.store.replacements(&job).await.unwrap();
+    let plans = s.store.place.replacements(&job).await.unwrap();
     assert_eq!(plans.len(), 1);
     assert_eq!(plans[0].plan.state, PlanState::Open);
 }
@@ -472,6 +475,7 @@ async fn a_format_added_beside_the_first_moves_with_it() {
     let srt = s.stored_id("Show-14.srt").await;
     let chose = s
         .store
+        .place
         .choose_stored(WORK, &srt, Chosen::Add, 2_500_000)
         .await
         .unwrap();
@@ -515,6 +519,7 @@ async fn choosing_a_stored_subtitle_leaves_its_relocation_waiting() {
 
     let chose = s
         .store
+        .place
         .choose_stored(WORK, &stored, Chosen::Apply, 2_500_000)
         .await
         .unwrap();
@@ -597,16 +602,24 @@ async fn an_approval_waiting_for_the_old_target_is_not_used_for_the_new_one() {
         (d.row.state, d.row.wait),
         (JobState::Waiting, Some(Wait::Approval))
     );
-    let old = s.store.replacements(&id).await.unwrap().remove(0).plan;
+    let old = s
+        .store
+        .place
+        .replacements(&id)
+        .await
+        .unwrap()
+        .remove(0)
+        .plan;
 
     remap(&s, -11).await;
 
     // The open plan goes stale; the job compares again for episode 3.
-    let plans = s.store.replacements(&id).await.unwrap();
+    let plans = s.store.place.replacements(&id).await.unwrap();
     assert_eq!(plans[0].plan.state, PlanState::Stale);
     assert_eq!(plans[0].plan.reason.as_deref(), Some(relocate::STALE));
     let decided = s
         .store
+        .place
         .decide_replacement(&id, &old.id, old.version, true, 2_500_000)
         .await
         .unwrap();
@@ -703,7 +716,7 @@ async fn a_link_made_by_the_same_number_follows_the_mapping_decided_later() {
     assert_eq!(s.read(&copy(2)), Some(fake::ass("Show-3")));
     assert_eq!(s.read(&copy(3)), None);
     // The candidate's row is a record of what put it there then.
-    let plan = s.store.plan(&id).await.unwrap();
+    let plan = s.store.place.plan(&id).await.unwrap();
     assert_eq!(
         plan[0]
             .placed
@@ -721,7 +734,7 @@ async fn an_episode_a_person_chose_for_a_source_with_no_mapping_stays() {
     // The name says 4, the candidate 3: asked.
     let id = make(&s, "c1", "3", "/pack/Show%20-%2004.ass", true).await;
     run(&s).await;
-    let (asked, whole) = s.store.placeable(&id).await.unwrap().unwrap();
+    let (asked, whole) = s.store.place.placeable(&id).await.unwrap().unwrap();
     assert!(!whole);
     let placings = asked
         .iter()
@@ -733,6 +746,7 @@ async fn an_episode_a_person_chose_for_a_source_with_no_mapping_stays() {
         .collect();
     queued(
         s.store
+            .place
             .confirm_placement(&id, placings, Vec::new(), None, 1_500_000)
             .await
             .unwrap(),
@@ -769,14 +783,22 @@ async fn an_approval_holds_when_the_mapping_keeps_the_same_number() {
         link(&s, "Show-3.ass").await,
         ("mapped".to_owned(), Some("anissia".to_owned()), 3)
     );
-    let row = s.store.plan(&job).await.unwrap().remove(0);
+    let row = s.store.place.plan(&job).await.unwrap().remove(0);
     assert_eq!(
         row.placed.map(|p| (p.episode, p.assignment.code())),
         Some((3, "mapped"))
     );
     assert_eq!(detail(&s, &job).await.row.wait, Some(Wait::Approval));
-    let plan = s.store.replacements(&job).await.unwrap().remove(0).plan;
+    let plan = s
+        .store
+        .place
+        .replacements(&job)
+        .await
+        .unwrap()
+        .remove(0)
+        .plan;
     s.store
+        .place
         .decide_replacement(&job, &plan.id, plan.version, true, 3_500_000)
         .await
         .unwrap();
@@ -799,19 +821,20 @@ async fn a_change_before_the_confirmation_plans_anew_and_refuses_the_old_table()
     applied(&s, "c1", 14).await;
     remap(&s, -11).await;
     let job = s.relocation().await;
-    let (asked, _) = s.store.placeable(&job).await.unwrap().unwrap();
+    let (asked, _) = s.store.place.placeable(&job).await.unwrap().unwrap();
     let shown: Vec<String> = removals(&s, &job).await.into_iter().map(|r| r.id).collect();
 
     remap(&s, -10).await;
 
     // The same job, planned for episode 4.
     assert_eq!(s.relocation().await, job);
-    let (now_asked, _) = s.store.placeable(&job).await.unwrap().unwrap();
+    let (now_asked, _) = s.store.place.placeable(&job).await.unwrap().unwrap();
     assert_eq!(now_asked[0].placed.as_ref().map(|p| p.episode), Some(4));
     assert_ne!(now_asked[0].position, asked[0].position);
     // The table the person saw is not the plan any more.
     let stale = s
         .store
+        .place
         .confirm_placement(
             &job,
             vec![RowPlacing {
@@ -829,6 +852,7 @@ async fn a_change_before_the_confirmation_plans_anew_and_refuses_the_old_table()
     // The rows as they are now, without the removals they come with.
     let rows_only = s
         .store
+        .place
         .confirm_placement(
             &job,
             vec![RowPlacing {
@@ -847,6 +871,7 @@ async fn a_change_before_the_confirmation_plans_anew_and_refuses_the_old_table()
     let planned: Vec<String> = removals(&s, &job).await.into_iter().map(|r| r.id).collect();
     let moved = s
         .store
+        .place
         .confirm_placement(
             &job,
             vec![RowPlacing {
@@ -895,6 +920,7 @@ async fn a_relocation_moved_back_before_its_confirmation_ends_with_nothing_moved
 /// A confirmation with no rows and no removals.
 async fn confirm_rows(s: &Setup, job: &str) -> Confirmed {
     s.store
+        .place
         .confirm_placement(job, Vec::new(), Vec::new(), None, 3_000_000)
         .await
         .unwrap()
@@ -952,7 +978,7 @@ async fn a_relocation_that_only_takes_copies_off_says_it_took_them_off() {
     let jobs = s.relocations().await;
     assert_eq!(jobs.len(), 2, "{jobs:?}");
     let job = jobs[1].clone();
-    let (asked, _) = s.store.placeable(&job).await.unwrap().unwrap();
+    let (asked, _) = s.store.place.placeable(&job).await.unwrap().unwrap();
     assert!(asked.is_empty(), "{asked:?}");
     let off = removals(&s, &job).await;
     assert_eq!(
@@ -1006,7 +1032,7 @@ async fn a_copy_being_taken_off_does_not_count_as_applied_when_its_episode_comes
     let jobs = s.relocations().await;
     assert_eq!(jobs.len(), 3, "{jobs:?}");
     let third = jobs[2].clone();
-    let (asked, _) = s.store.placeable(&third).await.unwrap().unwrap();
+    let (asked, _) = s.store.place.placeable(&third).await.unwrap().unwrap();
     assert_eq!(
         asked
             .iter()
@@ -1080,7 +1106,7 @@ async fn a_shift_by_one_episode_moves_every_copy_with_no_approval() {
         d.row.note,
         d.events
     );
-    assert!(s.store.replacements(&job).await.unwrap().is_empty());
+    assert!(s.store.place.replacements(&job).await.unwrap().is_empty());
     assert_eq!(s.read(&copy(2)), None);
     assert_eq!(s.read(&copy(3)), Some(fake::ass("Show-14")));
     assert_eq!(s.read(&copy(4)), Some(fake::ass("Show-15")));
@@ -1108,7 +1134,7 @@ async fn a_mapping_saved_after_the_confirmation_keeps_what_is_back_in_place() {
     );
     let off = removals(&s, &job).await;
     assert_eq!(off[0].state, RemovalState::Kept, "{off:?}");
-    let plan = s.store.plan(&job).await.unwrap();
+    let plan = s.store.place.plan(&job).await.unwrap();
     assert_eq!(plan[0].outcome, Some(Outcome::Applied));
     assert_eq!(plan[0].note.as_deref(), Some(relocate::ALREADY_APPLIED));
     // Episode 2 keeps its copy; nothing went on 3.
@@ -1135,6 +1161,7 @@ async fn a_run_whose_rows_a_mapping_change_moved_goes_back_in_line() {
     // Its run ends waiting for the approval it counted: back in line.
     let back = s
         .store
+        .run
         .settle(
             &id,
             JobState::Waiting,
@@ -1200,7 +1227,7 @@ async fn a_copy_recorded_after_a_mapping_change_moved_its_subtitle_is_planned_to
         .unwrap();
 
     // Recording it plans its relocation, and the row says where it went.
-    let plan = s.store.plan(&id).await.unwrap();
+    let plan = s.store.place.plan(&id).await.unwrap();
     assert_eq!(
         (plan[0].outcome, plan[0].placed.as_ref().map(|p| p.episode)),
         (Some(Outcome::Applied), Some(2))
@@ -1392,6 +1419,7 @@ async fn a_held_removal_holds_only_the_rows_it_touches() {
     // whose copy is held: both wait. Episode 5's goes on.
     let rows: Vec<(Option<i64>, Option<Outcome>, Option<String>)> = s
         .store
+        .place
         .plan(&job)
         .await
         .unwrap()
@@ -1452,6 +1480,7 @@ async fn a_relocation_cut_short_too_often_holds_its_removals_under_way() {
     set_removal(&s, &started, "set_aside").await;
 
     s.store
+        .run
         .hold_stuck(&job, "거듭 중단됐어요".to_owned(), 4_000_000)
         .await
         .unwrap();
@@ -1502,8 +1531,16 @@ async fn a_held_removal_waits_for_the_approval_another_row_needs() {
         d.row.note,
         d.events
     );
-    let plan = s.store.replacements(&job).await.unwrap().remove(0).plan;
+    let plan = s
+        .store
+        .place
+        .replacements(&job)
+        .await
+        .unwrap()
+        .remove(0)
+        .plan;
     s.store
+        .place
         .decide_replacement(&job, &plan.id, plan.version, true, 3_500_000)
         .await
         .unwrap();
@@ -1540,8 +1577,16 @@ async fn a_held_removal_waits_for_the_work_folder_an_approved_row_needs() {
     set_removal(&s, &four, "set_aside").await;
     std::fs::create_dir_all(aside(&s, &four).join("in-the-way")).unwrap();
     run(&s).await;
-    let plan = s.store.replacements(&job).await.unwrap().remove(0).plan;
+    let plan = s
+        .store
+        .place
+        .replacements(&job)
+        .await
+        .unwrap()
+        .remove(0)
+        .plan;
     s.store
+        .place
         .decide_replacement(&job, &plan.id, plan.version, true, 3_500_000)
         .await
         .unwrap();
@@ -1588,7 +1633,7 @@ async fn a_copy_prepared_for_the_old_episode_is_not_published_there() {
     let id = make(&s, "c1", "14", "/ok/Show-14", true).await;
     run(&s).await;
     assert_eq!(
-        s.store.plan(&id).await.unwrap()[0].outcome,
+        s.store.place.plan(&id).await.unwrap()[0].outcome,
         Some(Outcome::NoVideo)
     );
     std::fs::write(&ep2, b"video").unwrap();
