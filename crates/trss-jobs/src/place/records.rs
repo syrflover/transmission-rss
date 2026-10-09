@@ -7,6 +7,7 @@ use std::collections::{btree_map::Entry, BTreeMap};
 
 use rusqlite::{params, Connection, OptionalExtension, Row, TransactionBehavior};
 use trss_core::{episode::EpisodeNumber, Millis};
+use trss_library::mapping::reason;
 
 use crate::{
     model::{
@@ -2023,11 +2024,10 @@ pub fn confirm_placement(
         }
         for p in placings {
             if let Some(episode) = p.episode {
-                if episode < 1 || total.is_some_and(|n| episode > i64::from(n)) {
-                    return Ok(Confirmed::Refused(match total {
-                        Some(n) => format!("{episode}화는 이 시즌의 1–{n}화 밖이에요."),
-                        None => format!("{episode}화는 회차가 될 수 없어요."),
-                    }));
+                if !reason::in_season(episode, total) {
+                    return Ok(Confirmed::Refused(reason::placed_outside_season(
+                        episode, total,
+                    )));
                 }
             } else if p.apply {
                 return Ok(Confirmed::Refused(format!(

@@ -3,9 +3,10 @@
 //! its source's mapping, checked against the number the file's name says.
 
 use trss_core::episode::{episode_label, EpisodeNumber};
+use trss_library::mapping::reason::{self, Wording};
 use trss_subtitles::episode::{holds, Holds};
 
-use crate::mapping::{whole, Mapped, Mapping};
+use crate::mapping::{whole, Mapping};
 
 /// What puts a stored subtitle on an episode (`assignment` in
 /// `docs/specs/settings.md`, 보관 관계 필드).
@@ -135,32 +136,19 @@ fn candidate_target(
                     },
                 ))
             }
-            None => Err(format!(
-                "후보의 회차 {}는 정수 회차가 아니라 시즌의 회차로 옮기지 못했어요",
-                episode_label(candidate)
-            )),
+            None => Err(reason::not_whole(candidate, Wording::Candidate)),
         },
-        Some(mapping) => match mapping.season_episode(candidate) {
-            Mapped::Episode(n) => Ok((
+        Some(mapping) => {
+            let n = reason::place(mapping, candidate, Wording::Candidate)?;
+            Ok((
                 n,
                 Target::Episode {
                     episode: n,
                     assignment: Assignment::Mapped,
                     basis: Some(Basis::Anissia),
                 },
-            )),
-            Mapped::NotReceived => Err(format!(
-                "회차 대응이 후보의 {}를 받지 않는 회차로 정해 두었어요",
-                episode_label(candidate)
-            )),
-            Mapped::Unmapped if mapping.decided_offset().is_none() => {
-                Err("이 제작자의 회차 대응이 아직 미정이에요".to_owned())
-            }
-            Mapped::Unmapped => Err(format!(
-                "후보의 회차 {}는 회차 대응으로 옮길 수 없는 회차예요",
-                episode_label(candidate)
-            )),
-        },
+            ))
+        }
     }
 }
 
@@ -183,14 +171,12 @@ pub fn of_candidate(
         Ok(found) => found,
         Err(reason) => return Target::Ask(reason),
     };
-    if episode < 1 || total.is_some_and(|n| episode > i64::from(n)) {
-        let range = match total {
-            Some(n) => format!("1–{n}화"),
-            None => "1화부터".to_owned(),
-        };
-        return Target::Ask(format!(
-            "후보의 {}를 옮긴 시즌 {episode}화가 시즌의 {range} 밖이에요",
-            episode_label(candidate)
+    if !reason::in_season(episode, total) {
+        return Target::Ask(reason::outside_season(
+            candidate,
+            episode,
+            total,
+            Wording::Candidate,
         ));
     }
     match named(name) {

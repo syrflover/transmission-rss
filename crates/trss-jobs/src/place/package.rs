@@ -50,10 +50,11 @@
 use std::collections::BTreeMap;
 
 use trss_core::episode::{episode_label, EpisodeNumber};
+use trss_library::mapping::reason::{self, Wording};
 use trss_subtitles::verify::Format;
 
 use crate::{
-    mapping::{whole, Mapped, Mapping},
+    mapping::{whole, Mapping},
     model::{AssetKind, Outcome, PlanAction, SubtitleFormat},
     place::{
         episode::{named, of_candidate, Assignment, Basis, Named, Target},
@@ -403,11 +404,6 @@ pub fn plan(candidates: &[Candidate<'_>], files: &[File<'_>], ctx: &Context<'_>)
         Some((m, episode)) => format!("후보의 {} 파일에 적힌 시즌({m})", episode_label(episode)),
         None => format!("이 작업의 시즌({})", ctx.season),
     };
-    let range = || match ctx.total {
-        Some(n) => format!("1–{n}화"),
-        None => "1화부터".to_owned(),
-    };
-
     // Where another episode's file goes: its episode, or why none.
     let other = |i: usize| -> Result<Target, String> {
         let key = match named(base(i)) {
@@ -421,13 +417,9 @@ pub fn plan(candidates: &[Candidate<'_>], files: &[File<'_>], ctx: &Context<'_>)
             ));
         }
         let Some(number) = whole(&key) else {
-            return Err(format!(
-                "{}는 정수 회차가 아니라 시즌의 회차로 정하지 못했어요",
-                episode_label(&key)
-            ));
+            return Err(reason::not_whole(&key, Wording::File));
         };
-        let through = ctx.mapping.map(|m| (m, m.season_episode(&key)));
-        let target = match (numbering, through) {
+        let target = match (numbering, ctx.mapping) {
             // The names number the season's episodes.
             (Numbering::Season, _) => Target::Episode {
                 episode: number,
@@ -442,44 +434,21 @@ pub fn plan(candidates: &[Candidate<'_>], files: &[File<'_>], ctx: &Context<'_>)
                     basis,
                 }
             }
-            (_, Some((_, Mapped::NotReceived))) => {
-                return Err(format!(
-                    "회차 대응이 {}를 받지 않는 회차로 정해 두었어요",
-                    episode_label(&key)
-                ))
+            (_, Some(m)) => {
+                let n = reason::place(m, &key, Wording::File)?;
+                if matches!(numbering, Numbering::Unknown | Numbering::Mixed) && n != number {
+                    return Err(reason::numbering_unclear(&key));
+                }
+                Target::Episode {
+                    episode: n,
+                    assignment: Assignment::Mapped,
+                    basis: Some(Basis::Attachment),
+                }
             }
-            (_, Some((m, Mapped::Unmapped))) => {
-                return Err(match m.decided_offset() {
-                    None => "이 제작자의 회차 대응이 아직 미정이에요".to_owned(),
-                    Some(_) => format!(
-                        "{}는 회차 대응으로 옮길 수 없는 회차예요",
-                        episode_label(&key)
-                    ),
-                })
-            }
-            (Numbering::Unknown | Numbering::Mixed, Some((_, Mapped::Episode(n))))
-                if n != number =>
-            {
-                return Err(format!(
-                    "파일 이름의 {}가 Anissia의 회차인지 시즌의 회차인지 정하지 못했어요",
-                    episode_label(&key)
-                ))
-            }
-            (_, Some((_, Mapped::Episode(n)))) => Target::Episode {
-                episode: n,
-                assignment: Assignment::Mapped,
-                basis: Some(Basis::Attachment),
-            },
         };
         match target {
-            Target::Episode { episode, .. }
-                if episode < 1 || ctx.total.is_some_and(|n| episode > i64::from(n)) =>
-            {
-                Err(format!(
-                    "{}가 시즌의 {} 밖이라 다른 시즌의 파일로 보여요",
-                    episode_label(&key),
-                    range()
-                ))
+            Target::Episode { episode, .. } if !reason::in_season(episode, ctx.total) => {
+                Err(reason::another_seasons_file(&key, ctx.total))
             }
             target => Ok(target),
         }
@@ -676,12 +645,9 @@ fn named_target(base: &str, ctx: &Context<'_>) -> Result<Placed, String> {
         ));
     }
     let Some(number) = whole(&key) else {
-        return Err(format!(
-            "{}는 정수 회차가 아니라 시즌의 회차로 정하지 못했어요",
-            episode_label(&key)
-        ));
+        return Err(reason::not_whole(&key, Wording::File));
     };
-    let placed = match ctx.mapping.map(|m| (m, m.season_episode(&key))) {
+    let placed = match ctx.mapping {
         None => {
             let (assignment, basis) = Assignment::same_number(ctx.source, Basis::Attachment);
             Placed {
@@ -690,35 +656,18 @@ fn named_target(base: &str, ctx: &Context<'_>) -> Result<Placed, String> {
                 basis,
             }
         }
-        Some((_, Mapped::Episode(n))) => Placed {
-            episode: n,
+        Some(m) => Placed {
+            episode: reason::place(m, &key, Wording::File)?,
             assignment: Assignment::Mapped,
             basis: Some(Basis::Attachment),
         },
-        Some((_, Mapped::NotReceived)) => {
-            return Err(format!(
-                "회차 대응이 {}를 받지 않는 회차로 정해 두었어요",
-                episode_label(&key)
-            ))
-        }
-        Some((m, Mapped::Unmapped)) => {
-            return Err(match m.decided_offset() {
-                None => "이 제작자의 회차 대응이 아직 미정이에요".to_owned(),
-                Some(_) => format!(
-                    "{}는 회차 대응으로 옮길 수 없는 회차예요",
-                    episode_label(&key)
-                ),
-            })
-        }
     };
-    if placed.episode < 1 || ctx.total.is_some_and(|n| placed.episode > i64::from(n)) {
-        return Err(format!(
-            "{}가 시즌의 {} 밖이에요",
-            episode_label(&key),
-            match ctx.total {
-                Some(n) => format!("1–{n}화"),
-                None => "1화부터".to_owned(),
-            }
+    if !reason::in_season(placed.episode, ctx.total) {
+        return Err(reason::outside_season(
+            &key,
+            placed.episode,
+            ctx.total,
+            Wording::File,
         ));
     }
     Ok(placed)

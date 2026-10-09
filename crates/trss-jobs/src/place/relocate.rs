@@ -92,9 +92,10 @@ use trss_core::{
     files::{rename_noreplace, rename_noreplace_synced, sync_dir, sync_renamed},
     Millis,
 };
+use trss_library::mapping::reason::{self, Wording};
 
 use crate::{
-    mapping::{self, Mapped, Mapping},
+    mapping::{self, Mapping},
     model::{JobState, RemovalState, StepKind},
     place::{
         blocking,
@@ -148,18 +149,11 @@ fn target(
     let Some(text) = text.map(str::trim).filter(|t| !t.is_empty()) else {
         return Err("원래 회차의 기록이 없어요".to_owned());
     };
-    let label = trss_core::episode::episode_label(text);
-    match mapping.season_episode(text) {
-        Mapped::Episode(n) if n >= 1 && total.is_none_or(|t| n <= i64::from(t)) => Ok(n),
-        Mapped::Episode(n) => Err(format!(
-            "{label}를 옮긴 시즌 {n}화가 시즌의 {} 밖이에요",
-            match total {
-                Some(t) => format!("1–{t}화"),
-                None => "1화부터".to_owned(),
-            }
-        )),
-        Mapped::NotReceived => Err(format!("회차 대응이 {label}를 받지 않는 회차로 정했어요")),
-        Mapped::Unmapped => Err(format!("{label}는 회차 대응으로 옮길 수 없는 회차예요")),
+    let n = reason::place(mapping, text, Wording::Stored)?;
+    if reason::in_season(n, total) {
+        Ok(n)
+    } else {
+        Err(reason::outside_season(text, n, total, Wording::Stored))
     }
 }
 

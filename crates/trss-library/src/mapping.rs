@@ -90,6 +90,8 @@ use trss_core::{
     Millis,
 };
 
+pub mod reason;
+
 /// How long after the last scheduled episode aired a post still belongs to it.
 const LAST_WINDOW_MS: i64 = 7 * 24 * 60 * 60 * 1000;
 
