@@ -7,7 +7,6 @@
 //! | `PUT  /api/library/works/{id}/seasons/{n}/anissia/sources/{source}/mapping`        | `{ "version": 3, "offset": -12, "exceptions": [{ "episode": "13.5", "target": null }] }` |
 //! | `POST /api/library/works/{id}/seasons/{n}/anissia/sources/{source}/mapping/revert` | `{ "version": 3 }`                                                      |
 //! | `POST /api/library/works/{id}/seasons/{n}/anissia/sources/{source}/mapping/preview` | the dialog's input, see below                                          |
-//! | `POST /api/library/works/{id}/seasons/{n}/anissia/sources/{source}/mapping/preview` | the dialog's input, see below                                          |
 //!
 //! `{source}` is the `source_id` of a creator of the season's linked anime (the
 //! candidates' `source_id`), whether or not it is the subscribed creator. The
