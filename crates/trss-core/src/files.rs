@@ -70,14 +70,14 @@ pub fn sync_dir_fd(dir: impl AsFd) -> io::Result<()> {
 }
 
 /// Syncs a file already written, so its bytes outlive a power loss.
-pub fn sync_file(file: &File, path: &Path) -> io::Result<()> {
+pub fn sync_file(file: &File) -> io::Result<()> {
     #[cfg(any(test, feature = "test-support"))]
-    testing::before_sync(path)?;
+    let path = testing::path_of(file)?;
+    #[cfg(any(test, feature = "test-support"))]
+    testing::before_sync(&path)?;
     file.sync_all()?;
     #[cfg(any(test, feature = "test-support"))]
-    testing::synced(path);
-    #[cfg(not(any(test, feature = "test-support")))]
-    let _ = path;
+    testing::synced_file(file, &path);
     Ok(())
 }
 
@@ -143,7 +143,7 @@ pub fn write_new<T>(
         options.mode(mode);
     }
     let mut file = options.open(path)?;
-    let written = fill(&mut file).and_then(|value| sync_file(&file, path).map(|()| value));
+    let written = fill(&mut file).and_then(|value| sync_file(&file).map(|()| value));
     drop(file);
     if written.is_err() {
         let _ = std::fs::remove_file(path);
@@ -201,6 +201,8 @@ pub mod testing {
     #[derive(Default)]
     struct State {
         synced: HashMap<PathBuf, usize>,
+        /// The files synced, by device and inode, whatever name they had.
+        synced_files: HashMap<(u64, u64), usize>,
         failing: HashSet<PathBuf>,
     }
 
@@ -213,7 +215,13 @@ pub mod testing {
     }
 
     fn spelled(path: &Path) -> PathBuf {
-        std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+        let spelled = |path: &Path| std::fs::canonicalize(path).ok();
+        spelled(path)
+            .or_else(|| {
+                // A file that is gone is named by the folder it was in.
+                Some(spelled(path.parent()?)?.join(path.file_name()?))
+            })
+            .unwrap_or_else(|| path.to_path_buf())
     }
 
     pub(super) fn before_sync(path: &Path) -> io::Result<()> {
@@ -227,7 +235,18 @@ pub mod testing {
         *state().synced.entry(spelled(path)).or_default() += 1;
     }
 
-    /// The folder a descriptor is open on, as the system names it.
+    pub(super) fn synced_file(file: &std::fs::File, path: &Path) {
+        synced(path);
+        if let Ok(meta) = file.metadata() {
+            use std::os::unix::fs::MetadataExt;
+            *state()
+                .synced_files
+                .entry((meta.dev(), meta.ino()))
+                .or_default() += 1;
+        }
+    }
+
+    /// The file or folder a descriptor is open on, as the system names it.
     pub(super) fn path_of(fd: &impl AsFd) -> io::Result<PathBuf> {
         std::fs::read_link(format!("/proc/self/fd/{}", fd.as_fd().as_raw_fd()))
     }
@@ -235,6 +254,20 @@ pub mod testing {
     /// How many times `path` (a file or a folder) was synced.
     pub fn syncs_of(path: &Path) -> usize {
         state().synced.get(&spelled(path)).copied().unwrap_or(0)
+    }
+
+    /// How many times the file now at `path` was synced, under whatever name
+    /// it had then (it may have been renamed since).
+    pub fn syncs_of_file(path: &Path) -> usize {
+        use std::os::unix::fs::MetadataExt;
+        match std::fs::metadata(path) {
+            Ok(meta) => state()
+                .synced_files
+                .get(&(meta.dev(), meta.ino()))
+                .copied()
+                .unwrap_or(0),
+            Err(_) => 0,
+        }
     }
 
     /// Makes the syncs of `path` fail until the guard is dropped.
@@ -417,6 +450,18 @@ mod tests {
         let err = sync_dir(&dir.path().join("none")).unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::NotFound);
         assert_eq!(testing::syncs_of(&dir.path().join("none")), 0);
+    }
+
+    #[test]
+    fn a_file_is_synced_by_the_path_it_is_open_on() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("a");
+        let file = File::create(&path).unwrap();
+        sync_file(&file).unwrap();
+        assert_eq!(testing::syncs_of(&path), 1);
+        let _failing = testing::fail_syncs_of(&path);
+        assert!(sync_file(&file).is_err());
+        assert_eq!(testing::syncs_of(&path), 1);
     }
 
     #[test]

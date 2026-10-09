@@ -11,7 +11,9 @@ use rustix::{
     fs::{fstat, linkat, open, openat, statat, unlinkat, AtFlags, FileType, Mode, OFlags, Stat},
     io::Errno,
 };
-use trss_core::files::{noreplace_unsupported, rename_noreplace_at};
+use trss_core::files::{
+    create_dir_all_synced, noreplace_unsupported, rename_noreplace_at, sync_dir_fd, sync_file,
+};
 
 use super::BrowserError;
 
@@ -76,6 +78,14 @@ fn check_plain(stat: &Stat) -> Result<(), BrowserError> {
 /// which must not exist there: a file already there is never replaced.
 /// Blocking.
 ///
+/// The file is on the disk when this returns: its bytes are synced before the
+/// move (the browser does not sync what it writes), `dir` and every folder
+/// made for it are synced into the folder they are in, and the two folders
+/// are synced after the move. An error from the sync of the bytes leaves the
+/// download where it was. A sync of the folders that fails after the move is
+/// logged and is not an error: the file is placed, and a caller told
+/// otherwise would wait for a file that is already there.
+///
 /// The run's folder is writable by the browser, which can be compromised (it
 /// runs without its own sandbox), so nothing in it is trusted: the folder is
 /// opened without following a link and must be a folder, the file is looked
@@ -101,13 +111,15 @@ pub(super) fn move_into(
     let stat = statat(&run_fd, guid, AtFlags::SYMLINK_NOFOLLOW).map_err(io::Error::from)?;
     check_plain(&stat)?;
 
-    std::fs::create_dir_all(dir)?;
+    create_dir_all_synced(dir)?;
     let dir_fd = open(
         dir,
         OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
         Mode::empty(),
     )
     .map_err(io::Error::from)?;
+
+    sync_download(&run_fd, guid)?;
 
     match rename_noreplace_at(&run_fd, guid, &dir_fd, name) {
         Ok(()) => {}
@@ -141,11 +153,36 @@ pub(super) fn move_into(
         }
         return Err(why);
     }
+    for (folder, fd) in [(dir, &dir_fd), (run_dir, &run_fd)] {
+        if let Err(err) = sync_dir_fd(fd) {
+            eprintln!(
+                "Browser: cannot sync {} after moving {name} into {}: {err}",
+                folder.display(),
+                dir.display()
+            );
+        }
+    }
     Ok(MovedFile {
         name: name.to_owned(),
         path: dir.join(name),
         size: placed.st_size as u64,
     })
+}
+
+/// Syncs the bytes of the download `guid` before it is moved. The
+/// file is opened without following a link or waiting on a pipe, and must be
+/// a plain file still.
+fn sync_download(run_fd: &OwnedFd, guid: &str) -> Result<(), BrowserError> {
+    let file = openat(
+        run_fd,
+        guid,
+        OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC,
+        Mode::empty(),
+    )
+    .map_err(io::Error::from)?;
+    check_plain(&fstat(&file).map_err(io::Error::from)?)?;
+    sync_file(&File::from(file))?;
+    Ok(())
 }
 
 /// Removes the download once it is placed. A download already gone (the run
@@ -185,7 +222,9 @@ fn copy_across(
         Mode::from_raw_mode(0o644),
     )
     .map_err(io::Error::from)?;
-    let copied = io::copy(&mut File::from(source), &mut File::from(target));
+    let mut target = File::from(target);
+    let copied = io::copy(&mut File::from(source), &mut target).and_then(|_| sync_file(&target));
+    drop(target);
     if let Err(err) = copied {
         let _ = unlinkat(dir_fd, &partial, AtFlags::empty());
         return Err(err.into());
@@ -205,6 +244,8 @@ fn copy_across(
 #[cfg(test)]
 mod tests {
     use std::os::unix::fs::symlink;
+
+    use trss_core::files::testing;
 
     use super::*;
 
@@ -269,6 +310,49 @@ mod tests {
         assert!(matches!(again, Err(BrowserError::AlreadyExists(ref n)) if n == "a.zip"));
         assert_eq!(std::fs::read(dest.join("a.zip")).unwrap(), b"12345");
         assert!(from.exists(), "the download stays when the move is refused");
+    }
+
+    #[test]
+    fn a_moved_file_and_both_folders_are_synced() {
+        let (root, run) = folder();
+        std::fs::write(run.join(GUID), b"12345").unwrap();
+        let dest = root.path().join("receive/job");
+
+        move_into(&run, GUID, &dest, "a.zip").unwrap();
+
+        // The bytes before the move, the folders made for it in the folder
+        // each is in, and the folder it left and the one it came into.
+        assert!(testing::syncs_of_file(&dest.join("a.zip")) >= 1);
+        assert!(testing::syncs_of(root.path()) >= 1);
+        assert!(testing::syncs_of(&root.path().join("receive")) >= 1);
+        assert!(testing::syncs_of(&run) >= 1);
+        assert!(testing::syncs_of(&dest) >= 1);
+    }
+
+    #[test]
+    fn a_refused_file_syncs_no_folder_and_a_failing_sync_of_its_bytes_leaves_it_where_it_was() {
+        let (root, run) = folder();
+        let dest = root.path().join("out");
+        std::fs::write(run.join(GUID), b"12345").unwrap();
+        std::fs::create_dir(&dest).unwrap();
+        std::fs::write(dest.join("a.zip"), b"theirs").unwrap();
+        let refused = move_into(&run, GUID, &dest, "a.zip");
+        assert!(matches!(refused, Err(BrowserError::AlreadyExists(_))));
+        assert_eq!(testing::syncs_of(&dest), 0, "nothing arrived to sync");
+
+        let failing = testing::fail_syncs_of(&run.join(GUID));
+        let failed = move_into(&run, GUID, &dest, "b.zip");
+        assert!(matches!(failed, Err(BrowserError::Io(_))), "{failed:?}");
+        assert!(run.join(GUID).exists(), "the download stays");
+        assert!(!dest.join("b.zip").exists());
+        drop(failing);
+
+        // A folder that cannot be synced after the move is no error: the file
+        // is placed.
+        let _failing = testing::fail_syncs_of(&dest);
+        let moved = move_into(&run, GUID, &dest, "c.zip").unwrap();
+        assert_eq!(moved.path, dest.join("c.zip"));
+        assert_eq!(std::fs::read(dest.join("c.zip")).unwrap(), b"12345");
     }
 
     #[test]
@@ -351,6 +435,27 @@ mod tests {
             "{refused:?}"
         );
         assert!(!dest.join("a.zip").exists());
+    }
+
+    #[test]
+    fn a_copy_across_filesystems_is_synced_before_it_takes_its_name() {
+        let (root, run) = folder();
+        let dest = root.path().join("out");
+        std::fs::create_dir(&dest).unwrap();
+        std::fs::write(run.join(GUID), b"copied").unwrap();
+        let open_dir = |path: &Path| {
+            open(
+                path,
+                OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
+                Mode::empty(),
+            )
+            .unwrap()
+        };
+        let (run_fd, dest_fd) = (open_dir(&run), open_dir(&dest));
+
+        copy_across(&run_fd, GUID, &dest_fd, "a.zip").unwrap();
+
+        assert!(testing::syncs_of_file(&dest.join("a.zip")) >= 1);
     }
 
     #[test]

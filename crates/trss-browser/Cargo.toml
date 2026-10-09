@@ -38,6 +38,8 @@ url.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+# `files::testing`: which files and folders a download's move synced.
+trss-core = { workspace = true, features = ["test-support"] }
 regex.workspace = true
 tempfile.workspace = true
 yaml_serde.workspace = true

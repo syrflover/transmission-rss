@@ -871,7 +871,8 @@ impl BrowserRun {
     /// name the site suggested, made safe ([`files::safe_file_name`]). A file
     /// of that name in `dir` is never replaced
     /// ([`BrowserError::AlreadyExists`]), and the download then stays where it
-    /// is.
+    /// is. The file is synced, and so are the folder it left and the one it
+    /// came into ([`files::move_into`]).
     pub async fn move_download(
         &self,
         download: &Download,
