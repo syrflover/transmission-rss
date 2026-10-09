@@ -8,6 +8,8 @@
 //!   alerts; [`watch_rescan`] is the command that reads one now;
 //! - [`artwork`] and [`seasons`] keep each work's cover and each season's
 //!   AniList entries, with the worker's queues that fetch them;
+//! - [`mapping`] decides which episode of a season a subtitle source's episode
+//!   is;
 //! - [`store`] holds the queries and rules of the tables of these.
 //!
 //! The AniList and Anissia answers are read in `trss-anilist`; this crate
@@ -17,6 +19,7 @@ pub mod artwork;
 pub mod automatic_watch;
 pub mod discovery;
 pub mod live;
+pub mod mapping;
 pub mod seasons;
 pub mod store;
 pub mod watch;
