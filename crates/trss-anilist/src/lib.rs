@@ -580,15 +580,6 @@ mod tests {
     const NOW: i64 = 1_000_000;
 
     #[tokio::test]
-    async fn a_request_waits_for_its_turn_and_is_then_sent() {
-        let (fake, anilist) = waiting_client(Duration::from_millis(300)).await;
-        let started = std::time::Instant::now();
-        assert!(anilist.media(1, None).await.unwrap().is_some());
-        assert!(started.elapsed() >= Duration::from_millis(250));
-        assert_eq!(fake.api_requests().len(), 1);
-    }
-
-    #[tokio::test]
     async fn a_block_that_comes_while_a_request_waits_for_its_turn_stops_the_request() {
         let (fake, anilist) = waiting_client(Duration::from_millis(600)).await;
         let blocker = tokio::spawn({

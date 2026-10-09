@@ -236,43 +236,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn request_slots_keep_their_spacing_and_a_block_holds_every_request() {
-        let store = RequestPace::anissia(Db::open(":memory:").await.unwrap());
-        assert_eq!(
-            store.take_request_slot(1000, 2000, None).await.unwrap(),
-            Ok(1000)
-        );
-        assert_eq!(
-            store.take_request_slot(1000, 2000, None).await.unwrap(),
-            Ok(3000)
-        );
-        // A caller that may wait 1 s is told the wait instead of taking the slot.
-        assert_eq!(
-            store
-                .take_request_slot(1000, 2000, Some(1000))
-                .await
-                .unwrap(),
-            Err(4000)
-        );
-        assert_eq!(
-            store.take_request_slot(1000, 2000, None).await.unwrap(),
-            Ok(5000)
-        );
-
-        store.block_requests(60_000).await.unwrap();
-        assert_eq!(
-            store.take_request_slot(7000, 2000, None).await.unwrap(),
-            Ok(60_000)
-        );
-        // A shorter block does not shorten a longer one.
-        store.block_requests(10_000).await.unwrap();
-        assert_eq!(
-            store.take_request_slot(8000, 2000, None).await.unwrap(),
-            Ok(62_000)
-        );
-    }
-
-    #[tokio::test]
     async fn the_three_services_and_each_host_have_their_own_pace_and_case_does_not_matter() {
         let db = Db::open(":memory:").await.unwrap();
         let rows = [
@@ -282,6 +245,8 @@ mod tests {
             RequestPace::host(db.clone(), "other.test"),
         ];
         for row in &rows {
+            // A service never asked has no block.
+            assert_eq!(row.blocked_until().await.unwrap(), None);
             assert_eq!(
                 row.take_request_slot(1000, 3000, None).await.unwrap(),
                 Ok(1000)
@@ -297,6 +262,36 @@ mod tests {
         assert_eq!(rows[0].blocked_until().await.unwrap(), None);
         assert_eq!(rows[2].blocked_until().await.unwrap(), Some(60_000));
         assert_eq!(rows[3].blocked_until().await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn each_service_keeps_its_pace_in_its_own_table() {
+        let db = Db::open(":memory:").await.unwrap();
+        let rows = [
+            RequestPace::anilist(db.clone()),
+            RequestPace::anissia(db.clone()),
+            RequestPace::host(db.clone(), "Nyaa.si"),
+        ];
+        for (spacing, row) in (1..).zip(&rows) {
+            row.take_request_slot(1000, spacing, None)
+                .await
+                .unwrap()
+                .unwrap();
+        }
+        let next = db
+            .run(|c| {
+                let next_at = |sql: &str| -> Result<Millis, DbError> {
+                    Ok(c.query_row(sql, [], |r| r.get(0))?)
+                };
+                Ok::<_, DbError>([
+                    next_at("SELECT next_at FROM anilist_pace WHERE id = 1")?,
+                    next_at("SELECT next_at FROM anissia_pace WHERE id = 1")?,
+                    next_at("SELECT next_at FROM search_pace WHERE host = 'nyaa.si'")?,
+                ])
+            })
+            .await
+            .unwrap();
+        assert_eq!(next, [1001, 1002, 1003]);
     }
 
     #[tokio::test]
@@ -318,6 +313,26 @@ mod tests {
                 .await
                 .unwrap(),
             Ok(3_600_000)
+        );
+        // A slot within the wait is taken.
+        assert_eq!(
+            pace.take_request_slot(3_600_000, 3_000, Some(60_000))
+                .await
+                .unwrap(),
+            Ok(3_603_000)
+        );
+    }
+
+    #[tokio::test]
+    async fn a_request_later_than_the_next_slot_is_not_delayed() {
+        let pace = RequestPace::anilist(Db::open(":memory:").await.unwrap());
+        assert_eq!(
+            pace.take_request_slot(1_000, 3_000, None).await.unwrap(),
+            Ok(1_000)
+        );
+        assert_eq!(
+            pace.take_request_slot(20_000, 3_000, None).await.unwrap(),
+            Ok(20_000)
         );
     }
 

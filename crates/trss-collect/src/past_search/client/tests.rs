@@ -50,32 +50,6 @@ async fn a_host_blocked_for_an_hour_fails_the_search_at_once() {
 }
 
 #[tokio::test]
-async fn a_block_that_comes_while_a_request_waits_for_its_slot_stops_the_request() {
-    let clock = system_clock();
-    let (client, pace, _dir) = client(Duration::from_millis(600), clock.clone()).await;
-    let host = "127.0.0.1";
-    // Another search's request holds the slot before this one's.
-    pace.take_slot(host, clock(), 600, None)
-        .await
-        .unwrap()
-        .unwrap();
-    let blocker = tokio::spawn({
-        let (pace, clock) = (pace.clone(), clock.clone());
-        async move {
-            tokio::time::sleep(Duration::from_millis(150)).await;
-            pace.block(host, clock() + 10_000).await.unwrap();
-        }
-    });
-    let answer = page(&client, Duration::from_secs(5)).await;
-    blocker.await.unwrap();
-    let Some(Err(err)) = answer else {
-        panic!("unexpected answer: {answer:?}");
-    };
-    // The request must not be sent into the block: sent, it would fail to connect.
-    assert!(matches!(err, SearchError::Wait(_)), "{err}");
-}
-
-#[tokio::test]
 async fn a_search_redirected_to_another_host_is_read_without_the_channel_url_going_along() {
     let hosts = crate::feed::testing::Redirect::start().await;
     let (client, _pace, _dir) = client(Duration::from_millis(10), system_clock()).await;

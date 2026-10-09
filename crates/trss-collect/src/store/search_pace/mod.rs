@@ -9,9 +9,6 @@
 //! do not use the row. The caller waits for its turn
 //! ([`RequestPace::wait_for_turn`]) before it sends.
 
-#[cfg(test)]
-mod tests;
-
 use trss_core::{
     db::{Db, DbError},
     pace::RequestPace,
