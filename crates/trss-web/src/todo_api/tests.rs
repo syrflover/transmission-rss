@@ -211,7 +211,7 @@ async fn a_work_without_a_creator_is_one_suggestion_with_no_names_and_no_badge()
     // A suggestion is no to-do: the badge does not count it.
     assert_eq!(
         app.get("/api/todo").await,
-        json!({ "needs": [], "count": 0 })
+        json!({ "needs": [], "count": 0, "badges": {} })
     );
     assert!(app.jobs().await.is_empty());
 }
@@ -281,6 +281,9 @@ async fn choosing_a_candidates_creator_receives_its_episodes_and_a_check_is_a_to
     assert_eq!(todo["count"], 1);
     assert_eq!(todo["needs"][0]["kind"], "auth");
     assert_eq!(todo["needs"][0]["episodes"], json!(["2"]));
+    // The answer names its badge and the work's, for the screen to show.
+    assert_eq!(todo["needs"][0]["badge"], "auth");
+    assert_eq!(todo["badges"], json!({ "w1": ["auth"] }));
 
     // The candidates show the app's mapping of the creator's source.
     let shown = app

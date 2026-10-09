@@ -5,7 +5,7 @@ import { ApiError } from "@/lib/api";
 import { forgetPrefix, peek, store, useAfterDelay, useStored } from "@/lib/cached";
 
 import { fetchTodos } from "../todo/api";
-import { kindsByWork, withKinds } from "../todo/kinds";
+import { withKinds } from "../todo/kinds";
 import { LIST_PREFIX, loadWorkPage, type FilterKey, type LibraryWorkPage, type SortKey } from "./api";
 import { prepare, type Work } from "./model";
 
@@ -129,7 +129,7 @@ export function useWorkPages(query: WorkPagesQuery): WorkPages {
         (todos) => {
           const now = peek<LoadedPages>(key);
           if (controller.signal.aborted || now === undefined) return;
-          const works = withKinds(now.works, kindsByWork(todos.needs));
+          const works = withKinds(now.works, new Map(Object.entries(todos.badges)));
           if (works !== now.works) store(key, { ...now, works });
         },
         // The badges stay as they were read; the next read of the list has them again.

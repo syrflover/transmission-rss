@@ -453,6 +453,31 @@ async fn the_detail_says_what_changed_without_the_lines() {
 }
 
 #[tokio::test]
+async fn a_plan_says_what_it_changes_as_one_plans_total() {
+    let app = App::new().await;
+    let (job, plan) = app.waiting_revision().await;
+
+    assert_eq!(
+        app.replacement(&job).await["changes"],
+        json!({
+            "added": 0, "changed": 24, "removed": 0, "timing": 0, "styles": 0,
+            "fonts": 0, "uncompared": 0, "partial": 0, "plans": 1
+        })
+    );
+
+    // One that was not compared, or could not be, is counted as uncompared.
+    let uncompared = json!({
+        "added": 0, "changed": 0, "removed": 0, "timing": 0, "styles": 0,
+        "fonts": 0, "uncompared": 1, "partial": 0, "plans": 1
+    });
+    app.recompared(&plan, None).await;
+    assert_eq!(app.replacement(&job).await["changes"], uncompared);
+    app.recompared(&plan, Some("현재 자막: 인코딩을 알 수 없어요"))
+        .await;
+    assert_eq!(app.replacement(&job).await["changes"], uncompared);
+}
+
+#[tokio::test]
 async fn a_plan_with_no_comparison_or_an_unreadable_one_says_so_and_never_no_difference() {
     let app = App::new().await;
     let (job, plan) = app.waiting_revision().await;

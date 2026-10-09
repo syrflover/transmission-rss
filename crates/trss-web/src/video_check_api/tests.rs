@@ -121,8 +121,10 @@ async fn a_video_whose_name_gives_no_episode_is_a_to_do_until_a_person_checks_it
                 "path": ASKED,
                 "reason": "이름에서 회차를 읽지 못했어요",
                 "seen": seen,
+                "badge": "episode_check",
             }],
             "count": 1,
+            "badges": { work.clone(): ["episode_check"] },
         })
     );
     assert_eq!(app.badges().await, json!(["episode_check"]));
@@ -143,7 +145,7 @@ async fn a_video_whose_name_gives_no_episode_is_a_to_do_until_a_person_checks_it
     assert_eq!(app.check(&work, ASKED, &seen).await, StatusCode::NO_CONTENT);
     assert_eq!(
         app.get("/api/todo").await,
-        json!({ "needs": [], "count": 0 })
+        json!({ "needs": [], "count": 0, "badges": {} })
     );
     assert_eq!(app.get("/api/todo/count").await, json!({ "count": 0 }));
     assert_eq!(app.badges().await, json!([]));

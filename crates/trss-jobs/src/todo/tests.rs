@@ -4,8 +4,8 @@ use crate::{
     place::{
         episode::Assignment,
         replace::records::{
-            Compared, Comparison, Diff, Encoding, FileSeen, Format, Plan, PlanPath, PlanView, Side,
-            StoredFacts, VideoSeen,
+            Compared, Comparison, Diff, Encoding, FileSeen, Format, Item, NotCompared, Plan,
+            PlanPath, PlanView, Side, StoredFacts, VideoSeen,
         },
     },
 };
@@ -428,4 +428,239 @@ fn of_several_plans_the_newest_of_each_time_is_kept() {
 
     assert_eq!(received.current, Some(3_000));
     assert_eq!(received.new, Some(9_000));
+}
+
+// ---- one plan's total
+
+/// A comparison of the two formats, with what `edit` leaves of it.
+fn edited(old: Format, new: Format, edit: impl FnOnce(&mut Diff)) -> Comparison {
+    let mut comparison = compared(old, new);
+    if let Compared::Diff(diff) = &mut comparison.result {
+        edit(diff);
+    }
+    comparison
+}
+
+#[test]
+fn one_plans_part_of_the_card_is_counted_from_its_comparison() {
+    assert_eq!(
+        Changes::of(Some(&compared(Format::Ass, Format::Ass))),
+        Changes {
+            added: 2,
+            changed: 12,
+            timing: 3,
+            styles: 2,
+            fonts: 2,
+            plans: 1,
+            ..Changes::default()
+        }
+    );
+}
+
+#[test]
+fn a_plan_made_before_the_app_compared_contents_is_uncompared() {
+    assert_eq!(
+        Changes::of(None),
+        Changes {
+            uncompared: 1,
+            plans: 1,
+            ..Changes::default()
+        }
+    );
+}
+
+#[test]
+fn a_plan_whose_contents_could_not_be_read_is_uncompared() {
+    let unreadable = Comparison {
+        path: "Season 01/Show S01E01.ass".into(),
+        result: Compared::Unreadable("새 자막: 인코딩을 알 수 없어요".into()),
+    };
+
+    assert_eq!(
+        Changes::of(Some(&unreadable)),
+        Changes {
+            uncompared: 1,
+            plans: 1,
+            ..Changes::default()
+        }
+    );
+}
+
+#[test]
+fn an_ass_set_against_an_srt_leaves_its_styles_and_fonts_out() {
+    let comparison = edited(Format::Ass, Format::Srt, |diff| {
+        diff.styles = None;
+        diff.fonts = None;
+    });
+
+    assert_eq!(Changes::of(Some(&comparison)).partial, 1);
+}
+
+#[test]
+fn an_ass_set_against_an_smi_counts_its_dialogue_and_is_partial() {
+    let comparison = edited(Format::Ass, Format::Smi, |diff| {
+        diff.dialogue = Dialogue {
+            added: 303,
+            changed: 24,
+            removed: 0,
+            lines: vec![],
+        };
+        diff.timing = Timing::default();
+        diff.styles = None;
+        diff.fonts = None;
+        diff.not_compared = vec![NotCompared {
+            item: Item::Styles,
+            reason: "한쪽이 ASS가 아니에요".into(),
+        }];
+    });
+
+    assert_eq!(
+        Changes::of(Some(&comparison)),
+        Changes {
+            added: 303,
+            changed: 24,
+            partial: 1,
+            plans: 1,
+            ..Changes::default()
+        }
+    );
+}
+
+#[test]
+fn two_srts_have_no_styles_to_leave_out() {
+    let comparison = edited(Format::Srt, Format::Srt, |diff| {
+        diff.styles = None;
+        diff.fonts = None;
+    });
+
+    assert_eq!(Changes::of(Some(&comparison)).partial, 0);
+}
+
+#[test]
+fn a_language_of_the_dialogue_with_no_counterpart_leaves_a_part_out() {
+    let comparison = edited(Format::Ass, Format::Ass, |diff| {
+        diff.not_compared = vec![NotCompared {
+            item: Item::Dialogue,
+            reason: "ENCC".into(),
+        }];
+    });
+
+    assert_eq!(Changes::of(Some(&comparison)).partial, 1);
+}
+
+// ---- the badge of a kind
+
+#[test]
+fn a_jobs_placement_check_and_a_videos_are_the_badge_of_a_mappings_episode_check() {
+    assert_eq!(todo_of("placement_check", None).badge(), "episode_check");
+    assert_eq!(todo_of("video_check", None).badge(), "episode_check");
+    assert_eq!(todo_of("auth", None).badge(), "auth");
+}
+
+#[test]
+fn every_kind_has_its_badge() {
+    let badges: Vec<_> = [
+        "auth",
+        "receive_failed",
+        "replacement",
+        "episode_check",
+        "placement_check",
+        "video_check",
+    ]
+    .iter()
+    .map(|kind| todo_of(kind, None).badge())
+    .collect();
+
+    assert_eq!(
+        badges,
+        [
+            "auth",
+            "receive_failed",
+            "replacement",
+            "episode_check",
+            "episode_check",
+            "episode_check"
+        ]
+    );
+}
+
+#[test]
+fn a_list_with_each_kind_gives_every_work_its_kinds_once_in_the_lists_order() {
+    let todos = [
+        todo_of("auth", Some("w2")),
+        todo_of("receive_failed", Some("w1")),
+        todo_of("receive_failed", Some("w1")),
+        todo_of("replacement", Some("w1")),
+        todo_of("replacement", None),
+        todo_of("episode_check", Some("w3")),
+        todo_of("placement_check", Some("w3")),
+        todo_of("placement_check", Some("w1")),
+        todo_of("video_check", Some("w4")),
+    ];
+
+    assert_eq!(
+        badges_by_work(&todos),
+        std::collections::HashMap::from([
+            ("w2".to_owned(), vec!["auth"]),
+            (
+                "w1".to_owned(),
+                vec!["receive_failed", "replacement", "episode_check"]
+            ),
+            ("w3".to_owned(), vec!["episode_check"]),
+            ("w4".to_owned(), vec!["episode_check"]),
+        ])
+    );
+}
+
+// ---- the answer
+
+#[test]
+fn the_answer_names_each_todos_badge_and_each_works_badges() {
+    let list = ordered(
+        vec![at_time("auth", Some("w1"), 5)],
+        vec![],
+        vec![],
+        vec![
+            at_time("video_check", Some("w1"), 4),
+            at_time("placement_check", None, 3),
+        ],
+    );
+
+    let shown = serde_json::to_value(&list).unwrap();
+
+    assert_eq!(shown["count"], 3);
+    assert_eq!(
+        shown["badges"],
+        serde_json::json!({ "w1": ["auth", "episode_check"] })
+    );
+    let kinds: Vec<_> = shown["needs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|todo| {
+            (
+                todo["kind"].as_str().unwrap(),
+                todo["badge"].as_str().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        kinds,
+        [
+            ("auth", "auth"),
+            ("video_check", "episode_check"),
+            ("placement_check", "episode_check"),
+        ]
+    );
+    // The fields the to-do had are all there still.
+    assert_eq!(shown["needs"][0]["key"], "auth:w1:5");
+    assert_eq!(shown["needs"][0]["work"]["id"], "w1");
+}
+
+#[test]
+fn an_empty_list_has_no_badges() {
+    assert_eq!(
+        serde_json::to_value(ordered(vec![], vec![], vec![], vec![])).unwrap(),
+        serde_json::json!({ "needs": [], "count": 0, "badges": {} })
+    );
 }

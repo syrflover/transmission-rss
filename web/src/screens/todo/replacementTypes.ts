@@ -68,6 +68,8 @@ export interface Replacement {
   paths: ReplacementPath[];
   /** The limits of the comparison that hold, only those. */
   limits: ("unknown_source" | "lines_unknown")[];
+  /** What this plan changes as one plan's total, which the server sums over a job's plans for the `교체 승인` to-do. */
+  changes: ReplacementChanges;
   /** What differs between the two files' contents; `null` for a plan made before the app compared contents. */
   comparison: Comparison | null;
 }

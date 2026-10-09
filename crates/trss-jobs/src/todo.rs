@@ -19,7 +19,7 @@ mod receive_failed;
 
 use std::collections::HashMap;
 
-use serde::Serialize;
+use serde::{Serialize, Serializer};
 use thiserror::Error;
 
 use trss_collect::store::channels::ChannelError;
@@ -198,8 +198,27 @@ pub fn badges_by_work(todos: &[Todo]) -> HashMap<String, Vec<&'static str>> {
 
 #[derive(Debug, Serialize)]
 pub struct TodoList {
+    /// Each with its `badge`.
+    #[serde(serialize_with = "with_badges")]
     pub needs: Vec<Todo>,
     pub count: usize,
+    /// Each work's kinds of to-do ([`badges_by_work`]).
+    pub badges: HashMap<String, Vec<&'static str>>,
+}
+
+/// The to-dos with the badge each is named by ([`Todo::badge`]), so the
+/// screen shows the server's rule and does not make its own.
+fn with_badges<S: Serializer>(todos: &[Todo], serializer: S) -> Result<S::Ok, S::Error> {
+    #[derive(Serialize)]
+    struct Badged<'a> {
+        #[serde(flatten)]
+        todo: &'a Todo,
+        badge: &'static str,
+    }
+    serializer.collect_seq(todos.iter().map(|todo| Badged {
+        todo,
+        badge: todo.badge(),
+    }))
 }
 
 /// The to-dos that need the person: `auth` before `receive_failed`, that
@@ -245,6 +264,7 @@ fn ordered(
     auth.extend(checks);
     TodoList {
         count: auth.len(),
+        badges: badges_by_work(&auth),
         needs: auth,
     }
 }

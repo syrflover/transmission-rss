@@ -8,11 +8,13 @@
 //!   { "kind": "auth", "key": "auth:<work id>", "at": 1760000000000,
 //!     "work": { "id": "…", "name": "Show", "cover_url": "…" }, "title": "작품",
 //!     "season": 1, "episodes": ["11", "12"], "creator": "제작자",
-//!     "reason": "CAPTCHA", "job_id": "…", "jobs": 1 },
+//!     "reason": "CAPTCHA", "job_id": "…", "jobs": 1, "badge": "auth" },
 //!   { "kind": "receive_failed", "key": "revision:<work id>", "at": 1759990000000,
 //!     "context": "revision", "work": { … }, "title": "Show", "season": 1,
-//!     "episodes": ["14"], "count": 1, "reason": "…", "channel_id": null } ],
-//!   "count": 2 }
+//!     "episodes": ["14"], "count": 1, "reason": "…", "channel_id": null,
+//!     "badge": "receive_failed" } ],
+//!   "count": 2,
+//!   "badges": { "<work id>": ["auth", "receive_failed"] } }
 //! ```
 //!
 //! - `auth` (`인증 필요`): the subtitle jobs waiting for a person to pass a
@@ -81,7 +83,13 @@
 //! module only answers with them.
 //!
 //! Each work's kinds of to-do are also the badges of the library list
-//! ([`trss_jobs::todo::badges_by_work`], [`super::library_api`]).
+//! ([`trss_jobs::todo::badges_by_work`], [`super::library_api`]). The answer
+//! says them so the screen does not work them out: each to-do has a `badge`
+//! (`auth`, `receive_failed`, `replacement` or `episode_check`, which
+//! `episode_check`, `placement_check` and `video_check` all are), and `badges`
+//! maps each work's ID to its to-dos' badges, once each, in the list's order
+//! (`{ "badges": { "<work id>": ["receive_failed", "episode_check"] } }`);
+//! a to-do of no work has none.
 //!
 //! `auth` comes before `receive_failed`, that before `replacement`, and that
 //! before `episode_check`, `placement_check` and `video_check`, each newest

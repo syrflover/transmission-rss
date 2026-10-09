@@ -1,11 +1,10 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { kindOf, kindsByWork, todosOfWork, withKinds, type TodoKind, type TodoOf } from "./kinds.ts";
+import { todosOfWork, withKinds, type TodoKind, type TodoOf } from "./kinds.ts";
 
-const of = (kind: TodoOf["kind"], work: string | null): TodoOf & { key: string } => ({
+const of = (kind: string, work: string | null): TodoOf & { key: string } => ({
   key: `${kind}:${work}`,
-  kind,
   work: work === null ? null : { id: work },
 });
 
@@ -21,24 +20,6 @@ const LIST = [
   of("placement_check", "w1"),
   of("video_check", "w4"),
 ];
-
-test("a job's 배치 확인 and a video's episode are the badge of a mapping's 회차 확인 필요", () => {
-  assert.equal(kindOf({ kind: "placement_check" }), "episode_check");
-  assert.equal(kindOf({ kind: "video_check" }), "episode_check");
-  assert.equal(kindOf({ kind: "auth" }), "auth");
-});
-
-test("a work's badges are its kinds once each, in the list's order, as the server makes them", () => {
-  assert.deepEqual(
-    kindsByWork(LIST),
-    new Map<string, TodoKind[]>([
-      ["w2", ["auth"]],
-      ["w1", ["receive_failed", "replacement", "episode_check"]],
-      ["w3", ["episode_check"]],
-      ["w4", ["episode_check"]],
-    ]),
-  );
-});
 
 test("a work's to-dos are its own, in the list's order", () => {
   assert.deepEqual(

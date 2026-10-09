@@ -41,7 +41,11 @@
 //!   `current` and `new` (received or changed time, size, dialogue lines,
 //!   creator, format, post, encoding, whether the app manages it, its path,
 //!   and the current one's stored file), `side_by_side` (the creator, format
-//!   or post differs, or the current file's source is not known), `comparison`
+//!   or post differs, or the current file's source is not known), `changes`
+//!   (what the plan changes as one plan's total, in the shape of the
+//!   `교체 승인` to-do's `changes`, which sums these: `added`, `changed`,
+//!   `removed`, `timing`, `styles`, `fonts`, `uncompared`, `partial` and
+//!   `plans`, which is 1), `comparison`
 //!   (what differs between the two files' contents, made with the plan; see
 //!   below), `paths`
 //!   (each path beside the video with its `action`, `add`, `replace`,

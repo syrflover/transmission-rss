@@ -52,6 +52,8 @@ const plan = (over: Partial<Replacement> = {}): Replacement => ({
   side_by_side: false,
   paths: [{ path: "/v/01.ass", action: "replace", managed: true, warning: null }],
   limits: [],
+  // A plan with no comparison: counted as one that was not compared.
+  changes: { added: 0, changed: 0, removed: 0, timing: 0, styles: 0, fonts: 0, uncompared: 1, partial: 0, plans: 1 },
   comparison: null,
   ...over,
 });
@@ -273,20 +275,8 @@ test("모두 교체 and 모두 유지 decide each plan the list shows, at the ve
 
 test("an episode row's tags are what the to-do card would say for that plan alone", () => {
   assert.deepEqual(rowTags(plan()), ["비교 불가"]);
-  const comparison = {
-    state: "compared",
-    current: { format: "ASS", encoding: "UTF-8", cues: 24 },
-    new: { format: "SMI", encoding: "UTF-8", cues: 327 },
-    dialogue: { added: 303, changed: 24, removed: 0 },
-    timing: { count: 0 },
-    styles: null,
-    fonts: null,
-    not_compared: [{ item: "styles", reason: "한쪽이 ASS가 아니에요" }],
-  } as const;
+  // The server's total of one plan whose dialogue was compared and whose styles and fonts were left out.
+  const changes = { added: 303, changed: 24, removed: 0, timing: 0, styles: 0, fonts: 0, uncompared: 0, partial: 1, plans: 1 };
   // One plan: no number beside 일부 비교 불가.
-  assert.deepEqual(rowTags(plan({ comparison: { ...comparison, not_compared: [...comparison.not_compared] } })), [
-    "대사 추가 303",
-    "대사 변경 24",
-    "일부 비교 불가",
-  ]);
+  assert.deepEqual(rowTags(plan({ changes })), ["대사 추가 303", "대사 변경 24", "일부 비교 불가"]);
 });

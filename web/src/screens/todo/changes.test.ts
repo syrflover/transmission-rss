@@ -10,7 +10,6 @@ import {
   LINES_STEP,
   needsLines,
   NOT_COMPARED_YET,
-  planChanges,
   receivedLine,
   timingRows,
   todoTags,
@@ -83,18 +82,6 @@ test("the card's tags come in the spec's order and only for numbers that are not
 test("a card with nothing changed and nothing uncompared says 차이 없음", () => {
   assert.deepEqual(todoTags(changes()), ["차이 없음"]);
   assert.deepEqual(todoTags(changes({ plans: 4 })), ["차이 없음"]);
-});
-
-test("one plan's part of the card is counted as the server sums it", () => {
-  assert.deepEqual(planChanges(compared()), changes({ added: 2, changed: 12, timing: 3, styles: 2, fonts: 2 }));
-  assert.deepEqual(planChanges(null), changes({ uncompared: 1 }));
-  assert.deepEqual(planChanges({ state: "unreadable", reason: "새 자막: 인코딩을 알 수 없어요" }), changes({ uncompared: 1 }));
-  const srt = { format: "SRT", encoding: "UTF-8", cues: 40 } as const;
-  // An ASS against an SRT: its styles and fonts were left out.
-  assert.equal(planChanges(compared({ new: srt, styles: null, fonts: null })).partial, 1);
-  // Two SRTs have no styles to leave out.
-  assert.equal(planChanges(compared({ current: srt, new: srt, styles: null, fonts: null })).partial, 0);
-  assert.equal(planChanges(compared({ not_compared: [{ item: "dialogue", reason: "ENCC" }] })).partial, 1);
 });
 
 test("a card of no open plan has no tag, not 차이 없음", () => {

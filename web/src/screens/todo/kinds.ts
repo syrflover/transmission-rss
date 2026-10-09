@@ -1,40 +1,17 @@
 /**
  * The kinds of `처리 필요` as a badge names them (`docs/specs/jobs.md`, 할 일). The 할 일 screen's cards, the library
- * grid's covers and the work detail's `할 일` show the same name and colour (`badges.tsx`, `TodoBadge`).
+ * grid's covers and the work detail's `할 일` show the same name and colour (`badges.tsx`, `TodoBadge`). The server
+ * decides which badge a to-do has: a job's 배치 확인 and a video's episode are a `회차 확인 필요` like a mapping's.
  */
 export type TodoKind = "auth" | "receive_failed" | "replacement" | "episode_check";
 
 /**
- * What these read of a to-do (`api.ts`, `Todo`): its kind and its work. Said here rather than imported, so the tests
- * run without the app's module paths.
+ * What these read of a to-do (`api.ts`, `Todo`): its work. Said here rather than imported, so the tests run without
+ * the app's module paths. A to-do's badge and a work's badges are the server's (`api.ts`, `Todo.badge` and
+ * `TodoList.badges`).
  */
 export interface TodoOf {
-  kind: TodoKind | "placement_check" | "video_check";
   work: { id: string } | null;
-}
-
-/**
- * A to-do's badge: a job's 배치 확인 and a video's episode are a `회차 확인 필요` like a mapping's (the server's
- * `todo_api::Todo::badge`).
- */
-export function kindOf(todo: Pick<TodoOf, "kind">): TodoKind {
-  return todo.kind === "placement_check" || todo.kind === "video_check" ? "episode_check" : todo.kind;
-}
-
-/**
- * Each work's badges in the to-do list: its kinds once each, in the list's order (red kinds first). The library
- * list's `todos` are made the same way on the server (`todo_api::badges_by_work`). A to-do of no work has none.
- */
-export function kindsByWork(todos: readonly TodoOf[]): Map<string, TodoKind[]> {
-  const kinds = new Map<string, TodoKind[]>();
-  for (const todo of todos) {
-    if (todo.work === null) continue;
-    const mine = kinds.get(todo.work.id) ?? [];
-    const kind = kindOf(todo);
-    if (!mine.includes(kind)) mine.push(kind);
-    kinds.set(todo.work.id, mine);
-  }
-  return kinds;
 }
 
 /** One work's to-dos, in the list's order. */

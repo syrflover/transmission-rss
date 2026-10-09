@@ -31,6 +31,14 @@ pub struct Changes {
 }
 
 impl Changes {
+    /// What one plan changes: the total of that plan alone, as a row of the
+    /// plans' list says it.
+    pub fn of(comparison: Option<&Comparison>) -> Self {
+        let mut changes = Changes::default();
+        changes.add(comparison);
+        changes
+    }
+
     /// Adds one open plan, with the comparison of its contents (`None` for a
     /// plan made before the app compared them).
     pub fn add(&mut self, comparison: Option<&Comparison>) {

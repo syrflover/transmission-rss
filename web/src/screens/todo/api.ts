@@ -1,5 +1,6 @@
 import { api } from "@/lib/api";
 
+import type { TodoKind } from "./kinds";
 import type { ConfirmView, Placement, PlacementChoice, Relocation } from "./placementTypes";
 import type {
   Replacement,
@@ -55,11 +56,20 @@ export interface WorkRef {
   cover_url: string | null;
 }
 
+/** What every to-do carries: the badge its kind is named by, which the server decides. */
+interface Badged {
+  /**
+   * `placement_check` and `video_check` are `episode_check`, like a mapping's `회차 확인 필요`. The 할 일 cards, the
+   * library grid's covers and the work detail's `할 일` show the same name and colour (`badges.tsx`, `TodoBadge`).
+   */
+  badge: TodoKind;
+}
+
 /**
  * `인증 필요`: subtitle jobs of one work wait for a person to solve a site's
  * check. One to-do per work; it opens the oldest such job.
  */
-export interface AuthTodo {
+export interface AuthTodo extends Badged {
   kind: "auth";
   /** Stable across reads: what the screen keys the card by. */
   key: string;
@@ -85,7 +95,7 @@ export interface AuthTodo {
  * work (a failed video revision replacement, `revision`) or per rule (an item
  * Transmission did not add, `add_failed`).
  */
-export interface ReceiveFailedTodo {
+export interface ReceiveFailedTodo extends Badged {
   kind: "receive_failed";
   key: string;
   /** The newest failure's time (Unix ms). */
@@ -111,7 +121,7 @@ export interface ReceiveFailedTodo {
  * why), or some of its episodes fit the decided mapping nowhere, so they are not received. One to-do per work; it
  * names the lowest season's check and opens that creator's group in the work's 자막 후보.
  */
-export interface EpisodeCheckTodo {
+export interface EpisodeCheckTodo extends Badged {
   kind: "episode_check";
   key: string;
   /** Since when the work's oldest check waits (Unix ms). */
@@ -134,7 +144,7 @@ export interface EpisodeCheckTodo {
  * `회차 확인 필요` of a subtitle job: it received files whose episode a person has to say (its 배치 확인). One per
  * job; it opens the job's detail.
  */
-export interface PlacementCheckTodo {
+export interface PlacementCheckTodo extends Badged {
   kind: "placement_check";
   key: string;
   /** Since when the job waits (Unix ms). */
@@ -159,7 +169,7 @@ export interface PlacementCheckTodo {
  * or another season's. The app neither puts it on an episode nor counts it missing. One per video, until the person
  * says `확인함` (`checkVideo`) or the video is renamed or moved; another video put at the path is asked about again.
  */
-export interface VideoCheckTodo {
+export interface VideoCheckTodo extends Badged {
   kind: "video_check";
   key: string;
   /** The video's modification time (Unix ms). */
@@ -192,7 +202,7 @@ export function checkVideo(workId: string, path: string, seen: string): Promise<
  * already has. One to-do per work (per job when it has no work); it opens the oldest such job. Its reason line is the
  * number tags of `changes` (`changes.ts`, `todoTags`).
  */
-export interface ReplacementTodo {
+export interface ReplacementTodo extends Badged {
   kind: "replacement";
   key: string;
   /** Since when the oldest of its jobs waits (Unix ms). */
@@ -231,6 +241,8 @@ export interface TodoList {
   needs: Todo[];
   /** What the menu badge shows: `needs.length`. */
   count: number;
+  /** Each work's badges by its ID: the kinds of its to-dos, once each, in the list's order. A work without one is not in it. */
+  badges: Record<string, TodoKind[]>;
 }
 
 export function fetchTodos(signal?: AbortSignal): Promise<TodoList> {

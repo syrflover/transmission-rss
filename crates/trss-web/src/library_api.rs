@@ -83,7 +83,6 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 use super::{artwork_api::image_url, todo_api::todo_list, ApiError, AppState};
-use trss_jobs::todo::badges_by_work;
 use trss_library::store::library::{
     Cursor, EpisodeRange, Filter, LibraryError, ListQuery, Sort, WorkOverview,
 };
@@ -252,7 +251,7 @@ async fn list(
         .map_err(|e| ApiError::Internal(e.to_string()))?;
     // The badges are extra: a list whose to-dos cannot be read still answers.
     let mut badges = match todo_list(&state).await {
-        Ok(todos) => badges_by_work(&todos.needs),
+        Ok(todos) => todos.badges,
         Err(e) => {
             eprintln!("Cannot read the to-dos for the library's badges: {e:?}");
             HashMap::new()

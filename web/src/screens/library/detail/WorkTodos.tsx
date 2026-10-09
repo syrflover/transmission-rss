@@ -21,7 +21,7 @@ import {
 import { kindTone, OriginTags, Tag, TodoBadge } from "../../todo/badges";
 import { receivedLine, todoTags } from "../../todo/changes";
 import { LockIcon } from "../../todo/icons";
-import { kindOf, todosOfWork } from "../../todo/kinds";
+import { todosOfWork } from "../../todo/kinds";
 import { KEYS, TODOS_MS, usePolled } from "../../todo/poll";
 import { TargetLine } from "../../todo/TargetLine";
 import { episodeCheckPath, episodeCheckReason, receiveFailedAction, receiveFailedPath } from "../../todo/TodoCards";
@@ -90,7 +90,7 @@ function WorkTodoCard({ todo, season, onRefresh }: { todo: Todo; season: SeasonT
 
 /** The kind badge and the time on top, the lines under them, and the button at the bottom right. */
 function Card({ todo, children, action }: { todo: Todo; children: ReactNode; action: ReactNode }) {
-  const kind = kindOf(todo);
+  const kind = todo.badge;
   return (
     <article
       className={cn(

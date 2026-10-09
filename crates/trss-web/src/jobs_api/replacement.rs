@@ -20,6 +20,7 @@ use trss_jobs::{
         },
         NEW_REVISION,
     },
+    todo::Changes,
 };
 
 use super::{internal, now_millis, ApiError, AppState};
@@ -231,6 +232,9 @@ pub(super) struct ReplacementView {
     /// Whether the two files' facts are shown side by side: the creator,
     /// format or post differs, or the current file's source is not known.
     side_by_side: bool,
+    /// What this plan changes, as one plan's total (the `교체 승인` to-do sums
+    /// these): the number tags of its row in the episode list.
+    changes: Changes,
     /// What differs between `current` and `new`: `null` for a plan made
     /// before the app compared contents.
     comparison: Option<ComparisonView>,
@@ -325,6 +329,7 @@ fn view(v: &PlanView) -> ReplacementView {
         current,
         new,
         side_by_side,
+        changes: Changes::of(v.comparison.as_ref()),
         comparison: v.comparison.as_ref().map(ComparisonView::of),
         paths: plan
             .paths

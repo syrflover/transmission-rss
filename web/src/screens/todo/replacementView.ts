@@ -1,6 +1,6 @@
 import { when } from "../../lib/time.ts";
 import { sizeText } from "./bytes.ts";
-import { planChanges, todoTags } from "./changes.ts";
+import { todoTags } from "./changes.ts";
 import type { Replacement, ReplacementDecision, ReplacementPath, ReplacementVersion } from "./replacementTypes.ts";
 
 /**
@@ -49,7 +49,7 @@ export function decisionsFor(open: readonly Replacement[], decision: "replace" |
 
 /** The tags of an episode row: what the to-do card would say for that plan alone. */
 export function rowTags(r: Replacement): string[] {
-  return todoTags(planChanges(r.comparison));
+  return todoTags(r.changes);
 }
 
 /**

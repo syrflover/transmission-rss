@@ -143,7 +143,7 @@ function Card({
 function AuthCard({ todo }: { todo: AuthTodo }) {
   return (
     <Card
-      kind={<TodoBadge kind="auth" />}
+      kind={<TodoBadge kind={todo.badge} />}
       at={todo.at}
       title={todo.title}
       work={todo.work}
@@ -168,7 +168,7 @@ function AuthCard({ todo }: { todo: AuthTodo }) {
 function ReceiveFailedCard({ todo }: { todo: ReceiveFailedTodo }) {
   return (
     <Card
-      kind={<TodoBadge kind="receive_failed" />}
+      kind={<TodoBadge kind={todo.badge} />}
       at={todo.at}
       title={todo.title}
       work={todo.work}
@@ -192,7 +192,7 @@ function EpisodeCheckCard({ todo }: { todo: EpisodeCheckTodo }) {
   return (
     <Card
       tone="check"
-      kind={<TodoBadge kind="episode_check" />}
+      kind={<TodoBadge kind={todo.badge} />}
       at={todo.at}
       title={todo.title}
       work={todo.work}
@@ -221,7 +221,7 @@ function ReplacementCard({ todo }: { todo: ReplacementTodo }) {
   return (
     <Card
       tone="check"
-      kind={<TodoBadge kind="replacement" />}
+      kind={<TodoBadge kind={todo.badge} />}
       at={todo.at}
       title={todo.title}
       work={todo.work}
@@ -252,7 +252,7 @@ function PlacementCheckCard({ todo }: { todo: PlacementCheckTodo }) {
   return (
     <Card
       tone="check"
-      kind={<TodoBadge kind="episode_check" />}
+      kind={<TodoBadge kind={todo.badge} />}
       at={todo.at}
       title={todo.title}
       work={todo.work}
@@ -280,7 +280,7 @@ function VideoCheckCard({ todo }: { todo: VideoCheckTodo }) {
   return (
     <Card
       tone="check"
-      kind={<TodoBadge kind="episode_check" />}
+      kind={<TodoBadge kind={todo.badge} />}
       at={todo.at}
       title={todo.title}
       work={todo.work}
