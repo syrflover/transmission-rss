@@ -9,6 +9,8 @@
  * the file, so an image named `a.ass` is sent and dropped there.
  */
 
+import { sizeText } from "../../../lib/size.ts";
+
 /** The limits the server holds an upload to (`upload_limits` of the work detail). */
 export interface UploadLimits {
   /** Files sent: subtitles, fonts and ZIPs. */
@@ -99,14 +101,6 @@ export interface Plan<F extends Chosen = Chosen> {
   problems: string[];
 }
 
-export function bytesText(bytes: number): string {
-  const unit = (n: number, name: string) => `${n < 10 ? n.toFixed(1).replace(/\.0$/, "") : Math.round(n)}${name}`;
-  if (bytes < 1024) return `${bytes}B`;
-  if (bytes < 1024 * 1024) return unit(bytes / 1024, "KB");
-  if (bytes < 1024 * 1024 * 1024) return unit(bytes / (1024 * 1024), "MB");
-  return unit(bytes / (1024 * 1024 * 1024), "GB");
-}
-
 export function planOf<F extends Chosen>(entries: readonly Entry<F>[], limits: UploadLimits): Plan<F> {
   const send = entries.filter((e) => e.kind !== null);
   const skip = entries.filter((e) => e.kind === null);
@@ -127,10 +121,10 @@ export function planOf<F extends Chosen>(entries: readonly Entry<F>[], limits: U
   }
   const big = send.filter((e) => e.file.size > limits.file_bytes);
   if (big.length > 0) {
-    problems.push(`파일 하나는 ${bytesText(limits.file_bytes)}까지 올릴 수 있어요. ${big[0].name}${big.length > 1 ? ` 외 ${big.length - 1}개` : ""}이(가) 넘어요.`);
+    problems.push(`파일 하나는 ${sizeText(limits.file_bytes)}까지 올릴 수 있어요. ${big[0].name}${big.length > 1 ? ` 외 ${big.length - 1}개` : ""}이(가) 넘어요.`);
   }
   if (totalBytes > limits.total_bytes) {
-    problems.push(`한 번에 모두 합쳐 ${bytesText(limits.total_bytes)}까지 올릴 수 있어요. 지금 ${bytesText(totalBytes)}예요. 나눠서 올려 주세요.`);
+    problems.push(`한 번에 모두 합쳐 ${sizeText(limits.total_bytes)}까지 올릴 수 있어요. 지금 ${sizeText(totalBytes)}예요. 나눠서 올려 주세요.`);
   }
   return { send, skip, counts, totalBytes, problems };
 }

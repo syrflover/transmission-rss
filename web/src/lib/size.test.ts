@@ -14,3 +14,14 @@ test("a size under 1 KB is told in bytes, then KB and MB with one decimal under 
   assert.equal(sizeText(1234567), "1.2 MB");
   assert.equal(sizeText(200 * 1024 * 1024), "200 MB");
 });
+
+test("a size of 1 GB or more is told in GB by the same rounding rule", () => {
+  const gb = 1024 * 1024 * 1024;
+  assert.equal(sizeText(gb - 1024 * 1024), "1023 MB");
+  assert.equal(sizeText(gb), "1 GB");
+  assert.equal(sizeText(1.5 * gb), "1.5 GB");
+  assert.equal(sizeText(1.04 * gb), "1 GB");
+  assert.equal(sizeText(9.96 * gb), "10 GB");
+  assert.equal(sizeText(12.4 * gb), "12 GB");
+  assert.equal(sizeText(1536 * 1024 * 1024), "1.5 GB");
+});

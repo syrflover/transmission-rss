@@ -4,6 +4,7 @@ import { Dialog } from "radix-ui";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ApiError } from "@/lib/api";
+import { sizeText } from "@/lib/size";
 import { cn } from "@/lib/utils";
 
 import { btnAction, btnDanger, btnNeutral, hintClass, inputClass } from "../../collect/channels/styles";
@@ -18,7 +19,6 @@ import {
 } from "../api";
 import type { Work } from "../model";
 import { Cover } from "../WorkItem";
-import { bytesText } from "./upload";
 
 /** How often an open cover view reads the state again while the app is still searching or receiving. */
 const PENDING_POLL_MS = 3000;
@@ -283,7 +283,7 @@ export function CoverDialog({
                 )}
                 {state && (
                   <p className={hintClass}>
-                    JPEG·PNG·WebP 이미지를 {bytesText(maxBytes)}까지 올릴 수 있어요. 파일 이름이 아니라 내용으로 판단해요. 표지를 비우면 자동으로도 찾지 않아요.
+                    JPEG·PNG·WebP 이미지를 {sizeText(maxBytes)}까지 올릴 수 있어요. 파일 이름이 아니라 내용으로 판단해요. 표지를 비우면 자동으로도 찾지 않아요.
                   </p>
                 )}
                 {error && (

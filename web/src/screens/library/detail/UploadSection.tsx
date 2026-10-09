@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { ApiError } from "@/lib/api";
 import { newCommandId } from "@/lib/commands";
 import { useMediaQuery } from "@/lib/media";
+import { sizeText } from "@/lib/size";
 import { cn } from "@/lib/utils";
 
 import { btnAction, btnNeutral, hintClass, inputClass } from "../../collect/channels/styles";
@@ -14,7 +15,6 @@ import type { CandidateList } from "../api";
 import {
   KIND_LABEL,
   TOUCH_QUERY,
-  bytesText,
   canPickFolder,
   countsText,
   entriesOf,
@@ -258,7 +258,7 @@ export function UploadSection({
       {total > 0 && (
         <div className="mt-3">
           <p className="m-0 text-[13px] font-semibold text-text-secondary" data-testid="upload-summary">
-            {plan.send.length > 0 ? `올릴 파일: ${countsText(plan.counts)} · ${bytesText(plan.totalBytes)}` : "올릴 파일이 없어요."}
+            {plan.send.length > 0 ? `올릴 파일: ${countsText(plan.counts)} · ${sizeText(plan.totalBytes)}` : "올릴 파일이 없어요."}
             {plan.skip.length > 0 && <span className="font-normal text-text-muted"> · 뺄 파일 {plan.skip.length}개</span>}
           </p>
           <ul className="m-0 mt-2 max-h-72 list-none overflow-y-auto rounded-card border border-hairline-soft bg-surface-1 p-0 shadow-(--card-shadow)">
@@ -273,7 +273,7 @@ export function UploadSection({
                   <span className={cn("text-xs", entry.kind === null ? "text-text-secondary" : "text-text-muted")}>
                     {entry.kind === null
                       ? "빼요 · 이름으로 보아 자막이나 폰트가 아니에요"
-                      : `${KIND_LABEL[entry.kind]} · ${bytesText(entry.file.size)}${entry.kind === "archive" ? " · 받은 뒤 풀어요" : ""}`}
+                      : `${KIND_LABEL[entry.kind]} · ${sizeText(entry.file.size)}${entry.kind === "archive" ? " · 받은 뒤 풀어요" : ""}`}
                   </span>
                 </span>
                 <button

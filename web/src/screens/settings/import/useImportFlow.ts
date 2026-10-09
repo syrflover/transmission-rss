@@ -2,6 +2,7 @@ import { useCallback, useState } from "react";
 
 import { api, ApiError } from "@/lib/api";
 import { store } from "@/lib/cached";
+import { sizeText } from "@/lib/size";
 import { everythingChanged, KEYS } from "@/screens/collect/cache";
 
 import { loadCollection } from "../collection/api";
@@ -10,7 +11,7 @@ import { isPicked, pickedRequests, pickKey, standing, type Picks } from "./sugge
 import type { ApplyResult, ChoiceRequest, Decision, Preview } from "./types";
 import { useSuggestionLookup, type SuggestionLookup } from "./useSuggestionLookup";
 
-/** The server refuses a request body over 2 MB; say so before sending. */
+/** The server refuses a request body over 2 MB; say so before sending, so the browser does not read a large file. */
 const MAX_FILE_BYTES = 2 * 1024 * 1024;
 
 export type ImportStep = "pick" | "review" | "result";
@@ -101,7 +102,7 @@ export function useImportFlow(): ImportFlow {
   const chooseFile = useCallback(
     async (file: File) => {
       if (file.size > MAX_FILE_BYTES) {
-        setPickError("파일이 너무 커요. 2MB 이하의 기존 YAML 파일을 선택해 주세요.");
+        setPickError(`파일이 너무 커요. ${sizeText(MAX_FILE_BYTES)} 이하의 기존 YAML 파일을 선택해 주세요.`);
         return;
       }
       let text: string;

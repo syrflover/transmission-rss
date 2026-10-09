@@ -133,12 +133,12 @@ fn internal(e: &dyn std::fmt::Display) -> ApiError {
     ApiError::Internal(e.to_string())
 }
 
-/// A size as the limits' sentences say it (`1GiB`, `200MiB`).
+/// A size as the limits' sentences say it (`1 GB`, `200 MB`, the screen's own form).
 fn size_text(bytes: u64) -> String {
     match bytes {
-        b if b >= 1 << 30 && b % (1 << 30) == 0 => format!("{}GiB", b >> 30),
-        b if b >= 1 << 20 && b % (1 << 20) == 0 => format!("{}MiB", b >> 20),
-        b if b >= 1 << 10 && b % (1 << 10) == 0 => format!("{}KiB", b >> 10),
+        b if b >= 1 << 30 && b % (1 << 30) == 0 => format!("{} GB", b >> 30),
+        b if b >= 1 << 20 && b % (1 << 20) == 0 => format!("{} MB", b >> 20),
+        b if b >= 1 << 10 && b % (1 << 10) == 0 => format!("{} KB", b >> 10),
         b => format!("{b}바이트"),
     }
 }

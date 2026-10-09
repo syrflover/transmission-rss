@@ -64,11 +64,11 @@ test("limits are told before sending", () => {
 
   const big = planOf(entriesOf([file("big.ttf", LIMITS.file_bytes + 1)], 0), LIMITS);
   assert.equal(big.problems.length, 1);
-  assert.match(big.problems[0], /200MB/);
+  assert.match(big.problems[0], /200 MB/);
 
   const sum = planOf(entriesOf(Array.from({ length: 6 }, (_, i) => file(`${i}.zip`, LIMITS.file_bytes)), 0), LIMITS);
   assert.equal(sum.problems.length, 1);
-  assert.match(sum.problems[0], /1GB/);
+  assert.match(sum.problems[0], /1 GB/);
 
   const named = planOf(entriesOf(Array.from({ length: LIMITS.entries + 1 }, (_, i) => file(`${i}.txt`, 1)), 0), LIMITS);
   assert.equal(named.send.length, 0);
@@ -131,4 +131,12 @@ test("every archive format and the volumes of a split archive are sent, not left
     plan.skip.map((e) => e.name),
     ["c.txt"],
   );
+});
+
+test("the limit sentences tell sizes the way the rest of the app does, with a space before the unit", () => {
+  const big = planOf(entriesOf([file("big.ttf", LIMITS.file_bytes + 1)], 0), LIMITS);
+  assert.equal(big.problems[0], "파일 하나는 200 MB까지 올릴 수 있어요. big.ttf이(가) 넘어요.");
+
+  const sum = planOf(entriesOf(Array.from({ length: 6 }, (_, i) => file(`${i}.zip`, LIMITS.file_bytes)), 0), LIMITS);
+  assert.equal(sum.problems[0], "한 번에 모두 합쳐 1 GB까지 올릴 수 있어요. 지금 1.2 GB예요. 나눠서 올려 주세요.");
 });

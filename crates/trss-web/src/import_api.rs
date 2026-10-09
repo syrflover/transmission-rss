@@ -310,7 +310,7 @@ fn json<T>(body: Result<Json<T>, JsonRejection>) -> Result<T, ApiError> {
     match body {
         Ok(Json(body)) => Ok(body),
         Err(JsonRejection::BytesRejection(_)) => Err(ApiError::invalid(
-            "요청이 너무 크거나 읽을 수 없어요. 파일이 2MB 이하인지 확인해 주세요.",
+            "요청이 너무 크거나 읽을 수 없어요. 파일이 2 MB 이하인지 확인해 주세요.",
         )),
         Err(_) => Err(ApiError::invalid(
             "요청을 읽을 수 없어요. 화면을 새로 고친 다음 다시 시도해 주세요.",

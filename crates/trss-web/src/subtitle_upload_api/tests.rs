@@ -740,7 +740,7 @@ async fn a_body_with_no_length_is_cut_at_the_total_and_the_framing_allowance() {
     let (status, refused) = answer(&s.router, request(body)).await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
     assert!(
-        refused["message"].as_str().unwrap().contains("1MiB"),
+        refused["message"].as_str().unwrap().contains("1 MB"),
         "{refused}"
     );
     // The file went past the limit (a refusal of its own, then drained as
