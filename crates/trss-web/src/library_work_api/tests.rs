@@ -188,7 +188,7 @@ async fn a_season_tells_its_episodes_with_a_video_and_with_a_subtitle_as_runs() 
         serde_json::json!(["1–3", "5", "SP"])
     );
     assert_eq!(season["subtitle_ranges"], serde_json::json!(["1–2"]));
-    let shown: Vec<(&str, &str)> = season["episodes"]
+    let shown: Vec<(&str, &str, &str)> = season["episodes"]
         .as_array()
         .unwrap()
         .iter()
@@ -196,17 +196,18 @@ async fn a_season_tells_its_episodes_with_a_video_and_with_a_subtitle_as_runs() 
             (
                 e["episode"].as_str().unwrap(),
                 e["episode_shown"].as_str().unwrap(),
+                e["episode_key"].as_str().unwrap(),
             )
         })
         .collect();
     assert_eq!(
         shown,
         [
-            ("01", "1"),
-            ("02", "2"),
-            ("03", "3"),
-            ("05", "5"),
-            ("SP", "SP")
+            ("01", "1", "n:1"),
+            ("02", "2", "n:2"),
+            ("03", "3", "n:3"),
+            ("05", "5", "n:5"),
+            ("SP", "SP", "t:SP")
         ]
     );
 }
@@ -224,6 +225,7 @@ async fn a_season_with_no_subtitle_has_no_runs_of_it_and_stored_rows_and_copies_
     let episodes = body["seasons"][0]["episodes"].as_array().unwrap();
     let stored_row = episodes.iter().find(|e| e["episode"] == "05").unwrap();
     assert_eq!(stored_row["episode_shown"], "5");
+    assert_eq!(stored_row["episode_key"], "n:5");
     // A row with no files adds nothing to the runs.
     assert_eq!(
         body["seasons"][0]["video_ranges"],

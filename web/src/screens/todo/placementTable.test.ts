@@ -27,6 +27,7 @@ const placement = (position: number, over: Partial<Placement> = {}): Placement =
   anissia_episode: null,
   question: null,
   named: null,
+  named_is_episode: false,
   assignment: null,
   action: "apply",
   outcome: null,
@@ -168,7 +169,11 @@ test("a mapped row says what its name said while it stays on the planned episode
   assert.equal(mappedNote(p, 1), "이름 13 → 1화 (회차 대응)");
   assert.equal(mappedNote(p, 2), null);
   assert.equal(mappedNote(p, "skip"), null);
-  assert.equal(mappedNote(placement(1, { episode: 1, named: "01", assignment: "mapped" }), 1), null);
+  // The server says the name's number is the episode (`01` on 1): there is nothing to explain.
+  assert.equal(
+    mappedNote(placement(1, { episode: 1, named: "01", named_is_episode: true, assignment: "mapped" }), 1),
+    null,
+  );
   assert.equal(mappedNote(placement(1, { episode: 1, named: "13", assignment: "explicit" }), 1), null);
   assert.equal(mappedNote(placement(1, { episode: 1, named: null, assignment: "mapped" }), 1), null);
 });

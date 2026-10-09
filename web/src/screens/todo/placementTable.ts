@@ -115,7 +115,7 @@ export function videoText(choice: Choice, episodes: readonly ConfirmEpisode[]): 
  */
 export function mappedNote(p: Placement, choice: Choice): string | null {
   if (p.assignment !== "mapped" || p.named === null || p.episode === null || choice !== p.episode) return null;
-  if (Number(p.named) === p.episode) return null;
+  if (p.named_is_episode) return null;
   return `이름 ${p.named} → ${p.episode}화 (회차 대응)`;
 }
 

@@ -132,6 +132,12 @@ async fn an_upload_waiting_for_its_placement_shows_its_table() {
     let rows = detail["placements"].as_array().unwrap();
     let row = |name: &str| rows.iter().find(|r| r["name"] == name).unwrap();
     assert_eq!(row("Show - 01.ass")["named"], "01");
+    // The name's number is the episode the row is on (`01` is 1), or no
+    // episode is placed, or the name says none.
+    assert_eq!(row("Show - 01.ass")["named_is_episode"], true);
+    assert_eq!(row("Show - 02.ass")["named_is_episode"], true);
+    assert_eq!(row("Show - 04.ass")["named_is_episode"], false);
+    assert_eq!(row("A.ttf")["named_is_episode"], false);
     assert_eq!(row("Show - 01.ass")["assignment"], "explicit");
     assert_eq!(row("Show - 04.ass")["episode"], Value::Null);
     assert_eq!(
@@ -191,6 +197,18 @@ async fn the_persons_table_is_taken_once_and_one_that_cannot_be_kept_is_refused(
     let (_, detail) = get(&router, "/api/subtitle-jobs/j1").await;
     assert_eq!(detail["state"], "pending");
     assert_eq!(detail["confirm"], Value::Null);
+    // `04` placed on episode 3: the name's number is not the episode's.
+    let moved = detail["placements"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["name"] == "Show - 04.ass")
+        .unwrap();
+    assert_eq!(
+        (&moved["episode"], &moved["named"]),
+        (&json!(3), &json!("04"))
+    );
+    assert_eq!(moved["named_is_episode"], false);
 
     // Taken once; no such job is no table.
     let (status, _) = call(

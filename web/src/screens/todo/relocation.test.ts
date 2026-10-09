@@ -15,6 +15,7 @@ const placement = (position: number, over: Partial<Placement> = {}): Placement =
   anissia_episode: String(position + 12),
   question: null,
   named: null,
+  named_is_episode: false,
   assignment: "mapped",
   action: "apply",
   outcome: null,

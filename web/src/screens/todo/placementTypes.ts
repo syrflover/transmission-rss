@@ -24,6 +24,8 @@ export interface Placement {
   question: string | null;
   /** The episode number the file's name says, as written (`13`), when it does. */
   named: string | null;
+  /** Whether `named` is the number of `episode` (`01` is episode 1); `false` when the name says none or the row is on no episode. */
+  named_is_episode: boolean;
   /**
    * What put the file on `episode`: its source's episode mapping (`mapped`), its own number while the source has no
    * mapping (`same_number`, which follows the one decided later), or a person's choice or the same number where no

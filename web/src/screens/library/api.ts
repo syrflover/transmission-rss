@@ -196,6 +196,8 @@ export interface WorkEpisode {
   episode: string;
   /** `episode` without the leading zeros of a whole number (`1` for `01`). */
   episode_shown: string;
+  /** The key two texts of one episode share (`n:1` for `01` and `1`, `t:SP`): what the candidates' `episode_key` is compared with. */
+  episode_key: string;
   /** The episode as a number, `null` when it is no number. */
   sort: number | null;
   /** When AniList schedules it (Unix milliseconds); only for a releasing entry with a schedule, else `null`. */
@@ -648,6 +650,12 @@ export interface Candidate {
   episode: string;
   /** `episode` without the leading zeros of a whole number. */
   episode_shown: string;
+  /** The key two texts of one episode share (`n:13` for `013`, `13` and `13.0`, `t:SP`); equal keys are one episode. */
+  episode_key: string;
+  /** The episode's place among the list's episodes, from `0`: numbers by value, then the other texts; one rank per episode. */
+  episode_rank: number;
+  /** `number`, `zero` (the number 0, the line a creator registers before the first episode) or `text` (`SP`). */
+  episode_form: "number" | "zero" | "text";
   /** Anissia's `updDt` as received. */
   updated: string;
   updated_at: number | null;

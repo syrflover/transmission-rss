@@ -15,21 +15,20 @@ import {
   type CandidateMapping,
   type WorkEpisode,
 } from "../api";
-import { episodeKey, numericKey, segmentsText } from "./episodeKey.ts";
+import { segmentsText } from "./episodeKey.ts";
 import { episodeLabel, type EpisodeOrder } from "./model";
 
 /**
  * What the `자막 후보` section and the episode rows derive from the candidates
  * answer: the groups by creator, the newest observation of each episode, the
  * kinds, the counts and which library episode a candidate is about. A
- * candidate's episode is Anissia's text, so it is never computed with except
- * where it is plainly a number; `0` (the line a creator registers before the
- * first episode) and any other text stand for themselves.
+ * candidate's episode is Anissia's text, so the screen reads none of it as a
+ * number: the server sends the key two texts of one episode share
+ * (`episode_key`), the episode's place in the order (`episode_rank`) and what
+ * kind of text it is (`episode_form`).
  */
 
 // --- episodes ---------------------------------------------------------------------------
-
-export { episodeKey, numericKey };
 
 /**
  * Whether a candidate's episode is the library episode. This compares Anissia's
@@ -37,36 +36,25 @@ export { episodeKey, numericKey };
  * anime differently (season-relative `12` or cumulative `24`), and the per-source
  * episode mapping (자막의 회차 대응) that tells them apart does not exist yet.
  */
-export function matchesEpisode(text: string, episode: WorkEpisode): boolean {
-  return episodeKey(text) === episodeKey(episode.episode);
+export function matchesEpisode(c: Pick<Candidate, "episode_key">, episode: Pick<WorkEpisode, "episode_key">): boolean {
+  return c.episode_key === episode.episode_key;
 }
 
 /** A candidate's episode as shown, always with its own label: `24화`; text that is no episode number (`0`, `SP`) as written. */
-export function candidateLabel(c: Pick<Candidate, "episode" | "episode_shown">): string {
-  const n = numericKey(c.episode);
-  return n === null || n === "0" ? c.episode : episodeLabel(c.episode_shown);
+export function candidateLabel(c: Pick<Candidate, "episode" | "episode_shown" | "episode_form">): string {
+  return c.episode_form === "number" ? episodeLabel(c.episode_shown) : c.episode;
 }
 
-/** Orders two numeric keys by value without making a float. */
-function compareNumeric(a: string, b: string): number {
-  const [ai, af = ""] = a.split(".");
-  const [bi, bf = ""] = b.split(".");
-  const d = BigInt(ai) - BigInt(bi);
-  if (d !== 0n) return d < 0n ? -1 : 1;
-  const width = Math.max(af.length, bf.length);
-  const x = af.padEnd(width, "0");
-  const y = bf.padEnd(width, "0");
-  return x < y ? -1 : x > y ? 1 : 0;
-}
+type Ranked = Pick<Candidate, "episode_rank" | "episode_form">;
 
 /** The episodes in the order asked for: numbers ascending (or descending), then the other texts as written. */
-function compareEpisodes(a: string, b: string, order: EpisodeOrder): number {
-  const x = numericKey(a);
-  const y = numericKey(b);
-  if (x !== null && y !== null) return order === "latest" ? compareNumeric(y, x) : compareNumeric(x, y);
-  if (x !== null) return -1;
-  if (y !== null) return 1;
-  return a < b ? -1 : a > b ? 1 : 0;
+function compareEpisodes(a: Ranked, b: Ranked, order: EpisodeOrder): number {
+  const x = a.episode_form !== "text";
+  const y = b.episode_form !== "text";
+  if (x && y) return order === "latest" ? b.episode_rank - a.episode_rank : a.episode_rank - b.episode_rank;
+  if (x) return -1;
+  if (y) return 1;
+  return a.episode_rank - b.episode_rank;
 }
 
 // --- categories and job states -------------------------------------------------------------
@@ -86,20 +74,20 @@ export const KIND_TEXT: Record<Kind, string> = {
   missing: "누락",
 };
 
-/** The episodes (`episodeKey`) of the season that have a subtitle: a library episode with a subtitle file, or a candidate a job received. */
+/** The episodes (`episode_key`) of the season that have a subtitle: a library episode with a subtitle file, or a candidate a job received. */
 export type Holdings = ReadonlySet<string>;
 
 export function holdingsOf(list: CandidateList, episodes: readonly WorkEpisode[]): Holdings {
   const has = new Set<string>();
-  for (const episode of episodes) if (episode.subtitle.length > 0) has.add(episodeKey(episode.episode));
-  for (const c of list.candidates) if (c.job?.state === "done") has.add(episodeKey(c.episode));
+  for (const episode of episodes) if (episode.subtitle.length > 0) has.add(episode.episode_key);
+  for (const c of list.candidates) if (c.job?.state === "done") has.add(c.episode_key);
   return has;
 }
 
 export function kindOf(c: Candidate, holdings: Holdings): Kind {
   if (c.job?.state === "done") return "received";
   if (c.revision !== null) return "revision";
-  return holdings.has(episodeKey(c.episode)) ? "has" : "missing";
+  return holdings.has(c.episode_key) ? "has" : "missing";
 }
 
 /** A job holds the candidate (running, waiting or done), so it cannot be taken again; `failed` and `held` can. */
@@ -207,7 +195,7 @@ export function groupsOf(
   for (const [sourceId, observed] of bySource) {
     const byEpisode = new Map<string, Candidate[]>();
     for (const c of observed) {
-      const key = episodeKey(c.episode);
+      const key = c.episode_key;
       const same = byEpisode.get(key);
       if (same) same.push(c);
       else byEpisode.set(key, [c]);
@@ -226,7 +214,7 @@ export function groupsOf(
           .map((candidate) => ({ candidate, kind: kindOf(candidate, holdings) })),
       });
     }
-    rows.sort((a, b) => compareEpisodes(a.candidate.episode, b.candidate.episode, order));
+    rows.sort((a, b) => compareEpisodes(a.candidate, b.candidate, order));
     const newest = observed.reduce((a, b) => (b.id > a.id ? b : a));
     groups.push({
       sourceId,
@@ -272,7 +260,7 @@ export function candidatesOf(
   if (episode.subtitle.length > 0) return [];
   const newest = new Map<string, Candidate>();
   for (const c of list.candidates) {
-    if (!matchesEpisode(c.episode, episode)) continue;
+    if (!matchesEpisode(c, episode)) continue;
     const seen = newest.get(c.source_id);
     if (!seen || c.id > seen.id) newest.set(c.source_id, c);
   }

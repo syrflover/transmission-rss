@@ -13,7 +13,11 @@
 //! empty text) is no number; it is an episode by its text, and sorts after
 //! every number ([`EpisodeKey`]).
 
-use std::{cmp::Ordering, collections::BTreeMap, fmt};
+use std::{
+    cmp::Ordering,
+    collections::{BTreeMap, BTreeSet},
+    fmt,
+};
 
 use serde::Serialize;
 
@@ -71,6 +75,20 @@ impl EpisodeNumber {
     /// reader that holds the key as text asks.
     pub fn is_key(&self, key: &str) -> bool {
         self.to_string() == key
+    }
+
+    /// Whether the number is `0` (`00` and `0.0` too), the line a creator
+    /// registers before the first episode.
+    pub fn is_zero(&self) -> bool {
+        self.is_whole() && self.whole == "0"
+    }
+
+    /// Whether the number is the whole number `episode` (`013` and `13.0`
+    /// are episode 13, `13.5` is none).
+    pub fn is_episode(&self, episode: i64) -> bool {
+        u128::try_from(episode)
+            .ok()
+            .is_some_and(|episode| self.whole() == Some(episode))
     }
 
     /// `13화`, the number as the app writes an episode.
@@ -158,6 +176,22 @@ impl EpisodeKey {
 /// ([`EpisodeKey::stored`]).
 pub fn stored_key(text: &str) -> String {
     EpisodeKey::of(text).stored()
+}
+
+/// The position of each text among the distinct episodes of `texts`, in the
+/// order of [`EpisodeKey`] (numbers by value, then the other texts by their
+/// text): the first episode is `0`, and texts of one episode (`013`, `13`) have
+/// one position. A reader orders by it without reading the texts.
+pub fn ranks<'a>(texts: impl IntoIterator<Item = &'a str>) -> Vec<usize> {
+    let keys: Vec<EpisodeKey> = texts.into_iter().map(EpisodeKey::of).collect();
+    let rank: BTreeMap<&EpisodeKey, usize> = keys
+        .iter()
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .enumerate()
+        .map(|(rank, key)| (key, rank))
+        .collect();
+    keys.iter().map(|key| rank[key]).collect()
 }
 
 /// `text` as it is written, with `화` after it when it is a number (`013` is
@@ -475,6 +509,36 @@ mod tests {
         assert_eq!(number(&u128::MAX.to_string()).whole(), Some(u128::MAX));
         assert_eq!(number(&"9".repeat(60)).whole(), None);
         assert!(number(&"9".repeat(60)).is_whole());
+    }
+
+    #[test]
+    fn zero_and_the_episode_a_number_is() {
+        for text in ["0", "00", "0.0", "0.00"] {
+            assert!(number(text).is_zero(), "{text}");
+        }
+        for text in ["1", "0.5", "10", "00.1"] {
+            assert!(!number(text).is_zero(), "{text}");
+        }
+        assert!(number("13").is_episode(13));
+        assert!(number("013").is_episode(13));
+        assert!(number("13.0").is_episode(13));
+        assert!(!number("13.5").is_episode(13));
+        assert!(!number("13").is_episode(1));
+        assert!(number("0").is_episode(0));
+        // No episode is below 0, and a number too large for `i64` is none.
+        assert!(!number("1").is_episode(-1));
+        assert!(!number(&"9".repeat(60)).is_episode(i64::MAX));
+    }
+
+    #[test]
+    fn ranks_follow_the_order_of_the_keys_and_share_one_per_episode() {
+        // Numbers by value, one rank for the spellings of one episode, the other
+        // texts after every number by their text.
+        assert_eq!(
+            ranks(["SP", "10", "9", "013", "13", "13.0", "0", "13.5", "OVA", "00"]),
+            [6, 2, 1, 3, 3, 3, 0, 4, 5, 0]
+        );
+        assert_eq!(ranks([]), Vec::<usize>::new());
     }
 
     #[test]

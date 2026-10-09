@@ -85,7 +85,9 @@
 //!   the job's.
 //!
 //!   Each of `placements` has its `position`, the episode number its name
-//!   says (`named`, as written) and what put it on its episode
+//!   says (`named`, as written; `named_is_episode` says whether it is the
+//!   number of the episode the row is on, `01` for episode 1, so the screen
+//!   compares no text) and what put it on its episode
 //!   (`assignment`: `mapped` by the source's mapping, `same_number` by its
 //!   own number while the source has no mapping, `explicit` by a person or
 //!   the same number where no source is known). While the job waits for its
@@ -195,7 +197,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use trss_collect::store::anissia::PickError;
-use trss_core::episode::{segments, shown as shown_episode, EpisodeSegment};
+use trss_core::episode::{segments, shown as shown_episode, EpisodeNumber, EpisodeSegment};
 use trss_jobs::{
     place::{
         unchanged,
@@ -557,6 +559,9 @@ struct PlacementView {
     question: Option<String>,
     /// The episode number its name says, as written.
     named: Option<String>,
+    /// Whether `named` is the number of `episode` (`01` is episode 1, `13` is
+    /// not): `false` when the name says none or the row is on no episode.
+    named_is_episode: bool,
     /// What put it on `episode`: `mapped` (the source's mapping) or
     /// `explicit` (the same number, or a person's choice).
     assignment: Option<&'static str>,
@@ -860,6 +865,15 @@ async fn detail(
         .map(|p| {
             let at = paths.get(&p.position).cloned().unwrap_or_default();
             let font_receipt = fonts.get(&p.position).copied();
+            let named_is_episode = p
+                .placed
+                .as_ref()
+                .zip(
+                    p.attachment_episode
+                        .as_deref()
+                        .and_then(EpisodeNumber::parse),
+                )
+                .is_some_and(|(placed, named)| named.is_episode(placed.episode));
             let full =
                 |relative: Option<String>| Some(format!("{}/{}", at.folder.as_deref()?, relative?));
             PlacementView {
@@ -871,6 +885,7 @@ async fn detail(
                 episode: p.placed.as_ref().map(|placed| placed.episode),
                 assignment: p.placed.map(|placed| placed.assignment.code()),
                 anissia_episode: p.anissia_episode,
+                named_is_episode,
                 named: p.attachment_episode,
                 question: p.question,
                 action: p.action.code(),

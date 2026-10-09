@@ -61,6 +61,7 @@
 //!   "candidates": [
 //!     { "id": 12, "source_id": "6f0c…", "creator": "에루샤",
 //!       "post_url": "https://erulabo.com/837", "episode": "12", "episode_shown": "12",
+//!       "episode_key": "n:12", "episode_rank": 11, "episode_form": "number",
 //!       "updated": "2026-09-10T12:10:00", "updated_at": 1789009800000,
 //!       "updated_parse_failed": false, "first_seen_at": 1790780400000,
 //!       "sort_at": 1789009800000,
@@ -84,7 +85,15 @@
 //!   `null` and none.
 //! - `episode` is Anissia's text as written (`0`, `13.5`): it is not a number
 //!   and no episode of the season; `episode_shown` is it without the leading
-//!   zeros of a whole number (`1` for `01`). `source_id` is the app's ID of the creator's
+//!   zeros of a whole number (`1` for `01`). The screen compares and orders
+//!   episodes by what the server computes ([`trss_core::episode`]) and reads
+//!   no text as a number: `episode_key` is the key two texts of one episode
+//!   share (`n:13` for `013`, `13` and `13.0`, `t:SP` for `SP`), `episode_rank`
+//!   is the episode's position among the episodes of `candidates`, from `0`, in
+//!   ascending order (numbers by value, then the other texts by their text; one
+//!   rank for the spellings of one episode), and `episode_form` is `number`,
+//!   `zero` (the number 0 in any spelling, the line a creator registers before
+//!   the first episode) or `text`. `source_id` is the app's ID of the creator's
 //!   lines of the anime; `creator` is the display name Anissia gives and is not
 //!   an ID.
 //! - `revision` marks a revision candidate: a subtitle job received the
@@ -148,7 +157,7 @@ use trss_collect::store::{
     anissia::{mark_attributed, Attributed},
     channels::{season_holders, Rule, SeasonAnimeError},
 };
-use trss_core::episode::{segments, shown, EpisodeSegment};
+use trss_core::episode::{ranks, segments, shown, stored_key, EpisodeNumber, EpisodeSegment};
 use trss_library::store::seasons::SeasonError;
 
 #[cfg(test)]
@@ -627,6 +636,13 @@ struct CandidateObservation {
     episode: String,
     /// `episode` without the leading zeros of a whole number.
     episode_shown: String,
+    /// The key of the episode in the form the database keeps it (`n:13`,
+    /// `t:SP`): two texts of one episode have one.
+    episode_key: String,
+    /// The episode's position among the list's episodes in ascending order.
+    episode_rank: usize,
+    /// `number`, `zero` (the number 0, in any spelling) or `text`.
+    episode_form: &'static str,
     updated: String,
     updated_at: Option<i64>,
     updated_parse_failed: bool,
@@ -685,6 +701,13 @@ impl From<&trss_collect::store::anissia::Candidate> for CandidateObservation {
             post_url: c.post_url.clone(),
             episode: c.episode.clone(),
             episode_shown: shown(&c.episode).to_owned(),
+            episode_key: stored_key(&c.episode),
+            episode_rank: 0,
+            episode_form: match EpisodeNumber::parse(&c.episode) {
+                None => "text",
+                Some(number) if number.is_zero() => "zero",
+                Some(_) => "number",
+            },
             updated: c.updated.clone(),
             updated_at: c.updated_at,
             updated_parse_failed: c.updated_at.is_none(),
@@ -823,12 +846,14 @@ async fn candidates(
         refresh: refresh.as_ref().map(CommandView::from),
         candidates: observed
             .iter()
-            .map(|c| CandidateObservation {
+            .zip(ranks(observed.iter().map(|c| c.episode.as_str())))
+            .map(|(c, episode_rank)| CandidateObservation {
                 job: latest.get(&c.id).map(|p| PickView {
                     id: p.job_id.clone(),
                     state: p.item_state.code(),
                     wait: p.item_wait.map(trss_jobs::Wait::code),
                 }),
+                episode_rank,
                 ..CandidateObservation::from(c)
             })
             .collect(),

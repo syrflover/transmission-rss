@@ -17,7 +17,8 @@
 //!     "info": { "version": 2, "entries": [ … ], … },
 //!     "video_ranges": ["1–3", "5"], "subtitle_ranges": ["1–2"],
 //!     "episodes": [{
-//!       "episode": "01", "episode_shown": "1", "sort": 1.0, "air_at": null,
+//!       "episode": "01", "episode_shown": "1", "episode_key": "n:1",
+//!       "sort": 1.0, "air_at": null,
 //!       "video":    [{ "path": "Season 01/… S01E01.mkv", "added_at": null }],
 //!       "subtitle": [{ "path": "Season 01/… S01E01.ko.ass", "added_at": 1760000100000,
 //!                      "creator": { "source_id": "…", "name": "하느", "anime_no": 3441 },
@@ -87,7 +88,10 @@
 //!   `sort` is its number, `null` when it is no number (`SP`). `added_at` is
 //!   Unix milliseconds, `null` when unknown (the file was there before the app
 //!   first looked). `episode_shown` is `episode` without the leading zeros of
-//!   a whole number (`1` for `01`, [`trss_core::episode::shown`]). A season's
+//!   a whole number (`1` for `01`, [`trss_core::episode::shown`]), and
+//!   `episode_key` is the key the episode has in the database (`n:1` for `01`,
+//!   `t:SP` for `SP`, [`trss_core::episode::stored_key`]) that the screen
+//!   matches the season's candidates by. A season's
 //!   `video_ranges` and `subtitle_ranges` are the episodes that have a video
 //!   and those that have a subtitle as runs, each episode once and in numeric
 //!   order, the ends of a run through `shown`
@@ -262,7 +266,7 @@ use trss_collect::{
     store::{channels::ChannelWithRules, revisions::Revision},
 };
 use trss_core::{
-    episode::{runs, shown, EpisodeNumber, EpisodeRun},
+    episode::{runs, shown, stored_key, EpisodeNumber, EpisodeRun},
     settings::policy::FormatOrder,
     trname_names::season_episode,
 };
@@ -359,6 +363,9 @@ struct EpisodeView {
     episode: String,
     /// `episode` without the leading zeros of a whole number (`02` is `2`).
     episode_shown: String,
+    /// The key of the episode in the form the database keeps it (`n:2`,
+    /// `t:SP`), so the screen matches episodes without reading their texts.
+    episode_key: String,
     sort: Option<f64>,
     air_at: Option<i64>,
     video: Vec<FileView>,
@@ -420,6 +427,7 @@ impl From<EpisodeDetail> for EpisodeView {
     fn from(episode: EpisodeDetail) -> Self {
         EpisodeView {
             episode_shown: shown(&episode.episode).to_owned(),
+            episode_key: stored_key(&episode.episode),
             episode: episode.episode,
             sort: episode.number,
             air_at: None,
@@ -804,6 +812,7 @@ fn attach_stored(seasons: &mut [SeasonView], stored: Vec<trss_jobs::place::recor
                     EpisodeView {
                         episode: format!("{:02}", one.episode),
                         episode_shown: shown(&format!("{:02}", one.episode)).to_owned(),
+                        episode_key: stored_key(&format!("{:02}", one.episode)),
                         sort: Some(number),
                         air_at: None,
                         video: Vec::new(),
@@ -860,6 +869,7 @@ fn attach_revisions(
                     EpisodeView {
                         episode: episode.clone(),
                         episode_shown: shown(&episode).to_owned(),
+                        episode_key: stored_key(&episode),
                         sort: number,
                         air_at: None,
                         video: Vec::new(),
