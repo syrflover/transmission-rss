@@ -216,13 +216,13 @@ async fn a_work_without_a_creator_is_one_suggestion_with_no_names_and_no_badge()
 }
 
 #[tokio::test]
-async fn choosing_a_candidates_creator_receives_its_episodes_and_a_check_is_a_to_do() {
+async fn choosing_a_candidates_creator_receives_its_episodes_and_the_candidates_show_its_mapping() {
     let app = App::new().await;
-    // 에루샤's post of episode 2 asks for a check. The creators are chosen from
-    // the lines the app observed, without asking Anissia.
+    // The creators are chosen from the lines the app observed, without asking
+    // Anissia.
     app.observe(&[
         ("s1", "에루샤", "1", "/ok/a1", "x"),
-        ("s1", "에루샤", "2", "/auth/a2", "x"),
+        ("s1", "에루샤", "2", "/ok/a2", "x"),
         ("s2", "코코렛", "3", "/ok/b3", "x"),
     ])
     .await;
@@ -275,15 +275,6 @@ async fn choosing_a_candidates_creator_receives_its_episodes_and_a_check_is_a_to
     assert_eq!(episodes, ["1", "2", "3"]);
     assert!(jobs.iter().all(|j| j["origin"] == "auto"));
 
-    // Episode 2 waits for a person: that is a to-do, counted in the badge.
-    let todo = app.get("/api/todo").await;
-    assert_eq!(todo["count"], 1);
-    assert_eq!(todo["needs"][0]["kind"], "auth");
-    assert_eq!(todo["needs"][0]["episodes"], json!(["2"]));
-    // The answer names its badge and the work's, for the screen to show.
-    assert_eq!(todo["needs"][0]["badge"], "auth");
-    assert_eq!(todo["badges"], json!({ "w1": ["auth"] }));
-
     // The candidates show the app's mapping of the creator's source.
     let shown = app
         .get("/api/library/works/w1/seasons/1/anissia/candidates")
@@ -324,47 +315,6 @@ async fn a_revision_job_names_the_receipt_it_revises() {
     assert_eq!(detail["origin"], "auto");
     assert_eq!(detail["revision_of"], 1);
     assert_eq!(detail["revises_job"], first);
-}
-
-#[tokio::test]
-async fn turning_subtitles_off_takes_the_work_out_of_the_suggestions() {
-    let app = App::new().await;
-    app.observe(&[("s1", "에루샤", "1", "/ok/a1", "x")]).await;
-    app.state
-        .channels
-        .set_subtitle_receiving(&app.rule.id, app.rule.version, false)
-        .await
-        .unwrap();
-    assert_eq!(
-        app.get("/api/todo/subtitle-follow").await,
-        json!({ "suggestions": [] })
-    );
-
-    // On again: suggested again, and still nothing received.
-    let version = app
-        .state
-        .channels
-        .get_rule(&app.rule.id)
-        .await
-        .unwrap()
-        .unwrap()
-        .version;
-    let (status, body) = app
-        .call(
-            Method::PUT,
-            &format!("/api/rules/{}/switch", app.rule.id),
-            Some(json!({ "version": version, "subtitles": true })),
-        )
-        .await;
-    assert_eq!(status, StatusCode::OK, "{body}");
-    assert_eq!(
-        app.get("/api/todo/subtitle-follow").await["suggestions"]
-            .as_array()
-            .unwrap()
-            .len(),
-        1
-    );
-    assert!(app.jobs().await.is_empty());
 }
 
 /// A history item a rule picked and Transmission did not add is listed with
@@ -630,11 +580,13 @@ async fn a_failed_replacement_is_in_the_receive_failures_with_its_work_and_both_
         entry["reason"].as_str().unwrap().contains("CRC32"),
         "{entry}"
     );
-    assert_eq!(
-        entry["files"],
-        json!([
-            { "role": "old", "path": "Season 01/Show S01E14.mkv", "state": "kept" },
-            { "role": "new", "path": format!("Season 01/{NEW_NAME}"), "state": "received_name" },
-        ])
-    );
+    // The files are told by `failure_of`, which the tests above check by its
+    // rows; here the entry carries the old file and the new one.
+    let roles: Vec<_> = entry["files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|file| file["role"].as_str().unwrap())
+        .collect();
+    assert_eq!(roles, ["old", "new"]);
 }

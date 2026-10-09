@@ -220,6 +220,16 @@ async fn one_files_creator_changes_by_its_version_and_a_stale_version_changes_no
     assert_eq!(first.version, SEED + 1);
     assert_eq!(first.creator.as_ref().unwrap().name, "하느");
     assert_eq!(first.creator.as_ref().unwrap().anime_no, 3441);
+    // The other files are as they were.
+    assert_eq!(
+        lib.creators().await,
+        [
+            row(path, Some("하느"), SEED + 1),
+            row("Season 01/S01E02.ass", None, SEED),
+            row("Season 01/S01E03.ass", None, SEED),
+            row("Season 02/S02E01.ass", None, SEED),
+        ]
+    );
 
     // The same creator again is no change.
     let same = lib

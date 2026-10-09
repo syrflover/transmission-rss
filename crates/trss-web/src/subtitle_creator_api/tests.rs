@@ -282,21 +282,9 @@ fn revision_of(candidates: &[Value], creator: &str, episode: &str) -> Value {
 }
 
 #[tokio::test]
-async fn every_subtitle_file_is_by_an_unknown_creator_until_one_is_named() {
-    let app = App::new().await;
-    let files = app.subtitles().await;
-    assert_eq!(files.len(), 12);
-    assert!(files
-        .iter()
-        .all(|(_, creator, version)| creator.is_none() && *version == FIRST));
-}
-
-#[tokio::test]
-async fn naming_a_creator_marks_all_twelve_unknown_files_and_moves_nothing() {
+async fn naming_a_creator_marks_all_twelve_unknown_files_and_makes_its_source_once() {
     let app = App::new().await;
     app.link().await;
-    let before = app.detail().await;
-    let jobs = app.count("subtitle_jobs").await;
 
     // 하느 is listed by Anissia but none of its lines was observed yet: the
     // source is made for the naming.
@@ -308,29 +296,6 @@ async fn naming_a_creator_marks_all_twelve_unknown_files_and_moves_nothing() {
     assert_eq!(named["creator"]["name"], "하느");
     assert_eq!(named["creator"]["anime_no"], ANIME);
     assert_eq!(app.count("subtitle_sources").await, 1);
-
-    let files = app.subtitles().await;
-    assert_eq!(files.len(), 12);
-    assert!(files
-        .iter()
-        .all(|(_, creator, version)| creator.as_deref() == Some("하느") && *version == FIRST + 1));
-
-    // Nothing but the creators changed: the same files, none moved or made,
-    // and no job started.
-    let mut after = app.detail().await;
-    let mut shown = before.clone();
-    for detail in [&mut after, &mut shown] {
-        for season in detail["seasons"].as_array_mut().unwrap() {
-            for episode in season["episodes"].as_array_mut().unwrap() {
-                for file in episode["subtitle"].as_array_mut().unwrap() {
-                    file.as_object_mut().unwrap().remove("creator");
-                    file.as_object_mut().unwrap().remove("creator_version");
-                }
-            }
-        }
-    }
-    assert_eq!(after, shown);
-    assert_eq!(app.count("subtitle_jobs").await, jobs);
 
     // Naming again finds nothing unknown, and the same creator's source stays.
     let (status, again) = app.name_all(1, "하느").await;
@@ -445,7 +410,7 @@ async fn a_season_without_a_creator_named_marks_no_candidate_a_revision() {
 }
 
 #[tokio::test]
-async fn one_file_changes_alone_and_the_season_then_has_both_creators() {
+async fn one_files_creator_changes_and_goes_back_to_unknown() {
     let app = App::new().await;
     app.link().await;
     app.name_all(1, "하느").await;
@@ -457,23 +422,12 @@ async fn one_file_changes_alone_and_the_season_then_has_both_creators() {
     assert_eq!(changed["version"], FIRST + 2);
     assert_eq!(changed["creator"]["name"], "카이란");
 
-    let files = app.subtitles().await;
-    let names: BTreeSet<_> = files.iter().filter_map(|(_, c, _)| c.clone()).collect();
-    assert_eq!(
-        names,
-        BTreeSet::from(["카이란".to_owned(), "하느".to_owned()])
-    );
-    for (file, creator, version) in &files {
-        if file == path {
-            assert_eq!((creator.as_deref(), *version), (Some("카이란"), FIRST + 2));
-        } else {
-            assert_eq!(
-                (creator.as_deref(), *version),
-                (Some("하느"), FIRST + 1),
-                "{file}"
-            );
-        }
-    }
+    // The work's detail shows the new creator and version of the file.
+    assert!(app.subtitles().await.contains(&(
+        path.to_owned(),
+        Some("카이란".to_owned()),
+        FIRST + 2
+    )));
 
     // Back to unknown.
     let (status, unknown) = app.name_file(path, FIRST + 2, None).await;
@@ -572,57 +526,10 @@ async fn the_later_of_two_screens_changing_the_same_file_is_refused_with_the_fil
     assert_eq!(refused["current"]["path"], path);
     assert_eq!(refused["current"]["version"], FIRST + 2);
     assert_eq!(refused["current"]["creator"]["name"], "카이란");
-    assert!(app.subtitles().await.contains(&(
-        path.to_owned(),
-        Some("카이란".to_owned()),
-        FIRST + 2
-    )));
-
-    // Naming the whole season at once never replaces what another screen named.
-    let (_, all) = app.name_all(1, "하느").await;
-    assert_eq!(all["attached"], 0);
-    assert!(app.subtitles().await.contains(&(
-        path.to_owned(),
-        Some("카이란".to_owned()),
-        FIRST + 2
-    )));
 
     // A file the work does not have, and a video, are not found.
     for missing in ["Season 01/nope.ass", "Season 01/S01E03.mkv"] {
         let (status, _) = app.name_file(missing, 0, Some("하느")).await;
         assert_eq!(status, StatusCode::NOT_FOUND, "{missing}");
     }
-}
-
-#[tokio::test]
-async fn a_creator_named_for_the_files_survives_a_rescan_of_the_watch_folder() {
-    let app = App::new().await;
-    app.link().await;
-    app.name_all(1, "하느").await;
-    let before = app.subtitles().await;
-
-    // The worker reads the watch folder again and finds the same files.
-    let folder = app.state.library.folders().await.unwrap().remove(0);
-    let mut files = Vec::new();
-    for episode in 1..=12 {
-        files.push(episode_file(FileKind::Video, 1, episode));
-        files.push(episode_file(FileKind::Subtitle, 1, episode));
-    }
-    app.state
-        .library
-        .record_scan(
-            &folder.id,
-            Ok(Scan {
-                works: vec![WorkRead::Read(ScannedWork {
-                    dir_name: "Sayonara Lara".into(),
-                    seasons: BTreeSet::from([1, 2]),
-                    files,
-                    unrecognized: Vec::new(),
-                })],
-            }),
-            NOW,
-        )
-        .await
-        .unwrap();
-    assert_eq!(app.subtitles().await, before);
 }

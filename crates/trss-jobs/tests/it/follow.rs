@@ -3,7 +3,7 @@
 //! (`docs/specs/subtitles.md`, 구독 제작자 자동 수신).
 
 use crate::{
-    world::{ticking_from, Base},
+    world::{ticking_from, Base, TodoStores},
     Handles,
 };
 
@@ -15,6 +15,7 @@ use trss_core::{Db, DbError};
 use trss_jobs::{
     mapping::{Mapping, MappingKind, Saved, UserMapping},
     store::JobDetail,
+    todo::Todo,
     Created, Follow, JobState, NewItem, NewJob, Runner, Wait, AUTO,
 };
 use trss_subtitles::{
@@ -456,6 +457,18 @@ impl World {
     }
 }
 
+/// The to-dos that need a person, over the database of the world.
+async fn todos(w: &World) -> trss_jobs::todo::TodoList {
+    TodoStores::new(&w.db).list().await.unwrap()
+}
+
+/// The `회차 확인 필요` cards of the mapping among them.
+async fn episode_checks_of(w: &World) -> Vec<Todo> {
+    let mut cards = todos(w).await.needs;
+    cards.retain(|todo| matches!(todo, Todo::EpisodeCheck { .. }));
+    cards
+}
+
 #[tokio::test]
 async fn a_new_episode_of_the_subscribed_creator_is_received_without_a_pick() {
     let w = World::new(Sub::default()).await;
@@ -498,6 +511,24 @@ async fn a_post_that_asks_for_a_check_stops_at_auth() {
     assert_eq!(d.row.wait, Some(Wait::Auth));
     // While it waits, nothing more is made of the episode.
     assert!(w.evaluate().await.is_empty());
+
+    // The check is a to-do of the work, counted in the badge.
+    let list = todos(&w).await;
+    assert_eq!(list.count, 1);
+    let Todo::Auth {
+        key,
+        episodes,
+        job_id,
+        ..
+    } = &list.needs[0]
+    else {
+        panic!("{:?}", list.needs);
+    };
+    assert_eq!(key, "auth:w1");
+    assert_eq!(episodes, &["6"]);
+    assert_eq!(job_id, &made[0]);
+    assert_eq!(list.needs[0].badge(), "auth");
+    assert_eq!(list.badges.get(WORK), Some(&vec!["auth"]));
 }
 
 #[tokio::test]
@@ -681,6 +712,71 @@ async fn an_undecided_work_with_candidates_is_one_suggestion_until_a_creator_is_
         episodes.push(w.detail(id).await.items[0].episode.clone());
     }
     assert_eq!(episodes, ["1", "4"]);
+}
+
+#[tokio::test]
+async fn a_suggestion_keeps_the_first_spelling_of_an_episode_and_the_earliest_time_it_was_seen() {
+    let w = World::new(Sub {
+        subtitles: SubtitleMode::Undecided,
+        creator: None,
+        ..Sub::default()
+    })
+    .await;
+    // `04` is seen before `4`, and the lines are first seen at different times.
+    for (creator, episode, seen) in [
+        ("에루샤", "1", 9),
+        ("에루샤", "2", 8),
+        ("코코렛", "3", 7),
+        ("코코렛", "04", 10),
+        ("에루샤", "4", 11),
+    ] {
+        w.observe_seen(
+            creator,
+            episode,
+            &format!("/ok/{creator}{episode}"),
+            "2026-10-02T11:00:00",
+            seen,
+        )
+        .await;
+    }
+    let suggestions = w.follow.suggestions().await.unwrap();
+    assert_eq!(suggestions.len(), 1);
+    let s = &suggestions[0];
+    assert_eq!(s.episodes, ["1", "2", "3", "04"]);
+    assert_eq!(s.creators, 2);
+    assert_eq!(s.since, 7);
+    // No creator is chosen: nothing is received, and the work is no to-do.
+    assert!(w.evaluate().await.is_empty());
+    assert_eq!(w.job_count().await, 0);
+    assert!(todos(&w).await.needs.is_empty());
+}
+
+#[tokio::test]
+async fn turning_subtitles_off_takes_the_work_out_of_the_suggestions_and_on_again_suggests_it() {
+    let w = World::new(Sub {
+        subtitles: SubtitleMode::Undecided,
+        creator: None,
+        ..Sub::default()
+    })
+    .await;
+    w.observe("에루샤", "1", "/ok/ep1", "2026-10-02T11:00:00")
+        .await;
+    let rule = w.rule_now().await;
+    w.channels
+        .set_subtitle_receiving(&rule.id, rule.version, false)
+        .await
+        .unwrap();
+    assert!(w.follow.suggestions().await.unwrap().is_empty());
+
+    // On again: suggested again, and still nothing received.
+    let rule = w.rule_now().await;
+    w.channels
+        .set_subtitle_receiving(&rule.id, rule.version, true)
+        .await
+        .unwrap();
+    assert_eq!(w.follow.suggestions().await.unwrap().len(), 1);
+    assert!(w.evaluate().await.is_empty());
+    assert_eq!(w.job_count().await, 0);
 }
 
 #[tokio::test]
@@ -1808,6 +1904,18 @@ async fn an_episode_the_user_does_not_receive_is_left_while_the_others_follow_th
     assert_eq!(checks[0].episodes, ["13.5"]);
     assert_eq!(checks[0].undecided, None);
     assert_eq!(checks[0].creator, "에루샤");
+    let cards = episode_checks_of(&w).await;
+    assert_eq!(cards.len(), 1, "{cards:?}");
+    let Todo::EpisodeCheck {
+        episodes, reason, ..
+    } = &cards[0]
+    else {
+        unreachable!()
+    };
+    assert_eq!(
+        (episodes.as_slice(), reason.as_deref()),
+        (&["13.5".to_owned()][..], None)
+    );
 
     // The user maps the default 0 and says `13.5` is not received.
     let saved = user_sets(&w, 1, "에루샤", 0, &[("13.5", None)]).await;
@@ -1898,6 +2006,88 @@ async fn another_creators_episode_the_users_exception_moves_holds_the_target() {
 }
 
 #[tokio::test]
+async fn an_undecided_creator_with_only_the_registration_line_asks_nothing_until_a_real_episode_is_posted(
+) {
+    let w = World::new(Sub::aired(FIRST, 12)).await;
+    // `0` and `00` are the line a creator registers before the first episode.
+    let before = Some(at(FIRST, 1, -7 * 86_400));
+    w.observe_at("에루샤", "0", "/ok/ep0", before).await;
+    w.observe_at("에루샤", "00", "/ok/ep00", before).await;
+    assert!(w.evaluate().await.is_empty());
+    assert!(w.follow.episode_checks().await.unwrap().is_empty());
+    assert!(episode_checks_of(&w).await.is_empty());
+    assert_eq!(w.job_count().await, 0);
+
+    // Episode 1 posted weeks after the air windows says nothing about the
+    // numbering: the mapping stays undecided, and now there is something to ask.
+    w.observe_at(
+        "에루샤",
+        "1",
+        "/ok/ep1",
+        Some(at(FIRST, 1, 30 * 7 * 86_400)),
+    )
+    .await;
+    assert!(w.evaluate().await.is_empty());
+    assert_eq!(w.mapping(1, "에루샤").await.kind, MappingKind::Undecided);
+    let checks = w.follow.episode_checks().await.unwrap();
+    assert_eq!(checks.len(), 1, "{checks:?}");
+    assert_eq!(checks[0].source_id, "src-에루샤");
+    assert!(checks[0].episodes.is_empty());
+}
+
+#[tokio::test]
+async fn an_exception_written_13_50_covers_the_conflict_13_5_and_the_ask_is_gone() {
+    let w = World::new(Sub::aired(FIRST, 12)).await;
+    // 1 and 2 on time, 13.5 fits no mapping.
+    for (episode, k) in [("1", 1), ("2", 2)] {
+        w.observe_at(
+            "에루샤",
+            episode,
+            &format!("/ok/ep{episode}"),
+            Some(at(FIRST, k, 3_600)),
+        )
+        .await;
+    }
+    w.observe_at("에루샤", "13.5", "/ok/ep13_5", Some(at(FIRST, 3, 3_600)))
+        .await;
+    let made = w.evaluate().await;
+    assert_eq!(w.episodes_of(&made).await, ["1", "2"]);
+    assert_eq!(w.mapping(1, "에루샤").await.kind, MappingKind::Auto);
+
+    // The ask names the episode and has no reason of an undecided mapping.
+    let cards = episode_checks_of(&w).await;
+    assert_eq!(cards.len(), 1, "{cards:?}");
+    let Todo::EpisodeCheck {
+        episodes, reason, ..
+    } = &cards[0]
+    else {
+        unreachable!()
+    };
+    assert_eq!(
+        (episodes.as_slice(), reason.as_deref()),
+        (&["13.5".to_owned()][..], None)
+    );
+
+    // `13.50` is `13.5`: the exception covers it, and the other episodes keep
+    // the default.
+    let saved = user_sets(&w, 1, "에루샤", 0, &[("13.50", None)]).await;
+    assert_eq!(saved.kind, MappingKind::User);
+    // Kept as the user wrote it.
+    assert_eq!(
+        saved
+            .exceptions
+            .iter()
+            .map(|e| (e.episode.as_str(), e.target))
+            .collect::<Vec<_>>(),
+        [("13.50", None)]
+    );
+    assert!(episode_checks_of(&w).await.is_empty());
+    assert!(w.evaluate().await.is_empty());
+    assert!(episode_checks_of(&w).await.is_empty());
+    assert_eq!(w.job_count().await, 2);
+}
+
+#[tokio::test]
 async fn continuing_on_from_the_earlier_season_decides_an_undecided_source_and_receives_on() {
     let w = World::new(Sub {
         season: 2,
@@ -1918,6 +2108,33 @@ async fn continuing_on_from_the_earlier_season_decides_an_undecided_source_and_r
     );
     assert!(checks[0].undecided.is_some());
     assert!(checks[0].episodes.is_empty());
+    // The to-do is one card of the work, with the mapping's evidence as its reason.
+    let cards = episode_checks_of(&w).await;
+    assert_eq!(cards.len(), 1, "{cards:?}");
+    let Todo::EpisodeCheck {
+        key,
+        work,
+        season,
+        creator,
+        source_id,
+        episodes,
+        reason,
+        sources,
+        ..
+    } = &cards[0]
+    else {
+        unreachable!()
+    };
+    assert_eq!(key, "episode:w1");
+    assert_eq!(work.as_ref().map(|work| work.id.as_str()), Some(WORK));
+    assert_eq!((*season, creator.as_str()), (2, "에루샤"));
+    assert_eq!(source_id, "src-에루샤");
+    assert!(episodes.is_empty());
+    assert_eq!(
+        reason.as_deref(),
+        Some(w.mapping(2, "에루샤").await.evidence.as_str())
+    );
+    assert_eq!(*sources, 1);
     // The sum the choice subtracts is known for the second season, and is 0
     // for the first.
     assert_eq!(
@@ -1932,6 +2149,7 @@ async fn continuing_on_from_the_earlier_season_decides_an_undecided_source_and_r
     let saved = user_sets(&w, 2, "에루샤", -12, &[]).await;
     assert_eq!((saved.kind, saved.offset), (MappingKind::User, Some(-12)));
     assert!(w.follow.episode_checks().await.unwrap().is_empty());
+    assert!(episode_checks_of(&w).await.is_empty());
     let made = w.evaluate().await;
     assert_eq!(w.episodes_of(&made).await, ["13"]);
 }

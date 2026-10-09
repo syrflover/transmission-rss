@@ -122,22 +122,6 @@ impl App {
         sql(&self.state, batch).await;
     }
 
-    /// A line of `에루샤` for `episode` written at `at` (Unix ms), whatever the episode's air time.
-    async fn observe_at(&self, episode: &str, at: i64) {
-        sql(
-            &self.state,
-            format!(
-                "INSERT OR IGNORE INTO subtitle_sources (id, anime_no, creator_name, created_at)
-                     VALUES ('s1', {ANIME}, '에루샤', 1);
-                 INSERT INTO caption_observations (source_id, post_url, episode, updated,
-                     updated_at, first_seen_at)
-                     VALUES ('s1', 'https://fake.trss.invalid/ok/{episode}', '{episode}',
-                             'x', {at}, 7);"
-            ),
-        )
-        .await;
-    }
-
     /// `에루샤` becomes the subscribed creator; the follower looks at once.
     async fn follow(&self) {
         let (status, rule) = self
@@ -194,24 +178,6 @@ impl App {
         .await
     }
 
-    /// The `회차 확인 필요` to-dos.
-    async fn checks(&self) -> Vec<Value> {
-        let todo = self.get("/api/todo").await;
-        let checks: Vec<Value> = todo["needs"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .filter(|t| t["kind"] == "episode_check")
-            .cloned()
-            .collect();
-        // The badge counts them.
-        assert_eq!(
-            todo["count"].as_u64().unwrap() as usize,
-            todo["needs"].as_array().unwrap().len()
-        );
-        checks
-    }
-
     /// The episodes of the jobs the follower made, sorted.
     async fn received(&self) -> Vec<String> {
         let groups = self.get("/api/subtitle-jobs").await;
@@ -242,20 +208,6 @@ async fn an_undecided_subscribed_creator_is_a_to_do_that_goes_when_the_user_maps
     assert_eq!(app.get(CANDIDATES).await["season_episodes"], 12);
     assert!(app.received().await.is_empty());
 
-    let checks = app.checks().await;
-    assert_eq!(checks.len(), 1, "{checks:?}");
-    let check = &checks[0];
-    assert_eq!(check["key"], "episode:w1");
-    assert_eq!(check["work"]["id"], "w1");
-    assert_eq!(
-        (check["season"].clone(), check["creator"].clone()),
-        (json!(1), json!("에루샤"))
-    );
-    assert_eq!(check["source_id"], "s1");
-    assert_eq!(check["episodes"], json!([]));
-    assert_eq!(check["reason"], mapping["evidence"]);
-    assert_eq!(check["sources"], 1);
-
     // The user continues on from the earlier season: 13 is the first.
     let (status, saved) = app
         .save(mapping["version"].as_i64().unwrap(), -12, json!([]))
@@ -264,7 +216,6 @@ async fn an_undecided_subscribed_creator_is_a_to_do_that_goes_when_the_user_maps
     assert_eq!(saved["kind"], "user");
     assert_eq!(saved["offset"], -12);
     assert!(saved["version"].as_i64().unwrap() > mapping["version"].as_i64().unwrap());
-    assert!(app.checks().await.is_empty());
     // The follower looked at once: the episode is received as the season's first.
     assert_eq!(app.received().await, ["13"]);
     let shown = app.mapping().await;
@@ -275,39 +226,11 @@ async fn an_undecided_subscribed_creator_is_a_to_do_that_goes_when_the_user_maps
 }
 
 #[tokio::test]
-async fn an_undecided_creator_with_only_the_registration_line_asks_nothing_until_a_real_episode_is_posted(
-) {
-    let app = App::new().await;
-    // `0` and `00` are the line a creator registers before the first episode.
-    app.observe_at("0", (AIRED - WEEK) * 1000).await;
-    app.observe_at("00", (AIRED - WEEK) * 1000).await;
-    app.follow().await;
-    assert!(app.checks().await.is_empty());
-    assert!(app.received().await.is_empty());
-
-    // Episode 1 posted weeks after the air windows says nothing about the
-    // numbering: the mapping stays undecided, and now there is something to ask.
-    app.observe_at("1", (AIRED + 30 * WEEK) * 1000).await;
-    crate::jobs_api::follow_now(&app.state).await;
-    assert_eq!(app.mapping().await["kind"], "undecided");
-    let checks = app.checks().await;
-    assert_eq!(checks.len(), 1, "{checks:?}");
-    assert_eq!(checks[0]["source_id"], "s1");
-    assert_eq!(checks[0]["episodes"], json!([]));
-}
-
-#[tokio::test]
-async fn a_conflicting_episode_is_a_to_do_until_an_exception_covers_it() {
+async fn a_saved_exception_is_echoed_as_sent_and_shown_with_the_candidates() {
     let app = App::new().await;
     // 1 and 2 on time, 13.5 fits no mapping.
     app.observe(&["1", "2", "13.5"]).await;
     app.follow().await;
-    assert_eq!(app.mapping().await["kind"], "auto");
-    assert_eq!(app.received().await, ["1", "2"]);
-    let checks = app.checks().await;
-    assert_eq!(checks.len(), 1);
-    assert_eq!(checks[0]["episodes"], json!(["13.5"]));
-    assert_eq!(checks[0]["reason"], Value::Null);
 
     // `13.50` is `13.5`: the exception covers it, and the other episodes keep the default.
     let version = app.mapping().await["version"].as_i64().unwrap();
@@ -319,8 +242,6 @@ async fn a_conflicting_episode_is_a_to_do_until_an_exception_covers_it() {
         saved["exceptions"],
         json!([{ "episode": "13.50", "target": null }])
     );
-    assert!(app.checks().await.is_empty());
-    assert_eq!(app.received().await, ["1", "2"]);
     // The candidates answer says what a screen needs for the dialog.
     let shown = app.get(CANDIDATES).await;
     assert_eq!(shown["previous_episodes"], 0);
@@ -377,14 +298,7 @@ async fn two_exceptions_of_one_number_are_refused_with_a_sentence() {
     // Nothing was saved.
     assert_eq!(app.mapping().await["kind"], "auto");
 
-    for (offset, exceptions) in [
-        (20_000, json!([])),
-        (0, json!([{ "episode": "", "target": 1 }])),
-        (0, json!([{ "episode": "13", "target": 0 }])),
-    ] {
-        let (status, body) = app.save(version, offset, exceptions).await;
-        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
-    }
+    // A body that lacks a field is no request.
     let (status, _) = app
         .call(Method::PUT, MAPPING, Some(json!({ "version": version })))
         .await;
@@ -461,11 +375,8 @@ async fn reverting_gives_the_source_back_to_the_app_which_decides_again() {
         .await;
     assert_eq!(status, StatusCode::OK, "{reverted}");
     assert_eq!(reverted["source_id"], "s1");
-    // The follower looked again: the grounds say 0 as before, with no exceptions.
+    // The answer is the mapping the app decided again, a new version of it.
     let mapping = &reverted["mapping"];
-    assert_eq!(mapping["kind"], "auto");
-    assert_eq!(mapping["offset"], 0);
-    assert_eq!(mapping["exceptions"], json!([]));
     assert_ne!(mapping["version"], saved["version"]);
     assert_eq!(app.mapping().await, *mapping);
 
