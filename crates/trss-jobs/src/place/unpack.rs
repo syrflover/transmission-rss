@@ -335,6 +335,85 @@ pub struct MemberRow {
     pub format: Result<Format, String>,
 }
 
+/// What came of unpacking a received archive, for a person
+/// ([`unpack_status`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UnpackStatus {
+    /// A later volume of a split archive, unpacked with its first.
+    Volume {
+        /// The first volume's name, while it is known.
+        first: Option<String>,
+    },
+    /// The members were recorded.
+    Done {
+        /// How many tries failed for this machine before.
+        tries: u32,
+        /// How many files it held, and how many of them are subtitles and
+        /// fonts by their check and name.
+        files: usize,
+        subtitles: usize,
+        fonts: usize,
+    },
+    /// It could not be unpacked (풀지 못함); it stays in the receive area.
+    Failed {
+        reason: String,
+        /// How many tries failed for this machine, and the one after them
+        /// that the archive's own reason ended.
+        tries: u32,
+    },
+    /// A try this machine failed waits for the next.
+    Retry {
+        reason: Option<String>,
+        tries: u32,
+        /// When the next try goes at the latest; `None` when a worker started
+        /// since, which tries it at its next run.
+        retry_at: Option<Millis>,
+    },
+}
+
+/// What came of unpacking the received archive `file`, given the members
+/// recorded for it and, for a later volume, its first volume's name; `None`
+/// for a file that is no archive or not tried yet.
+pub fn unpack_status<'a>(
+    file: &FileRow,
+    members: impl IntoIterator<Item = &'a MemberRow>,
+    first_name: Option<&str>,
+) -> Option<UnpackStatus> {
+    if file.volume_of.is_some() {
+        return Some(UnpackStatus::Volume {
+            first: first_name.map(str::to_owned),
+        });
+    }
+    if let Some(reason) = &file.unpack_error {
+        return Some(UnpackStatus::Failed {
+            reason: reason.clone(),
+            tries: file.unpack_tries,
+        });
+    }
+    if file.unpacked_at.is_none() {
+        return (file.unpack_tries > 0).then(|| UnpackStatus::Retry {
+            reason: file.unpack_failure.clone(),
+            tries: file.unpack_tries,
+            retry_at: file.unpack_retry_at,
+        });
+    }
+    let (mut files, mut subtitles, mut fonts) = (0, 0, 0);
+    for m in members {
+        files += 1;
+        match m.format.clone().ok().map(|format| member(&m.path, format)) {
+            Some(Member::Subtitle(_)) => subtitles += 1,
+            Some(Member::Font) => fonts += 1,
+            _ => {}
+        }
+    }
+    Some(UnpackStatus::Done {
+        tries: file.unpack_tries,
+        files,
+        subtitles,
+        fonts,
+    })
+}
+
 impl Placer {
     /// Unpacks the job's received archives not tried yet (see the module
     /// docs). `None` when `cancel` fired in the middle.
@@ -837,5 +916,146 @@ mod tests {
         assert!(is_archive("pack", Some(Format::Zip)));
         assert!(is_archive("pack.7z.002", Some(Format::Other)));
         assert!(!is_archive("a.ass", Some(Format::Ass)));
+    }
+
+    fn member_row(path: &str, format: Result<Format, String>) -> MemberRow {
+        MemberRow {
+            file_id: "f1".into(),
+            position: 0,
+            path: path.into(),
+            size: 1,
+            sha256: String::new(),
+            format,
+        }
+    }
+
+    #[test]
+    fn what_came_of_unpacking_an_archive_is_told_by_its_receipt_and_its_members() {
+        use crate::store::blank_file;
+        let archive = || blank_file(FileState::Done);
+        let members = [
+            member_row("Show/01.ass", Ok(Format::Ass)),
+            member_row("Show/01.ssa", Ok(Format::Ass)),
+            member_row("Show/02.srt", Ok(Format::Srt)),
+            member_row("Fonts/a.ttf", Ok(Format::Other)),
+            member_row("Fonts/b.otf", Ok(Format::Other)),
+            member_row("readme.txt", Ok(Format::Other)),
+            member_row("broken.ass", Err("not a file".into())),
+        ];
+        // (what, the receipt, its members, the first volume's name, the status)
+        type Case<'a> = (
+            &'a str,
+            FileRow,
+            &'a [MemberRow],
+            Option<&'a str>,
+            Option<UnpackStatus>,
+        );
+        let cases: Vec<Case> = vec![
+            ("not tried yet", archive(), &[], None, None),
+            (
+                "a later volume, tried before it was split off",
+                FileRow {
+                    volume_of: Some("f0".into()),
+                    unpack_tries: 2,
+                    unpack_error: Some("ignored".into()),
+                    ..archive()
+                },
+                &[],
+                Some("Show.part1.rar"),
+                Some(UnpackStatus::Volume {
+                    first: Some("Show.part1.rar".into()),
+                }),
+            ),
+            (
+                "a later volume whose first is not known",
+                FileRow {
+                    volume_of: Some("f0".into()),
+                    ..archive()
+                },
+                &[],
+                None,
+                Some(UnpackStatus::Volume { first: None }),
+            ),
+            (
+                "ended by the archive's own reason after two tries",
+                FileRow {
+                    unpack_error: Some("비밀번호가 있어요".into()),
+                    unpack_tries: 2,
+                    unpacked_at: Some(5),
+                    ..archive()
+                },
+                &[],
+                None,
+                Some(UnpackStatus::Failed {
+                    reason: "비밀번호가 있어요".into(),
+                    tries: 2,
+                }),
+            ),
+            (
+                "a try this machine failed waits for the next",
+                FileRow {
+                    unpack_tries: 1,
+                    unpack_failure: Some("디스크가 가득 찼어요".into()),
+                    unpack_retry_at: Some(7),
+                    ..archive()
+                },
+                &[],
+                None,
+                Some(UnpackStatus::Retry {
+                    reason: Some("디스크가 가득 찼어요".into()),
+                    tries: 1,
+                    retry_at: Some(7),
+                }),
+            ),
+            (
+                "a try failed and a worker started since",
+                FileRow {
+                    unpack_tries: 1,
+                    ..archive()
+                },
+                &[],
+                None,
+                Some(UnpackStatus::Retry {
+                    reason: None,
+                    tries: 1,
+                    retry_at: None,
+                }),
+            ),
+            (
+                "unpacked: files, and the subtitles and fonts among them",
+                FileRow {
+                    unpacked_at: Some(5),
+                    unpack_tries: 1,
+                    ..archive()
+                },
+                &members,
+                None,
+                Some(UnpackStatus::Done {
+                    tries: 1,
+                    files: 7,
+                    // An SSA is a subtitle too, though it is not applied by itself.
+                    subtitles: 3,
+                    fonts: 2,
+                }),
+            ),
+            (
+                "unpacked with no member",
+                FileRow {
+                    unpacked_at: Some(5),
+                    ..archive()
+                },
+                &[],
+                None,
+                Some(UnpackStatus::Done {
+                    tries: 0,
+                    files: 0,
+                    subtitles: 0,
+                    fonts: 0,
+                }),
+            ),
+        ];
+        for (what, file, members, first, expected) in cases {
+            assert_eq!(unpack_status(&file, members, first), expected, "{what}");
+        }
     }
 }

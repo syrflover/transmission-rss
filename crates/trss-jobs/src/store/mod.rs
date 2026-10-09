@@ -24,9 +24,11 @@ mod views;
 pub use create::{Created, MappingStamp, NewItem, NewJob, NewUpload, UploadedFile};
 pub use find::{AskedFinish, Found, NewFind, NOTHING_FOUND};
 pub use receipts::{snapshot_json, FileProblem};
+#[cfg(test)]
+pub(crate) use rows::blank_file;
 pub use rows::{
-    DonePage, DroppedRow, EventRow, FileRow, ItemRow, JobDetail, JobRow, OpenGroups, Pick,
-    Progress, StepRow, UploadSummary,
+    DonePage, DroppedRow, EventRow, FileRow, FileShown, ItemRow, JobDetail, JobRow, OpenGroups,
+    Pick, Progress, StepRow, UploadSummary,
 };
 pub use run::DECIDED;
 

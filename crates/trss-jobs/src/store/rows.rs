@@ -266,6 +266,38 @@ pub struct FileRow {
     pub unchanged_asset: Option<String>,
 }
 
+/// How a receipt of a file stands for a person ([`FileRow::shown`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FileShown {
+    /// Under way: its episode runs.
+    Receiving,
+    /// Held, or not confirmed because its episode stopped or is held.
+    Held,
+    /// Received.
+    Done,
+    Failed,
+}
+
+impl FileRow {
+    /// How the receipt stands, given the state of the item (episode) it
+    /// belongs to; `None` for an attempt that left no bytes and was replaced
+    /// by the next one.
+    pub fn shown(&self, item: ItemState) -> Option<FileShown> {
+        match self.state {
+            // Under way only while its episode runs; a held or stopped episode
+            // left it unconfirmed.
+            FileState::Intended | FileState::Fetched if item == ItemState::Running => {
+                Some(FileShown::Receiving)
+            }
+            FileState::Intended | FileState::Fetched => Some(FileShown::Held),
+            FileState::Done => Some(FileShown::Done),
+            FileState::Held => Some(FileShown::Held),
+            FileState::Failed => Some(FileShown::Failed),
+            FileState::Abandoned => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EventRow {
     pub at: Millis,
@@ -618,6 +650,45 @@ pub(super) fn steps(c: &Connection, job_id: &str) -> Result<Vec<StepRow>, JobErr
     Ok(rows)
 }
 
+/// A receipt in `state` with nothing else known of it, for the tests of the
+/// states a file is shown in.
+#[cfg(test)]
+pub(crate) fn blank_file(state: FileState) -> FileRow {
+    FileRow {
+        id: "f1".into(),
+        item_id: 1,
+        file_key: "k".into(),
+        name: "a.zip".into(),
+        state,
+        same_as: None,
+        temp_dir: None,
+        expected_size: None,
+        size: None,
+        sha256: None,
+        object: None,
+        path: None,
+        reason: None,
+        created_at: 0,
+        format: None,
+        failure: None,
+        http_status: None,
+        content_type: None,
+        response_size: None,
+        snapshot: None,
+        kind: None,
+        archive: None,
+        folder: None,
+        cleared_at: None,
+        volume_of: None,
+        unpacked_at: None,
+        unpack_error: None,
+        unpack_tries: 0,
+        unpack_failure: None,
+        unpack_retry_at: None,
+        unchanged_asset: None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -716,5 +787,32 @@ mod tests {
         // waits, held, then pending, each oldest first.
         assert_eq!(ids(&groups.waiting), ["j5", "j9", "j4", "j7", "j3", "j1"]);
         assert_eq!(ids(&groups.running), ["j8", "j10"]);
+    }
+    #[test]
+    fn a_receipt_is_receiving_only_while_its_episode_runs_and_an_abandoned_one_is_not_shown() {
+        use FileShown::*;
+        // (file state, item state, shown)
+        let cases = [
+            (FileState::Intended, ItemState::Running, Some(Receiving)),
+            (FileState::Fetched, ItemState::Running, Some(Receiving)),
+            (FileState::Intended, ItemState::Held, Some(Held)),
+            (FileState::Fetched, ItemState::Waiting, Some(Held)),
+            (FileState::Fetched, ItemState::Failed, Some(Held)),
+            (FileState::Intended, ItemState::Pending, Some(Held)),
+            (FileState::Done, ItemState::Running, Some(Done)),
+            (FileState::Done, ItemState::Done, Some(Done)),
+            (FileState::Held, ItemState::Running, Some(Held)),
+            (FileState::Failed, ItemState::Running, Some(Failed)),
+            (FileState::Failed, ItemState::Failed, Some(Failed)),
+            (FileState::Abandoned, ItemState::Running, None),
+            (FileState::Abandoned, ItemState::Done, None),
+        ];
+        for (file, item, expected) in cases {
+            assert_eq!(
+                blank_file(file).shown(item),
+                expected,
+                "{file:?} in {item:?}"
+            );
+        }
     }
 }

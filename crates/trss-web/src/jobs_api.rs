@@ -189,10 +189,10 @@ use serde_json::json;
 use trss_collect::store::anissia::PickError;
 use trss_jobs::{
     place::{
-        package::{member, Member},
         unchanged,
+        unpack::{unpack_status, UnpackStatus},
     },
-    store::{DonePage, FileRow, JobDetail, JobRow, StepRow},
+    store::{DonePage, FileRow, FileShown, JobDetail, JobRow, StepRow},
     AskedFinish, Created, FileState, ItemState, NewFind, NewJob, StepKind, Wait, FIND, RELOCATE,
     UPLOAD,
 };
@@ -643,51 +643,50 @@ fn unpack_view(
     members: &Unpacked<'_>,
     names: &HashMap<&str, &str>,
 ) -> Option<UnpackView> {
-    let view = |state| UnpackView {
+    let of = members.get(file.id.as_str()).map_or(&[][..], Vec::as_slice);
+    let first = file
+        .volume_of
+        .as_deref()
+        .and_then(|first| names.get(first).copied());
+    let view = |state, tries| UnpackView {
         state,
         reason: None,
-        tries: file.unpack_tries,
+        tries,
         retry_at: None,
         first: None,
         files: None,
         subtitles: None,
         fonts: None,
     };
-    if let Some(first) = &file.volume_of {
-        return Some(UnpackView {
-            first: names.get(first.as_str()).map(|n| (*n).to_owned()),
-            tries: 0,
-            ..view("volume")
-        });
-    }
-    if let Some(reason) = &file.unpack_error {
-        return Some(UnpackView {
-            reason: Some(reason.clone()),
-            ..view("failed")
-        });
-    }
-    if file.unpacked_at.is_none() {
-        return (file.unpack_tries > 0).then(|| UnpackView {
-            reason: file.unpack_failure.clone(),
-            retry_at: file.unpack_retry_at,
-            ..view("retry")
-        });
-    }
-    let of = members.get(file.id.as_str()).map_or(&[][..], Vec::as_slice);
-    let kinds: Vec<Member> = of
-        .iter()
-        .filter_map(|m| Some(member(&m.path, m.format.clone().ok()?)))
-        .collect();
-    Some(UnpackView {
-        files: Some(of.len()),
-        subtitles: Some(
-            kinds
-                .iter()
-                .filter(|k| matches!(k, Member::Subtitle(_)))
-                .count(),
-        ),
-        fonts: Some(kinds.iter().filter(|k| **k == Member::Font).count()),
-        ..view("done")
+    Some(match unpack_status(file, of.iter().copied(), first)? {
+        UnpackStatus::Volume { first } => UnpackView {
+            first,
+            ..view("volume", 0)
+        },
+        UnpackStatus::Failed { reason, tries } => UnpackView {
+            reason: Some(reason),
+            ..view("failed", tries)
+        },
+        UnpackStatus::Retry {
+            reason,
+            tries,
+            retry_at,
+        } => UnpackView {
+            reason,
+            retry_at,
+            ..view("retry", tries)
+        },
+        UnpackStatus::Done {
+            tries,
+            files,
+            subtitles,
+            fonts,
+        } => UnpackView {
+            files: Some(files),
+            subtitles: Some(subtitles),
+            fonts: Some(fonts),
+            ..view("done", tries)
+        },
     })
 }
 
@@ -699,16 +698,11 @@ fn file_view(
     unpacked: (&Unpacked<'_>, &HashMap<&str, &str>),
     new_assets: &HashMap<&str, usize>,
 ) -> Option<FileView> {
-    let shown = match file.state {
-        // Under way only while its episode runs; a held or stopped episode
-        // left it unconfirmed.
-        FileState::Intended | FileState::Fetched if item == ItemState::Running => "receiving",
-        FileState::Intended | FileState::Fetched => "held",
-        FileState::Done => "done",
-        FileState::Held => "held",
-        FileState::Failed => "failed",
-        // An attempt that left no bytes, replaced by the next one.
-        FileState::Abandoned => return None,
+    let shown = match file.shown(item)? {
+        FileShown::Receiving => "receiving",
+        FileShown::Held => "held",
+        FileShown::Done => "done",
+        FileShown::Failed => "failed",
     };
     // Only a received file is at its path; a held one's path may hold
     // another file or nothing.
