@@ -38,7 +38,7 @@ export function JobAuth({
   const title = find ? FIND_TITLE : TITLE;
   return (
     <section aria-labelledby={headingId} className="mt-6 max-[720px]:mt-4">
-      {screen.state === "ready" && screen.run !== null ? (
+      {screen.state === "ready" && screen.run !== null && screen.limits !== null ? (
         <RemoteScreen
           jobId={jobId}
           run={screen.run}
@@ -47,6 +47,7 @@ export function JobAuth({
           title={title}
           opening={prepare.opening}
           onReopen={prepare.open}
+          limits={screen.limits}
         />
       ) : (
         <>

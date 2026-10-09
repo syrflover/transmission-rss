@@ -1,10 +1,4 @@
-import type { Viewport } from "./protocol.ts";
-
-/** The bounds the server takes for a device's size and pixel ratio. */
-export const MIN_SIDE = 200;
-export const MAX_SIDE = 4096;
-export const MIN_DPR = 0.5;
-export const MAX_DPR = 4;
+import type { ScreenLimits, Viewport } from "./protocol.ts";
 
 const clamp = (value: number, low: number, high: number) => Math.min(high, Math.max(low, value));
 
@@ -15,18 +9,23 @@ const clamp = (value: number, low: number, high: number) => Math.min(high, Math.
  * keyboard does not shorten, so raising the keyboard does not lay the remote
  * page out again; a computer passes its window's. Either way the height's
  * middle, where the server scrolls the check box to, lies in the first screen.
+ * The width and the pixel ratio are held to the bounds the server takes
+ * (`limits`).
  */
-export function deviceViewport(device: {
-  areaWidth: number;
-  deviceHeight: number;
-  dpr: number;
-  touch: boolean;
-}): Viewport {
+export function deviceViewport(
+  device: {
+    areaWidth: number;
+    deviceHeight: number;
+    dpr: number;
+    touch: boolean;
+  },
+  limits: ScreenLimits,
+): Viewport {
   const dpr = Number.isFinite(device.dpr) ? device.dpr : 1;
   return {
-    width: Math.round(clamp(Math.floor(device.areaWidth), MIN_SIDE, MAX_SIDE)),
+    width: Math.round(clamp(Math.floor(device.areaWidth), limits.min_side, limits.max_side)),
     height: Math.round(clamp(Math.round(device.deviceHeight * 0.6), 360, 720)),
-    dpr: Math.round(clamp(dpr, MIN_DPR, MAX_DPR) * 1000) / 1000,
+    dpr: Math.round(clamp(dpr, limits.min_dpr, limits.max_dpr) * 1000) / 1000,
     touch: device.touch,
   };
 }

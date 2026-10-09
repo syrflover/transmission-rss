@@ -21,6 +21,7 @@ import {
   planOf,
   signatureOf,
   type Entry,
+  type UploadLimits,
 } from "./upload";
 
 /** The most rows of the chosen files the list draws; the rest are counted. */
@@ -65,11 +66,14 @@ export function UploadSection({
   season,
   seasonCount,
   candidates,
+  limits,
 }: {
   workId: string;
   season: number;
   seasonCount: number;
   candidates: CandidateList | null;
+  /** What the server holds an upload to. */
+  limits: UploadLimits;
 }) {
   const [entries, setEntries] = useState<Entry<File>[]>([]);
   const [creator, setCreator] = useState(UNKNOWN);
@@ -96,7 +100,7 @@ export function UploadSection({
   const directoryInput = useMemo(hasDirectoryInput, []);
   const folder = canPickFolder({ hasDirectoryInput: directoryInput, touchOnly });
   const creators = useMemo(() => creatorsOf(candidates), [candidates]);
-  const plan = useMemo(() => planOf(entries), [entries]);
+  const plan = useMemo(() => planOf(entries, limits), [entries, limits]);
   const sending = phase.kind === "sending";
   const total = entries.length;
 

@@ -29,7 +29,7 @@ import {
   nextClickCount,
   wheelPixels,
 } from "./keys";
-import { textChunks, type EndedReason, type InputBody, type Tab, type TouchPoint } from "./protocol";
+import { textChunks, type EndedReason, type InputBody, type ScreenLimits, type Tab, type TouchPoint } from "./protocol";
 import { PageDialogCard } from "./PageDialogCard";
 import { showsTabRow, tabLabel, withShown } from "./tabs";
 import { isTouchDevice, useRemoteConnection } from "./useRemoteConnection";
@@ -95,6 +95,7 @@ export function RemoteScreen({
   title,
   opening,
   onReopen,
+  limits,
 }: {
   jobId: string;
   run: string;
@@ -105,6 +106,8 @@ export function RemoteScreen({
   opening: boolean;
   /** Asks for the page and its screen to be prepared again; resolves when the answer is in. */
   onReopen: () => Promise<void>;
+  /** What the server's socket takes. */
+  limits: ScreenLimits;
 }) {
   const area = useRef<HTMLDivElement>(null);
   const image = useRef<HTMLImageElement>(null);
@@ -125,7 +128,7 @@ export function RemoteScreen({
   }, [run, bound]);
   const [touch] = useState(isTouchDevice);
   const [typing, setTyping] = useState(false);
-  const conn = useRemoteConnection({ jobId, run, bound, attempt, area, image });
+  const conn = useRemoteConnection({ jobId, run, bound, attempt, area, image, limits });
   const { send, session } = conn;
   const tabs = withShown(conn.tabs, wanted);
   // The server's tabs are the truth again once they come.
@@ -520,6 +523,7 @@ export function RemoteScreen({
           <PageDialogCard
             key={dialog.id}
             dialog={dialog}
+            maxText={limits.max_prompt_text}
             onAnswer={(accept, text) => conn.answerDialog(dialog.id, accept, text)}
           />
         )}

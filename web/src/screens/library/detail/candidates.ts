@@ -4,7 +4,7 @@ import { ApiError } from "@/lib/api";
 import { patch, store } from "@/lib/cached";
 import { newCommandId } from "@/lib/commands";
 
-import { createSubtitleJob, MAX_JOB_CANDIDATES } from "../../todo/api";
+import { createSubtitleJob } from "../../todo/api";
 import { usePolled } from "../../todo/poll";
 import {
   candidatesKey,
@@ -385,11 +385,13 @@ const sameList = (a: readonly number[], b: readonly number[]) => a.length === b.
  * - The same candidates pressed again after a lost answer reuse the ID, in the
  *   same order, so the server sees the same content.
  * - `onMade` runs once the job exists, with the candidates it took.
+ * - More than `maxCandidates` (what the server takes for one job) are not sent.
  */
 export function useCreateJob(
   workId: string,
   season: number,
   onMade: (candidates: readonly number[], jobId: string) => void,
+  maxCandidates: number,
 ) {
   const [phase, setPhase] = useState<CreatePhase>({ kind: "idle" });
   const request = useRef<Request | null>(null);
@@ -431,11 +433,11 @@ export function useCreateJob(
   /** Creates the job for `candidates` (a new request, or the unanswered one when it is the same content). */
   const create = useCallback(
     (candidates: readonly number[]) => {
-      if (busy.current || candidates.length === 0 || candidates.length > MAX_JOB_CANDIDATES) return;
+      if (busy.current || candidates.length === 0 || candidates.length > maxCandidates) return;
       const kept = request.current;
       void send(kept && sameList(kept.candidates, candidates) ? kept : (request.current = { id: newCommandId(), candidates: [...candidates] }));
     },
-    [send],
+    [send, maxCandidates],
   );
 
   /** Sends the unanswered request again, with its ID and its candidates. */

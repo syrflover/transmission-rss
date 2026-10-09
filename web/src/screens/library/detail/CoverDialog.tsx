@@ -18,6 +18,7 @@ import {
 } from "../api";
 import type { Work } from "../model";
 import { Cover } from "../WorkItem";
+import { bytesText } from "./upload";
 
 /** How often an open cover view reads the state again while the app is still searching or receiving. */
 const PENDING_POLL_MS = 3000;
@@ -69,6 +70,7 @@ export function CoverDialog({
   workId,
   work,
   coverUrl,
+  maxBytes,
   open,
   onOpenChange,
   onChanged,
@@ -76,6 +78,8 @@ export function CoverDialog({
   workId: string;
   work: Pick<Work, "title" | "hue" | "initial">;
   coverUrl: string | null;
+  /** The most bytes of an image the server takes. */
+  maxBytes: number;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   /** The cover URL after a change, for the head and the list. */
@@ -279,7 +283,7 @@ export function CoverDialog({
                 )}
                 {state && (
                   <p className={hintClass}>
-                    JPEG·PNG·WebP 이미지를 10MB까지 올릴 수 있어요. 파일 이름이 아니라 내용으로 판단해요. 표지를 비우면 자동으로도 찾지 않아요.
+                    JPEG·PNG·WebP 이미지를 {bytesText(maxBytes)}까지 올릴 수 있어요. 파일 이름이 아니라 내용으로 판단해요. 표지를 비우면 자동으로도 찾지 않아요.
                   </p>
                 )}
                 {error && (

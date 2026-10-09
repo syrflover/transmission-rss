@@ -6,6 +6,7 @@ import { forgetWeek } from "../schedule/api";
 import type { EpisodeSegment } from "../todo/episodeLine.ts";
 import type { TodoKind } from "../todo/kinds";
 import type { FormatOrder, SubtitleFormat, WorkSubtitles } from "./detail/subtitles.ts";
+import type { UploadLimits } from "./detail/upload.ts";
 import type { WorkStorage } from "./storage.ts";
 
 export type { FormatOrder, SubtitleCopy, SubtitleCreatorCopies, SubtitleFormat, WorkSubtitles } from "./detail/subtitles.ts";
@@ -348,6 +349,10 @@ export interface WorkDetail {
   storage: WorkStorage;
   /** The received subtitles by creator and the format order (`자막` card); a server without them leaves it out. */
   subtitles?: WorkSubtitles;
+  /** What an upload of subtitle files is held to. */
+  upload_limits: UploadLimits;
+  /** The most bytes of a cover image the server takes. */
+  cover_max_bytes: number;
 }
 
 /** The cache key of one work's page. */
@@ -490,6 +495,8 @@ export interface SeasonInfo {
   note: { code: string; message: string } | null;
   /** The work's first season: the only one the app searches for. */
   can_auto: boolean;
+  /** The most entries a season links. */
+  max_entries: number;
   entries: SeasonEntry[];
   airing: { start: FuzzyDate; end: FuzzyDate; state: AiringState | string | null } | null;
   /** `null` when unknown (no entry, or an entry's count is unknown). */
@@ -584,6 +591,8 @@ export interface AnissiaPage {
   items: AnissiaCandidate[];
   has_next: boolean;
   page: number;
+  /** The last page a search answers. */
+  max_page: number;
 }
 
 /** Where a picked anime came from: the server checks it against that very list. */
@@ -667,6 +676,8 @@ export interface CandidateList {
   previous_episodes?: number | null;
   /** The season's own episode count when it is known. */
   season_episodes?: number | null;
+  /** The most candidates one job takes. */
+  max_job_candidates: number;
 }
 
 /**

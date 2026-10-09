@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { encode, MAX_MESSAGE_BYTES, parseServerMessage, socketUrl, textChunks } from "./protocol.ts";
+import { encode, parseServerMessage, socketUrl, textChunks } from "./protocol.ts";
+
+/** What the server tells the device its socket takes in a message. */
+const MAX_MESSAGE_BYTES = 64 * 1024;
 
 test("the server's messages are read by their shape", () => {
   assert.deepEqual(parseServerMessage('{"type":"viewport","gen":2,"width":402,"height":666,"dpr":3,"touch":true}'), {
@@ -89,17 +92,17 @@ test("a message that is not the protocol's is ignored", () => {
 });
 
 test("an answer to a dialog names it and carries a prompt's text", () => {
-  assert.deepEqual(JSON.parse(encode({ type: "dialog", id: 3, accept: true, text: "답" }) ?? ""), {
+  assert.deepEqual(JSON.parse(encode({ type: "dialog", id: 3, accept: true, text: "답" }, MAX_MESSAGE_BYTES) ?? ""), {
     type: "dialog",
     id: 3,
     accept: true,
     text: "답",
   });
-  assert.deepEqual(JSON.parse(encode({ type: "dialog", id: 3, accept: false }) ?? ""), { type: "dialog", id: 3, accept: false });
+  assert.deepEqual(JSON.parse(encode({ type: "dialog", id: 3, accept: false }, MAX_MESSAGE_BYTES) ?? ""), { type: "dialog", id: 3, accept: false });
 });
 
 test("inputs are encoded as the server's protocol names them", () => {
-  const text = encode({ type: "mouse", gen: 3, event: "mousePressed", x: 10.5, y: 20, button: "left", buttons: 1, clickCount: 1, modifiers: 0 });
+  const text = encode({ type: "mouse", gen: 3, event: "mousePressed", x: 10.5, y: 20, button: "left", buttons: 1, clickCount: 1, modifiers: 0 }, MAX_MESSAGE_BYTES);
   assert.deepEqual(JSON.parse(text ?? ""), {
     type: "mouse",
     gen: 3,
@@ -111,10 +114,10 @@ test("inputs are encoded as the server's protocol names them", () => {
     clickCount: 1,
     modifiers: 0,
   });
-  assert.deepEqual(JSON.parse(encode({ type: "reload" }) ?? ""), { type: "reload" });
-  assert.deepEqual(JSON.parse(encode({ type: "back" }) ?? ""), { type: "back" });
-  assert.deepEqual(JSON.parse(encode({ type: "forward" }) ?? ""), { type: "forward" });
-  assert.deepEqual(JSON.parse(encode({ type: "viewport", width: 402, height: 666, dpr: 3, touch: true }) ?? ""), {
+  assert.deepEqual(JSON.parse(encode({ type: "reload" }, MAX_MESSAGE_BYTES) ?? ""), { type: "reload" });
+  assert.deepEqual(JSON.parse(encode({ type: "back" }, MAX_MESSAGE_BYTES) ?? ""), { type: "back" });
+  assert.deepEqual(JSON.parse(encode({ type: "forward" }, MAX_MESSAGE_BYTES) ?? ""), { type: "forward" });
+  assert.deepEqual(JSON.parse(encode({ type: "viewport", width: 402, height: 666, dpr: 3, touch: true }, MAX_MESSAGE_BYTES) ?? ""), {
     type: "viewport",
     width: 402,
     height: 666,
@@ -124,8 +127,8 @@ test("inputs are encoded as the server's protocol names them", () => {
 });
 
 test("a message over the socket's cap is not encoded", () => {
-  assert.equal(encode({ type: "text", gen: 1, text: "가".repeat(MAX_MESSAGE_BYTES / 3 + 1) }), null);
-  assert.notEqual(encode({ type: "text", gen: 1, text: "가".repeat(1000) }), null);
+  assert.equal(encode({ type: "text", gen: 1, text: "가".repeat(MAX_MESSAGE_BYTES / 3 + 1) }, MAX_MESSAGE_BYTES), null);
+  assert.notEqual(encode({ type: "text", gen: 1, text: "가".repeat(1000) }, MAX_MESSAGE_BYTES), null);
 });
 
 test("long text goes in pieces that never cut a character", () => {

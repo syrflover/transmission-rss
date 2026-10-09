@@ -10,10 +10,12 @@ export interface UnpackResult {
   state: "done" | "failed" | "retry" | "volume";
   reason: string | null;
   /**
-   * How many tries failed for this machine, out of {@link UNPACK_TRIES}, and for `failed` the try after them that
+   * How many tries failed for this machine, out of `max_tries`, and for `failed` the try after them that
    * the archive's own reason ended; 0 for none.
    */
   tries: number;
+  /** How many tries an archive gets when this machine fails them (the worker's `UNPACK_TRIES`). */
+  max_tries: number;
   /**
    * For `retry`: when the next try goes at the latest; `null` once a worker started since, which tries it at once.
    * A time gone by is the next run's too (the job is put back in line, or a person holds it).
@@ -26,9 +28,6 @@ export interface UnpackResult {
   subtitles: number | null;
   fonts: number | null;
 }
-
-/** How many tries an archive gets when this machine fails them (the worker's `UNPACK_TRIES`). */
-export const UNPACK_TRIES = 3;
 
 /**
  * What came of unpacking an archive, in a phrase: `파일 14개를 풀었어요 (자막 12 · 폰트 2)`, `풀지 못함` (urgent,
@@ -64,7 +63,7 @@ export function unpackText(
           ? `${when(unpack.retry_at, now)} 또는 worker가 다시 시작할 때`
           : "다음 실행 때";
       return {
-        text: `다시 풀기를 기다려요 (${UNPACK_TRIES}번 중 ${unpack.tries}번째 시도 실패)`,
+        text: `다시 풀기를 기다려요 (${unpack.max_tries}번 중 ${unpack.tries}번째 시도 실패)`,
         reason: [unpack.reason, `다음 시도: ${next}`].filter((part) => part !== null).join(" · "),
         urgent: false,
       };

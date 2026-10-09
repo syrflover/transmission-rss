@@ -48,9 +48,15 @@ export function channelTitle(channel: Pick<Channel, "name" | "host">): string {
   return channel.name ?? channel.host;
 }
 
-export async function listChannels(): Promise<Channel[]> {
-  const { channels } = await api<{ channels: Channel[] }>("/channels");
-  return channels;
+/** The channels, and the longest name the server takes (a new channel has none to carry it). */
+export interface ChannelList {
+  channels: Channel[];
+  /** The most characters of a channel's display name. */
+  name_max_chars: number;
+}
+
+export function listChannels(): Promise<ChannelList> {
+  return api<ChannelList>("/channels");
 }
 
 export function createChannel(draft: ChannelDraft): Promise<Channel> {

@@ -18,9 +18,12 @@ const LEAVE_TEXT = "이 페이지를 떠날까요? 입력한 내용이 저장되
  */
 export function PageDialogCard({
   dialog,
+  maxText,
   onAnswer,
 }: {
   dialog: PageDialog;
+  /** The most characters of a prompt's answer the server takes. */
+  maxText: number;
   onAnswer: (accept: boolean, text?: string) => void;
 }) {
   const titleId = useId();
@@ -81,7 +84,7 @@ export function PageDialogCard({
             }}
             aria-label="답"
             value={text}
-            maxLength={2000}
+            maxLength={maxText}
             disabled={answered}
             onChange={(e) => setText(e.target.value)}
             onKeyDown={(e) => {

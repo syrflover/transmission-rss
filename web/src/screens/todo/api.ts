@@ -10,6 +10,7 @@ import type {
   ReplacementLines,
   ReplacementResult,
 } from "./replacementTypes";
+import type { ScreenLimits } from "./remote/protocol.ts";
 import type { UnpackResult } from "./unpack";
 
 export type { EpisodeSegment };
@@ -441,7 +442,7 @@ export function fetchDoneJobs(
   signal?: AbortSignal,
 ): Promise<DonePage> {
   return api<DonePage>(
-    `/subtitle-jobs/done?after=${encodeURIComponent(after)}&limit=20`,
+    `/subtitle-jobs/done?after=${encodeURIComponent(after)}`,
     { signal },
   );
 }
@@ -581,6 +582,8 @@ export interface JobScreen {
   note: string | null;
   /** With `run`: the page shown is not the one the run was bound with (a popup). */
   popup: boolean;
+  /** With `run`: what the socket takes, which the device keeps within; `null` without one. */
+  limits: ScreenLimits | null;
 }
 
 export function fetchJob(id: string, signal?: AbortSignal): Promise<JobDetail> {
@@ -697,9 +700,6 @@ export function confirmPlacement(
     signal,
   });
 }
-
-/** The most candidates one job takes, as the server (`MAX_CANDIDATES` in `jobs_api.rs`) does. */
-export const MAX_JOB_CANDIDATES = 200;
 
 /** What creates a job: the candidates are the observation IDs of one creator, in the order the job lists them. */
 export interface NewSubtitleJob {

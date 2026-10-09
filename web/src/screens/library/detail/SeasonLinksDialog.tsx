@@ -18,9 +18,6 @@ import {
 } from "../api";
 import { fuzzyDate } from "./model";
 
-/** The most entries one season can link (the server's limit). */
-const MAX_ENTRIES = 8;
-
 /** An entry of the draft: what is shown of it in the list. */
 interface Item {
   id: number;
@@ -111,7 +108,7 @@ export function SeasonLinksDialog({
     });
 
   const add = (candidate: AnilistCandidate) =>
-    setDraft((items) => (items.length >= MAX_ENTRIES || items.some((i) => i.id === candidate.id) ? items : [...items, itemOfCandidate(candidate)]));
+    setDraft((items) => (items.length >= info.max_entries || items.some((i) => i.id === candidate.id) ? items : [...items, itemOfCandidate(candidate)]));
 
   const dirty = !sameIds(draft, info.entries);
 
@@ -198,7 +195,7 @@ export function SeasonLinksDialog({
               )}
               <p className={hintClass}>
                 TheTVDB의 시즌 하나가 AniList에서 두 항목(1쿨·2쿨)으로 나뉘어 있으면 모두 골라 순서를 맞춰 주세요. 줄거리는 첫 항목의 것을 보여줘요.
-                {draft.length >= MAX_ENTRIES ? ` 항목은 ${MAX_ENTRIES}개까지 이을 수 있어요.` : ""}
+                {draft.length >= info.max_entries ? ` 항목은 ${info.max_entries}개까지 이을 수 있어요.` : ""}
               </p>
               <div className="flex flex-wrap gap-2">
                 <Button
@@ -279,7 +276,7 @@ export function SeasonLinksDialog({
               )}
             </section>
 
-            <SeasonSearch workId={workId} season={info.season} initial={workName} chosen={draft} full={draft.length >= MAX_ENTRIES} onAdd={add} />
+            <SeasonSearch workId={workId} season={info.season} initial={workName} chosen={draft} full={draft.length >= info.max_entries} onAdd={add} />
           </div>
         </Dialog.Content>
       </Dialog.Portal>

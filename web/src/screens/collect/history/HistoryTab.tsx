@@ -6,7 +6,7 @@ import { patch, useCached } from "@/lib/cached";
 
 import { EmptyState } from "../../ScreenFrame";
 import { KEYS } from "../cache";
-import { listChannels, channelTitle, type Channel } from "../channels/api";
+import { listChannels, channelTitle, type ChannelList } from "../channels/api";
 import { btnNeutral, inputClass } from "../channels/styles";
 import {
   listHistory,
@@ -80,9 +80,9 @@ export function HistoryTab() {
     () => listHistory(filter, { limit: PAGE_SIZE }),
     "기록을 불러오지 못했어요.",
   );
-  const channelList = useCached<Channel[]>(KEYS.channels, listChannels, "");
+  const channelList = useCached<ChannelList>(KEYS.channels, listChannels, "");
   // Without the list the channel filter only offers the chosen channel; the list itself still works.
-  const channels = channelList.data ?? [];
+  const channels = channelList.data?.channels ?? [];
   const [extra, setExtra] = useState<Extra | null>(null);
   const [moreState, setMoreState] = useState<{ key: string; state: More }>({ key, state: "idle" });
   const more = moreState.key === key ? moreState.state : "idle";

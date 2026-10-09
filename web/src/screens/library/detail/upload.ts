@@ -9,17 +9,17 @@
  * the file, so an image named `a.ass` is sent and dropped there.
  */
 
-/** The limits the server holds an upload to (`UPLOAD` constants in `trss-jobs/src/upload.rs`). */
-export const LIMITS = {
+/** The limits the server holds an upload to (`upload_limits` of the work detail). */
+export interface UploadLimits {
   /** Files sent: subtitles, fonts and ZIPs. */
-  files: 500,
+  files: number;
   /** Files named in all, those left out included. */
-  entries: 2000,
-  /** The files' bytes in all: 1 GiB. */
-  totalBytes: 1024 * 1024 * 1024,
-  /** One file's bytes: 200 MiB. */
-  fileBytes: 200 * 1024 * 1024,
-} as const;
+  entries: number;
+  /** The files' bytes in all. */
+  total_bytes: number;
+  /** One file's bytes. */
+  file_bytes: number;
+}
 
 export type Kind = "subtitle" | "font" | "archive";
 
@@ -107,7 +107,7 @@ export function bytesText(bytes: number): string {
   return unit(bytes / (1024 * 1024 * 1024), "GB");
 }
 
-export function planOf<F extends Chosen>(entries: readonly Entry<F>[]): Plan<F> {
+export function planOf<F extends Chosen>(entries: readonly Entry<F>[], limits: UploadLimits): Plan<F> {
   const send = entries.filter((e) => e.kind !== null);
   const skip = entries.filter((e) => e.kind === null);
   const counts: Record<Kind, number> = { subtitle: 0, font: 0, archive: 0 };
@@ -117,20 +117,20 @@ export function planOf<F extends Chosen>(entries: readonly Entry<F>[]): Plan<F> 
     totalBytes += e.file.size;
   }
   const problems: string[] = [];
-  if (send.length > LIMITS.files) {
-    problems.push(`한 번에 파일 ${LIMITS.files}개까지 올릴 수 있어요. 지금 ${send.length}개예요. 나눠서 올려 주세요.`);
+  if (send.length > limits.files) {
+    problems.push(`한 번에 파일 ${limits.files}개까지 올릴 수 있어요. 지금 ${send.length}개예요. 나눠서 올려 주세요.`);
   }
-  if (entries.length > LIMITS.entries) {
+  if (entries.length > limits.entries) {
     problems.push(
-      `한 번에 고를 수 있는 파일은 올리지 않는 파일까지 모두 ${LIMITS.entries}개예요. 지금 ${entries.length}개예요.`,
+      `한 번에 고를 수 있는 파일은 올리지 않는 파일까지 모두 ${limits.entries}개예요. 지금 ${entries.length}개예요.`,
     );
   }
-  const big = send.filter((e) => e.file.size > LIMITS.fileBytes);
+  const big = send.filter((e) => e.file.size > limits.file_bytes);
   if (big.length > 0) {
-    problems.push(`파일 하나는 ${bytesText(LIMITS.fileBytes)}까지 올릴 수 있어요. ${big[0].name}${big.length > 1 ? ` 외 ${big.length - 1}개` : ""}이(가) 넘어요.`);
+    problems.push(`파일 하나는 ${bytesText(limits.file_bytes)}까지 올릴 수 있어요. ${big[0].name}${big.length > 1 ? ` 외 ${big.length - 1}개` : ""}이(가) 넘어요.`);
   }
-  if (totalBytes > LIMITS.totalBytes) {
-    problems.push(`한 번에 모두 합쳐 ${bytesText(LIMITS.totalBytes)}까지 올릴 수 있어요. 지금 ${bytesText(totalBytes)}예요. 나눠서 올려 주세요.`);
+  if (totalBytes > limits.total_bytes) {
+    problems.push(`한 번에 모두 합쳐 ${bytesText(limits.total_bytes)}까지 올릴 수 있어요. 지금 ${bytesText(totalBytes)}예요. 나눠서 올려 주세요.`);
   }
   return { send, skip, counts, totalBytes, problems };
 }

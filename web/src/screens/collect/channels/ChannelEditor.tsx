@@ -29,6 +29,8 @@ import {
 interface ChannelEditorProps {
   /** The channel being edited, or `null` to add a new one. */
   channel: Channel | null;
+  /** The most characters of the name the server takes. */
+  nameMaxChars: number;
   onSaved: (channel: Channel) => void;
   onCancel: () => void;
   onDeleted?: (channel: Channel, removedRules: number) => void;
@@ -68,7 +70,7 @@ function messageOf(error: unknown): string {
  * through failures: a conflict shows the server's current channel next to the
  * input and the next save is sent against that version.
  */
-export function ChannelEditor({ channel, onSaved, onCancel, onDeleted }: ChannelEditorProps) {
+export function ChannelEditor({ channel, nameMaxChars, onSaved, onCancel, onDeleted }: ChannelEditorProps) {
   const uid = useId();
   const isNew = channel === null;
 
@@ -226,7 +228,7 @@ export function ChannelEditor({ channel, onSaved, onCancel, onDeleted }: Channel
             onChange={(e) => setName(e.target.value)}
             className={inputClass}
             placeholder="주간 애니"
-            maxLength={100}
+            maxLength={nameMaxChars}
             autoComplete="off"
             aria-describedby={`${uid}-name-hint`}
           />

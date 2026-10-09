@@ -2,25 +2,36 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { deviceViewport, sameViewport, toRemote } from "./geometry.ts";
+import type { ScreenLimits } from "./protocol.ts";
+
+/** What the server tells the device its socket takes. */
+const LIMITS: ScreenLimits = {
+  min_side: 200,
+  max_side: 4096,
+  min_dpr: 0.5,
+  max_dpr: 4,
+  max_message_bytes: 64 * 1024,
+  max_prompt_text: 2000,
+};
 
 test("a phone reports its area's width, a height from its screen's, its pixel ratio and touch", () => {
-  const v = deviceViewport({ areaWidth: 358.6, deviceHeight: 844, dpr: 3, touch: true });
+  const v = deviceViewport({ areaWidth: 358.6, deviceHeight: 844, dpr: 3, touch: true }, LIMITS);
   assert.deepEqual(v, { width: 358, height: 506, dpr: 3, touch: true });
 });
 
 test("the height stays within 360 and 720 whatever the device", () => {
-  assert.equal(deviceViewport({ areaWidth: 800, deviceHeight: 300, dpr: 1, touch: false }).height, 360);
-  assert.equal(deviceViewport({ areaWidth: 800, deviceHeight: 2160, dpr: 1, touch: false }).height, 720);
+  assert.equal(deviceViewport({ areaWidth: 800, deviceHeight: 300, dpr: 1, touch: false }, LIMITS).height, 360);
+  assert.equal(deviceViewport({ areaWidth: 800, deviceHeight: 2160, dpr: 1, touch: false }, LIMITS).height, 720);
 });
 
 test("sizes and ratios outside what the server takes are held to its bounds", () => {
-  const small = deviceViewport({ areaWidth: 120, deviceHeight: 700, dpr: 0.1, touch: false });
+  const small = deviceViewport({ areaWidth: 120, deviceHeight: 700, dpr: 0.1, touch: false }, LIMITS);
   assert.equal(small.width, 200);
   assert.equal(small.dpr, 0.5);
-  const big = deviceViewport({ areaWidth: 9000, deviceHeight: 700, dpr: 9, touch: false });
+  const big = deviceViewport({ areaWidth: 9000, deviceHeight: 700, dpr: 9, touch: false }, LIMITS);
   assert.equal(big.width, 4096);
   assert.equal(big.dpr, 4);
-  assert.equal(deviceViewport({ areaWidth: 500, deviceHeight: 700, dpr: Number.NaN, touch: false }).dpr, 1);
+  assert.equal(deviceViewport({ areaWidth: 500, deviceHeight: 700, dpr: Number.NaN, touch: false }, LIMITS).dpr, 1);
 });
 
 test("viewports are the same only when every part is", () => {

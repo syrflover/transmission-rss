@@ -205,15 +205,27 @@ export type ClientMessage =
   | { type: "dialog"; id: number; accept: boolean; text?: string }
   | (InputBody & { gen: number });
 
-/** The server drops a message over this many bytes by closing the socket. */
-export const MAX_MESSAGE_BYTES = 64 * 1024;
-/** The most characters of one `text` input the server takes. */
-export const MAX_TEXT = 2000;
+/**
+ * What the socket of a screen takes (`limits` of the job's screen): the device keeps within it so that the server need
+ * not refuse a message or a size. The server drops a message over `max_message_bytes` by closing the socket.
+ */
+export interface ScreenLimits {
+  /** The least and most width or height of the viewport, in CSS pixels. */
+  min_side: number;
+  max_side: number;
+  /** The least and most pixel ratio of the viewport. */
+  min_dpr: number;
+  max_dpr: number;
+  /** The most bytes of one message. */
+  max_message_bytes: number;
+  /** The most characters of a prompt's answer. */
+  max_prompt_text: number;
+}
 
-/** The text frame to send, or `null` when it would be too large for the socket. */
-export function encode(message: ClientMessage): string | null {
+/** The text frame to send, or `null` when it would be too large for the socket (`maxBytes`). */
+export function encode(message: ClientMessage, maxBytes: number): string | null {
   const text = JSON.stringify(message);
-  return new TextEncoder().encode(text).length <= MAX_MESSAGE_BYTES ? text : null;
+  return new TextEncoder().encode(text).length <= maxBytes ? text : null;
 }
 
 /** Pasted or typed text in pieces the server takes, never cutting a character in two. */

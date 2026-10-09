@@ -15,6 +15,7 @@ import {
   type InputBody,
   type Nav,
   type PageDialog,
+  type ScreenLimits,
   type ServerMessage,
   type Tab,
   type Viewport,
@@ -101,8 +102,12 @@ export function useRemoteConnection(options: {
   attempt: number;
   area: RefObject<HTMLElement | null>;
   image: RefObject<HTMLImageElement | null>;
+  /** What the server's socket takes; read when a message is made, so a new object never reconnects. */
+  limits: ScreenLimits;
 }): Connection {
   const { jobId, run, bound, attempt, area, image } = options;
+  const limits = useRef(options.limits);
+  limits.current = options.limits;
   const [phase, setPhase] = useState<Phase>("connecting");
   const [reason, setReason] = useState<EndedReason | null>(null);
   const [frame, setFrame] = useState<{ width: number; height: number } | null>(null);
@@ -165,15 +170,18 @@ export function useRemoteConnection(options: {
       const box = area.current;
       if (box === null || ws.readyState !== WebSocket.OPEN) return;
       const touch = isTouchDevice();
-      const next = deviceViewport({
-        areaWidth: box.clientWidth,
-        // A virtual keyboard shortens the window of a touch screen, not its screen.
-        deviceHeight: touch ? window.screen.height : window.innerHeight,
-        dpr: window.devicePixelRatio,
-        touch,
-      });
+      const next = deviceViewport(
+        {
+          areaWidth: box.clientWidth,
+          // A virtual keyboard shortens the window of a touch screen, not its screen.
+          deviceHeight: touch ? window.screen.height : window.innerHeight,
+          dpr: window.devicePixelRatio,
+          touch,
+        },
+        limits.current,
+      );
       if (!force && sent !== null && sameViewport(sent, next)) return;
-      const text = encode({ type: "viewport", ...next });
+      const text = encode({ type: "viewport", ...next }, limits.current.max_message_bytes);
       if (text === null) return;
       sent = next;
       session.current = sentViewport(session.current, next);
@@ -311,7 +319,7 @@ export function useRemoteConnection(options: {
     const ws = socket.current;
     const gen = inputGen(session.current);
     if (ws === null || ws.readyState !== WebSocket.OPEN || gen === null) return false;
-    const text = encode({ ...body, gen } as ClientMessage);
+    const text = encode({ ...body, gen } as ClientMessage, limits.current.max_message_bytes);
     if (text === null) return false;
     ws.send(text);
     return true;
@@ -319,7 +327,7 @@ export function useRemoteConnection(options: {
 
   const command = useCallback((message: ClientMessage) => {
     const ws = socket.current;
-    const text = encode(message);
+    const text = encode(message, limits.current.max_message_bytes);
     if (ws !== null && ws.readyState === WebSocket.OPEN && text !== null) ws.send(text);
   }, []);
   const reload = useCallback(() => command({ type: "reload" }), [command]);

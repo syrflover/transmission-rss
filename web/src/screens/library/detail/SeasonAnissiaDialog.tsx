@@ -13,9 +13,6 @@ import { btnNeutral, btnPrimary, hintClass, inputClass } from "../../collect/cha
 import { searchAnissia, setAnissiaLink, type AnissiaCandidate, type AnissiaLink, type AnissiaSource, type ReferenceTitle } from "../api";
 import { anissiaStatusText as statusText } from "./model";
 
-/** The most pages of one search the server answers. */
-const MAX_PAGE = 100;
-
 type Tab = "list" | "schedule";
 
 /** The anime picked, and where it was picked from (the server checks it against that list). */
@@ -213,7 +210,7 @@ function FullList({
 }) {
   // Nothing is searched until the user writes a query.
   const [query, setQuery] = useState("");
-  const [results, setResults] = useState<{ q: string; rows: Row[]; page: number; hasNext: boolean } | null>(null);
+  const [results, setResults] = useState<{ q: string; rows: Row[]; page: number; hasNext: boolean; maxPage: number } | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -228,6 +225,7 @@ function FullList({
         rows: page > 1 && prev ? [...prev.rows, ...rows] : rows,
         page: answer.page,
         hasNext: answer.has_next,
+        maxPage: answer.max_page,
       }));
     } catch (e) {
       setError(e instanceof ApiError ? e.message : "Anissia 전체 목록을 검색하지 못했어요. 편성표에서는 고를 수 있어요.");
@@ -296,7 +294,7 @@ function FullList({
         </ul>
       )}
       {loading && <p className={hintClass}>Anissia에서 찾는 중이에요.</p>}
-      {results?.hasNext && results.page < MAX_PAGE && !loading && (
+      {results?.hasNext && results.page < results.maxPage && !loading && (
         <Button type="button" variant="ghost" className={cn(btnNeutral, "self-start")} onClick={() => void search(results.q, results.page + 1)}>
           결과 더 보기
         </Button>

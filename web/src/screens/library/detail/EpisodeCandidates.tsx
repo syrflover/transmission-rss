@@ -22,7 +22,7 @@ export function candidateNote(candidates: readonly Candidate[]): string {
 
 /** One creator's candidate for the episode with a `받기` that makes a job of this one candidate, the same as the section's. */
 function EpisodePick({ candidate: c, season, source }: { candidate: Candidate; season: number; source: EpisodeCandidateSource }) {
-  const { phase, create, resend } = useCreateJob(source.workId, season, source.onMade);
+  const { phase, create, resend } = useCreateJob(source.workId, season, source.onMade, source.list.max_job_candidates);
   return (
     <li className="flex flex-col gap-1.5">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">

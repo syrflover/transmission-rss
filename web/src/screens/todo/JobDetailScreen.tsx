@@ -111,7 +111,7 @@ function timeSentence(job: JobRow): string {
 }
 
 /** What a find job that has no screen yet shows while the worker opens its post. */
-const OPENING: JobScreen = { state: "preparing", run: null, bound: null, note: null, popup: false };
+const OPENING: JobScreen = { state: "preparing", run: null, bound: null, note: null, popup: false, limits: null };
 
 function Page({ job, prepare }: { job: JobDetail; prepare: ScreenPrepare }) {
   const title = useRef<HTMLHeadingElement>(null);

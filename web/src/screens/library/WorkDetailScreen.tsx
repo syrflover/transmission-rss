@@ -313,6 +313,7 @@ function Loaded({
           workId={work.id}
           work={cover}
           coverUrl={work.cover_url}
+          maxBytes={work.cover_max_bytes}
           open={coverOpen}
           onOpenChange={setCoverOpen}
           onChanged={onCoverChanged}
@@ -403,6 +404,7 @@ function Loaded({
               season={season.number}
               seasonCount={work.seasons.length}
               candidates={candidates.data ?? null}
+              limits={work.upload_limits}
             />
           )}
           {season ? (

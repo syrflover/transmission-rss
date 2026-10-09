@@ -12,6 +12,7 @@ const unpack = (fields: Partial<UnpackResult>): UnpackResult => ({
   state: "done",
   reason: null,
   tries: 0,
+  max_tries: 3,
   retry_at: null,
   first: null,
   files: null,

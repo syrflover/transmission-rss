@@ -7,7 +7,6 @@ import { ago } from "@/lib/time";
 import { cn } from "@/lib/utils";
 
 import { btnAction, btnNeutral, hintClass } from "../../collect/channels/styles";
-import { MAX_JOB_CANDIDATES } from "../../todo/api";
 import { changeCreator } from "../../collect/subs/api";
 import {
   ANISSIA_CAPTIONS_KIND,
@@ -152,6 +151,7 @@ function GroupItem({
   onChoose,
   facts,
   onMapping,
+  maxCandidates,
 }: {
   group: CandidateGroup;
   workId: string;
@@ -171,18 +171,20 @@ function GroupItem({
   facts: { previous: number | null | undefined; total: number | null | undefined };
   /** The creator's mapping changed (`null`: it has none now). */
   onMapping: (mapping: CandidateMapping | null) => void;
+  /** The most candidates one job takes. */
+  maxCandidates: number;
 }) {
   const bodyId = useId();
-  const { phase, create, resend } = useCreateJob(workId, season, onMade);
+  const { phase, create, resend } = useCreateJob(workId, season, onMade, maxCandidates);
   const all = missingOf(group);
   const chosen = pickedOf(group, picked);
   const sending = phase.kind === "sending";
-  const tooMany = (ids: readonly number[]) => ids.length > MAX_JOB_CANDIDATES;
+  const tooMany = (ids: readonly number[]) => ids.length > maxCandidates;
   const hint =
     all.length === 0
       ? "받을 수 있는 누락 회차가 없어요."
       : tooMany(all)
-        ? `한 번에 ${MAX_JOB_CANDIDATES}개까지 받을 수 있어요. 나눠서 골라 주세요.`
+        ? `한 번에 ${maxCandidates}개까지 받을 수 있어요. 나눠서 골라 주세요.`
         : group.revision > 0
           ? "수정 후보는 빼고 담아요."
           : null;
@@ -512,6 +514,7 @@ export function CandidateSection({
                   onChoose={(creator) => void choose(creator)}
                   facts={{ previous: list?.previous_episodes, total: list?.season_episodes }}
                   onMapping={(next) => setMapping(group.sourceId, next)}
+                  maxCandidates={list?.max_job_candidates ?? 0}
                 />
               ))}
             </ul>

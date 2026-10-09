@@ -6,7 +6,7 @@ import { useCached } from "@/lib/cached";
 import { EmptyState } from "../../ScreenFrame";
 import { KEYS, channelsChanged } from "../cache";
 import { PlusIcon } from "../icons";
-import { channelTitle, listChannels, type Channel } from "./api";
+import { channelTitle, listChannels, type Channel, type ChannelList } from "./api";
 import { ChannelCard } from "./ChannelCard";
 import { ChannelEditor } from "./ChannelEditor";
 import { CollectFolderNote } from "./CollectFolderNote";
@@ -14,17 +14,18 @@ import { btnAction, btnNeutral } from "./styles";
 
 /** The 채널 tab: RSS channels with their masked URLs, and adding, editing and deleting them. */
 export function ChannelsTab() {
-  const list = useCached<Channel[]>(KEYS.channels, listChannels, "채널을 불러오지 못했어요.");
+  const list = useCached<ChannelList>(KEYS.channels, listChannels, "채널을 불러오지 못했어요.");
   const [adding, setAdding] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const addButton = useRef<HTMLButtonElement>(null);
 
   /** The cached list takes the change at once, and the copies other screens keep of it are dropped. */
   const update = (fn: (channels: Channel[]) => Channel[]) => {
-    list.update(fn);
+    list.update((all) => ({ ...all, channels: fn(all.channels) }));
     channelsChanged();
   };
-  const channels = list.data;
+  const channels = list.data?.channels;
+  const nameMaxChars = list.data?.name_max_chars ?? 0;
 
   return (
     <div className="flex flex-col gap-4">
@@ -82,6 +83,7 @@ export function ChannelsTab() {
               </h3>
               <ChannelEditor
                 channel={null}
+                nameMaxChars={nameMaxChars}
                 onSaved={(created) => {
                   update((all) => [...all, created]);
                   setAdding(false);
@@ -106,6 +108,7 @@ export function ChannelsTab() {
                 <ChannelCard
                   key={channel.id}
                   channel={channel}
+                  nameMaxChars={nameMaxChars}
                   onEdit={() => setNotice(null)}
                   onUpdated={(saved) => {
                     update((all) => all.map((c) => (c.id === saved.id ? saved : c)));

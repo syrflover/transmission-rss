@@ -3,7 +3,7 @@ import { forgetLibrary, WORK_PREFIX } from "@/screens/library/api";
 import { forgetWeek } from "@/screens/schedule/api";
 
 import type { ArchiveSuggestion } from "./archive/api";
-import type { Channel } from "./channels/api";
+import type { ChannelList } from "./channels/api";
 import type { RuleList } from "./rules/api";
 
 /**
@@ -80,9 +80,10 @@ export function everythingChanged(): void {
 /** A rule was created (`+1`) or deleted (`-1`): the channel list shows how many rules a channel has. */
 export function ruleCountChanged(channelId: string, delta: number): void {
   forgetWeek();
-  patch<Channel[]>(KEYS.channels, (channels) =>
-    channels.map((c) => (c.id === channelId ? { ...c, rule_count: Math.max(0, c.rule_count + delta) } : c)),
-  );
+  patch<ChannelList>(KEYS.channels, (list) => ({
+    ...list,
+    channels: list.channels.map((c) => (c.id === channelId ? { ...c, rule_count: Math.max(0, c.rule_count + delta) } : c)),
+  }));
 }
 
 /** The rule list as it is after the rule `ruleId` was deleted. */

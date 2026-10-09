@@ -6,7 +6,7 @@ import { useCached } from "@/lib/cached";
 import { cn } from "@/lib/utils";
 
 import { KEYS } from "../../cache";
-import { channelTitle, listChannels, type Channel } from "../../channels/api";
+import { channelTitle, listChannels, type Channel, type ChannelList } from "../../channels/api";
 import { btnNeutral } from "../../channels/styles";
 import type { ScheduleEntry } from "../api";
 import { optionClass } from "./draft";
@@ -22,8 +22,8 @@ export function PickChannel({
   onPick: (channel: Channel) => void;
 }) {
   const uid = useId();
-  const list = useCached<Channel[]>(KEYS.channels, listChannels, "채널을 불러오지 못했어요.");
-  const channels = list.data;
+  const list = useCached<ChannelList>(KEYS.channels, listChannels, "채널을 불러오지 못했어요.");
+  const channels = list.data?.channels;
   const taken = new Set(anime.subscribed_rules.map((r) => r.channel_id));
 
   return (

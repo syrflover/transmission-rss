@@ -81,13 +81,15 @@ function ChannelDetails({ channel }: { channel: Channel }) {
 
 interface ChannelCardProps {
   channel: Channel;
+  /** The most characters of a channel's name the server takes. */
+  nameMaxChars: number;
   onEdit: () => void;
   onUpdated: (channel: Channel) => void;
   onDeleted: (channel: Channel, removedRules: number) => void;
 }
 
 /** One channel: its settings, or its editor in the same place after 수정. */
-export function ChannelCard({ channel, onEdit, onUpdated, onDeleted }: ChannelCardProps) {
+export function ChannelCard({ channel, nameMaxChars, onEdit, onUpdated, onDeleted }: ChannelCardProps) {
   const headingId = useId();
   const [editing, setEditing] = useState(false);
   const editButton = useRef<HTMLButtonElement>(null);
@@ -127,6 +129,7 @@ export function ChannelCard({ channel, onEdit, onUpdated, onDeleted }: ChannelCa
       {editing ? (
         <ChannelEditor
           channel={channel}
+          nameMaxChars={nameMaxChars}
           onSaved={(saved) => {
             onUpdated(saved);
             close();

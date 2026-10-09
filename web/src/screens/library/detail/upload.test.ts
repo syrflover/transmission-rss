@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import {
-  LIMITS,
   canPickFolder,
   countsText,
   entriesOf,
@@ -10,7 +9,11 @@ import {
   planOf,
   signatureOf,
   type Chosen,
+  type UploadLimits,
 } from "./upload.ts";
+
+/** What the server tells the work detail it holds an upload to. */
+const LIMITS: UploadLimits = { files: 500, entries: 2000, total_bytes: 1024 * 1024 * 1024, file_bytes: 200 * 1024 * 1024 };
 
 const file = (name: string, size = 100, webkitRelativePath?: string): Chosen => ({ name, size, webkitRelativePath });
 
@@ -29,7 +32,7 @@ test("a name's extension says subtitle, font, archive or nothing", () => {
 });
 
 test("the list says what is kept and what is dropped before anything is sent", () => {
-  const plan = planOf(entriesOf([file("01.ass"), file("02.ass"), file("a.ttf", 2048), file("readme.txt"), file("x.zip", 10)], 0));
+  const plan = planOf(entriesOf([file("01.ass"), file("02.ass"), file("a.ttf", 2048), file("readme.txt"), file("x.zip", 10)], 0), LIMITS);
   assert.deepEqual(plan.counts, { subtitle: 2, font: 1, archive: 1 });
   assert.deepEqual(
     plan.skip.map((e) => e.name),
@@ -49,29 +52,29 @@ test("a folder's files are named by their path in it", () => {
 });
 
 test("nothing to keep leaves nothing to send", () => {
-  const plan = planOf(entriesOf([file("a.txt"), file("b.png")], 0));
+  const plan = planOf(entriesOf([file("a.txt"), file("b.png")], 0), LIMITS);
   assert.equal(plan.send.length, 0);
   assert.equal(plan.skip.length, 2);
 });
 
 test("limits are told before sending", () => {
   const many = entriesOf(Array.from({ length: LIMITS.files + 1 }, (_, i) => file(`${i}.ass`, 1)), 0);
-  assert.equal(planOf(many).problems.length, 1);
-  assert.match(planOf(many).problems[0], /500개/);
+  assert.equal(planOf(many, LIMITS).problems.length, 1);
+  assert.match(planOf(many, LIMITS).problems[0], /500개/);
 
-  const big = planOf(entriesOf([file("big.ttf", LIMITS.fileBytes + 1)], 0));
+  const big = planOf(entriesOf([file("big.ttf", LIMITS.file_bytes + 1)], 0), LIMITS);
   assert.equal(big.problems.length, 1);
   assert.match(big.problems[0], /200MB/);
 
-  const sum = planOf(entriesOf(Array.from({ length: 6 }, (_, i) => file(`${i}.zip`, LIMITS.fileBytes)), 0));
+  const sum = planOf(entriesOf(Array.from({ length: 6 }, (_, i) => file(`${i}.zip`, LIMITS.file_bytes)), 0), LIMITS);
   assert.equal(sum.problems.length, 1);
   assert.match(sum.problems[0], /1GB/);
 
-  const named = planOf(entriesOf(Array.from({ length: LIMITS.entries + 1 }, (_, i) => file(`${i}.txt`, 1)), 0));
+  const named = planOf(entriesOf(Array.from({ length: LIMITS.entries + 1 }, (_, i) => file(`${i}.txt`, 1)), 0), LIMITS);
   assert.equal(named.send.length, 0);
   assert.equal(named.problems.length, 1);
 
-  const fine = planOf(entriesOf([file("a.ass", LIMITS.fileBytes)], 0));
+  const fine = planOf(entriesOf([file("a.ass", LIMITS.file_bytes)], 0), LIMITS);
   assert.deepEqual(fine.problems, []);
 });
 
@@ -122,7 +125,7 @@ test("every archive format and the volumes of a split archive are sent, not left
   for (const name of ["readme.txt", "cover.jpg", "rar", ".rar", "a.rar.txt", "a.001", "a.r1", "a.rxx", "a.7z.01", "a.zst"]) {
     assert.equal(kindByName(name), null, name);
   }
-  const plan = planOf(entriesOf([file("a.rar", 10), file("b.7z.001", 20), file("c.txt")], 0));
+  const plan = planOf(entriesOf([file("a.rar", 10), file("b.7z.001", 20), file("c.txt")], 0), LIMITS);
   assert.deepEqual(plan.counts, { subtitle: 0, font: 0, archive: 2 });
   assert.deepEqual(
     plan.skip.map((e) => e.name),
