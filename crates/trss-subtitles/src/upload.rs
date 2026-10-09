@@ -285,7 +285,7 @@ pub fn judge(path: &Path, budget: &mut u64) -> Verdict {
         return Verdict::Drop("파일이 비어 있어요".to_owned());
     }
     if len > MAX_FILE_BYTES {
-        return Verdict::Drop(format!("{}MiB를 넘어요", MAX_FILE_BYTES >> 20));
+        return Verdict::Drop(format!("{} MB를 넘어요", MAX_FILE_BYTES >> 20));
     }
     let mut head = Vec::with_capacity(HEAD);
     if let Err(e) = (&mut file).take(HEAD as u64).read_to_end(&mut head) {
@@ -765,7 +765,7 @@ mod tests {
             .set_len(MAX_FILE_BYTES + 1)
             .unwrap();
         assert!(
-            matches!(judge(&path, &mut INFLATE_BUDGET.clone()), Verdict::Drop(reason) if reason.contains("200MiB"))
+            matches!(judge(&path, &mut INFLATE_BUDGET.clone()), Verdict::Drop(reason) if reason.contains("200 MB"))
         );
     }
 

@@ -46,7 +46,7 @@ impl Rejected {
         match self {
             Rejected::Empty => "빈 파일이에요.".to_owned(),
             Rejected::TooLarge => format!(
-                "{}MB보다 큰 이미지는 받지 않아요.",
+                "{} MB보다 큰 이미지는 받지 않아요.",
                 MAX_IMAGE_BYTES / (1024 * 1024)
             ),
             Rejected::NotImage => {

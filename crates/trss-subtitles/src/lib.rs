@@ -452,10 +452,10 @@ pub struct Fetch {
 /// How much of a local file one piece holds.
 const LOCAL_PIECE: usize = 64 * 1024;
 
-/// `200MiB`, or a smaller limit in bytes.
+/// `200 MB`, or a smaller limit in bytes.
 pub(crate) fn size_limit_text(bytes: u64) -> String {
     match bytes % (1 << 20) {
-        0 => format!("{}MiB", bytes >> 20),
+        0 => format!("{} MB", bytes >> 20),
         _ => format!("{bytes}바이트"),
     }
 }

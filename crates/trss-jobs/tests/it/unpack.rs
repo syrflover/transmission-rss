@@ -1304,11 +1304,11 @@ async fn bombs_and_a_password_fail_alone_and_the_next_job_goes_on() {
     );
     assert_eq!(
         error("dict.xz").as_deref(),
-        Some("사전 크기가 64MiB를 넘어요")
+        Some("사전 크기가 64 MB를 넘어요")
     );
     assert_eq!(
         error("dict.rar").as_deref(),
-        Some("사전 크기가 64MiB를 넘어요")
+        Some("사전 크기가 64 MB를 넘어요")
     );
     assert_eq!(error("password.zip").as_deref(), Some("암호가 걸려 있어요"));
     assert_eq!(error("good.rar"), None);

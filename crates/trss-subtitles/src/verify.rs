@@ -124,7 +124,7 @@ pub fn check_within(path: &Path, name: &str, budget: &mut u64) -> Result<Format,
     let len = file.metadata().map_err(unreadable)?.len();
     if len > MAX_FILE_BYTES {
         return Err(not_a_file(format!(
-            "받은 파일이 {}MiB를 넘어 파일로 받지 않아요",
+            "받은 파일이 {} MB를 넘어 파일로 받지 않아요",
             MAX_FILE_BYTES >> 20
         )));
     }
@@ -518,7 +518,7 @@ mod tests {
         file.set_len(MAX_FILE_BYTES + 1).unwrap();
         let failure = check(&path, "big.srt").unwrap_err();
         assert_eq!(failure.kind, FailureKind::NotAFile);
-        assert!(failure.reason.contains("200MiB"));
+        assert!(failure.reason.contains("200 MB"));
     }
 
     #[test]

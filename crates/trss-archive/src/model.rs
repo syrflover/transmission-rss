@@ -144,7 +144,7 @@ impl ExtractError {
 /// What is said of the child running into its address-space limit, whether it
 /// says so itself or the parent sees it abort. The 256 MiB are
 /// `crate::child`'s `ADDRESS_SPACE`.
-pub(crate) const MEMORY_LIMIT: &str = "압축을 풀다가 메모리 한도(256MiB)에 닿았어요";
+pub(crate) const MEMORY_LIMIT: &str = "압축을 풀다가 메모리 한도(256 MB)에 닿았어요";
 
 /// How long a path or a detail may be in a message.
 const SHOWN: usize = 200;
@@ -170,11 +170,11 @@ impl fmt::Display for Refusal {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Refusal::TooManyMembers { limit } => write!(f, "멤버가 {limit}개를 넘어요"),
-            Refusal::TooLarge { limit } => write!(f, "풀린 크기가 {}MiB를 넘어요", limit >> 20),
+            Refusal::TooLarge { limit } => write!(f, "풀린 크기가 {} MB를 넘어요", limit >> 20),
             Refusal::MemberTooLarge { path, limit } => {
                 write!(
                     f,
-                    "{}: 멤버 하나가 {}MiB를 넘어요",
+                    "{}: 멤버 하나가 {} MB를 넘어요",
                     shown(path),
                     limit >> 20
                 )
@@ -196,7 +196,7 @@ impl fmt::Display for Refusal {
                 write!(f, "{}: 같은 경로의 멤버가 여럿이에요", shown(path))
             }
             Refusal::Encrypted => f.write_str("암호가 걸려 있어요"),
-            Refusal::Dictionary { limit } => write!(f, "사전 크기가 {}MiB를 넘어요", limit >> 20),
+            Refusal::Dictionary { limit } => write!(f, "사전 크기가 {} MB를 넘어요", limit >> 20),
             Refusal::MissingVolume => f.write_str("나뉜 압축 파일의 조각이 모자라요"),
             Refusal::Unsupported { what } => {
                 write!(f, "지원하지 않는 형식이에요: {}", shown(what))
@@ -247,7 +247,7 @@ mod tests {
     #[test]
     fn the_memory_message_names_the_limit_of_the_child() {
         assert_eq!(crate::child::ADDRESS_SPACE, 256 << 20);
-        assert!(MEMORY_LIMIT.contains("256MiB"));
+        assert!(MEMORY_LIMIT.contains("256 MB"));
     }
 
     #[test]
@@ -258,11 +258,11 @@ mod tests {
                 limit: 64 << 20
             }
             .to_string(),
-            "x: 멤버 하나가 64MiB를 넘어요"
+            "x: 멤버 하나가 64 MB를 넘어요"
         );
         assert_eq!(
             Refusal::Dictionary { limit: 64 << 20 }.to_string(),
-            "사전 크기가 64MiB를 넘어요"
+            "사전 크기가 64 MB를 넘어요"
         );
     }
 }

@@ -169,7 +169,7 @@ async fn an_upload_is_judged_by_its_bytes_not_its_name_or_type() {
     big.resize(MAX_IMAGE_BYTES + 1, 0);
     let (status, refused) = upload(&env, version, big, "application/octet-stream").await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
-    assert!(refused["message"].as_str().unwrap().contains("10MB"));
+    assert!(refused["message"].as_str().unwrap().contains("10 MB"));
     let (_, now) = json_call(&env.state, Method::GET, &base(&env), None).await;
     assert_eq!(now, body);
 

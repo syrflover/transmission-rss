@@ -173,7 +173,7 @@ fn unreadable() -> ApiError {
 
 fn too_slow_rate(limits: &Limits) -> ApiError {
     ApiError::invalid(format!(
-        "올리는 속도가 너무 느려서 멈췄어요. 평균 {}KiB/초 이상이어야 해요. 연결을 확인하고 다시 올려 주세요.",
+        "올리는 속도가 너무 느려서 멈췄어요. 평균 {} KB/초 이상이어야 해요. 연결을 확인하고 다시 올려 주세요.",
         (limits.min_rate >> 10).max(1)
     ))
 }
