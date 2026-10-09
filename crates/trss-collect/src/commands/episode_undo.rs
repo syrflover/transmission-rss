@@ -136,7 +136,10 @@ use crate::{
     revisions::{episode_name, owner_of, same_folder, Owner},
     rss::save_path,
     store::{
-        channels::{ChannelStore, NewUndoFile, Rule, UndoBegun, UndoFileState, REVISION_UNDER_WAY},
+        channels::{
+            ChannelError, ChannelStore, NewUndoFile, Rule, UndoBegun, UndoFileState,
+            REVISION_UNDER_WAY,
+        },
         history::HistoryStore,
     },
 };
@@ -218,6 +221,67 @@ impl EpisodeUndo {
     }
 }
 
+/// What an `episode_undo` request is for, as the rule stands now: what the
+/// web checks before it accepts the request and what [`run`] decides again
+/// when the worker gets to it ([`standing`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Standing {
+    /// The rule is gone.
+    RuleGone,
+    /// The offset is the automatic one asked for, and `to` is the value it
+    /// replaced: a new undo of the rule as it is.
+    New { rule: Rule, to: i64 },
+    /// The value is back already and an undo of the value asked for has files
+    /// left: `earlier` is carried on.
+    CarryOn(crate::store::channels::EpisodeUndo),
+    /// The offset is not the automatic one asked for (typed, changed since,
+    /// or an undo of another value), and no undo of that value has files
+    /// left.
+    Changed,
+    /// The offset is the automatic one asked for, but the value it replaced
+    /// is not known.
+    PreviousUnknown,
+}
+
+/// What the request `payload` is for now, in the order the rule decides it:
+/// a rule that is not automatic carries on the unfinished undo of the same
+/// value, whatever its offset is now; an automatic one is undone only when
+/// its offset is the value asked for and the value it replaced is known.
+pub async fn standing(
+    channels: &ChannelStore,
+    payload: &EpisodeUndo,
+) -> Result<Standing, ChannelError> {
+    let Some(rule) = channels.get_rule(&payload.rule_id).await? else {
+        return Ok(Standing::RuleGone);
+    };
+    if !rule.episode_auto {
+        // The value is back already: an undo of it with files left
+        // (`이어서 되돌리기`) is carried on.
+        return Ok(
+            match channels
+                .unfinished_episode_undo(&rule.id)
+                .await?
+                .filter(|undo| undo.from == payload.episode)
+            {
+                Some(earlier) => Standing::CarryOn(earlier),
+                None => Standing::Changed,
+            },
+        );
+    }
+    if rule.episode != payload.episode {
+        return Ok(Standing::Changed);
+    }
+    let previous = channels
+        .episode_marks(vec![rule.id.clone()])
+        .await?
+        .remove(&rule.id)
+        .and_then(|mark| mark.previous);
+    Ok(match previous {
+        Some(to) => Standing::New { rule, to },
+        None => Standing::PreviousUnknown,
+    })
+}
+
 /// How an executed command ended.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Finished {
@@ -243,28 +307,16 @@ fn transmission(err: impl std::fmt::Display) -> Retry {
     Retry::Transmission(err.to_string())
 }
 
-/// Plans and begins a new undo of the automatic value `from` of `rule`:
-/// the undo as begun, or how the command ends without one.
+/// Plans and begins a new undo of the automatic value `from` of `rule`, which
+/// puts `to` back: the undo as begun, or how the command ends without one.
 async fn begin(
     ctx: &UndoContext,
     command: &Command,
     rule: &Rule,
     from: i64,
+    to: i64,
     clock: &Clock,
 ) -> Result<Result<crate::store::channels::EpisodeUndo, Finished>, Retry> {
-    if rule.episode != from {
-        return Ok(Err(failed(RULE_CHANGED)));
-    }
-    let marks = ctx
-        .channels
-        .episode_marks(vec![rule.id.clone()])
-        .await
-        .map_err(store)?;
-    let Some(to) = marks.get(&rule.id).and_then(|m| m.previous) else {
-        return Ok(Err(failed(
-            "앱이 정하기 전 값을 몰라서 되돌릴 수 없어요. 회차 변환을 직접 적어 주세요.",
-        )));
-    };
     let Some(collect) = ctx.settings.collection().await.map_err(store)? else {
         return Ok(Err(failed(NO_COLLECT_FOLDER)));
     };
@@ -410,35 +462,24 @@ pub async fn run(ctx: &UndoContext, command: &Command, clock: &Clock) -> Result<
         // Begun by an earlier start of this command.
         Some(undo) => undo,
         None => {
-            let Some(rule) = ctx
-                .channels
-                .get_rule(&payload.rule_id)
-                .await
-                .map_err(store)?
-            else {
-                return Ok(failed("규칙을 찾지 못했어요. 삭제됐을 수 있어요."));
-            };
-            let begun = if rule.episode_auto {
+            let begun = match standing(&ctx.channels, &payload).await.map_err(store)? {
+                Standing::RuleGone => {
+                    return Ok(failed("규칙을 찾지 못했어요. 삭제됐을 수 있어요."));
+                }
                 // A new undo of the rule as it is.
-                begin(ctx, command, &rule, payload.episode, clock).await?
-            } else {
-                // The value is back already: an undo of it with files left
-                // (`이어서 되돌리기`) is carried on.
-                match ctx
+                Standing::New { rule, to } => {
+                    begin(ctx, command, &rule, payload.episode, to, clock).await?
+                }
+                Standing::CarryOn(earlier) => Ok(ctx
                     .channels
-                    .unfinished_episode_undo(&rule.id)
+                    .adopt_episode_undo(&earlier.command_id, &command.id)
                     .await
                     .map_err(store)?
-                    .filter(|undo| undo.from == payload.episode)
-                {
-                    Some(earlier) => Ok(ctx
-                        .channels
-                        .adopt_episode_undo(&earlier.command_id, &command.id)
-                        .await
-                        .map_err(store)?
-                        .unwrap_or(earlier)),
-                    None => Err(failed(RULE_CHANGED)),
-                }
+                    .unwrap_or(earlier)),
+                Standing::Changed => Err(failed(RULE_CHANGED)),
+                Standing::PreviousUnknown => Err(failed(
+                    "앱이 정하기 전 값을 몰라서 되돌릴 수 없어요. 회차 변환을 직접 적어 주세요.",
+                )),
             };
             match begun {
                 Ok(undo) => undo,
@@ -1073,5 +1114,7 @@ mod fixtures;
 mod renaming_tests;
 #[cfg(test)]
 mod rows_tests;
+#[cfg(test)]
+mod standing_tests;
 #[cfg(test)]
 mod waiting_tests;

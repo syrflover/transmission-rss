@@ -483,39 +483,21 @@ async fn check_receive_past(
 }
 
 /// The rule's offset must be the automatic one the request names, with the
-/// value it replaced known.
+/// value it replaced known: the worker decides it the same way
+/// ([`episode_undo::standing`]).
 async fn check_episode_undo(
     payload: &episode_undo::EpisodeUndo,
     state: &AppState,
 ) -> Result<(), ApiError> {
-    let rule = state
-        .channels
-        .get_rule(&payload.rule_id)
-        .await?
-        .ok_or_else(|| ApiError::not_found("규칙을 찾지 못했어요. 삭제됐을 수 있어요."))?;
-    // The value is back already: an undo of it with files left is carried on
-    // (`이어서 되돌리기`), whatever the rule's offset is now.
-    if !rule.episode_auto
-        && state
-            .channels
-            .unfinished_episode_undo(&rule.id)
-            .await?
-            .is_some_and(|undo| undo.from == payload.episode)
-    {
-        return Ok(());
+    match episode_undo::standing(&state.channels, payload).await? {
+        episode_undo::Standing::RuleGone => Err(ApiError::not_found(
+            "규칙을 찾지 못했어요. 삭제됐을 수 있어요.",
+        )),
+        episode_undo::Standing::New { .. } | episode_undo::Standing::CarryOn(_) => Ok(()),
+        episode_undo::Standing::Changed | episode_undo::Standing::PreviousUnknown => Err(
+            ApiError::invalid("되돌릴 자동 회차 변환이 없어요. 화면을 새로고침해 주세요."),
+        ),
     }
-    let previous = state
-        .channels
-        .episode_marks(vec![rule.id.clone()])
-        .await?
-        .remove(&rule.id)
-        .and_then(|mark| mark.previous);
-    if !rule.episode_auto || rule.episode != payload.episode || previous.is_none() {
-        return Err(ApiError::invalid(
-            "되돌릴 자동 회차 변환이 없어요. 화면을 새로고침해 주세요.",
-        ));
-    }
-    Ok(())
 }
 
 /// The watch folder must be registered.
