@@ -2187,6 +2187,15 @@ async fn a_plan_made_again_after_a_change_has_a_comparison_of_its_own() {
     assert!(lines_of(&s, &job, &v.plan).await.is_some());
     // The first plan's lines are not another job's or plan's to read.
     assert_eq!(lines_of(&s, "another", &v.plan).await, None);
+    // Nor is a plan the job has none of.
+    assert_eq!(
+        s.store
+            .place
+            .replacement_lines(&job, "no-plan")
+            .await
+            .unwrap(),
+        None
+    );
 }
 
 #[tokio::test]

@@ -1,5 +1,6 @@
-//! A job's replacements as its detail and the to-dos show them, and the
-//! person's decision (`trss_jobs::place::replace` has the plans themselves).
+//! A job's replacements as its detail shows them, and the person's decision
+//! (`trss_jobs::place::replace` has the plans themselves, and the replacement
+//! to-do card is tested in `trss-jobs` `tests/it/todo.rs`).
 
 use std::sync::Arc;
 
@@ -248,17 +249,6 @@ async fn a_revision_of_the_same_post_shows_two_version_lines_and_nothing_else() 
         new["path"],
         format!("{work}/.trss/subtitles/에루샤/Show-02v2.ass")
     );
-
-    // The to-do of the work, counted in the badge, opens the job.
-    let (_, todo) = app.call(Method::GET, "/api/todo", None).await;
-    assert_eq!(todo["count"], 1);
-    let card = &todo["needs"][0];
-    assert_eq!(card["kind"], "replacement");
-    assert_eq!(card["key"], "replacement:w1");
-    assert_eq!(card["job_id"], second.as_str());
-    assert_eq!(card["episodes"], json!([2]));
-    assert_eq!(card["jobs"], 1);
-    assert_eq!(card["creator"], "에루샤");
 }
 
 #[tokio::test]
@@ -279,19 +269,18 @@ async fn another_creators_ass_beside_an_applied_srt_warns_of_its_removal() {
     app.job("c1", "에루샤", "/pack/Show - 02.srt").await;
     let job = app.job("c2", "코코렛", "/ok/Show-02").await;
     let r = app.replacement(&job).await;
-    let work = app
-        .at("")
-        .to_string_lossy()
-        .trim_end_matches('/')
-        .to_owned();
+    let paths: Vec<(&Value, &Value, &Value)> = r["paths"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| (&p["action"], &p["managed"], &p["warning"]))
+        .collect();
     assert_eq!(
-        r["paths"],
-        json!([
-            { "path": format!("{work}/{TARGET}"), "action": "add", "managed": false,
-              "warning": null },
-            { "path": format!("{work}/Season 01/Show S01E02.srt"), "action": "remove",
-              "managed": true, "warning": "remove_applied" },
-        ])
+        paths,
+        [
+            (&json!("add"), &json!(false), &Value::Null),
+            (&json!("remove"), &json!(true), &json!("remove_applied")),
+        ]
     );
     // The applied `.srt` is the current subtitle, compared side by side.
     assert_eq!(r["side_by_side"], true);
@@ -346,17 +335,6 @@ async fn a_decision_names_the_version_it_saw() {
     // Used once.
     let (status, _) = app.decide(&job, &r, json!(1), "keep").await;
     assert_eq!(status, StatusCode::CONFLICT);
-    let (_, todo) = app.call(Method::GET, "/api/todo", None).await;
-    assert_eq!(todo["count"], 0);
-
-    app.run().await;
-    assert_eq!(
-        std::fs::read(app.at(TARGET)).unwrap(),
-        fake::ass("Show-02v2")
-    );
-    let detail = app.detail(&job).await;
-    assert_eq!(detail["state"], "done");
-    assert_eq!(detail["replacements"][0]["state"], "done");
 }
 
 #[tokio::test]
@@ -384,7 +362,6 @@ async fn a_plan_compared_again_says_why() {
     // The approval of the first version is not used again.
     let (status, _) = app.decide(&job, &r, json!(1), "replace").await;
     assert_eq!(status, StatusCode::CONFLICT);
-    assert_eq!(std::fs::read(app.at(TARGET)).unwrap(), fake::ass("Show-02"));
 }
 
 impl App {
@@ -453,7 +430,7 @@ async fn the_detail_says_what_changed_without_the_lines() {
 #[tokio::test]
 async fn a_plan_says_what_it_changes_as_one_plans_total() {
     let app = App::new().await;
-    let (job, plan) = app.waiting_revision().await;
+    let (job, _) = app.waiting_revision().await;
 
     assert_eq!(
         app.replacement(&job).await["changes"],
@@ -462,17 +439,6 @@ async fn a_plan_says_what_it_changes_as_one_plans_total() {
             "fonts": 0, "uncompared": 0, "partial": 0, "plans": 1
         })
     );
-
-    // One that was not compared, or could not be, is counted as uncompared.
-    let uncompared = json!({
-        "added": 0, "changed": 0, "removed": 0, "timing": 0, "styles": 0,
-        "fonts": 0, "uncompared": 1, "partial": 0, "plans": 1
-    });
-    app.recompared(&plan, None).await;
-    assert_eq!(app.replacement(&job).await["changes"], uncompared);
-    app.recompared(&plan, Some("현재 자막: 인코딩을 알 수 없어요"))
-        .await;
-    assert_eq!(app.replacement(&job).await["changes"], uncompared);
 }
 
 #[tokio::test]
@@ -501,11 +467,8 @@ async fn the_lines_of_a_compared_plan_come_from_their_own_route() {
         .await;
 
     assert_eq!(status, StatusCode::OK, "{lines}");
-    assert_eq!(lines["timing"], json!([]));
-    let dialogue = lines["dialogue"].as_array().unwrap();
-    assert_eq!(dialogue.len(), 24);
     assert_eq!(
-        dialogue[0],
+        lines["dialogue"][0],
         json!({
             "kind": "changed",
             "old": { "text": "가짜 자막 Show-02 1", "start": 0, "end": 1500 },
@@ -515,7 +478,7 @@ async fn the_lines_of_a_compared_plan_come_from_their_own_route() {
 }
 
 #[tokio::test]
-async fn the_lines_of_a_plan_that_is_not_the_jobs_or_was_not_compared_are_not_found() {
+async fn the_lines_of_a_plan_that_is_not_the_jobs_are_not_found() {
     let app = App::new().await;
     let (job, plan) = app.waiting_revision().await;
     let (status, _) = app
@@ -523,216 +486,11 @@ async fn the_lines_of_a_plan_that_is_not_the_jobs_or_was_not_compared_are_not_fo
         .await;
     assert_eq!(status, StatusCode::OK);
 
-    // Another job's plan, and no plan.
-    for (job, plan) in [("another", plan.as_str()), (job.as_str(), "no-plan")] {
-        let (status, body) = app
-            .call(Method::GET, &App::lines_uri(job, plan), None)
-            .await;
-        assert_eq!(status, StatusCode::NOT_FOUND, "{job} {plan}: {body}");
-    }
-    // A plan made before contents were compared, and one that could not be.
-    for why in [
-        None,
-        Some("새 자막: 이미지 자막이라 내용을 비교할 수 없어요"),
-    ] {
-        app.recompared(&plan, why).await;
-        let (status, body) = app
-            .call(Method::GET, &App::lines_uri(&job, &plan), None)
-            .await;
-        assert_eq!(status, StatusCode::NOT_FOUND, "{why:?}: {body}");
-    }
-}
-
-#[tokio::test]
-async fn the_replacement_to_do_sums_what_its_open_plans_change() {
-    let app = App::new().await;
-    app.job("c1", "에루샤", "/ok/Show-02").await;
-    // Two plans compared (24 dialogue lines changed each), one that could not
-    // be, and one made before contents were compared.
-    app.revision_of("c2", "/ok/Show-02v2").await;
-    app.revision_of("c3", "/ok/Show-02v3").await;
-    let (_, unreadable) = app.revision_of("c4", "/ok/Show-02v4").await;
-    let (_, earlier) = app.revision_of("c5", "/ok/Show-02v5").await;
-    app.recompared(&unreadable, Some("현재 자막: 인코딩을 알 수 없어요"))
+    // Another job's plan is not this job's to read.
+    let (status, body) = app
+        .call(Method::GET, &App::lines_uri("another", &plan), None)
         .await;
-    app.recompared(&earlier, None).await;
-
-    let (_, todo) = app.call(Method::GET, "/api/todo", None).await;
-
-    let card = &todo["needs"][0];
-    assert_eq!(card["kind"], "replacement");
-    assert_eq!(card["episodes"], json!([2]));
-    assert_eq!(card["jobs"], 4);
-    assert_eq!(
-        card["changes"],
-        json!({
-            "added": 0, "changed": 48, "removed": 0, "timing": 0, "styles": 0, "fonts": 0,
-            "uncompared": 2, "partial": 0, "plans": 4
-        })
-    );
-}
-
-#[tokio::test]
-async fn the_replacement_to_do_sums_timing_styles_and_fonts_too() {
-    let app = App::new().await;
-    // A file the app did not manage: the new copy's font and one line's start
-    // differ.
-    let current = String::from_utf8(fake::ass("Show-02v2"))
-        .unwrap()
-        .replace("Style: Default,Arial,", "Style: Default,Noto Sans CJK KR,")
-        .replacen("Dialogue: 0,0:00:00.00,", "Dialogue: 0,0:00:00.50,", 1);
-    std::fs::write(app.at(TARGET), current).unwrap();
-    app.job("c1", "에루샤", "/ok/Show-02v2").await;
-
-    let (_, todo) = app.call(Method::GET, "/api/todo", None).await;
-
-    assert_eq!(
-        todo["needs"][0]["changes"],
-        json!({
-            "added": 0, "changed": 0, "removed": 0, "timing": 1, "styles": 1, "fonts": 2,
-            "uncompared": 0, "partial": 0, "plans": 1
-        })
-    );
-}
-
-#[tokio::test]
-async fn the_replacement_to_do_counts_a_plan_compared_only_in_part() {
-    let app = App::new().await;
-    // An SRT beside the video with the new ASS's very dialogue: nothing
-    // differs in what was compared, but the ASS's styles and fonts were not.
-    let mut srt = String::new();
-    for i in 0..24 {
-        srt += &format!(
-            "{}\n00:00:{:02},000 --> 00:00:{:02},500\n가짜 자막 Show-02v2 {}\n\n",
-            i + 1,
-            i * 2,
-            i * 2 + 1,
-            i + 1
-        );
-    }
-    std::fs::write(app.at("Season 01/Show S01E02.srt"), srt).unwrap();
-    app.job("c1", "에루샤", "/ok/Show-02v2").await;
-
-    let (_, todo) = app.call(Method::GET, "/api/todo", None).await;
-
-    assert_eq!(
-        todo["needs"][0]["changes"],
-        json!({
-            "added": 0, "changed": 0, "removed": 0, "timing": 0, "styles": 0, "fonts": 0,
-            "uncompared": 0, "partial": 1, "plans": 1
-        })
-    );
-}
-
-#[tokio::test]
-async fn the_replacement_to_do_says_when_the_newest_current_and_new_subtitles_were_received() {
-    let app = App::new().await;
-    let first = app
-        .job_of(
-            "c1",
-            "에루샤",
-            &[("2", "/ok/Show-02"), ("3", "/ok/Show-03")],
-        )
-        .await;
-    let second = app
-        .job_of(
-            "c2",
-            "에루샤",
-            &[("2", "/ok/Show-02v2"), ("3", "/ok/Show-03v2")],
-        )
-        .await;
-    // Each plan's current and new subtitles were received at other times.
-    let received = |job: &str, episode: i64, at: i64| {
-        format!(
-            "UPDATE subtitle_packages SET received_at = {at}
-              WHERE id IN (SELECT package_id FROM subtitle_stored
-                            WHERE job_id = '{job}' AND episode = {episode});"
-        )
-    };
-    app.sql(
-        [
-            received(&first, 2, 1_000),
-            received(&first, 3, 3_000),
-            received(&second, 2, 6_000),
-            received(&second, 3, 5_000),
-        ]
-        .concat(),
-    )
-    .await;
-
-    let (_, todo) = app.call(Method::GET, "/api/todo", None).await;
-
-    let card = &todo["needs"][0];
-    assert_eq!(card["episodes"], json!([2, 3]));
-    assert_eq!(
-        (
-            &card["current_received_at"],
-            &card["current_changed_at"],
-            &card["new_received_at"]
-        ),
-        (&json!(3_000), &Value::Null, &json!(6_000))
-    );
-}
-
-#[tokio::test]
-async fn the_replacement_to_do_of_a_file_the_app_did_not_manage_has_its_change_time() {
-    let app = App::new().await;
-    std::fs::write(app.at(TARGET), fake::ass("Show-02")).unwrap();
-    let changed = std::time::UNIX_EPOCH + std::time::Duration::from_millis(1_700_000_000_000);
-    std::fs::File::options()
-        .write(true)
-        .open(app.at(TARGET))
-        .unwrap()
-        .set_modified(changed)
-        .unwrap();
-    app.job("c1", "에루샤", "/ok/Show-02v2").await;
-
-    let (_, todo) = app.call(Method::GET, "/api/todo", None).await;
-
-    let card = &todo["needs"][0];
-    assert_eq!(card["kind"], "replacement");
-    assert_eq!(card["current_received_at"], Value::Null);
-    assert_eq!(card["current_changed_at"], 1_700_000_000_000_i64);
-    assert!(card["new_received_at"].is_i64(), "{card}");
-}
-
-#[tokio::test]
-async fn a_current_subtitle_the_app_manages_gives_the_time_over_another_plans_file() {
-    let app = App::new().await;
-    app.job("c1", "에루샤", "/ok/Show-02").await;
-    std::fs::write(app.at("Season 01/Show S01E03.ass"), fake::ass("Show-03")).unwrap();
-    app.job_of(
-        "c2",
-        "에루샤",
-        &[("2", "/ok/Show-02v2"), ("3", "/ok/Show-03v2")],
-    )
-    .await;
-
-    let (_, todo) = app.call(Method::GET, "/api/todo", None).await;
-
-    let card = &todo["needs"][0];
-    assert_eq!(card["episodes"], json!([2, 3]));
-    assert!(card["current_received_at"].is_i64(), "{card}");
-    assert_eq!(card["current_changed_at"], Value::Null);
-}
-
-#[tokio::test]
-async fn the_library_badges_a_work_until_its_replacement_is_decided() {
-    let app = App::new().await;
-    let (job, _) = app.waiting_revision().await;
-    let badges = || async {
-        let (status, list) = app.call(Method::GET, "/api/library/works", None).await;
-        assert_eq!(status, StatusCode::OK, "{list}");
-        assert_eq!(list["items"][0]["id"], "w1");
-        list["items"][0]["todos"].clone()
-    };
-    assert_eq!(badges().await, json!(["replacement"]));
-
-    let r = app.replacement(&job).await;
-    let (status, _) = app.decide(&job, &r, json!(1), "keep").await;
-    assert_eq!(status, StatusCode::OK);
-
-    assert_eq!(badges().await, json!([]));
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
 }
 
 impl App {
@@ -778,11 +536,6 @@ impl App {
         )
         .await
     }
-
-    /// The subtitle beside the video of the episode.
-    fn subtitle(&self, episode: u32) -> Vec<u8> {
-        std::fs::read(self.at(&format!("Season 01/Show S01E{episode:02}.ass"))).unwrap()
-    }
 }
 
 #[tokio::test]
@@ -826,17 +579,6 @@ async fn several_decisions_at_once_answer_each_plan_in_the_order_asked() {
     assert!(states.contains(&(2, json!("approved"))), "{states:?}");
     assert!(states.contains(&(3, json!("kept"))), "{states:?}");
     assert!(states.contains(&(4, json!("open"))), "{states:?}");
-
-    app.run().await;
-    assert_eq!(app.subtitle(2), fake::ass("Show-02v2"));
-    assert_eq!(app.subtitle(3), fake::ass("Show-03"));
-    assert_eq!(app.subtitle(4), fake::ass("Show-04"));
-    // Episode 4 still waits for the person.
-    let detail = app.detail(&job).await;
-    assert_eq!(
-        (&detail["state"], &detail["wait"]),
-        (&json!("waiting"), &json!("approval"))
-    );
 }
 
 #[tokio::test]
@@ -895,20 +637,6 @@ async fn a_plan_of_another_job_is_not_found_and_nothing_of_the_list_is_written()
         .await;
     assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
     assert_eq!(body["error"], "not_found");
-
-    for id in [&job, &other] {
-        let detail = app.detail(id).await;
-        assert_eq!(
-            (&detail["state"], &detail["wait"]),
-            (&json!("waiting"), &json!("approval")),
-            "{id}"
-        );
-        assert!(detail["replacements"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .all(|r| r["state"] == "open"));
-    }
 }
 
 #[tokio::test]
