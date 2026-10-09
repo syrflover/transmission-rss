@@ -1,6 +1,7 @@
 import { Link } from "react-router-dom";
 
 import { Button } from "@/components/ui/button";
+import { quarterName } from "@/lib/quarter";
 import { ago, dateTime } from "@/lib/time";
 import { cn } from "@/lib/utils";
 import { workPath } from "@/screens/library/api";
@@ -73,7 +74,7 @@ export function RuleSummary({
   const season = rule?.season ?? null;
   const lastReceivedAt = rule?.last_received_at ?? null;
 
-  const quarter = subscription ? `${subscription.quarter.year}년 ${subscription.quarter.number}분기` : null;
+  const quarter = subscription ? quarterName(subscription.quarter) : null;
   const broadcast = quarter ? (anime ? `${airing(anime)} · ${quarter}` : quarter) : "미정";
 
   return (

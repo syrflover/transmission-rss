@@ -1,7 +1,5 @@
 import { weekdayLongFromMonday } from "@/lib/weekday";
 
-import type { Quarter } from "./api";
-
 /** The name of a weekday counted from Monday (0); nothing for a number outside 0–6. */
 export const weekdayName = (weekday: number) => weekdayLongFromMonday(weekday) ?? "";
 
@@ -11,5 +9,3 @@ export function monthDay(date: string): string {
   return `${month}월 ${day}일`;
 }
 
-/** "2026년 4분기". */
-export const quarterName = (q: Quarter) => `${q.year}년 ${q.number}분기`;

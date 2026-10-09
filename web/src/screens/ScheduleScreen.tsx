@@ -1,12 +1,13 @@
 import { useEffect, useState } from "react";
 
 import { useCached } from "@/lib/cached";
+import { quarterName } from "@/lib/quarter";
 import { clock } from "@/lib/time";
 
 import { EmptyState, ScreenFrame } from "./ScreenFrame";
 import { Checklist } from "./schedule/Checklist";
 import { DayRow, TODAY_ID } from "./schedule/DayRow";
-import { monthDay, quarterName } from "./schedule/format";
+import { monthDay } from "./schedule/format";
 import { SideColumn, SummaryLine } from "./schedule/Side";
 import { BTN } from "./settings/parts";
 import { loadHome, setSkipped, WEEK_KEY, type FirstRun, type Home, type Step, type Week } from "./schedule/api";

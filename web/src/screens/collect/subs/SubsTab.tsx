@@ -2,6 +2,7 @@ import { Link, Route, Routes } from "react-router-dom";
 
 import { Button } from "@/components/ui/button";
 import { useCached } from "@/lib/cached";
+import { quarterName } from "@/lib/quarter";
 
 import { EmptyState } from "../../ScreenFrame";
 import { ArchiveSuggestions } from "../archive/ArchiveSuggestions";
@@ -32,10 +33,6 @@ export function SubsTab() {
   );
 }
 
-function quarterLabel(quarter: SubscriptionList["quarter"]): string {
-  return `${quarter.year}년 ${quarter.number}분기`;
-}
-
 function SubscriptionsView() {
   const list = useCached<SubscriptionList>(KEYS.subscriptions, listSubscriptions, "구독을 불러오지 못했어요.");
   const data = list.data;
@@ -46,7 +43,7 @@ function SubscriptionsView() {
     <div className="flex flex-col gap-4">
       <div className="flex min-h-9 flex-wrap items-center justify-between gap-x-4 gap-y-2.5 max-[720px]:min-h-10">
         <p className="min-w-[220px] flex-1 text-[13px] text-text-muted">
-          {data ? `${quarterLabel(data.quarter)} 구독` : "이번 분기 구독"}
+          {data ? `${quarterName(data.quarter)} 구독` : "이번 분기 구독"}
         </p>
         <Button asChild type="button" variant="ghost" className={btnAction}>
           <Link to="/collect/subs/add">
@@ -84,7 +81,7 @@ function SubscriptionsView() {
       )}
 
       {data !== undefined && now.length > 0 && (
-        <ul className={grid} aria-label={`${quarterLabel(data.quarter)} 구독`}>
+        <ul className={grid} aria-label={`${quarterName(data.quarter)} 구독`}>
           {now.map((item) => (
             <SubscriptionCard key={item.rule_id} item={item} />
           ))}
