@@ -89,7 +89,9 @@ use std::{collections::BTreeMap, path::Path};
 
 use rusqlite::{params, Connection, OptionalExtension};
 use trss_core::{
-    files::{rename_noreplace, rename_noreplace_synced, sync_dir, sync_renamed},
+    files::{
+        create_dir_all_synced, rename_noreplace, rename_noreplace_synced, sync_dir, sync_renamed,
+    },
     Millis,
 };
 use trss_library::mapping::reason::{self, Wording};
@@ -1080,7 +1082,7 @@ impl Placer {
         let (from, to) = (at.clone(), aside_at.clone());
         let renamed = blocking(move || -> std::io::Result<()> {
             if let Some(dir) = to.parent() {
-                std::fs::create_dir_all(dir)?;
+                create_dir_all_synced(dir)?;
             }
             rename_noreplace_synced(&from, &to)
         })

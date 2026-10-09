@@ -100,7 +100,7 @@ use std::{
 
 use trss_core::{
     file_id::same_recorded_file,
-    files::{rename_noreplace, sync_renamed},
+    files::{rename_noreplace, sync_dir, sync_renamed},
 };
 
 use super::{
@@ -1516,6 +1516,12 @@ impl Placer {
                         }
                         files::remove_known(&aside)?;
                         files::remove_known(&protective)?;
+                        // The names stay removed after a power loss.
+                        let (kept_in, copy_in) = (aside.parent(), protective.parent());
+                        let folders = [kept_in, copy_in.filter(|c| Some(*c) != kept_in)];
+                        for folder in folders.into_iter().flatten().filter(|f| f.is_dir()) {
+                            sync_dir(folder)?;
+                        }
                         Ok(true)
                     })
                     .await;
