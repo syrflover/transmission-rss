@@ -91,7 +91,11 @@ use trss_jobs::{
     Finished,
 };
 
-use super::{commands_api::now_millis, ApiError, AppState};
+use super::{
+    commands_api::now_millis,
+    jobs_api::{linked_anime, season_link},
+    ApiError, AppState,
+};
 
 #[cfg(test)]
 mod tests;
@@ -337,33 +341,22 @@ async fn target_of(state: &AppState, head: Head) -> Result<Target, ApiError> {
     if work_id.is_empty() {
         return Err(ApiError::invalid("작품이 빠졌어요."));
     }
-    let link = state
-        .seasons
-        .store
-        .anissia_link(&work_id, season)
-        .await
-        .map_err(|e| match e {
-            trss_library::store::seasons::SeasonError::NotFound => {
-                ApiError::not_found("시즌을 찾지 못했어요. 화면을 새로고침해 주세요.")
-            }
-            e => internal(&e),
-        })?;
+    let link = season_link(state, &work_id, season).await?;
     let wanted = head.creator.filter(|c| !c.is_empty());
     let (source_id, creator) = match wanted {
         None => (None, None),
         Some(source_id) => {
-            let Some(anime_no) = link.anime_no else {
-                return Err(ApiError::invalid(
-                    "이 시즌은 Anissia 작품에 연결돼 있지 않아서 제작자를 고를 수 없어요.",
-                ));
-            };
-            let candidates = state
+            let anime_no = linked_anime(
+                &link,
+                "이 시즌은 Anissia 작품에 연결돼 있지 않아서 제작자를 고를 수 없어요.",
+            )?;
+            match state
                 .anissia_store
-                .candidates(anime_no, Vec::new())
+                .newest_of_creator(anime_no, source_id.clone())
                 .await
-                .map_err(|e| internal(&e))?;
-            match candidates.iter().find(|c| c.source_id == source_id) {
-                Some(found) => (Some(source_id), Some(found.creator.clone())),
+                .map_err(|e| internal(&e))?
+            {
+                Some(found) => (Some(source_id), Some(found.creator)),
                 None => {
                     return Err(ApiError::invalid(
                         "고른 제작자가 이 시즌의 제작자가 아니에요. 화면을 새로고침해 주세요.",

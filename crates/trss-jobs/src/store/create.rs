@@ -4,6 +4,8 @@
 use std::collections::HashSet;
 
 use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
+use serde_json::json;
+use trss_collect::store::anissia::{Candidate, Picked};
 use trss_core::Millis;
 use trss_subtitles::{
     upload::{Archive, Kind},
@@ -42,6 +44,42 @@ pub struct NewJob {
     pub items: Vec<NewItem>,
 }
 
+impl NewJob {
+    /// The job of the candidates a person picked for `work_id`'s `season`, of
+    /// anime `anime_no` ([`trss_collect::store::anissia::AnissiaStore::pick`]),
+    /// asked for by the browser's `command_id`. Its request is the work, the
+    /// season and the candidates' observation IDs in the order picked, in
+    /// canonical JSON.
+    pub fn pick(
+        command_id: String,
+        work_id: String,
+        season: u32,
+        anime_no: i64,
+        picked: &Picked,
+    ) -> NewJob {
+        let observations: Vec<i64> = picked.candidates.iter().map(|c| c.id).collect();
+        let request = json!({
+            "work_id": work_id,
+            "season": season,
+            "candidates": observations,
+        })
+        .to_string();
+        NewJob {
+            command_id,
+            request,
+            origin: "pick".to_owned(),
+            work_id: Some(work_id),
+            season: Some(i64::from(season)),
+            anime_no: Some(anime_no),
+            source_id: Some(picked.source_id.clone()),
+            creator: Some(picked.creator.clone()),
+            revision_of: None,
+            revises_attributed: false,
+            items: picked.candidates.iter().map(NewItem::of).collect(),
+        }
+    }
+}
+
 /// One candidate of a job, as it was picked.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NewItem {
@@ -49,6 +87,18 @@ pub struct NewItem {
     pub episode: String,
     pub post_url: String,
     pub found_at: Millis,
+}
+
+impl NewItem {
+    /// The item that receives the candidate's post.
+    pub fn of(candidate: &Candidate) -> NewItem {
+        NewItem {
+            observation_id: Some(candidate.id),
+            episode: candidate.episode.clone(),
+            post_url: candidate.post_url.clone(),
+            found_at: candidate.first_seen_at,
+        }
+    }
 }
 
 /// The post address of the one item of an upload job: there is no post.
@@ -381,4 +431,79 @@ fn create_upload(c: &mut Connection, up: &NewUpload, now: Millis) -> Result<Crea
     .execute(params![up.id, now, format!("{kept}{dropped_note}")])?;
     tx.commit()?;
     Ok(Created::Created(up.id.clone()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn candidate(id: i64, source_id: &str, episode: &str) -> Candidate {
+        Candidate {
+            id,
+            source_id: source_id.into(),
+            creator: "에루샤".into(),
+            post_url: format!("https://blog.test/{id}"),
+            episode: episode.into(),
+            updated: "2026-10-01 12:00:00".into(),
+            updated_at: Some(1_790_000_000_000),
+            first_seen_at: 1_790_000_100_000 + id,
+            revision: None,
+        }
+    }
+
+    /// The request is what `earlier` compares byte for byte with a repeat of
+    /// the browser's ID, so its text must not change.
+    #[test]
+    fn a_pick_is_one_job_of_the_candidates_in_the_order_picked() {
+        let picked = Picked {
+            source_id: "s1".into(),
+            creator: "에루샤".into(),
+            candidates: vec![candidate(7, "s1", "2"), candidate(3, "s1", "1.5")],
+        };
+
+        let job = NewJob::pick("b1".into(), "w1".into(), 2, 3424, &picked);
+
+        assert_eq!(
+            job,
+            NewJob {
+                command_id: "b1".into(),
+                request: r#"{"candidates":[7,3],"season":2,"work_id":"w1"}"#.into(),
+                origin: "pick".into(),
+                work_id: Some("w1".into()),
+                season: Some(2),
+                anime_no: Some(3424),
+                source_id: Some("s1".into()),
+                creator: Some("에루샤".into()),
+                revision_of: None,
+                revises_attributed: false,
+                items: vec![
+                    NewItem {
+                        observation_id: Some(7),
+                        episode: "2".into(),
+                        post_url: "https://blog.test/7".into(),
+                        found_at: 1_790_000_100_007,
+                    },
+                    NewItem {
+                        observation_id: Some(3),
+                        episode: "1.5".into(),
+                        post_url: "https://blog.test/3".into(),
+                        found_at: 1_790_000_100_003,
+                    },
+                ],
+            }
+        );
+    }
+
+    #[test]
+    fn an_item_takes_the_post_of_its_candidate_and_when_it_was_first_seen() {
+        assert_eq!(
+            NewItem::of(&candidate(5, "s1", "SP")),
+            NewItem {
+                observation_id: Some(5),
+                episode: "SP".into(),
+                post_url: "https://blog.test/5".into(),
+                found_at: 1_790_000_100_005,
+            }
+        );
+    }
 }

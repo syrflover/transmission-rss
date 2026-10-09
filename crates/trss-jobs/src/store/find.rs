@@ -3,6 +3,8 @@
 //! 받기.
 
 use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
+use serde_json::json;
+use trss_collect::store::anissia::Candidate;
 use trss_core::Millis;
 use trss_subtitles::upload::Archive;
 
@@ -27,6 +29,40 @@ pub struct NewFind {
     pub creator: String,
     /// The creator's newest post the app observed for the anime.
     pub post_url: String,
+}
+
+impl NewFind {
+    /// The find job of the creator whose newest observation is `newest`
+    /// ([`trss_collect::store::anissia::AnissiaStore::newest_of_creator`]),
+    /// for `work_id`'s `season` of anime `anime_no`, asked for by the
+    /// browser's `command_id`. Its request is the work, the season and the
+    /// creator's source in canonical JSON.
+    pub fn of(
+        command_id: String,
+        work_id: String,
+        season: u32,
+        anime_no: i64,
+        newest: &Candidate,
+    ) -> NewFind {
+        let request = json!({
+            "find": {
+                "work_id": work_id,
+                "season": season,
+                "creator": newest.source_id,
+            }
+        })
+        .to_string();
+        NewFind {
+            command_id,
+            request,
+            work_id,
+            season: i64::from(season),
+            anime_no,
+            source_id: newest.source_id.clone(),
+            creator: newest.creator.clone(),
+            post_url: newest.post_url.clone(),
+        }
+    }
 }
 
 /// What a find job has received so far: its item, the files it kept and the
@@ -438,4 +474,42 @@ fn received(tx: &Connection, id: &str) -> rusqlite::Result<bool> {
                             WHERE job_id = ?1 AND state <> 'done')",
     )?
     .query_row([id], |r| r.get(0))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The request is what `earlier` compares byte for byte with a repeat of
+    /// the browser's ID, so its text must not change.
+    #[test]
+    fn a_find_job_opens_the_newest_post_of_its_creator() {
+        let newest = Candidate {
+            id: 9,
+            source_id: "s1".into(),
+            creator: "에루샤".into(),
+            post_url: "https://blog.test/9".into(),
+            episode: "4".into(),
+            updated: String::new(),
+            updated_at: None,
+            first_seen_at: 1_790_000_100_000,
+            revision: None,
+        };
+
+        let find = NewFind::of("b1".into(), "w1".into(), 2, 3424, &newest);
+
+        assert_eq!(
+            find,
+            NewFind {
+                command_id: "b1".into(),
+                request: r#"{"find":{"creator":"s1","season":2,"work_id":"w1"}}"#.into(),
+                work_id: "w1".into(),
+                season: 2,
+                anime_no: 3424,
+                source_id: "s1".into(),
+                creator: "에루샤".into(),
+                post_url: "https://blog.test/9".into(),
+            }
+        );
+    }
 }

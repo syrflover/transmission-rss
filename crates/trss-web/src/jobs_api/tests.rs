@@ -9,7 +9,7 @@ use tower::ServiceExt;
 
 use super::*;
 use trss_core::{Db, DbError};
-use trss_jobs::{ItemState, JobRun};
+use trss_jobs::{ItemState, JobRun, NewItem};
 
 const ANIME: i64 = 3424;
 

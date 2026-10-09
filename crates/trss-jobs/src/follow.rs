@@ -606,12 +606,7 @@ impl Follow {
                 creator: Some(candidate.creator.clone()),
                 revision_of,
                 revises_attributed,
-                items: vec![NewItem {
-                    observation_id: Some(candidate.id),
-                    episode: candidate.episode.clone(),
-                    post_url: candidate.post_url.clone(),
-                    found_at: candidate.first_seen_at,
-                }],
+                items: vec![NewItem::of(candidate)],
             };
             // Decided under the mapping read above: a save of the user's between
             // that read and now makes the store refuse the job (the version is

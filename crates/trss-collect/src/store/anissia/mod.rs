@@ -21,7 +21,7 @@ use trss_anissia::Anime;
 
 pub use captions::{
     episode_key, mark_attributed, revision_by_attribution, revision_by_mapping, revision_of,
-    Attributed, Candidate, Line, Observed, Received, Revision,
+    Attributed, Candidate, Line, Observed, PickError, Picked, Received, Revision,
 };
 
 use trss_core::{

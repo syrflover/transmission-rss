@@ -267,6 +267,50 @@ pub fn mark_attributed(
     }
 }
 
+/// The observations of every anime with the creator of each, to be narrowed
+/// by a `WHERE` and read by [`candidate_of`].
+const OBSERVATIONS: &str = "SELECT o.id, o.source_id, s.creator_name, o.post_url, o.episode,
+                                   o.updated, o.updated_at, o.first_seen_at
+                              FROM caption_observations o
+                              JOIN subtitle_sources s ON s.id = o.source_id";
+
+/// A row of [`OBSERVATIONS`], with no revision mark.
+fn candidate_of(r: &rusqlite::Row<'_>) -> rusqlite::Result<Candidate> {
+    Ok(Candidate {
+        id: r.get(0)?,
+        source_id: r.get(1)?,
+        creator: r.get(2)?,
+        post_url: r.get(3)?,
+        episode: r.get(4)?,
+        updated: r.get(5)?,
+        updated_at: r.get(6)?,
+        first_seen_at: r.get(7)?,
+        revision: None,
+    })
+}
+
+/// The candidates a person picked for one job ([`AnissiaStore::pick`]): all of
+/// one creator's source, in the order picked.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Picked {
+    /// The creator's source for the anime.
+    pub source_id: String,
+    pub creator: String,
+    /// At least one.
+    pub candidates: Vec<Candidate>,
+}
+
+/// Why the candidates picked are no [`Picked`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PickError {
+    /// None was picked.
+    Empty,
+    /// One is no observation of the anime.
+    Unknown,
+    /// They are of more than one creator.
+    MixedCreators,
+}
+
 /// Whether an observation says what `line` says. The times are compared as
 /// moments when both are, so the same moment written another way is no change;
 /// otherwise as written.
@@ -386,27 +430,10 @@ impl AnissiaStore {
     ) -> Result<Vec<Candidate>> {
         self.db
             .run(move |c| {
-                let mut stmt = c.prepare_cached(
-                    "SELECT o.id, o.source_id, s.creator_name, o.post_url, o.episode,
-                            o.updated, o.updated_at, o.first_seen_at
-                       FROM caption_observations o
-                       JOIN subtitle_sources s ON s.id = o.source_id
-                      WHERE s.anime_no = ?1
-                      ORDER BY o.id",
-                )?;
-                let rows = stmt.query_map([anime_no], |r| {
-                    Ok(Candidate {
-                        id: r.get(0)?,
-                        source_id: r.get(1)?,
-                        creator: r.get(2)?,
-                        post_url: r.get(3)?,
-                        episode: r.get(4)?,
-                        updated: r.get(5)?,
-                        updated_at: r.get(6)?,
-                        first_seen_at: r.get(7)?,
-                        revision: None,
-                    })
-                })?;
+                let mut stmt = c.prepare_cached(&format!(
+                    "{OBSERVATIONS} WHERE s.anime_no = ?1 ORDER BY o.id"
+                ))?;
+                let rows = stmt.query_map([anime_no], candidate_of)?;
                 let mut out = Vec::new();
                 for row in rows {
                     let mut candidate = row?;
@@ -415,6 +442,67 @@ impl AnissiaStore {
                 }
                 out.sort_by(|a, b| b.sort_at().cmp(&a.sort_at()).then(b.id.cmp(&a.id)));
                 Ok::<_, super::AnissiaStoreError>(out)
+            })
+            .await
+    }
+
+    /// The newest observation (the one made last) of the creator whose source
+    /// is `source_id`, for anime `anime_no`; `None` when the source is no
+    /// source of the anime, or none of its lines was observed yet. Its
+    /// `creator` is the creator's name.
+    pub async fn newest_of_creator(
+        &self,
+        anime_no: i64,
+        source_id: String,
+    ) -> Result<Option<Candidate>> {
+        self.db
+            .run(move |c| {
+                Ok::<_, super::AnissiaStoreError>(
+                    c.prepare_cached(&format!(
+                        "{OBSERVATIONS} WHERE s.anime_no = ?1 AND o.source_id = ?2
+                         ORDER BY o.id DESC LIMIT 1"
+                    ))?
+                    .query_row(params![anime_no, source_id], candidate_of)
+                    .optional()?,
+                )
+            })
+            .await
+    }
+
+    /// The observations `ids` of anime `anime_no`, in the order given, when a
+    /// person picks them for one job: every one is an observation of the
+    /// anime, and all are of one creator's source. The unknown is told first.
+    pub async fn pick(
+        &self,
+        anime_no: i64,
+        ids: Vec<i64>,
+    ) -> Result<std::result::Result<Picked, PickError>> {
+        self.db
+            .run(move |c| {
+                let mut stmt = c.prepare_cached(&format!(
+                    "{OBSERVATIONS} WHERE s.anime_no = ?1 AND o.id = ?2"
+                ))?;
+                let mut candidates = Vec::with_capacity(ids.len());
+                for id in &ids {
+                    match stmt
+                        .query_row(params![anime_no, id], candidate_of)
+                        .optional()?
+                    {
+                        Some(candidate) => candidates.push(candidate),
+                        None => return Ok(Err(PickError::Unknown)),
+                    }
+                }
+                let Some(first) = candidates.first() else {
+                    return Ok(Err(PickError::Empty));
+                };
+                if candidates.iter().any(|c| c.source_id != first.source_id) {
+                    return Ok(Err(PickError::MixedCreators));
+                }
+                Ok::<_, super::AnissiaStoreError>(Ok(Picked {
+                    source_id: first.source_id.clone(),
+                    creator: first.creator.clone(),
+                    candidates,
+                }))
             })
             .await
     }

@@ -186,15 +186,17 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
+use trss_collect::store::anissia::PickError;
 use trss_jobs::{
     place::{
         package::{member, Member},
         unchanged,
     },
     store::{DonePage, FileRow, JobDetail, JobRow, StepRow},
-    AskedFinish, Created, FileState, ItemState, JobState, NewFind, NewItem, NewJob, StepKind, Wait,
-    FIND, RELOCATE, UPLOAD,
+    AskedFinish, Created, FileState, ItemState, JobState, NewFind, NewJob, StepKind, Wait, FIND,
+    RELOCATE, UPLOAD,
 };
+use trss_library::store::seasons::{anissia::AnissiaLink, SeasonError};
 
 use super::{artwork_api::image_url, commands_api::now_millis, ApiError, AppState};
 
@@ -918,6 +920,32 @@ async fn detail(
     }))
 }
 
+/// The Anissia link of a season, for a request to make a job of the season's
+/// anime: `404` for a season the work does not have.
+pub(super) async fn season_link(
+    state: &AppState,
+    work_id: &str,
+    season: u32,
+) -> Result<AnissiaLink, ApiError> {
+    state
+        .seasons
+        .store
+        .anissia_link(work_id, season)
+        .await
+        .map_err(|e| match e {
+            SeasonError::NotFound => {
+                ApiError::not_found("시즌을 찾지 못했어요. 화면을 새로고침해 주세요.")
+            }
+            e => internal(&e),
+        })
+}
+
+/// The Anissia anime a season is linked to; `400` with `not_linked` for a
+/// season that is linked to none.
+pub(super) fn linked_anime(link: &AnissiaLink, not_linked: &str) -> Result<i64, ApiError> {
+    link.anime_no.ok_or_else(|| ApiError::invalid(not_linked))
+}
+
 #[derive(Debug, Deserialize, Serialize)]
 struct CreateRequest {
     id: String,
@@ -953,71 +981,37 @@ async fn create(
         return Err(ApiError::invalid("같은 후보를 두 번 골랐어요."));
     }
 
-    let link = state
-        .seasons
-        .store
-        .anissia_link(&request.work_id, request.season)
-        .await
-        .map_err(|e| match e {
-            trss_library::store::seasons::SeasonError::NotFound => {
-                ApiError::not_found("시즌을 찾지 못했어요. 화면을 새로고침해 주세요.")
-            }
-            e => internal(&e),
-        })?;
-    let Some(anime_no) = link.anime_no else {
-        return Err(ApiError::invalid(
-            "이 시즌은 Anissia 작품에 연결돼 있지 않아요.",
-        ));
-    };
-    let candidates = state
+    let link = season_link(&state, &request.work_id, request.season).await?;
+    let anime_no = linked_anime(&link, "이 시즌은 Anissia 작품에 연결돼 있지 않아요.")?;
+    let picked = match state
         .anissia_store
-        .candidates(anime_no, Vec::new())
+        .pick(anime_no, request.candidates.clone())
         .await
-        .map_err(|e| internal(&e))?;
-    let by_id: HashMap<i64, _> = candidates.iter().map(|c| (c.id, c)).collect();
-    let mut picked = Vec::with_capacity(request.candidates.len());
-    for id in &request.candidates {
-        let Some(candidate) = by_id.get(id) else {
+        .map_err(|e| internal(&e))?
+    {
+        Ok(picked) => picked,
+        Err(PickError::Unknown) => {
             return Err(ApiError::invalid(
                 "고른 후보를 찾지 못했어요. 화면을 새로고침해 주세요.",
-            ));
-        };
-        picked.push(*candidate);
-    }
-    if picked.iter().any(|c| c.source_id != picked[0].source_id) {
-        return Err(ApiError::invalid(
-            "한 작업에는 한 제작자의 후보만 담을 수 있어요.",
-        ));
-    }
-
-    // The request's content as the browser sent it, in canonical JSON.
-    let canonical = json!({
-        "work_id": request.work_id,
-        "season": request.season,
-        "candidates": request.candidates,
-    })
-    .to_string();
-    let job = NewJob {
-        command_id: request.id.clone(),
-        request: canonical,
-        origin: "pick".to_owned(),
-        work_id: Some(request.work_id.clone()),
-        season: Some(i64::from(request.season)),
-        anime_no: Some(anime_no),
-        source_id: Some(picked[0].source_id.clone()),
-        creator: Some(picked[0].creator.clone()),
-        revision_of: None,
-        revises_attributed: false,
-        items: picked
-            .iter()
-            .map(|c| NewItem {
-                observation_id: Some(c.id),
-                episode: c.episode.clone(),
-                post_url: c.post_url.clone(),
-                found_at: c.first_seen_at,
-            })
-            .collect(),
+            ))
+        }
+        Err(PickError::MixedCreators) => {
+            return Err(ApiError::invalid(
+                "한 작업에는 한 제작자의 후보만 담을 수 있어요.",
+            ))
+        }
+        // Refused above, before the season was read.
+        Err(PickError::Empty) => {
+            return Err(ApiError::invalid("받을 후보를 하나 이상 골라 주세요."))
+        }
     };
+    let job = NewJob::pick(
+        request.id.clone(),
+        request.work_id.clone(),
+        request.season,
+        anime_no,
+        &picked,
+    );
     match state
         .job_requests
         .create(job, now_millis())
@@ -1065,32 +1059,17 @@ async fn create_find(
     if request.work_id.is_empty() {
         return Err(ApiError::invalid("작품이 빠졌어요."));
     }
-    let link = state
-        .seasons
-        .store
-        .anissia_link(&request.work_id, request.season)
-        .await
-        .map_err(|e| match e {
-            trss_library::store::seasons::SeasonError::NotFound => {
-                ApiError::not_found("시즌을 찾지 못했어요. 화면을 새로고침해 주세요.")
-            }
-            e => internal(&e),
-        })?;
-    let Some(anime_no) = link.anime_no else {
-        return Err(ApiError::invalid(
-            "이 시즌은 Anissia 작품에 연결돼 있지 않아서 직접 찾을 제작자가 없어요.",
-        ));
-    };
-    let candidates = state
-        .anissia_store
-        .candidates(anime_no, Vec::new())
-        .await
-        .map_err(|e| internal(&e))?;
+    let link = season_link(&state, &request.work_id, request.season).await?;
+    let anime_no = linked_anime(
+        &link,
+        "이 시즌은 Anissia 작품에 연결돼 있지 않아서 직접 찾을 제작자가 없어요.",
+    )?;
     // The creator's most recently observed post: the browser opens it.
-    let Some(newest) = candidates
-        .iter()
-        .filter(|c| c.source_id == request.creator)
-        .max_by_key(|c| c.id)
+    let Some(newest) = state
+        .anissia_store
+        .newest_of_creator(anime_no, request.creator.clone())
+        .await
+        .map_err(|e| internal(&e))?
     else {
         return Err(ApiError::invalid(
             "고른 제작자가 이 시즌의 제작자가 아니에요. 화면을 새로고침해 주세요.",
@@ -1100,24 +1079,13 @@ async fn create_find(
         return Err(ApiError::invalid("이 제작자의 게시물 주소를 열 수 없어요."));
     }
 
-    let canonical = json!({
-        "find": {
-            "work_id": request.work_id,
-            "season": request.season,
-            "creator": request.creator,
-        }
-    })
-    .to_string();
-    let find = NewFind {
-        command_id: id.to_owned(),
-        request: canonical,
-        work_id: request.work_id.clone(),
-        season: i64::from(request.season),
+    let find = NewFind::of(
+        id.to_owned(),
+        request.work_id.clone(),
+        request.season,
         anime_no,
-        source_id: newest.source_id.clone(),
-        creator: newest.creator.clone(),
-        post_url: newest.post_url.clone(),
-    };
+        &newest,
+    );
     match state
         .job_requests
         .create_find(find, now_millis())

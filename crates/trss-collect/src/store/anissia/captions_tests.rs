@@ -689,3 +689,129 @@ fn marking_the_attributed_leaves_a_mark_the_receipts_made_and_waits_for_a_file()
     assert_eq!(candidates[1].revision, marked);
     assert_eq!(candidates[2].revision, None);
 }
+
+#[tokio::test]
+async fn a_creators_newest_observation_is_the_one_made_last_and_only_of_its_own_anime() {
+    let store = store();
+    // 하느's line moves from 3화 to 4화, but the earlier state has the later
+    // update time: the newest is the one observed last.
+    store
+        .observe(
+            vec![
+                line(1, "하느", "3", "https://a.test/3", NOON_UTC + MIN),
+                line(1, "카이란", "9", "https://a.test/k", NOON_UTC),
+                line(2, "하느", "1", "https://a.test/other", NOON_UTC),
+            ],
+            1000,
+        )
+        .await
+        .unwrap();
+    store
+        .observe(
+            vec![line(1, "하느", "4", "https://a.test/4", NOON_UTC)],
+            2000,
+        )
+        .await
+        .unwrap();
+    let hanu = observed_of(&store, "하느", "4").await;
+    let named = store
+        .source_of_creator(1, "아직".into(), 3000)
+        .await
+        .unwrap();
+    let other = store
+        .candidates(2, Vec::new())
+        .await
+        .unwrap()
+        .remove(0)
+        .source_id;
+
+    let newest = store
+        .newest_of_creator(1, hanu.source_id.clone())
+        .await
+        .unwrap();
+    assert_eq!(newest, Some(hanu.clone()));
+    assert_eq!(newest.unwrap().creator, "하느");
+
+    // A source of another anime, one that is none, and one of a creator named
+    // before any line of it was observed are no creator of the anime.
+    for (what, source_id) in [
+        ("another anime's source", other),
+        ("no source", "nope".to_owned()),
+        ("a source with no observation", named),
+    ] {
+        assert_eq!(
+            store.newest_of_creator(1, source_id).await.unwrap(),
+            None,
+            "{what}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn picked_candidates_are_the_animes_own_and_of_one_creator() {
+    let store = store();
+    store
+        .observe(
+            vec![
+                line(1, "하느", "1", "https://a.test/1", NOON_UTC),
+                line(1, "하느", "2", "https://a.test/2", NOON_UTC + MIN),
+                line(1, "카이란", "1", "https://a.test/k", NOON_UTC),
+                line(2, "하느", "1", "https://a.test/other", NOON_UTC),
+            ],
+            1000,
+        )
+        .await
+        .unwrap();
+    let id = |anime, creator: &str, episode: &str| {
+        let store = store.clone();
+        let (creator, episode) = (creator.to_owned(), episode.to_owned());
+        async move {
+            store
+                .candidates(anime, Vec::new())
+                .await
+                .unwrap()
+                .into_iter()
+                .find(|c| c.creator == creator && c.episode == episode)
+                .unwrap()
+        }
+    };
+    let (one, two) = (id(1, "하느", "1").await, id(1, "하느", "2").await);
+    let kairan = id(1, "카이란", "1").await;
+    let elsewhere = id(2, "하느", "1").await;
+
+    // Of one creator: in the order picked, with the creator's source and name.
+    let picked = store
+        .pick(1, vec![two.id, one.id])
+        .await
+        .unwrap()
+        .expect("picked");
+    assert_eq!(picked.candidates, [two.clone(), one.clone()]);
+    assert_eq!(
+        (picked.source_id.as_str(), picked.creator.as_str()),
+        (one.source_id.as_str(), "하느")
+    );
+
+    // What cannot be picked: an observation of another anime or none, even
+    // among valid ones; creators mixed; nothing. The unknown is told first.
+    for (what, ids, error) in [
+        (
+            "another anime's",
+            vec![one.id, elsewhere.id],
+            PickError::Unknown,
+        ),
+        ("none", vec![one.id, 9999], PickError::Unknown),
+        (
+            "unknown and mixed",
+            vec![one.id, kairan.id, 9999],
+            PickError::Unknown,
+        ),
+        (
+            "two creators",
+            vec![one.id, kairan.id],
+            PickError::MixedCreators,
+        ),
+        ("nothing", vec![], PickError::Empty),
+    ] {
+        assert_eq!(store.pick(1, ids).await.unwrap(), Err(error), "{what}");
+    }
+}
