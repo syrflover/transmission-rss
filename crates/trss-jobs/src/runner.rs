@@ -2017,7 +2017,8 @@ impl Runner {
                 }
                 Some(expected) if len == expected && meta.is_file() => {
                     // Synced before it is published, as the first start would have.
-                    let synced = std::fs::File::open(&temp).and_then(|f| f.sync_all());
+                    let synced =
+                        std::fs::File::open(&temp).and_then(|f| trss_core::files::sync_file(&f));
                     let (Ok(()), Ok((size, sha, object))) = (synced, area::read_facts(&temp))
                     else {
                         return self
