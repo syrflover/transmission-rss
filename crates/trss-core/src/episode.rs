@@ -1,7 +1,8 @@
 //! How the app reads an episode text (`13`, `013`, `13.5`, `SP1`) as a key,
 //! orders episodes, and writes one as `13화` (`docs/specs/library.md`, 자막의
 //! 회차 대응). It also writes an offset ([`signed`]) and a run of episodes
-//! ([`ranges`]) as the screens do.
+//! ([`ranges`], and [`EpisodeSet`] for episodes given as texts) as the screens
+//! do.
 //!
 //! An episode text that is a decimal number (ASCII digits, then optionally a
 //! `.` and ASCII digits) is an [`EpisodeNumber`]. Its value is what is left
@@ -12,7 +13,7 @@
 //! empty text) is no number; it is an episode by its text, and sorts after
 //! every number ([`EpisodeKey`]).
 
-use std::{cmp::Ordering, fmt};
+use std::{cmp::Ordering, collections::BTreeMap, fmt};
 
 /// An episode text that is a decimal number, by value.
 ///
@@ -196,6 +197,145 @@ pub fn ranges(episodes: &[u32]) -> String {
     out.join(", ")
 }
 
+/// An episode text as the screens show it: the leading zeros of a text of
+/// digits only go (`01` is `1`, `00` is `0`); any other text, `13.0` and `SP`
+/// included, stays as written.
+pub fn shown(text: &str) -> &str {
+    if text.is_empty() || !text.bytes().all(|b| b.is_ascii_digit()) {
+        return text;
+    }
+    match text.trim_start_matches('0') {
+        "" => &text[text.len() - 1..],
+        rest => rest,
+    }
+}
+
+/// An episode as a set keys it: a whole number by value (`013`, `13` and
+/// `13.0` are one), anything else, a number with a fraction included, by its
+/// text. The whole numbers come first, in order, then the others by their
+/// text.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+enum SetKey {
+    Whole(u128),
+    Other(String),
+}
+
+fn set_key(text: &str) -> SetKey {
+    match EpisodeNumber::parse(text).and_then(|n| n.whole()) {
+        Some(whole) => SetKey::Whole(whole),
+        None => SetKey::Other(text.to_owned()),
+    }
+}
+
+/// Episodes given as texts, each distinct episode once, with the smallest of
+/// the texts it was written as (`013` is below `13`), in the order the screens
+/// list them.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct EpisodeSet {
+    written: BTreeMap<SetKey, String>,
+}
+
+impl EpisodeSet {
+    pub fn new() -> EpisodeSet {
+        EpisodeSet::default()
+    }
+
+    pub fn insert(&mut self, text: &str) {
+        let written = self
+            .written
+            .entry(set_key(text))
+            .or_insert_with(|| text.to_owned());
+        if text < written.as_str() {
+            *written = text.to_owned();
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.written.is_empty()
+    }
+
+    /// Whether every episode of `other` is in this set.
+    pub fn covers(&self, other: &EpisodeSet) -> bool {
+        other
+            .written
+            .keys()
+            .all(|key| self.written.contains_key(key))
+    }
+
+    /// The episodes as runs: consecutive whole numbers make one run, a gap
+    /// splits it, and each episode that is not a whole number (`13.5`, `SP`)
+    /// is a run of its own after them.
+    pub fn runs(&self) -> Vec<EpisodeRun> {
+        let mut out: Vec<EpisodeRun> = Vec::new();
+        let mut last_whole: Option<u128> = None;
+        for (key, written) in &self.written {
+            match key {
+                SetKey::Whole(n) => match out.last_mut() {
+                    Some(run) if last_whole.is_some_and(|last| last.checked_add(1) == Some(*n)) => {
+                        run.last = written.clone();
+                        run.count += 1;
+                    }
+                    _ => out.push(EpisodeRun::of(written, true)),
+                },
+                SetKey::Other(_) => out.push(EpisodeRun::of(written, false)),
+            }
+            last_whole = match key {
+                SetKey::Whole(n) => Some(*n),
+                SetKey::Other(_) => None,
+            };
+        }
+        out
+    }
+}
+
+impl<'a> FromIterator<&'a str> for EpisodeSet {
+    fn from_iter<I: IntoIterator<Item = &'a str>>(texts: I) -> EpisodeSet {
+        let mut set = EpisodeSet::new();
+        for text in texts {
+            set.insert(text);
+        }
+        set
+    }
+}
+
+/// A run of consecutive episodes, as written: `first` and `last` are the
+/// written forms of its ends, equal for a single episode.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EpisodeRun {
+    pub first: String,
+    pub last: String,
+    /// How many episodes the run holds.
+    pub count: usize,
+    /// Whether the run is of whole numbers (`0` and `13.0` included) rather
+    /// than an episode of any other text.
+    pub whole: bool,
+}
+
+impl EpisodeRun {
+    fn of(text: &str, whole: bool) -> EpisodeRun {
+        EpisodeRun {
+            first: text.to_owned(),
+            last: text.to_owned(),
+            count: 1,
+            whole,
+        }
+    }
+
+    /// The run as the screens show it, its ends through [`shown`]: `1–4`, or
+    /// `7` for a single episode.
+    pub fn text(&self) -> String {
+        match self.first == self.last {
+            true => shown(&self.first).to_owned(),
+            false => format!("{}–{}", shown(&self.first), shown(&self.last)),
+        }
+    }
+}
+
+/// The runs of the episodes `texts` name ([`EpisodeSet::runs`]).
+pub fn runs<'a>(texts: impl IntoIterator<Item = &'a str>) -> Vec<EpisodeRun> {
+    texts.into_iter().collect::<EpisodeSet>().runs()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -341,6 +481,174 @@ mod tests {
     fn episodes_are_written_as_ranges() {
         assert_eq!(ranges(&[1, 2, 3, 5, 7, 8]), "1–3, 5, 7–8");
         assert_eq!(ranges(&[4]), "4");
+    }
+
+    #[test]
+    fn leading_zeros_of_a_text_of_digits_go_and_nothing_else_changes() {
+        for (text, shown_text) in [
+            ("01", "1"),
+            ("013", "13"),
+            ("1", "1"),
+            ("10", "10"),
+            ("00", "0"),
+            ("000", "0"),
+            ("0", "0"),
+            ("13.0", "13.0"),
+            ("013.0", "013.0"),
+            ("0.5", "0.5"),
+            ("SP", "SP"),
+            ("SP01", "SP01"),
+            ("", ""),
+            ("-01", "-01"),
+            (" 01", " 01"),
+            ("０１", "０１"),
+        ] {
+            assert_eq!(shown(text), shown_text, "{text:?}");
+        }
+    }
+
+    /// The first and last text of each run `texts` make.
+    fn pairs(texts: &[&str]) -> Vec<(String, String)> {
+        runs(texts.iter().copied())
+            .into_iter()
+            .map(|r| (r.first, r.last))
+            .collect()
+    }
+
+    fn written(list: &[(&str, &str)]) -> Vec<(String, String)> {
+        list.iter()
+            .map(|(a, b)| (a.to_string(), b.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn consecutive_episodes_make_one_run_and_a_gap_splits_it() {
+        assert_eq!(pairs(&["01", "02", "03"]), written(&[("01", "03")]));
+        assert_eq!(
+            pairs(&["01", "02", "03", "05", "06", "12"]),
+            written(&[("01", "03"), ("05", "06"), ("12", "12")])
+        );
+        assert_eq!(pairs(&[]), written(&[]));
+    }
+
+    #[test]
+    fn episodes_run_by_number_not_by_text_or_by_the_order_given() {
+        // Written order is not numeric order, and `2` is not after `10` here.
+        assert_eq!(pairs(&["10", "9", "11"]), written(&[("9", "11")]));
+        assert_eq!(pairs(&["3", "2", "1"]), written(&[("1", "3")]));
+        // `013` and `13` are one episode, shown as the smaller written form.
+        assert_eq!(pairs(&["13", "013", "14"]), written(&[("013", "14")]));
+        // Zero is an episode, and a leading zero does not change its value.
+        assert_eq!(pairs(&["00", "1"]), written(&[("00", "1")]));
+        // An episode given twice is one.
+        let run = &runs(["2", "2"])[0];
+        assert_eq!((run.text().as_str(), run.count), ("2", 1));
+        assert_eq!(runs(["2", "2"]).len(), 1);
+    }
+
+    #[test]
+    fn zero_is_inside_the_runs_of_whole_numbers() {
+        assert_eq!(pairs(&["0", "1", "2"]), written(&[("0", "2")]));
+        assert_eq!(pairs(&["2", "0", "1"]), written(&[("0", "2")]));
+        assert_eq!(pairs(&["0", "2"]), written(&[("0", "0"), ("2", "2")]));
+        assert!(runs(["0"])[0].whole);
+    }
+
+    #[test]
+    fn a_number_larger_than_any_float_keeps_its_digits() {
+        let big = "9007199254740993"; // 2^53 + 1: not representable as an f64
+        let next = "9007199254740994";
+        let apart = "9007199254740996";
+        assert_eq!(
+            pairs(&[big, next, apart]),
+            written(&[(big, next), (apart, apart)])
+        );
+        // Beyond u128 the text is all there is: it stays a run of its own.
+        let huge = "9".repeat(60);
+        assert_eq!(pairs(&[&huge]), written(&[(&huge, &huge)]));
+        assert!(!runs([huge.as_str()])[0].whole);
+    }
+
+    #[test]
+    fn episodes_that_are_not_whole_numbers_stay_apart_and_come_last() {
+        assert_eq!(
+            pairs(&["17.5", "01", "02", "SP", "17"]),
+            written(&[("01", "02"), ("17", "17"), ("17.5", "17.5"), ("SP", "SP")])
+        );
+        // `1.5` does not join `1` and `2`, and `1` and `2` still make a run.
+        assert_eq!(
+            pairs(&["1", "1.5", "2"]),
+            written(&[("1", "2"), ("1.5", "1.5")])
+        );
+        assert_eq!(
+            pairs(&["SP", "1", "2"]),
+            written(&[("1", "2"), ("SP", "SP")])
+        );
+        assert_eq!(
+            pairs(&["13.5", "14"]),
+            written(&[("14", "14"), ("13.5", "13.5")])
+        );
+    }
+
+    #[test]
+    fn a_whole_number_written_with_a_zero_fraction_is_that_number() {
+        // `13.0` joins `12` and `14` in one run; `13.5` stays apart, after it.
+        assert_eq!(
+            pairs(&["12", "13.0", "14", "13.5"]),
+            written(&[("12", "14"), ("13.5", "13.5")])
+        );
+        // `13.0` and `13` are one episode, shown as the smaller written form;
+        // `13.0` alone is shown as written.
+        assert_eq!(pairs(&["13.0", "13", "14"]), written(&[("13", "14")]));
+        assert_eq!(pairs(&["13.00"]), written(&[("13.00", "13.00")]));
+        assert_eq!(runs(["13", "13.0"]).len(), 1);
+        // A fraction that is not zeros, or is empty, is no whole number.
+        assert_eq!(
+            pairs(&["13.01", "13."]),
+            written(&[("13.", "13."), ("13.01", "13.01")])
+        );
+    }
+
+    #[test]
+    fn a_run_is_shown_with_its_ends_through_shown() {
+        let text = |texts: &[&str]| -> Vec<String> {
+            runs(texts.iter().copied())
+                .iter()
+                .map(|r| r.text())
+                .collect()
+        };
+        assert_eq!(text(&["01", "02", "03", "04", "07"]), ["1–4", "7"]);
+        assert_eq!(text(&["00", "01"]), ["0–1"]);
+        assert_eq!(text(&["13.0", "14"]), ["13.0–14"]);
+        assert_eq!(text(&["013"]), ["13"]);
+        assert_eq!(text(&["SP01"]), ["SP01"]);
+        assert_eq!(text(&[]), Vec::<String>::new());
+    }
+
+    #[test]
+    fn a_run_counts_the_episodes_it_holds() {
+        let counts: Vec<(String, usize)> = runs(["1", "01", "2", "3", "5", "SP", "6"])
+            .iter()
+            .map(|r| (r.text(), r.count))
+            .collect();
+        assert_eq!(
+            counts,
+            [
+                ("1–3".to_owned(), 3),
+                ("5–6".to_owned(), 2),
+                ("SP".to_owned(), 1)
+            ]
+        );
+    }
+
+    #[test]
+    fn a_set_covers_the_episodes_it_holds_by_value() {
+        let set = |texts: &[&str]| texts.iter().copied().collect::<EpisodeSet>();
+        assert!(set(&["13", "14"]).covers(&set(&["13.0"])));
+        assert!(set(&["1", "2"]).covers(&set(&["01"])));
+        assert!(!set(&["1", "2"]).covers(&set(&["1", "3"])));
+        assert!(set(&["1"]).covers(&set(&[])));
+        assert!(set(&[]).is_empty() && !set(&["1"]).is_empty());
     }
 
     #[test]

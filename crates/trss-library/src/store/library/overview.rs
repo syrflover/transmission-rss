@@ -27,7 +27,7 @@
 //!   is the latest *known* time of any season; it is unknown only when no file
 //!   of that kind has a known time.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 
 use rusqlite::Connection;
 
@@ -35,7 +35,7 @@ use crate::{
     discovery::{kind_of, FileKind, Reason},
     store::seasons,
 };
-use trss_core::{episode::EpisodeNumber, Millis};
+use trss_core::{episode::EpisodeSet, Millis};
 
 /// A run of consecutive episodes, as written (`first` and `last` are the
 /// written forms of its ends; they are equal for a single episode).
@@ -99,57 +99,16 @@ pub struct WorkOverview {
     pub linked_titles: Vec<String>,
 }
 
-/// An episode as the list keys it: a whole number by value (`13.0` is `13`,
-/// as the work detail reads it), anything else, a number with a fraction
-/// included, by its text.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-enum ListKey {
-    Number(u128),
-    Other(String),
-}
-
-fn key_of(episode: &str) -> ListKey {
-    match EpisodeNumber::parse(episode).and_then(|n| n.whole()) {
-        Some(number) => ListKey::Number(number),
-        None => ListKey::Other(episode.to_owned()),
-    }
-}
-
-/// The episodes (one written form for each distinct episode) in order.
-type Episodes = BTreeMap<ListKey, String>;
-
-fn add(episodes: &mut Episodes, episode: &str) {
-    let written = episodes
-        .entry(key_of(episode))
-        .or_insert_with(|| episode.to_owned());
-    if episode < written.as_str() {
-        *written = episode.to_owned();
-    }
-}
-
-fn ranges(episodes: &Episodes) -> Vec<EpisodeRange> {
-    let mut out: Vec<EpisodeRange> = Vec::new();
-    let mut last_number: Option<u128> = None;
-    for (key, written) in episodes {
-        match key {
-            ListKey::Number(n) => {
-                if last_number.is_some_and(|last| last.checked_add(1) == Some(*n)) {
-                    out.last_mut().expect("a run is open").last = written.clone();
-                } else {
-                    out.push(EpisodeRange {
-                        first: written.clone(),
-                        last: written.clone(),
-                    });
-                }
-                last_number = Some(*n);
-            }
-            ListKey::Other(_) => out.push(EpisodeRange {
-                first: written.clone(),
-                last: written.clone(),
-            }),
-        }
-    }
-    out
+/// The set's runs as the list's ranges ([`EpisodeSet::runs`]).
+fn ranges(episodes: &EpisodeSet) -> Vec<EpisodeRange> {
+    episodes
+        .runs()
+        .into_iter()
+        .map(|run| EpisodeRange {
+            first: run.first,
+            last: run.last,
+        })
+        .collect()
 }
 
 /// A recorded media file, as far as the list needs it.
@@ -169,7 +128,7 @@ struct Holdings {
 }
 
 fn holdings(latest_season: Option<u32>, files: &[Media]) -> Holdings {
-    let (mut video, mut subtitle) = (Episodes::new(), Episodes::new());
+    let (mut video, mut subtitle) = (EpisodeSet::new(), EpisodeSet::new());
     let (mut video_added_at, mut subtitle_added_at) = (None, None);
     for file in files {
         let (episodes, added) = match file.kind {
@@ -179,12 +138,12 @@ fn holdings(latest_season: Option<u32>, files: &[Media]) -> Holdings {
         // `Option` orders `None` first, so the latest known time wins.
         *added = (*added).max(file.added_at);
         if Some(file.season) == latest_season {
-            add(episodes, &file.episode);
+            episodes.insert(&file.episode);
         }
     }
     let coverage = if subtitle.is_empty() {
         SubtitleCoverage::None
-    } else if !video.is_empty() && video.keys().all(|k| subtitle.contains_key(k)) {
+    } else if !video.is_empty() && subtitle.covers(&video) {
         SubtitleCoverage::All
     } else {
         SubtitleCoverage::Some
@@ -314,87 +273,10 @@ pub(super) fn overview(conn: &Connection) -> rusqlite::Result<Vec<WorkOverview>>
 mod tests {
     use super::*;
 
-    fn episodes(written: &[&str]) -> Vec<(String, String)> {
-        let mut set = Episodes::new();
-        for e in written {
-            add(&mut set, e);
-        }
-        ranges(&set)
-            .into_iter()
-            .map(|r| (r.first, r.last))
-            .collect()
-    }
-
-    fn pairs(list: &[(&str, &str)]) -> Vec<(String, String)> {
-        list.iter()
-            .map(|(a, b)| (a.to_string(), b.to_string()))
-            .collect()
-    }
-
+    /// `13.0` is `13`: a subtitle written so covers the video written `13`
+    /// (the runs themselves are tested in `trss_core::episode`).
     #[test]
-    fn consecutive_episodes_make_one_range_and_a_gap_splits_it() {
-        assert_eq!(episodes(&["01", "02", "03"]), pairs(&[("01", "03")]));
-        assert_eq!(
-            episodes(&["01", "02", "03", "05", "06", "12"]),
-            pairs(&[("01", "03"), ("05", "06"), ("12", "12")])
-        );
-        assert_eq!(episodes(&[]), pairs(&[]));
-    }
-
-    #[test]
-    fn episodes_compare_by_number_not_by_text() {
-        // Written order is not numeric order, and `2` is not after `10` here.
-        assert_eq!(episodes(&["10", "9", "11"]), pairs(&[("9", "11")]));
-        // `013` and `13` are one episode, shown as the smaller written form.
-        assert_eq!(episodes(&["13", "013", "14"]), pairs(&[("013", "14")]));
-        // Zero is an episode, and a leading zero does not change its value.
-        assert_eq!(episodes(&["00", "1"]), pairs(&[("00", "1")]));
-    }
-
-    #[test]
-    fn a_number_larger_than_any_float_keeps_its_digits() {
-        let big = "9007199254740993"; // 2^53 + 1: not representable as an f64
-        let next = "9007199254740994";
-        let apart = "9007199254740996";
-        assert_eq!(
-            episodes(&[big, next, apart]),
-            pairs(&[(big, next), (apart, apart)])
-        );
-        // Beyond u128 the text is all there is: it stays a range of its own.
-        let huge = "9".repeat(60);
-        assert_eq!(episodes(&[&huge]), pairs(&[(&huge, &huge)]));
-    }
-
-    #[test]
-    fn episodes_that_are_not_whole_numbers_stay_apart_and_come_last() {
-        assert_eq!(
-            episodes(&["17.5", "01", "02", "SP", "17"]),
-            pairs(&[("01", "02"), ("17", "17"), ("17.5", "17.5"), ("SP", "SP")])
-        );
-        // `1.5` does not join `1` and `2`, and `1` and `2` still make a range.
-        assert_eq!(
-            episodes(&["1", "1.5", "2"]),
-            pairs(&[("1", "2"), ("1.5", "1.5")])
-        );
-    }
-
-    #[test]
-    fn a_whole_number_written_with_a_zero_fraction_is_that_number() {
-        // `13.0` joins `12` and `14` in one range; `13.5` stays apart, after it.
-        assert_eq!(
-            episodes(&["12", "13.0", "14", "13.5"]),
-            pairs(&[("12", "14"), ("13.5", "13.5")])
-        );
-        // `13.0` and `13` are one episode, shown as the smaller written form;
-        // `13.0` alone is shown as written.
-        assert_eq!(episodes(&["13.0", "13", "14"]), pairs(&[("13", "14")]));
-        assert_eq!(episodes(&["13.00"]), pairs(&[("13.00", "13.00")]));
-        // A fraction that is not zeros, or is empty, is no whole number.
-        assert_eq!(
-            episodes(&["13.01", "13."]),
-            pairs(&[("13.", "13."), ("13.01", "13.01")])
-        );
-        // A subtitle written `13.0` covers the video `13`.
+    fn a_subtitle_written_with_a_zero_fraction_covers_the_video_of_that_number() {
         let files = [
             media(1, "13", FileKind::Video, None),
             media(1, "13.0", FileKind::Subtitle, None),
