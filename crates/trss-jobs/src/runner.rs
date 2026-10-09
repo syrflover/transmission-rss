@@ -376,10 +376,6 @@ impl Runner {
         self
     }
 
-    pub fn store(&self) -> &JobStore {
-        &self.store
-    }
-
     /// The sources this runner reads. The recheck ([`crate::recheck`]) asks the
     /// same ones, so its requests share their pace per host.
     pub fn sources(&self) -> &Sources {

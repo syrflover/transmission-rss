@@ -102,6 +102,7 @@
 //! jobs' task before the jobs run, so no store or link of this module comes
 //! between its look at a file and the removal.
 
+mod api;
 pub mod cleanup;
 pub mod episode;
 pub mod files;
