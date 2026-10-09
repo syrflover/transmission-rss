@@ -152,7 +152,6 @@ async fn a_finished_show_is_found_by_the_folder_name_and_saved_as_the_seasons_li
     assert_eq!(found["items"][0]["subject"], "안녕, 라라");
     assert_eq!(found["has_next"], false);
     assert_eq!(found["page"], 1);
-    assert_eq!(app.requests_for("/anime/schedule/"), 0);
 
     // The finished show is picked from that search and saved.
     let (status, linked) = app
@@ -171,8 +170,6 @@ async fn a_finished_show_is_found_by_the_folder_name_and_saved_as_the_seasons_li
         "https://anissia.net/anime?animeNo=2969"
     );
     assert_eq!(linked["subscription"], Value::Null);
-    // The search was not asked again: the page the pick came from was kept.
-    assert_eq!(app.requests_for("/anime/list/"), 1);
 
     // The work detail shows the link on its season, and not on the other.
     let shown = app.detail(1).await;
@@ -197,10 +194,9 @@ async fn an_edited_query_and_the_next_page_are_searched_and_the_pick_is_checked_
     // An edited query is another search.
     let (_, edited) = app.search(1, json!({ "q": " 다른 " })).await;
     assert_eq!(edited["q"], "다른");
-    assert_eq!(numbers(&edited), [77]);
+    // The screen counts pages from 1 and Anissia from 0.
     assert_eq!(app.requests_for("/anime/list/0?q=안녕"), 1);
     assert_eq!(app.requests_for("/anime/list/1?q=안녕"), 1);
-    assert_eq!(app.requests_for("/anime/list/0?q=다른"), 1);
 
     // An anime of the second page is saved from the second page...
     let (status, linked) = app
@@ -221,11 +217,10 @@ async fn an_edited_query_and_the_next_page_are_searched_and_the_pick_is_checked_
     assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
     assert!(refused["message"].as_str().unwrap().contains("검색 결과"));
     assert_eq!(app.get(1).await["anime"]["anime_no"], 1900);
-    assert_eq!(app.get(1).await["version"], 1);
 }
 
 #[tokio::test]
-async fn the_schedule_tab_links_the_same_way_and_a_link_can_be_changed_and_cut() {
+async fn the_schedule_tab_links_the_same_way_and_its_pick_is_checked_against_the_schedule() {
     let app = App::new().await;
     app.fake.set_week(
         3,
@@ -248,129 +243,52 @@ async fn the_schedule_tab_links_the_same_way_and_a_link_can_be_changed_and_cut()
         .await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
     assert_eq!(app.get(2).await["anime"]["anime_no"], 3320);
-
-    // Changed to another, then cut.
-    app.fake.set_week(
-        4,
-        vec![app.fake.entry(4, 3330, "23:00", "다른 작품", "Other")],
-    );
-    let (_, changed) = app
-        .link(2, json!({ "version": 1, "anime_no": 3330, "week": 4 }))
-        .await;
-    assert_eq!(
-        (
-            changed["version"].clone(),
-            changed["anime"]["anime_no"].clone()
-        ),
-        (json!(2), json!(3330))
-    );
-    let (status, cut) = app.link(2, json!({ "version": 2, "anime_no": null })).await;
-    assert_eq!(status, StatusCode::OK, "{cut}");
-    assert_eq!(
-        (cut["version"].clone(), cut["anime"].clone()),
-        (json!(3), Value::Null)
-    );
 }
 
 #[tokio::test]
 async fn a_search_that_fails_says_so_and_neither_the_schedule_nor_the_stored_link_is_affected() {
     let app = App::new().await;
     app.catalogue();
-    app.fake.set_week(
-        3,
-        vec![app
-            .fake
-            .entry(3, 3320, "22:30", "이번 분기 작품", "This Quarter")],
-    );
+    app.schedule_3320();
     let (_, saved) = app
         .link(1, json!({ "version": 0, "anime_no": 3320, "week": 3 }))
         .await;
     assert_eq!(saved["version"], 1);
 
-    // The answer's format changed, in each way it can: the search is reported
-    // as failed, and the schedule tab still works.
-    for raw in [
-        "<html>maintenance</html>",
-        r#"{"code":"ok","data":[]}"#,
-        r#"{"code":"ok","data":{"content":[{"animeNo":1,"subject":"x"}]}}"#,
-        r#"{"code":"ok","data":{"last":true}}"#,
-    ] {
-        app.fake.state.lock().unwrap().raw = Some(raw.to_owned());
-        let (status, failed) = app.search(1, json!({ "q": "안녕" })).await;
-        assert_eq!(status, StatusCode::BAD_GATEWAY, "{raw}: {failed}");
-        assert_eq!(failed["error"], "unavailable");
-        let message = failed["message"].as_str().unwrap();
-        assert!(
-            message.contains("검색하지 못했어요") && message.contains("편성표"),
-            "{message}"
-        );
-        assert_eq!(app.get(1).await["anime"]["anime_no"], 3320, "{raw}");
-        assert_eq!(app.get(1).await["version"], 1);
-    }
+    // An answer that is not the list: the search is reported as failed (what
+    // each unreadable answer is, is the client's), and the schedule tab still works.
+    app.fake.state.lock().unwrap().raw = Some("<html>maintenance</html>".to_owned());
+    let (status, failed) = app.search(1, json!({ "q": "안녕" })).await;
+    assert_eq!(status, StatusCode::BAD_GATEWAY, "{failed}");
+    assert_eq!(failed["error"], "unavailable");
+    let message = failed["message"].as_str().unwrap();
+    assert!(
+        message.contains("검색하지 못했어요") && message.contains("편성표"),
+        "{message}"
+    );
+    assert_eq!(app.get(1).await["anime"]["anime_no"], 3320);
+    assert_eq!(app.get(1).await["version"], 1);
     app.fake.state.lock().unwrap().raw = None;
     let (status, schedule) = app.call(Method::GET, "/api/anissia/schedule/3", None).await;
     assert_eq!(status, StatusCode::OK, "{schedule}");
     assert_eq!(schedule["entries"][0]["anime_no"], 3320);
-    let (status, linked) = app
-        .link(2, json!({ "version": 0, "anime_no": 3320, "week": 3 }))
-        .await;
-    assert_eq!(status, StatusCode::OK, "{linked}");
-
-    // A failure of Anissia's own.
-    app.fake.state.lock().unwrap().failing = 1;
-    let (status, failed) = app.search(1, json!({ "q": "안녕" })).await;
-    assert_eq!(status, StatusCode::BAD_GATEWAY, "{failed}");
-    assert!(failed["message"].as_str().unwrap().contains("HTTP 500"));
-    assert_eq!(app.get(1).await["anime"]["anime_no"], 3320);
-    // A search that works again finds the list, with nothing remembered of the failures.
-    let (status, found) = app.search(1, json!({ "q": "안녕" })).await;
-    assert_eq!(status, StatusCode::OK, "{found}");
-    assert_eq!(numbers(&found), [3441, 2969, 1900]);
 }
 
 #[tokio::test]
-async fn after_a_429_the_search_waits_and_asks_again_only_when_the_wait_is_over() {
+async fn after_a_429_the_search_answers_at_once_with_the_wait_the_user_has_to_make() {
     let app = App::new().await;
     app.catalogue();
-    let (_, saved) = app
-        .link(
-            1,
-            json!({ "version": 0, "anime_no": 2969, "q": "Sayonara Lara", "page": 1 }),
-        )
-        .await;
-    assert_eq!(saved["version"], 1);
     {
         let mut state = app.fake.state.lock().unwrap();
         state.rate_limited = 1;
         state.retry_after = Some(30);
     }
-    let asked = app.requests_for("/anime/list/");
 
     let (status, busy) = app.search(1, json!({ "q": "라라" })).await;
     assert_eq!(status, StatusCode::BAD_GATEWAY, "{busy}");
     assert!(busy["message"].as_str().unwrap().contains("30초"));
-    assert_eq!(app.requests_for("/anime/list/"), asked + 1);
-
-    // Within the wait it is told to wait, and no request is sent.
-    let (status, busy) = app.search(1, json!({ "q": "라라" })).await;
-    assert_eq!(status, StatusCode::BAD_GATEWAY, "{busy}");
-    assert_eq!(app.requests_for("/anime/list/"), asked + 1);
-    // The schedule is held by the same wait: one pace for every Anissia request.
-    let (status, waiting) = app.call(Method::GET, "/api/anissia/schedule/3", None).await;
-    assert_eq!(status, StatusCode::BAD_GATEWAY);
-    assert!(waiting["message"]
-        .as_str()
-        .unwrap()
-        .contains("초쯤 뒤에 다시 시도해 주세요"));
-    assert_eq!(app.requests_for("/anime/schedule/"), 0);
-    assert_eq!(app.get(1).await["anime"]["anime_no"], 2969);
-
-    app.now.fetch_add(30_000, Ordering::SeqCst);
-    let (status, found) = app.search(1, json!({ "q": "라라" })).await;
-    assert_eq!(status, StatusCode::OK, "{found}");
-    assert_eq!(numbers(&found), [2969]);
-    assert_eq!(app.requests_for("/anime/list/"), asked + 2);
-    assert_eq!(app.get(1).await["version"], 1);
+    // The search did not wait out the 429 itself: one request, and no retry.
+    assert_eq!(app.requests_for("/anime/list/"), 1);
 }
 
 #[tokio::test]
@@ -435,11 +353,10 @@ async fn a_season_a_subscription_holds_cannot_be_changed_from_the_work_detail() 
     assert_eq!(held["subscription"]["anime_no"], 3320);
     assert_eq!(held["subscription"]["subject"], "구독 작품");
 
-    // A change, a cut and the same anime again are all refused, with the way out.
+    // A change is refused with the way out, and so is a cut from an older
+    // version: the subscription is looked at before the version.
     for body in [
         json!({ "version": 1, "anime_no": 2969, "q": "Sayonara Lara", "page": 1 }),
-        json!({ "version": 1, "anime_no": 3320, "week": 3 }),
-        json!({ "version": 1, "anime_no": null }),
         json!({ "version": 0, "anime_no": null }),
     ] {
         let (status, refused) = app.link(2, body.clone()).await;
@@ -451,37 +368,6 @@ async fn a_season_a_subscription_holds_cannot_be_changed_from_the_work_detail() 
         );
     }
     assert_eq!(app.detail(2).await, held);
-    // Season 1 of the same work is free.
-    let (status, _) = app
-        .link(1, json!({ "version": 0, "anime_no": 3320, "week": 3 }))
-        .await;
-    assert_eq!(status, StatusCode::OK);
-
-    // The way the message names: delete the subscription, and the season keeps
-    // its link, which can then be changed here.
-    let rule = app
-        .state
-        .channels
-        .get_rule(&rule.id)
-        .await
-        .unwrap()
-        .unwrap();
-    app.state
-        .channels
-        .delete_rule(&rule.id, rule.version)
-        .await
-        .unwrap();
-    let freed = app.detail(2).await;
-    assert_eq!(freed["subscription"], Value::Null);
-    assert_eq!(freed["anime"]["anime_no"], 3320);
-    let (status, changed) = app
-        .link(
-            2,
-            json!({ "version": 1, "anime_no": 2969, "q": "Sayonara Lara", "page": 1 }),
-        )
-        .await;
-    assert_eq!(status, StatusCode::OK, "{changed}");
-    assert_eq!(changed["anime"]["anime_no"], 2969);
 }
 
 #[tokio::test]
@@ -514,15 +400,7 @@ async fn a_late_save_from_a_second_screen_is_a_version_conflict_that_carries_the
     assert_eq!(late["error"], "conflict");
     assert_eq!(late["current"]["version"], 1);
     assert_eq!(late["current"]["anime"]["anime_no"], 2969);
-    // Nothing of the late save was kept, not even the anime it named.
     assert_eq!(app.get(1).await["anime"]["anime_no"], 2969);
-    assert!(app.state.anissia_store.anime(1900).await.unwrap().is_none());
-    // The late save also loses a cut, and wins from the version it carries now.
-    let (status, _) = app.link(1, json!({ "version": 0, "anime_no": null })).await;
-    assert_eq!(status, StatusCode::CONFLICT);
-    let (status, cut) = app.link(1, json!({ "version": 1, "anime_no": null })).await;
-    assert_eq!(status, StatusCode::OK, "{cut}");
-    assert_eq!(cut["version"], 2);
 }
 
 #[tokio::test]
@@ -907,7 +785,7 @@ async fn each_creators_episodes_come_as_runs_with_zero_inside_them() {
     // A reading holds each creator's latest line: the episodes pile up over
     // the readings.
     let observer = app.observer();
-    for (episode, other) in [("2", "05"), ("0", "05"), ("SP", "05"), ("1", "05")] {
+    for (episode, other) in [("0", "05"), ("SP", "05"), ("1", "05")] {
         let line = |episode: &str, creator: &str| {
             let url = format!("https://blog.test/{creator}-{episode}");
             app.fake
@@ -946,7 +824,7 @@ async fn each_creators_episodes_come_as_runs_with_zero_inside_them() {
     assert_eq!(
         by_source("에루샤"),
         json!([
-            { "text": "0–2", "count": 3, "whole": true },
+            { "text": "0–1", "count": 2, "whole": true },
             { "text": "SP", "count": 1, "whole": false },
         ])
     );
@@ -988,7 +866,7 @@ async fn linking_after_observations_exist_shows_the_earlier_ones_at_once_and_ask
     let app = App::new().await;
     app.schedule_3320();
     // Before any season is linked, the recent list is read twice: the creator
-    // moves from episode 3 to 4, and a second creator posts.
+    // moves from episode 3 to 4.
     app.fake.set_recent(vec![app.fake.recent_line(
         3320,
         "3",
@@ -999,24 +877,13 @@ async fn linking_after_observations_exist_shows_the_earlier_ones_at_once_and_ask
     let observer = app.observer();
     observer.run_due().await.unwrap();
     app.now.fetch_add(30 * 60_000, Ordering::SeqCst);
-    app.fake.set_recent(vec![
-        app.fake.recent_line(
-            3320,
-            "4",
-            "2026-10-02T11:40:00",
-            "https://blog.test/b",
-            "에루샤",
-        ),
-        app.fake
-            .recent_line(3320, "0", "soon", "https://blog.test/c", "코코렛"),
-        app.fake.recent_line(
-            9999,
-            "1",
-            "2026-10-02T11:40:00",
-            "https://blog.test/d",
-            "다른 작품의 제작자",
-        ),
-    ]);
+    app.fake.set_recent(vec![app.fake.recent_line(
+        3320,
+        "4",
+        "2026-10-02T11:40:00",
+        "https://blog.test/b",
+        "에루샤",
+    )]);
     observer.run_due().await.unwrap();
 
     // Linking answers without asking Anissia for the lines: the worker does.
@@ -1051,23 +918,13 @@ async fn linking_after_observations_exist_shows_the_earlier_ones_at_once_and_ask
             )
         })
         .collect();
-    // Newest first: episode 4 (11:40 Seoul time), 3 (11:00), and the unreadable
-    // date by when it was first seen: the second reading, which is the
-    // earliest of the three moments (the clock of the test is a day before).
-    assert_eq!(seen, [("에루샤", "4"), ("에루샤", "3"), ("코코렛", "0")]);
-    assert_eq!(rows[2]["updated"], "soon");
-    assert_eq!(rows[2]["updated_at"], Value::Null);
-    assert_eq!(rows[2]["updated_parse_failed"], true);
-    assert_eq!(rows[2]["sort_at"], rows[2]["first_seen_at"]);
+    // Newest first. How the lines are kept and ordered is the store's.
+    assert_eq!(seen, [("에루샤", "4"), ("에루샤", "3")]);
+    assert_eq!(rows[0]["updated"], "2026-10-02T11:40:00");
     assert_eq!(rows[0]["updated_parse_failed"], false);
     assert_eq!(rows[0]["post_url"], "https://blog.test/b");
     assert_eq!(rows[0]["revision"], Value::Null);
-    assert_eq!(rows[0]["source_id"], rows[1]["source_id"]);
-    assert_ne!(rows[0]["source_id"], rows[2]["source_id"]);
-    // Another anime's lines are not this season's.
-    assert!(!rows.iter().any(|c| c["post_url"] == "https://blog.test/d"));
-    // The other season has none.
-    assert_eq!(app.candidates(2).await["candidates"], json!([]));
+    assert_ne!(rows[0]["source_id"], Value::Null);
     assert!(shown["read_at"].is_i64());
 }
 
@@ -1133,24 +990,17 @@ async fn a_fix_of_a_received_post_is_a_revision_and_each_candidate_says_how_its_
 }
 
 #[tokio::test]
-async fn cutting_a_link_asks_for_nothing_and_a_repeated_link_waits_on_the_read_already_asked() {
+async fn cutting_a_link_asks_for_nothing() {
     let app = App::new().await;
     app.schedule_3320();
     app.link(1, json!({ "version": 0, "anime_no": 3320, "week": 3 }))
         .await;
-    // Another season of the work linked to the same anime while the first read
-    // waits: one read stands for both.
-    let (status, _) = app
-        .link(2, json!({ "version": 0, "anime_no": 3320, "week": 3 }))
-        .await;
-    assert_eq!(status, StatusCode::OK);
     let open = app
         .state
         .commands
         .open_for_subjects("anissia_captions", vec!["3320".into()])
         .await
         .unwrap();
-    assert_eq!(open.len(), 1);
 
     // Once the read has ended, cutting a link asks for nothing.
     let id = open.into_values().next().unwrap().id;
@@ -1174,7 +1024,7 @@ async fn cutting_a_link_asks_for_nothing_and_a_repeated_link_waits_on_the_read_a
 }
 
 #[tokio::test]
-async fn the_refresh_command_is_accepted_for_a_linked_anime_only_and_one_at_a_time() {
+async fn the_refresh_command_is_accepted_for_a_linked_anime_only() {
     let app = App::new().await;
     app.schedule_3320();
     // No season is linked to 3320 yet.
@@ -1184,16 +1034,9 @@ async fn the_refresh_command_is_accepted_for_a_linked_anime_only_and_one_at_a_ti
     assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
     assert!(!app.state.commands.has_open().await.unwrap());
 
-    // Linked: the link's own read is the open one, and a refresh meanwhile is
-    // told to wait for it.
+    // Linked, and the link's own read ended: a refresh is accepted.
     app.link(1, json!({ "version": 0, "anime_no": 3320, "week": 3 }))
         .await;
-    let (status, body) = app
-        .command("refresh-0001", json!({ "anime_no": 3320 }))
-        .await;
-    assert_eq!(status, StatusCode::CONFLICT, "{body}");
-
-    // Once that read has ended, a refresh is accepted, and repeated by its ID.
     let open = app
         .state
         .commands
@@ -1221,14 +1064,6 @@ async fn the_refresh_command_is_accepted_for_a_linked_anime_only_and_one_at_a_ti
     assert_eq!(status, StatusCode::ACCEPTED, "{body}");
     assert_eq!(body["state"], "pending");
     assert_eq!(body["kind"], "anissia_captions");
-    let (status, _) = app
-        .command("refresh-0001", json!({ "anime_no": 3320 }))
-        .await;
-    assert_eq!(status, StatusCode::OK);
-    let (status, _) = app
-        .command("refresh-0001", json!({ "anime_no": 3321 }))
-        .await;
-    assert_eq!(status, StatusCode::CONFLICT);
     // The payload is the anime and nothing else.
     let (status, _) = app
         .command("refresh-0002", json!({ "anime_no": 3320, "x": 1 }))

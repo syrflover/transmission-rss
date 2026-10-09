@@ -143,4 +143,46 @@ mod tests {
         assert!(serde_json::from_str::<AnissiaCaptions>(r#"{"anime_no":1,"x":1}"#).is_err());
         assert!(serde_json::from_str::<AnissiaCaptions>(r#"{"anime_no":"1"}"#).is_err());
     }
+
+    async fn commands() -> (tempfile::TempDir, CommandStore) {
+        let dir = tempfile::tempdir().unwrap();
+        let db = trss_core::Db::open(dir.path().join("app.db"))
+            .await
+            .unwrap();
+        (dir, CommandStore::new(db))
+    }
+
+    /// One anime has at most one open read, so a read waiting or running stands
+    /// for the next ask; another anime is independent, and once the read has
+    /// ended a new one is stored.
+    #[tokio::test]
+    async fn an_anime_has_one_open_read_at_a_time() {
+        let (_dir, commands) = commands().await;
+
+        assert!(ask(&commands, 3320, 1_000).await.unwrap());
+        let stored = commands.get("captions-3320-1000").await.unwrap().unwrap();
+        assert_eq!(stored.kind, KIND);
+        assert_eq!(stored.payload, r#"{"anime_no":3320}"#);
+        assert_eq!(stored.subject.as_deref(), Some("3320"));
+        assert_eq!(stored.state, CommandState::Pending);
+
+        // Waiting, and then running: the open read stands for the ask.
+        assert!(!ask(&commands, 3320, 1_100).await.unwrap());
+        commands.claim_next(1_200).await.unwrap().unwrap();
+        assert!(!ask(&commands, 3320, 1_300).await.unwrap());
+        assert_eq!(commands.get("captions-3320-1100").await.unwrap(), None);
+        assert!(ask(&commands, 3321, 1_400).await.unwrap());
+
+        // Once it has ended, whatever way, the anime is read again.
+        let outcome = Outcome {
+            result: READ.to_owned(),
+            reason: None,
+        };
+        commands
+            .finish("captions-3320-1000", CommandState::Done, outcome, 1_500)
+            .await
+            .unwrap();
+        assert!(ask(&commands, 3320, 1_600).await.unwrap());
+        assert!(commands.get("captions-3320-1600").await.unwrap().is_some());
+    }
 }

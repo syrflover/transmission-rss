@@ -452,6 +452,11 @@ async fn a_search_answer_that_is_not_the_lists_is_refused() {
             "no content",
         ),
         (r#"{"code":"ok","data":{"content":[]}}"#, "last"),
+        // Entries that read, with no word on whether they are the last page.
+        (
+            r#"{"code":"ok","data":{"content":[{"animeNo":1,"subject":"x"}]}}"#,
+            "last",
+        ),
         (
             r#"{"code":"ok","data":{"content":[],"last":"yes"}}"#,
             "last",
