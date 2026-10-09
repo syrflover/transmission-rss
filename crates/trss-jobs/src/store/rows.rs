@@ -65,6 +65,75 @@ impl JobRow {
             .or_else(|| self.work_name.clone())
             .unwrap_or_else(|| "작품을 찾지 못한 작업".to_owned())
     }
+
+    /// Whether the job waits for a person to pass a site's check (`인증
+    /// 필요`). A find job, which waits the same way while a person browses, is
+    /// the person's own doing and does not. [`WAITS_FOR_CHECK`] is the same
+    /// condition in SQL.
+    pub fn waits_for_check(&self) -> bool {
+        self.state == JobState::Waiting && self.wait == Some(Wait::Auth) && self.origin != FIND
+    }
+
+    /// Whether the job waits for a person to say which episode a file is (its
+    /// 배치 확인, `회차 확인 필요`). [`WAITS_FOR_PLACEMENT`] is the same condition
+    /// in SQL.
+    pub fn waits_for_placement(&self) -> bool {
+        self.state == JobState::Waiting && self.wait == Some(Wait::Placement)
+    }
+
+    /// Where the job sits among the open jobs that are neither failed nor
+    /// running: a person's check first, then the other waits (a find job,
+    /// which waits for a person's browsing, among them), held, then pending.
+    /// `None` for any other.
+    fn waiting_rank(&self) -> Option<u8> {
+        match self.state {
+            JobState::Waiting if self.waits_for_check() => Some(0),
+            JobState::Waiting => Some(1),
+            JobState::Held => Some(2),
+            JobState::Pending => Some(3),
+            _ => None,
+        }
+    }
+}
+
+/// [`JobRow::waits_for_check`] over the table `subtitle_jobs j`.
+pub(super) const WAITS_FOR_CHECK: &str =
+    "j.state = 'waiting' AND j.wait = 'auth' AND j.origin <> 'find'";
+
+/// [`JobRow::waits_for_placement`] over the table `subtitle_jobs j`.
+pub(super) const WAITS_FOR_PLACEMENT: &str = "j.state = 'waiting' AND j.wait = 'placement'";
+
+/// The jobs that are not done, in the groups the job list shows them in.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct OpenGroups {
+    /// `failed` and `partial`, the newest state change first.
+    pub failed: Vec<JobRow>,
+    /// A person's check first, then the other waits, held, then pending
+    /// (each oldest first).
+    pub waiting: Vec<JobRow>,
+    /// Oldest first.
+    pub running: Vec<JobRow>,
+}
+
+impl OpenGroups {
+    /// Groups `open`, the jobs that are not done, oldest first.
+    pub fn of(open: Vec<JobRow>) -> OpenGroups {
+        let mut groups = OpenGroups::default();
+        let mut waiting = Vec::new();
+        for row in open {
+            match row.state {
+                JobState::Failed | JobState::Partial => groups.failed.push(row),
+                JobState::Running => groups.running.push(row),
+                _ => waiting.extend(row.waiting_rank().map(|rank| (rank, row))),
+            }
+        }
+        groups
+            .failed
+            .sort_by_key(|r| std::cmp::Reverse((r.state_at, r.seq)));
+        waiting.sort_by_key(|(rank, r)| (*rank, r.seq));
+        groups.waiting = waiting.into_iter().map(|(_, row)| row).collect();
+        groups
+    }
 }
 
 /// What an upload or a find job kept, by kind, and how many files it dropped.
@@ -547,4 +616,105 @@ pub(super) fn steps(c: &Connection, job_id: &str) -> Result<Vec<StepRow>, JobErr
         })?
         .collect::<Result<Vec<_>, _>>()?;
     Ok(rows)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn job(
+        seq: i64,
+        origin: &str,
+        state: JobState,
+        wait: Option<Wait>,
+        state_at: Millis,
+    ) -> JobRow {
+        JobRow {
+            seq,
+            id: format!("j{seq}"),
+            origin: origin.to_owned(),
+            revision_of: None,
+            revises_job: None,
+            revises_attributed: false,
+            state,
+            wait,
+            stage: None,
+            note: None,
+            state_at,
+            created_at: 0,
+            finished_at: None,
+            work_id: None,
+            work_name: None,
+            season: None,
+            anime_no: None,
+            anime_title: None,
+            creator: None,
+            episodes: Vec::new(),
+            source: None,
+            progress: Progress::default(),
+            failure: None,
+            upload: None,
+            finishing: false,
+            receiving: false,
+        }
+    }
+
+    fn ids(rows: &[JobRow]) -> Vec<&str> {
+        rows.iter().map(|r| r.id.as_str()).collect()
+    }
+
+    #[test]
+    fn a_job_waits_for_a_persons_check_unless_it_is_a_find_job_that_waits_for_browsing() {
+        use JobState::*;
+        // (state, wait, origin, waits for a check, waits for a placement)
+        let cases = [
+            (Waiting, Some(Wait::Auth), "pick", true, false),
+            (Waiting, Some(Wait::Auth), "auto", true, false),
+            (Waiting, Some(Wait::Auth), FIND, false, false),
+            (Waiting, Some(Wait::Placement), "upload", false, true),
+            (Waiting, Some(Wait::Placement), FIND, false, true),
+            (Waiting, Some(Wait::Subtitle), "pick", false, false),
+            (Waiting, Some(Wait::Approval), "pick", false, false),
+            (Waiting, None, "pick", false, false),
+            (Held, Some(Wait::Auth), "pick", false, false),
+            (Running, Some(Wait::Placement), "pick", false, false),
+            (Pending, None, "pick", false, false),
+        ];
+        for (state, wait, origin, check, placement) in cases {
+            let row = job(1, origin, state, wait, 0);
+            assert_eq!(row.waits_for_check(), check, "{state:?} {wait:?} {origin}");
+            assert_eq!(
+                row.waits_for_placement(),
+                placement,
+                "{state:?} {wait:?} {origin}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_open_jobs_are_grouped_failed_newest_first_and_waiting_by_what_they_wait_for() {
+        use JobState::*;
+        let open = vec![
+            job(1, "pick", Pending, None, 50),
+            job(2, "pick", Failed, None, 100),
+            job(3, "pick", Held, None, 50),
+            job(4, "pick", Waiting, Some(Wait::Subtitle), 50),
+            job(5, "pick", Waiting, Some(Wait::Auth), 60),
+            job(6, "pick", Partial, None, 200),
+            job(7, FIND, Waiting, Some(Wait::Auth), 60),
+            job(8, "pick", Running, None, 70),
+            job(9, "pick", Waiting, Some(Wait::Auth), 60),
+            job(10, "pick", Running, None, 30),
+            // The same time as another failure: the later job first.
+            job(11, "pick", Failed, None, 100),
+        ];
+
+        let groups = OpenGroups::of(open);
+
+        assert_eq!(ids(&groups.failed), ["j6", "j11", "j2"]);
+        // A person's check first (a find job is no check), then the other
+        // waits, held, then pending, each oldest first.
+        assert_eq!(ids(&groups.waiting), ["j5", "j9", "j4", "j7", "j3", "j1"]);
+        assert_eq!(ids(&groups.running), ["j8", "j10"]);
+    }
 }

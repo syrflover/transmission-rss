@@ -655,3 +655,54 @@ async fn the_receive_failures_have_the_adds_a_rule_failed_and_no_other_history_i
         .collect();
     assert_eq!(added, [("r1", "[Group] Show - 03")]);
 }
+
+/// The two lists of waiting jobs are read in SQL; a row says the same of
+/// itself (`JobRow::waits_for_check`, `JobRow::waits_for_placement`).
+#[tokio::test]
+async fn the_waits_the_store_lists_are_the_jobs_their_rows_say_wait() {
+    let base = Base::new().await;
+    let mut insert = String::new();
+    let mut n = 0;
+    for state in ["pending", "running", "waiting", "held", "failed", "partial"] {
+        for wait in [
+            "NULL",
+            "'auth'",
+            "'subtitle'",
+            "'placement'",
+            "'approval'",
+            "'video'",
+        ] {
+            for origin in ["pick", "auto", "find", "upload", "relocate"] {
+                n += 1;
+                insert.push_str(&format!(
+                    "INSERT INTO subtitle_jobs
+                         (id, command_id, request, origin, state, wait, created_at, updated_at, state_at)
+                     VALUES ('j{n}', 'c{n}', '{{}}', '{origin}', '{state}', {wait}, 1, 1, 1);"
+                ));
+            }
+        }
+    }
+    base.db
+        .run(move |c| c.execute_batch(&insert).map_err(trss_core::DbError::from))
+        .await
+        .unwrap();
+    let views = &base.store.views;
+    let open = views.open_jobs().await.unwrap();
+    assert_eq!(open.len(), n);
+
+    let ids = |rows: Vec<trss_jobs::store::JobRow>| -> Vec<String> {
+        rows.into_iter().map(|r| r.id).collect()
+    };
+    let by_row = |wanted: fn(&trss_jobs::store::JobRow) -> bool| -> Vec<String> {
+        open.iter()
+            .filter(|r| wanted(r))
+            .map(|r| r.id.clone())
+            .collect()
+    };
+    let checks = by_row(|r| r.waits_for_check());
+    let placements = by_row(|r| r.waits_for_placement());
+    // Some of every kind are there to be told apart.
+    assert!(!checks.is_empty() && !placements.is_empty());
+    assert_eq!(ids(views.auth_waits().await.unwrap()), checks);
+    assert_eq!(ids(views.placement_waits().await.unwrap()), placements);
+}

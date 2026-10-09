@@ -25,8 +25,8 @@ pub use create::{Created, MappingStamp, NewItem, NewJob, NewUpload, UploadedFile
 pub use find::{AskedFinish, Found, NewFind, NOTHING_FOUND};
 pub use receipts::{snapshot_json, FileProblem};
 pub use rows::{
-    DonePage, DroppedRow, EventRow, FileRow, ItemRow, JobDetail, JobRow, Pick, Progress, StepRow,
-    UploadSummary,
+    DonePage, DroppedRow, EventRow, FileRow, ItemRow, JobDetail, JobRow, OpenGroups, Pick,
+    Progress, StepRow, UploadSummary,
 };
 pub use run::DECIDED;
 

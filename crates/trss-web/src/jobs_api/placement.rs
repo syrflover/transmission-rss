@@ -69,7 +69,7 @@ pub(super) async fn view(
         return Ok(None);
     };
     let waiting = match whole {
-        true => row.state == JobState::Waiting && row.wait == Some(Wait::Placement),
+        true => row.waits_for_placement(),
         false => {
             !matches!(row.state, JobState::Running | JobState::Held)
                 && row.wait != Some(Wait::Approval)

@@ -3,8 +3,8 @@
 use rusqlite::{params, Connection};
 
 use super::{
-    rows::{dropped_rows, items, rows, steps},
-    DonePage, EventRow, ItemRow, JobDetail, JobError, JobRow, JobViews, Pick,
+    rows::{dropped_rows, items, rows, steps, WAITS_FOR_CHECK, WAITS_FOR_PLACEMENT},
+    DonePage, EventRow, ItemRow, JobDetail, JobError, JobRow, JobViews, OpenGroups, Pick,
 };
 
 impl JobViews {
@@ -15,30 +15,27 @@ impl JobViews {
             .await
     }
 
-    /// The jobs waiting for a person's check, oldest first. A find job, which
-    /// waits the same way while a person browses, is the person's own doing
-    /// and not among them.
+    /// The jobs that are not done, in the groups the job list shows them in.
+    pub async fn open_groups(&self) -> Result<OpenGroups, JobError> {
+        Ok(OpenGroups::of(self.open_jobs().await?))
+    }
+
+    /// The jobs waiting for a person's check ([`JobRow::waits_for_check`]),
+    /// oldest first.
     pub async fn auth_waits(&self) -> Result<Vec<JobRow>, JobError> {
         self.db
-            .run(|c| {
-                rows(
-                    c,
-                    "WHERE j.state = 'waiting' AND j.wait = 'auth' AND j.origin <> 'find'
-                     ORDER BY j.seq",
-                    [],
-                )
-            })
+            .run(|c| rows(c, &format!("WHERE {WAITS_FOR_CHECK} ORDER BY j.seq"), []))
             .await
     }
 
-    /// The jobs waiting for a person to say which episode a file is (the
-    /// job's 배치 확인, `회차 확인 필요`), oldest first.
+    /// The jobs waiting for a person to say which episode a file is
+    /// ([`JobRow::waits_for_placement`]), oldest first.
     pub async fn placement_waits(&self) -> Result<Vec<JobRow>, JobError> {
         self.db
             .run(|c| {
                 rows(
                     c,
-                    "WHERE j.state = 'waiting' AND j.wait = 'placement' ORDER BY j.seq",
+                    &format!("WHERE {WAITS_FOR_PLACEMENT} ORDER BY j.seq"),
                     [],
                 )
             })

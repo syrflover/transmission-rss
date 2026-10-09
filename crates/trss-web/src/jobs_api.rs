@@ -193,8 +193,8 @@ use trss_jobs::{
         unchanged,
     },
     store::{DonePage, FileRow, JobDetail, JobRow, StepRow},
-    AskedFinish, Created, FileState, ItemState, JobState, NewFind, NewJob, StepKind, Wait, FIND,
-    RELOCATE, UPLOAD,
+    AskedFinish, Created, FileState, ItemState, NewFind, NewJob, StepKind, Wait, FIND, RELOCATE,
+    UPLOAD,
 };
 use trss_library::store::seasons::{anissia::AnissiaLink, SeasonError};
 
@@ -382,43 +382,23 @@ struct Groups {
     done: DonePageView,
 }
 
-/// Where a not-done job sits in `waiting`: a person's check first, then the
-/// other waits (a find job, which waits for a person's browsing, among them),
-/// held, then pending.
-fn waiting_rank(row: &JobRow) -> Option<u8> {
-    match (row.state, row.wait) {
-        (JobState::Waiting, Some(Wait::Auth)) if row.origin != FIND => Some(0),
-        (JobState::Waiting, _) => Some(1),
-        (JobState::Held, _) => Some(2),
-        (JobState::Pending, _) => Some(3),
-        _ => None,
-    }
-}
-
 async fn groups(State(state): State<AppState>) -> Result<Json<Groups>, ApiError> {
-    let open = state.jobs.open_jobs().await.map_err(|e| internal(&e))?;
-    let covers = covers_of(&state, &open).await?;
-    let mut failed: Vec<&JobRow> = open
-        .iter()
-        .filter(|r| matches!(r.state, JobState::Failed | JobState::Partial))
-        .collect();
-    failed.sort_by_key(|r| std::cmp::Reverse((r.state_at, r.seq)));
-    let mut waiting: Vec<(u8, &JobRow)> = open
-        .iter()
-        .filter_map(|r| waiting_rank(r).map(|rank| (rank, r)))
-        .collect();
-    waiting.sort_by_key(|(rank, r)| (*rank, r.seq));
-    let running = open.iter().filter(|r| r.state == JobState::Running);
-
+    let open = state.jobs.open_groups().await.map_err(|e| internal(&e))?;
+    let covers = covers_of(
+        &state,
+        open.failed.iter().chain(&open.waiting).chain(&open.running),
+    )
+    .await?;
     let done = state
         .jobs
         .done_page(None, DONE_FIRST)
         .await
         .map_err(|e| internal(&e))?;
+    let views = |rows: &[JobRow]| rows.iter().map(|r| view(r, &covers)).collect();
     Ok(Json(Groups {
-        failed: failed.into_iter().map(|r| view(r, &covers)).collect(),
-        waiting: waiting.into_iter().map(|(_, r)| view(r, &covers)).collect(),
-        running: running.map(|r| view(r, &covers)).collect(),
+        failed: views(&open.failed),
+        waiting: views(&open.waiting),
+        running: views(&open.running),
         done: page_view(&state, done).await?,
     }))
 }
