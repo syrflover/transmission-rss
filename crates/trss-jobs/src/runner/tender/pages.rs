@@ -3,16 +3,16 @@
 //! 수명).
 //!
 //! While a run is bound to a job, the job's watch keeps a follower
-//! ([`Runner::follow_pages_of`]) that looks at the run's pages once a second:
+//! ([`ScreenTender::follow_pages_of`]) that looks at the run's pages once a second:
 //!
 //! - It writes the pages that stayed, in the order they came, as the tabs of
-//!   the screen ([`ScreenStore::set_pages`]). A page counts once it is seen
+//!   the screen ([`screen::ScreenStore::set_pages`]). A page counts once it is seen
 //!   twice in a row, so one that opens and closes at once is never a tab.
 //! - It closes the pages a person asked to close
-//!   ([`ScreenStore::take_close`]), never the page the run was bound with, in
+//!   ([`screen::ScreenStore::take_close`]), never the page the run was bound with, in
 //!   the browser.
 //! - It decides which page the screen shows ([`Pages::look`]): the page a
-//!   person chose ([`ScreenStore::take_switch`]); else a page that has stayed
+//!   person chose ([`screen::ScreenStore::take_switch`]); else a page that has stayed
 //!   since the last look (a popup); else, when the page shown is gone, the
 //!   newest page left; else the page it shows now, so a person's choice of an
 //!   older tab is not undone at the next look.
@@ -22,7 +22,7 @@ use std::{sync::Arc, time::Duration};
 use tokio_util::sync::{CancellationToken, DropGuard};
 use trss_subtitles::auth::AuthBrowser;
 
-use super::Runner;
+use super::ScreenTender;
 use crate::screen;
 
 /// How often the follower looks at the run's pages.
@@ -94,7 +94,7 @@ impl Pages {
     }
 }
 
-impl Runner {
+impl ScreenTender {
     /// Starts the follower of the bound run (see the module docs). It ends
     /// with the returned guard, which the job's watch holds.
     pub(super) fn follow_pages_of(

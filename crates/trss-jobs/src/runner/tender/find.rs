@@ -6,10 +6,10 @@
 //! serves it as it is). A person browses there: past posts, popups, and any
 //! check the site puts up, which only they pass.
 //!
-//! The job's watch ([`Runner::watch_find`]) takes every download the run
+//! The job's watch ([`ScreenTender::watch_find`]) takes every download the run
 //! completes: each is judged as an uploaded file is ([`sort_arrival`]) and
 //! kept as a file of the job's package, or dropped with why. One taker at a
-//! time for a job ([`Runner::find_take`]): the watch, a next run's start and
+//! time for a job ([`ScreenTender::find_take`]): the watch, a next run's start and
 //! the end of a job with no run never judge the same staged file. The screen
 //! follows the pages of the run like a site's check does ([`super::pages`]):
 //! a post a popup opens is the one a person sees, and a person may switch
@@ -24,7 +24,7 @@
 //! download of the run is on its way: a download under way is waited for (it
 //! ends within the browser's stall and size limits), never cut off. A job
 //! with no run bound is ended by the worker's next look at the screens
-//! ([`Runner::tend_screens`], with or without a server browser) or by its run
+//! ([`crate::Runner::tend_screens`], with or without a server browser) or by its run
 //! starting. Either end takes what is in the job's folder first.
 
 use std::{path::Path, sync::Arc, time::Duration};
@@ -37,7 +37,8 @@ use trss_subtitles::{
 };
 use url::Url;
 
-use super::{described, Runner, NO_AUTH_BROWSER};
+use super::ScreenTender;
+use crate::runner::{described, NO_AUTH_BROWSER};
 use crate::{
     model::{ItemState, JobState, StepKind, StepState, Wait},
     screen,
@@ -51,10 +52,10 @@ pub const FIND_NOTE: &str = "원격 화면에서 게시물을 찾아 첨부 파�
 /// How often the watch looks for a request to finish.
 const FINISH_POLL: Duration = Duration::from_millis(500);
 
-impl Runner {
+impl ScreenTender {
     /// One run of the find job `id` (see the module docs). Returns whether
     /// the run ended (the job waits or is done).
-    pub(super) async fn run_find(
+    pub(in crate::runner) async fn run_find(
         &self,
         id: &str,
         cancel: &CancellationToken,
@@ -232,8 +233,8 @@ impl Runner {
     }
 
     /// Waits for the find job `job`'s staged downloads to be the caller's
-    /// alone: held while taking them ([`Runner::take_found`],
-    /// [`Runner::take_one`]) and while ending the job.
+    /// alone: held while taking them ([`ScreenTender::take_found`],
+    /// [`ScreenTender::take_one`]) and while ending the job.
     async fn find_take(&self, job: &str) -> tokio::sync::OwnedMutexGuard<()> {
         let lock = self
             .find_takes
@@ -247,7 +248,7 @@ impl Runner {
 
     /// Takes the files a run left in the item's folder (a restart cut its
     /// watch short after the download moved). The caller holds
-    /// [`Runner::find_take`].
+    /// [`ScreenTender::find_take`].
     async fn take_found(&self, job: &str, item: i64, budget: &mut u64) -> Result<(), JobError> {
         let staging = self.check_staging(job, item);
         let Ok(mut entries) = tokio::fs::read_dir(&staging).await else {
@@ -269,7 +270,7 @@ impl Runner {
     }
 
     /// Judges the file the run downloaded to `path`, named `name`, and
-    /// records it as kept or dropped. The caller holds [`Runner::find_take`].
+    /// records it as kept or dropped. The caller holds [`ScreenTender::find_take`].
     async fn take_one(
         &self,
         job: &str,

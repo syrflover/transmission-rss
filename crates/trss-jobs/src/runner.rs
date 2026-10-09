@@ -32,26 +32,11 @@
 //!   A post whose check a person passes in the server browser
 //!   ([`Opened::BrowserAuth`]) is first brought to the check by the runner's
 //!   [`AuthBrowser`] ([`Runner::with_auth`]), and the run that shows it is
-//!   bound to the job ([`crate::screen`]); one item of a job at a time. The
-//!   worker watches the bound run ([`Runner::tend_screens`]): the file the
-//!   browser downloads when the person passes the check is put in a folder of
-//!   the item's and the job goes back in line, and the item's next run
-//!   receives that file like any other (`받기`). Where the file should have
-//!   come from answering with a web page instead (an expired address, a
-//!   file gone; [`Waited::Refused`]) is kept in that folder the same way,
-//!   and the item's next run fails with it: nothing asks the address again,
-//!   and a new attempt goes through the check anew. Each opening of the
-//!   job's screen lets the browser bring a check that went away back to the
-//!   page ([`AuthBrowser::rearm`]). A person may also ask to start the run
-//!   anew when its page is stuck ([`screen::ScreenStore::request_restart`]):
-//!   the worker ends the run, after any download of it has ended, and puts
-//!   the job back in line to be brought to the check in a new run. The
-//!   item's folder goes once the item settles (received, failed or held). A
-//!   run that ends before leaves the job waiting with no run; a person's
-//!   next opening of the job's page asks for it again, and the job goes back
-//!   in line to be brought to the check anew. The runs the worker's own shutdown ends leave the
-//!   binding to the next worker's start. Without an [`AuthBrowser`] such a
-//!   post waits for a source.
+//!   bound to the job ([`crate::screen`]); the worker watches that run
+//!   ([`Runner::tend_screens`]) and the job goes back in line when the person
+//!   has passed the check. The care of the screen (the check, the watch, the
+//!   pages, the end of the run) is the `tender` module's. Without an
+//!   [`AuthBrowser`] such a post waits for a source.
 //!   A site's check that needs no browser (a protected post) only waits.
 //! - A find job ([`crate::store::FIND`]) has no source to read: the browser
 //!   opens its creator's post for a person to browse on the job's remote
@@ -80,7 +65,6 @@
 //! `receive` module's.
 
 use std::{
-    collections::{HashMap, HashSet},
     path::PathBuf,
     sync::{Arc, Mutex},
     time::Duration,
@@ -90,9 +74,9 @@ use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 use trss_core::{episode::episode_label, Clock, Millis};
 use trss_subtitles::{
-    auth::{self, AuthBrowser, AuthPage, Waited},
+    auth::AuthBrowser,
     winpng::{self, ViewRequest, Viewed, WinpngReader},
-    Failure, FailureKind, Opened, PostFile, Snapshot, Sources,
+    Failure, FailureKind, Opened, Snapshot, Sources,
 };
 use url::Url;
 
@@ -100,15 +84,16 @@ use crate::{
     area::ReceiveArea,
     model::{FileState, ItemState, JobState, StepKind, StepState, Wait},
     place::{PlaceStore, Placement, Placer},
-    screen::{self, Arrival, ScreenStore},
+    screen::ScreenStore,
     store::{FileProblem, ItemRow, JobError, JobRun, JobViews, FIND, RELOCATE, UPLOAD},
 };
 
-pub mod find;
-mod pages;
 mod receive;
+mod tender;
 
 use receive::{Receipt, Receiver};
+pub use tender::find;
+use tender::{Check, ScreenTender};
 
 /// What the job's log and screen say for a post no source reads.
 pub const NO_SOURCE: &str = "이 출처에서 받는 방법을 아직 몰라요";
@@ -143,6 +128,7 @@ pub struct Runner {
     /// Stores and applies what the items received ([`crate::place`]).
     placer: Placer,
     sources: Sources,
+    /// Where a reading of images puts its files ([`Runner::staging`]).
     area: ReceiveArea,
     clock: Clock,
     /// Receives, publishes and recovers the files of an item.
@@ -150,37 +136,12 @@ pub struct Runner {
     /// Reads the WinPNG images of a post; `None`: the worker has no server
     /// browser.
     winpng: Option<Arc<dyn WinpngReader>>,
-    /// Brings a post to a site's check in the server browser and takes the
-    /// file a person's pass downloads; `None`: no server browser.
-    auth: Option<Arc<dyn AuthBrowser>>,
-    screens: ScreenStore,
-    /// The bound run and item each job's watch waits on
-    /// ([`Runner::tend_screens`]).
-    watching: Arc<Mutex<HashMap<String, (String, i64)>>>,
-    /// The jobs whose check is being brought back to the page
-    /// ([`Runner::tend_screens`]): one at a time for each.
-    rearming: Arc<Mutex<HashSet<String>>>,
-    /// By find job: held by whoever takes its staged downloads or ends it
-    /// ([`Runner::watch_find`]), so two of them never judge the same file.
-    find_takes: Arc<Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>>,
+    /// Cares for the remote screens: the checks, their watches, the find
+    /// jobs.
+    tender: ScreenTender,
     /// The library's generation the last look for arrived videos saw
     /// ([`Runner::requeue_awaiting_video`]).
     video_seen: Arc<Mutex<Option<i64>>>,
-}
-
-/// A job's check being brought back to its page; the job is free again when
-/// this goes, whatever way the task ended.
-struct Rearming {
-    jobs: Arc<Mutex<HashSet<String>>>,
-    job: String,
-}
-
-impl Drop for Rearming {
-    fn drop(&mut self) {
-        if let Ok(mut jobs) = self.jobs.lock() {
-            jobs.remove(&self.job);
-        }
-    }
 }
 
 /// What a failure says in the log: its class, then its reason.
@@ -205,19 +166,6 @@ async fn pause(wait: Duration, cancel: &CancellationToken) -> bool {
     }
 }
 
-/// What an item whose post needs a person's check in the server browser
-/// came to.
-enum Check {
-    /// The browser downloaded the post's file: receive it.
-    Arrived(Box<PostFile>),
-    /// Where the file should have come from answered with a page instead:
-    /// the item fails with it.
-    Refused(Failure),
-    /// The item waits (its state is written).
-    Settled,
-    Interrupted,
-}
-
 /// How a job stands from its items alone ([`Runner::received`]).
 struct Received {
     state: JobState,
@@ -237,20 +185,17 @@ enum ItemEnd {
 impl Runner {
     pub fn new(store: JobRun, sources: Sources, area: ReceiveArea, clock: Clock) -> Runner {
         let placer = Placer::new(store.clone(), area.clone(), clock.clone());
+        let views = JobViews::new(store.db().clone());
         Runner {
             receiver: Receiver::new(store.clone(), placer.clone(), area.clone(), clock.clone()),
+            tender: ScreenTender::new(store.clone(), views.clone(), area.clone(), clock.clone()),
             placer,
             sources,
             area,
             clock,
             winpng: None,
-            auth: None,
-            screens: ScreenStore::new(store.db().clone()),
-            watching: Arc::default(),
-            rearming: Arc::default(),
-            find_takes: Arc::default(),
             video_seen: Arc::default(),
-            views: JobViews::new(store.db().clone()),
+            views,
             place: PlaceStore::new(store.db().clone()),
             store,
         }
@@ -266,12 +211,12 @@ impl Runner {
 
     /// The same runner bringing posts to a site's check with `browser`.
     pub fn with_auth(mut self, browser: Arc<dyn AuthBrowser>) -> Runner {
-        self.auth = Some(browser);
+        self.tender = self.tender.with_auth(browser);
         self
     }
 
     pub fn screens(&self) -> &ScreenStore {
-        &self.screens
+        self.tender.screens()
     }
 
     /// The same runner reading WinPNG images with `reader`.
@@ -345,6 +290,25 @@ impl Runner {
         self.placer.run_cleanups().await
     }
 
+    /// Watches the runs bound to jobs that wait for a person's check, and
+    /// answers the requests to prepare their screens (see the module docs).
+    /// A file that arrives, or a job put back in line, notifies `wake` (the
+    /// worker's job loop). A person's request to start a run anew ends that
+    /// run first (never while it has a download on its way: the request
+    /// waits for a later round), and only then puts the job back in line, so
+    /// the next run of the job cannot take the same run back. The worker
+    /// calls it whenever it is woken and every few seconds. Without an [`AuthBrowser`] it only ends the find jobs a
+    /// person asked to finish that have no run bound. `shutdown` is the
+    /// worker's: a run that ends after it fired was ended by the shutdown,
+    /// which closes no screen (the next start does).
+    pub async fn tend_screens(
+        &self,
+        wake: &Arc<Notify>,
+        shutdown: &CancellationToken,
+    ) -> Result<(), JobError> {
+        self.tender.tend(wake, shutdown).await
+    }
+
     /// Runs the ready jobs one after the other until none is left or `cancel`
     /// fires. Returns how many runs ended. The caller holds the worker lock.
     pub async fn run_ready(&self, cancel: &CancellationToken) -> Result<usize, JobError> {
@@ -405,7 +369,7 @@ impl Runner {
             .event(id, message.to_owned(), None, self.now())
             .await?;
         if find && !found {
-            return self.run_find(id, cancel).await;
+            return self.tender.run_find(id, cancel).await;
         }
 
         for item in items {
@@ -633,11 +597,12 @@ impl Runner {
             Ok(Opened::Files(files)) => files,
             Ok(Opened::BrowserAuth { reason, page }) => {
                 match self
+                    .tender
                     .through_check(job, &item, &ep, &post, reason, &page, cancel)
                     .await?
                 {
                     Check::Arrived(file) => {
-                        checked = Some(self.check_staging(job, item.id));
+                        checked = Some(self.tender.check_staging(job, item.id));
                         vec![*file]
                     }
                     Check::Refused(failure) => {
@@ -658,7 +623,8 @@ impl Runner {
                             )
                             .await?;
                         fail(failure.reason, Some(failure.kind)).await?;
-                        let _ = tokio::fs::remove_dir_all(self.check_staging(job, item.id)).await;
+                        let _ = tokio::fs::remove_dir_all(self.tender.check_staging(job, item.id))
+                            .await;
                         return Ok(ItemEnd::Settled);
                     }
                     Check::Settled => return Ok(ItemEnd::Settled),
@@ -747,408 +713,6 @@ impl Runner {
         Ok(ItemEnd::Settled)
     }
 
-    /// The folder the file of an item's check goes to when the browser
-    /// downloads it ([`Runner::tend_screens`]): the item's own, so a file
-    /// that came stays for the item's next run, a restart in between too.
-    fn check_staging(&self, job: &str, item: i64) -> PathBuf {
-        self.area.at(&format!(".tmp/check-{job}-{item}"))
-    }
-
-    /// An item whose post needs a person's check in the server browser (see
-    /// the module docs): the file the check let the browser download, or the
-    /// item brought to the check and waiting.
-    #[allow(clippy::too_many_arguments)]
-    async fn through_check(
-        &self,
-        job: &str,
-        item: &ItemRow,
-        ep: &str,
-        post: &Url,
-        reason: String,
-        page: &AuthPage,
-        cancel: &CancellationToken,
-    ) -> Result<Check, JobError> {
-        let now = self.now();
-        if let Some(staged) = auth::staged(&self.check_staging(job, item.id)).await {
-            self.store
-                .set_step(job, StepKind::Open, StepState::Done, None, now)
-                .await?;
-            self.store
-                .set_step(job, StepKind::Auth, StepState::Done, None, now)
-                .await?;
-            return Ok(match staged {
-                auth::Staged::File { name, path } => {
-                    Check::Arrived(Box::new(auth::arrived(post, page, &name, path).await))
-                }
-                auth::Staged::Refused(failure) => Check::Refused(failure),
-            });
-        }
-        let Some(browser) = &self.auth else {
-            self.wait_check(
-                job,
-                item.id,
-                Wait::Subtitle,
-                NO_AUTH_BROWSER.to_owned(),
-                None,
-            )
-            .await?;
-            self.store
-                .event(
-                    job,
-                    format!("{ep}: 사이트 확인에 서버 브라우저가 필요해요"),
-                    Some(reason),
-                    now,
-                )
-                .await?;
-            return Ok(Check::Settled);
-        };
-        // One check of a job on the screen at a time.
-        if let Some(bound) = self.screens.bound(job).await? {
-            if bound.item_id != item.id && browser.is_live(job, &bound.run_id) {
-                self.wait_check(job, item.id, Wait::Auth, OTHER_CHECK_FIRST.to_owned(), None)
-                    .await?;
-                return Ok(Check::Settled);
-            }
-        }
-
-        self.store.set_stage(job, StepKind::Auth, now).await?;
-        self.store
-            .event(
-                job,
-                format!("{ep}: 서버 브라우저에서 사이트 확인을 준비해요"),
-                Some(reason.clone()),
-                now,
-            )
-            .await?;
-        let prepared = tokio::select! {
-            biased;
-            _ = cancel.cancelled() => return Ok(Check::Interrupted),
-            prepared = browser.prepare(auth::PrepareRequest { job, post, page }) => prepared,
-        };
-        let now = self.now();
-        match prepared {
-            Ok(prepared) => {
-                self.screens
-                    .bind(job, item.id, &prepared.run_id, &prepared.target_id, now)
-                    .await?;
-                self.wait_check(
-                    job,
-                    item.id,
-                    Wait::Auth,
-                    reason.clone(),
-                    Some(reason.clone()),
-                )
-                .await?;
-                self.store
-                    .event(
-                        job,
-                        format!("{ep}: 사이트 확인이 필요해요. 작업 화면에서 확인해 주세요"),
-                        Some(reason),
-                        now,
-                    )
-                    .await?;
-            }
-            Err(failure) => {
-                let note = format!("확인 화면을 준비하지 못했어요: {}", failure.reason);
-                self.screens
-                    .bind_failed(job, item.id, note.clone(), now)
-                    .await?;
-                self.wait_check(job, item.id, Wait::Auth, reason, Some(note))
-                    .await?;
-                self.store
-                    .event(
-                        job,
-                        format!("{ep}: 사이트 확인 화면을 준비하지 못했어요"),
-                        Some(described(&FileProblem::from(&failure))),
-                        now,
-                    )
-                    .await?;
-            }
-        }
-        Ok(Check::Settled)
-    }
-
-    /// An item of a post that needs a check waits for `wait` (`why`), the
-    /// step `auth` with `note` when it is the check.
-    async fn wait_check(
-        &self,
-        job: &str,
-        item: i64,
-        wait: Wait,
-        why: String,
-        note: Option<String>,
-    ) -> Result<(), JobError> {
-        let now = self.now();
-        self.store
-            .set_step(job, StepKind::Open, StepState::Done, None, now)
-            .await?;
-        if wait == Wait::Auth {
-            self.store
-                .set_step(job, StepKind::Auth, StepState::Waiting, note, now)
-                .await?;
-        }
-        self.store
-            .set_item(item, ItemState::Waiting, Some(wait), Some(why), now)
-            .await
-    }
-
-    /// Watches the runs bound to jobs that wait for a person's check, and
-    /// answers the requests to prepare their screens (see the module docs).
-    /// A file that arrives, or a job put back in line, notifies `wake` (the
-    /// worker's job loop). A person's request to start a run anew ends that
-    /// run first (never while it has a download on its way: the request
-    /// waits for a later round), and only then puts the job back in line, so
-    /// the next run of the job cannot take the same run back. The worker
-    /// calls it whenever it is woken and every few seconds. Without an [`AuthBrowser`] it only ends the find jobs a
-    /// person asked to finish that have no run bound. `shutdown` is the
-    /// worker's: a run that ends after it fired was ended by the shutdown,
-    /// which closes no screen (the next start does).
-    pub async fn tend_screens(
-        &self,
-        wake: &Arc<Notify>,
-        shutdown: &CancellationToken,
-    ) -> Result<(), JobError> {
-        // A find job a person asked to finish with no run bound: its run
-        // ended (idle, a restart) before its watch ended it, it never had
-        // one, or the worker has no server browser. Only the worker ends it,
-        // after taking what a run left in its folder. One failing job does
-        // not hold back the others.
-        for job in self.store.unbound_finishes().await? {
-            match self.end_unbound_find(&job).await {
-                // What it kept is analysed next.
-                Ok(true) => wake.notify_one(),
-                Ok(false) => {}
-                Err(err) => eprintln!("Subtitle job {job}: finishing: {err}"),
-            }
-        }
-        let Some(browser) = &self.auth else {
-            return Ok(());
-        };
-        for binding in self.screens.bindings().await? {
-            let fresh = {
-                let mut watching = self.watching.lock().expect("watching lock");
-                let watched = (binding.run_id.clone(), binding.item_id);
-                match watching.get(&binding.job_id) {
-                    Some(now) if *now == watched => false,
-                    _ => {
-                        watching.insert(binding.job_id.clone(), watched);
-                        true
-                    }
-                }
-            };
-            if fresh && binding.find {
-                tokio::spawn(self.clone().watch_find(
-                    binding,
-                    browser.clone(),
-                    wake.clone(),
-                    shutdown.clone(),
-                ));
-            } else if fresh {
-                tokio::spawn(self.clone().watch(
-                    binding,
-                    browser.clone(),
-                    wake.clone(),
-                    shutdown.clone(),
-                ));
-            }
-        }
-        for request in self.screens.prepare_requests().await? {
-            let now = self.now();
-            if request.restart {
-                // A person asked to start the stuck run anew. A download on
-                // its way is not lost for it: the request stays unanswered
-                // until the download ended.
-                if let Some(run) = request
-                    .run_id
-                    .as_deref()
-                    .filter(|run| browser.is_live(&request.job_id, run))
-                {
-                    if browser.downloading(&request.job_id, run) {
-                        continue;
-                    }
-                    // The run is over before the job goes back in line.
-                    browser.release(&request.job_id).await;
-                }
-                if self
-                    .screens
-                    .requeue_for_check(&request.job_id, request.asked_at, true, self.now())
-                    .await?
-                {
-                    println!(
-                        "Subtitle job {}: the server browser is started anew at a person's request",
-                        request.job_id
-                    );
-                    wake.notify_one();
-                }
-                continue;
-            }
-            // A person opened the screen: the live run's idle time counts
-            // from now.
-            let live = request
-                .run_id
-                .as_deref()
-                .is_some_and(|run| browser.touch(&request.job_id, run));
-            if live {
-                self.screens
-                    .mark_prepared(&request.job_id, request.asked_at, now)
-                    .await?;
-                // A check that went away while no one looked comes back. One
-                // at a time for a job: a screen opened while the card is being
-                // clicked waits for nothing and starts nothing. A find job has
-                // no check: its page is the person's as they left it.
-                if let Some(run) = request.run_id.clone().filter(|_| !request.find) {
-                    let job = request.job_id.clone();
-                    let started = self
-                        .rearming
-                        .lock()
-                        .expect("rearming lock")
-                        .insert(job.clone());
-                    if started {
-                        let guard = Rearming {
-                            jobs: self.rearming.clone(),
-                            job: job.clone(),
-                        };
-                        let browser = browser.clone();
-                        tokio::spawn(async move {
-                            browser.rearm(&job, &run).await;
-                            drop(guard);
-                        });
-                    }
-                }
-            } else if self
-                .screens
-                .requeue_for_check(&request.job_id, request.asked_at, false, now)
-                .await?
-            {
-                println!(
-                    "Subtitle job {}: {} is brought to the screen again",
-                    request.job_id,
-                    if request.find {
-                        "the creator's post"
-                    } else {
-                        "the site's check"
-                    }
-                );
-                wake.notify_one();
-            }
-        }
-        Ok(())
-    }
-
-    /// Waits on the bound run of a job for the file of its check, until the
-    /// file arrives or the run ends.
-    async fn watch(
-        self,
-        binding: screen::Binding,
-        browser: Arc<dyn AuthBrowser>,
-        wake: Arc<Notify>,
-        shutdown: CancellationToken,
-    ) {
-        let (job, run, item) = (
-            binding.job_id.as_str(),
-            binding.run_id.as_str(),
-            binding.item_id,
-        );
-        let staging = self.check_staging(job, binding.item_id);
-        let _stop_following = self.follow_pages_of(&binding, &browser);
-        loop {
-            let waited = browser.wait_file(job, run, &staging).await;
-            let now = self.now();
-            match waited {
-                Waited::File { name, path } => {
-                    match self
-                        .screens
-                        .arrival(job, run, item, screen::FILE_ARRIVED, &name, now)
-                        .await
-                    {
-                        Ok(Arrival::Taken) => {
-                            println!("Subtitle job {job}: the site's check was passed");
-                            wake.notify_one();
-                        }
-                        // The binding changed meanwhile, but the item has yet
-                        // to receive its file: its next run takes it from
-                        // the folder (`through_check`).
-                        Ok(Arrival::Stale { item_open: true }) => {}
-                        Ok(Arrival::Stale { item_open: false }) => {
-                            let _ = tokio::fs::remove_file(&path).await;
-                            let _ = tokio::fs::remove_dir_all(&staging).await;
-                        }
-                        Err(err) => {
-                            eprintln!("Subtitle job {job}: the file of the site's check: {err}")
-                        }
-                    }
-                    break;
-                }
-                Waited::Refused(failure) => {
-                    // Kept for the item's next run, which fails with it.
-                    if let Err(err) = auth::record_refusal(&staging, &failure).await {
-                        eprintln!(
-                            "Subtitle job {job}: the refusal of the site's check could not be kept: {}",
-                            err.kind()
-                        );
-                        break;
-                    }
-                    let detail = described(&FileProblem::from(&failure));
-                    match self
-                        .screens
-                        .arrival(job, run, item, screen::FILE_REFUSED, &detail, now)
-                        .await
-                    {
-                        Ok(Arrival::Taken) => {
-                            println!(
-                                "Subtitle job {job}: the site's check was passed but its file was refused"
-                            );
-                            wake.notify_one();
-                        }
-                        Ok(Arrival::Stale { item_open: true }) => {}
-                        Ok(Arrival::Stale { item_open: false }) => {
-                            let _ = tokio::fs::remove_dir_all(&staging).await;
-                        }
-                        Err(err) => {
-                            eprintln!("Subtitle job {job}: the refusal of the site's check: {err}")
-                        }
-                    }
-                    break;
-                }
-                Waited::NotTaken { reason } => {
-                    let _ = self
-                        .store
-                        .event(
-                            job,
-                            "브라우저가 파일을 받지 못했어요".to_owned(),
-                            Some(reason),
-                            now,
-                        )
-                        .await;
-                }
-                // The worker's shutdown ended the run: the next start closes
-                // the screen with its own note (`WORKER_RESTARTED`).
-                Waited::Ended if shutdown.is_cancelled() => break,
-                Waited::Ended => {
-                    if let Ok(true) = self.screens.unbind(job, run, screen::RUN_ENDED, now).await {
-                        let _ = self
-                            .store
-                            .event(
-                                job,
-                                "사이트 확인을 기다리던 서버 브라우저가 닫혔어요".to_owned(),
-                                Some(screen::RUN_ENDED.to_owned()),
-                                now,
-                            )
-                            .await;
-                    }
-                    break;
-                }
-            }
-        }
-        let mut watching = self.watching.lock().expect("watching lock");
-        if watching
-            .get(job)
-            .is_some_and(|(r, i)| r == run && *i == item)
-        {
-            watching.remove(job);
-        }
-    }
-
     /// The folder a reading of images puts its files in: the job's own, in the
     /// area's temporary folder, though not named as an attempt (nothing else
     /// removes it).
@@ -1230,7 +794,7 @@ impl Runner {
                 ItemState::Done | ItemState::Failed | ItemState::Held
             )
         }) {
-            let dir = self.check_staging(job, item.id);
+            let dir = self.tender.check_staging(job, item.id);
             if tokio::fs::try_exists(&dir).await.unwrap_or(false) {
                 let _ = tokio::fs::remove_dir_all(dir).await;
             }
@@ -1498,10 +1062,7 @@ impl Runner {
             if let Some(reader) = &self.winpng {
                 reader.release(job).await;
             }
-            if let Some(browser) = &self.auth {
-                browser.release(job).await;
-            }
-            self.screens.clear(job).await?;
+            self.tender.release(job).await?;
         }
         println!("Subtitle job {job}: {} ({done}/{total})", state.code());
         Ok(())
