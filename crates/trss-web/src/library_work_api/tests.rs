@@ -5,7 +5,10 @@ use serde_json::Value;
 
 use super::*;
 use crate::testing;
-use trss_collect::store::channels::{ChannelInput, RuleInput, RuleState};
+use trss_anissia::Anime;
+use trss_collect::store::channels::{
+    ChannelInput, NewSubscription, RuleInput, RuleState, SubtitleMode,
+};
 use trss_core::Db;
 use trss_library::discovery::{
     EpisodeFile, FileKind, Reason, Scan, ScannedWork, Unrecognized, WorkRead,
@@ -332,6 +335,81 @@ async fn lists_the_rules_that_save_into_the_work_folder() {
     assert_eq!(rules[1]["state"], "archived");
     assert_eq!(rules[1]["channel"]["name"], Value::Null);
     assert_eq!(rules[1]["channel"]["host"], "other.example.net");
+}
+
+/// A subscription to the Anissia anime 3320 (`작품`) following the creator
+/// `에텔레로사`, connected to season 1 of the work `id`.
+async fn subscribed_season(state: &AppState, id: &str) -> trss_collect::store::channels::Rule {
+    let channel = state
+        .channels
+        .create_channel(ChannelInput::new("https://feed.test/rss"))
+        .await
+        .unwrap();
+    let rule = state
+        .channels
+        .create_subscription_rule(
+            &channel.id,
+            RuleInput {
+                r#match: Some("Lycoris".into()),
+                directory: "Lycoris Recoil/Season 01".into(),
+                ..Default::default()
+            },
+            NewSubscription {
+                anime: Anime {
+                    anime_no: 3320,
+                    subject: "작품".into(),
+                    original_subject: None,
+                    week: 3,
+                    air_time: None,
+                    start_date: None,
+                    end_date: None,
+                    status: "ON".into(),
+                    fetched_at: 1,
+                },
+                subtitles: SubtitleMode::Follow,
+                creator: Some("에텔레로사".into()),
+                subscribed_at: 1,
+            },
+        )
+        .await
+        .unwrap();
+    state
+        .channels
+        .link_season(&rule.id, &format!("{id}:1"))
+        .await
+        .unwrap();
+    state.channels.get_rule(&rule.id).await.unwrap().unwrap()
+}
+
+#[tokio::test]
+async fn the_head_of_a_work_names_the_subscription_of_its_season_and_the_anissia_title() {
+    let (state, id) = state_with_work().await;
+    // A work no subscription is connected to has no Korean title.
+    let (_, body) = get(&state, &format!("/library/works/{id}")).await;
+    assert_eq!(body["korean_title"], Value::Null);
+    assert_eq!(body["subscriptions"], serde_json::json!([]));
+
+    let rule = subscribed_season(&state, &id).await;
+    let (status, body) = get(&state, &format!("/library/works/{id}")).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["korean_title"], "작품");
+    let held = &body["subscriptions"][0];
+    assert_eq!(held["season"], 1);
+    assert_eq!(held["rule_id"], rule.id.as_str());
+    assert_eq!(held["rule_version"], rule.version);
+    assert_eq!(held["anime_no"], 3320);
+    assert_eq!(held["subject"], "작품");
+    assert_eq!(held["creator"], "에텔레로사");
+
+    // A change of the creator shows in the head.
+    state
+        .channels
+        .set_creator(&rule.id, rule.version, Some("다른 제작자".into()))
+        .await
+        .unwrap();
+    let (_, body) = get(&state, &format!("/library/works/{id}")).await;
+    assert_eq!(body["subscriptions"][0]["creator"], "다른 제작자");
+    assert_eq!(body["subscriptions"][0]["rule_version"], rule.version + 1);
 }
 
 #[tokio::test]

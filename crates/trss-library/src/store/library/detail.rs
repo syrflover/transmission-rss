@@ -501,6 +501,52 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_season_counts_the_episodes_with_a_video_once_each() {
+        use FileKind::{Subtitle, Video};
+        let (store, id) = store_with(scan(
+            "Show",
+            &[1, 2, 3],
+            vec![
+                file(1, "01", "S01E01.mkv", Video),
+                file(1, "01", "S01E01.ko.ass", Subtitle),
+                // `013` and `13` are one episode, and two videos of it count once.
+                file(1, "013", "S01E013.mkv", Video),
+                file(1, "13", "S01E13.mkv", Video),
+                // A subtitle without its video does not count; an episode that is
+                // not whole-numbered does.
+                file(1, "02", "S01E02.ko.ass", Subtitle),
+                file(1, "17.5", "S01E17.5.mkv", Video),
+                file(2, "01", "S02E01.mkv", Video),
+            ],
+            Vec::new(),
+        ))
+        .await;
+
+        let holdings = |season| {
+            let store = store.clone();
+            let id = id.clone();
+            async move { store.season_holdings(&id, season).await.unwrap() }
+        };
+        let first = holdings(1).await.unwrap();
+        assert_eq!(
+            (first.dir_name.as_str(), first.missing, first.videos),
+            ("Show", false, 3)
+        );
+        assert_eq!(holdings(2).await.unwrap().videos, 1);
+        // A season of the work with no file has none.
+        assert_eq!(holdings(3).await.unwrap().videos, 0);
+
+        // No such work, and a work of a folder that is not registered.
+        assert_eq!(
+            store.season_holdings("no-such-work", 1).await.unwrap(),
+            None
+        );
+        let folder = store.folders().await.unwrap().remove(0);
+        store.remove_folder(&folder.id, 200).await.unwrap().unwrap();
+        assert_eq!(store.season_holdings(&id, 1).await.unwrap(), None);
+    }
+
+    #[tokio::test]
     async fn a_work_whose_folder_is_gone_has_no_episodes_to_hold() {
         let (store, id) = store_with(scan(
             "Show",
