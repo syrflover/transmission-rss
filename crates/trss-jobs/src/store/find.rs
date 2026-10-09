@@ -7,7 +7,7 @@ use trss_core::Millis;
 use trss_subtitles::upload::Archive;
 
 use super::{
-    create::{Created, UploadedFile},
+    create::{earlier, Created, UploadedFile},
     rows::{dropped_rows, found_note, items, upload_note, upload_summary},
     DroppedRow, FileRow, JobError, JobStore, FIND,
 };
@@ -292,15 +292,8 @@ impl JobStore {
 
 fn create_find(c: &mut Connection, find: &NewFind, now: Millis) -> Result<Created, JobError> {
     let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    let known: Option<(String, String)> = tx
-        .prepare_cached("SELECT id, request FROM subtitle_jobs WHERE command_id = ?1")?
-        .query_row([&find.command_id], |r| Ok((r.get(0)?, r.get(1)?)))
-        .optional()?;
-    if let Some((id, request)) = known {
-        return Ok(match request == find.request {
-            true => Created::Existing(id),
-            false => Created::Mismatch(id),
-        });
+    if let Some(made) = earlier(&tx, &find.command_id, &find.request)? {
+        return Ok(made);
     }
     let id = uuid::Uuid::new_v4().to_string();
     tx.prepare_cached(

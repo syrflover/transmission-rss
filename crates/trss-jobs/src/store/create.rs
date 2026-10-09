@@ -184,6 +184,26 @@ impl JobStore {
     }
 }
 
+/// What the job already made under the browser's ID `command_id` says about a
+/// request: `Existing` for the same `request`, `Mismatch` for another one, and
+/// `None` when no job was made under that ID. The three ways to make a job ask
+/// it first, in their write transaction, so two deliveries at once make one
+/// job.
+pub(super) fn earlier(
+    tx: &Connection,
+    command_id: &str,
+    request: &str,
+) -> Result<Option<Created>, JobError> {
+    let known: Option<(String, String)> = tx
+        .prepare_cached("SELECT id, request FROM subtitle_jobs WHERE command_id = ?1")?
+        .query_row([command_id], |r| Ok((r.get(0)?, r.get(1)?)))
+        .optional()?;
+    Ok(known.map(|(id, stored)| match stored == request {
+        true => Created::Existing(id),
+        false => Created::Mismatch(id),
+    }))
+}
+
 fn create(
     c: &mut Connection,
     job: &NewJob,
@@ -206,15 +226,8 @@ fn create(
             return Ok(None);
         }
     }
-    let known: Option<(String, String)> = tx
-        .prepare_cached("SELECT id, request FROM subtitle_jobs WHERE command_id = ?1")?
-        .query_row([&job.command_id], |r| Ok((r.get(0)?, r.get(1)?)))
-        .optional()?;
-    if let Some((id, request)) = known {
-        return Ok(Some(match request == job.request {
-            true => Created::Existing(id),
-            false => Created::Mismatch(id),
-        }));
+    if let Some(made) = earlier(&tx, &job.command_id, &job.request)? {
+        return Ok(Some(made));
     }
     let id = uuid::Uuid::new_v4().to_string();
     tx.prepare_cached(
@@ -283,15 +296,8 @@ fn create(
 
 fn create_upload(c: &mut Connection, up: &NewUpload, now: Millis) -> Result<Created, JobError> {
     let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    let known: Option<(String, String)> = tx
-        .prepare_cached("SELECT id, request FROM subtitle_jobs WHERE command_id = ?1")?
-        .query_row([&up.command_id], |r| Ok((r.get(0)?, r.get(1)?)))
-        .optional()?;
-    if let Some((id, request)) = known {
-        return Ok(match request == up.request {
-            true => Created::Existing(id),
-            false => Created::Mismatch(id),
-        });
+    if let Some(made) = earlier(&tx, &up.command_id, &up.request)? {
+        return Ok(made);
     }
     let counts = crate::upload::Counts {
         subtitles: up.files.iter().filter(|f| f.kind == Kind::Subtitle).count(),
