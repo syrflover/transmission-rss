@@ -180,6 +180,8 @@ async fn the_list_holds_the_rules_of_every_channel_with_their_check_order() {
     assert_eq!(list["channels"].as_array().unwrap().len(), 2);
     assert_eq!(list["channels"][0]["host"], "a.test");
     assert_eq!(list["channels"][0]["rule_count"], 2);
+    // The folder a rule's directory is under is told with the list.
+    assert_eq!(list["collect_folder"], "/media");
     assert_eq!(list["rules"][0]["overlap"], false);
     assert_eq!(list["rules"][0]["last_received_at"], Value::Null);
     // No secret value of the channel URL is in the response.

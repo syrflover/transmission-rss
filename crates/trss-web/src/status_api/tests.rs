@@ -73,6 +73,23 @@ async fn an_empty_installation_has_no_snapshots_and_seven_zero_days() {
 }
 
 #[tokio::test]
+async fn the_board_says_whether_the_collect_folder_is_set() {
+    let (state, router) = app();
+    let (status, board) = get(&router, "/api/collect/status").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(board["collect_folder_set"], false);
+
+    state
+        .settings
+        .put_collection(0, "/media".to_owned(), None)
+        .await
+        .unwrap();
+    let (status, board) = get(&router, "/api/collect/status").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(board["collect_folder_set"], true);
+}
+
+#[tokio::test]
 async fn channels_show_the_workers_last_read_and_a_channel_never_read_is_unknown() {
     let (state, router) = app();
     let mut named = ChannelInput::new("https://feed-a.test/rss?token=SECRETVALUE99");

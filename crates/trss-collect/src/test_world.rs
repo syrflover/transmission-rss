@@ -375,6 +375,33 @@ impl World {
         outcomes
     }
 
+    /// The judging step of a cycle while no collect folder is set, as the
+    /// worker's `run_cycle` does it: the channels are read and their items
+    /// judged with nowhere to save into, so the items no rule takes are
+    /// recorded and the ones a rule takes are left unrecorded. What was
+    /// judged is summed over the channels; nothing is added or removed.
+    pub async fn cycle_without_folder(&self) -> cycle::Judged {
+        let at = self.now();
+        let ctx = &self.ctx;
+        let snapshot = ctx.channels.list_channels_with_rules().await.unwrap();
+        let plans = cycle::make_plans(ctx, snapshot, Path::new("")).await;
+        let mut total = cycle::Judged::default();
+        for plan in &plans {
+            let Ok(feed) = feed::fetch(&ctx.http, &plan.channel.url).await else {
+                continue;
+            };
+            let judged = cycle::judge_feed(ctx, plan, &feed, None, at).await;
+            total.jobs.extend(judged.jobs);
+            total.present.extend(judged.present);
+            total.items_seen += judged.items_seen;
+            total.items_new += judged.items_new;
+            total.no_match += judged.no_match;
+            total.excluded += judged.excluded;
+            total.waiting_for_collect_folder += judged.waiting_for_collect_folder;
+        }
+        total
+    }
+
     /// What the items of [`World::cycle_outcomes`] that waited for their work
     /// folder to come out of the archive folder came to: `asked` of each, in
     /// order.

@@ -621,6 +621,36 @@ fn a_long_preview_lists_the_newest_matches_up_to_the_limit_and_counts_all_of_the
 }
 
 #[test]
+fn a_rule_saving_straight_under_the_collect_folder_keeps_its_trailing_slash_in_the_preview_the_plan_and_a_retry(
+) {
+    // A channel's base folder with nothing after it became the collect folder
+    // with a directory ending in `/` (or an empty one): the text the cycle gave
+    // Transmission stays what the preview shows and a retry uses.
+    let items = recorded(&["Show - 01"], 10);
+    for (directory, saved) in [("other/", "/media/other/"), ("", "/media/")] {
+        let stored = Rule {
+            directory: directory.into(),
+            ..rule("r", 0, Some("Show"))
+        };
+        let cwr = channel_with(vec![stored.clone()]);
+
+        let listed = run(&cwr, edit_of("r", &stored.to_input()), &items);
+        assert_eq!(
+            listed.items[0].save_path.as_deref().and_then(Path::to_str),
+            Some(saved),
+            "preview of {directory:?}"
+        );
+        let plan = ChannelPlan::new(cwr, Path::new("/media"));
+        let Judgement::Selected { save_path, .. } = plan.judge("Show - 01") else {
+            panic!("the rule takes the item");
+        };
+        assert_eq!(save_path.to_str(), Some(saved), "plan of {directory:?}");
+        let (retry, _) = crate::plan::rule_destination(Path::new("/media"), &stored);
+        assert_eq!(retry.to_str(), Some(saved), "retry of {directory:?}");
+    }
+}
+
+#[test]
 fn the_preview_agrees_with_the_plan_for_every_recorded_title() {
     // The preview and the worker judge through `ChannelPlan`. This pins that the
     // preview's per-item answer is that plan's answer for the same items and

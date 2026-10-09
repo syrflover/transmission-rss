@@ -107,8 +107,9 @@ impl World {
 
 // --- which rule takes an item, and where its torrent goes ------------------------------
 
-#[tokio::test]
-async fn a_cycle_judges_each_item_by_the_first_rule_that_takes_it_and_adds_it_there() {
+/// The channel of four rules and two excludes that reads the feed of seven
+/// items below: three a rule takes, two the excludes catch, two no rule takes.
+async fn world_of_the_sample_feed() -> World {
     let s = World::with_rules(vec![
         rule("[SubsPlease] Sayonara Lara - ", "Sayonara Lara/Season 01"),
         RuleInput {
@@ -139,7 +140,6 @@ async fn a_cycle_judges_each_item_by_the_first_rule_that_takes_it_and_adds_it_th
         )
         .await
         .unwrap();
-    let rules = s.ctx.channels.list_rules(&s.channel_id).await.unwrap();
     s.feed_numbered(&[
         (1, "[SubsPlease] Sayonara Lara - 03 (1080p) [AAAA0001].mkv"),
         (2, "[SubsPlease] Sayonara Lara - 03 (720p) [AAAA0002].mkv"),
@@ -155,6 +155,13 @@ async fn a_cycle_judges_each_item_by_the_first_rule_that_takes_it_and_adds_it_th
         (6, "[SubsPlease] Unrelated Show - 05 (1080p) [AAAA0009].mkv"),
         (7, ""),
     ]);
+    s
+}
+
+#[tokio::test]
+async fn a_cycle_judges_each_item_by_the_first_rule_that_takes_it_and_adds_it_there() {
+    let s = world_of_the_sample_feed().await;
+    let rules = s.ctx.channels.list_rules(&s.channel_id).await.unwrap();
 
     s.cycle().await;
 
@@ -978,4 +985,66 @@ async fn open_move(s: &World, rule: &crate::store::channels::Rule) -> trss_core:
         panic!("no command is open: {asked:?}");
     };
     open
+}
+
+// --- no collect folder ----------------------------------------------------------------
+
+#[tokio::test]
+async fn while_no_collect_folder_is_set_a_cycle_records_what_no_rule_takes_and_waits_with_the_rest()
+{
+    let s = world_of_the_sample_feed().await;
+    s.sql("DELETE FROM collection_settings");
+
+    // Seven items are judged: the four no rule takes are recorded as usual, the
+    // three a rule takes wait unrecorded, so nothing piles up as `add_failed`.
+    let judged = s.cycle_without_folder().await;
+    assert_eq!(judged.items_seen, 7);
+    assert_eq!(judged.waiting_for_collect_folder, 3);
+    assert_eq!((judged.excluded, judged.no_match), (2, 2));
+    assert!(judged.jobs.is_empty(), "nothing is selected to add");
+    let items = s.history_items().await;
+    assert_eq!(items.len(), 4, "{items:?}");
+    assert!(items
+        .iter()
+        .all(|i| matches!(i.result, HistoryResult::Excluded | HistoryResult::NoMatch)));
+    assert!(s.tr.calls_of("torrent-add").is_empty());
+
+    // The same again, still unset: the same, and still nothing recorded for them.
+    s.advance(300_000);
+    let again = s.cycle_without_folder().await;
+    assert_eq!(again.waiting_for_collect_folder, 3);
+    assert_eq!(s.history_items().await.len(), 4);
+
+    // Choosing the folder is all it takes: the next cycle judges those items as
+    // new and receives them where their rules say.
+    s.ctx
+        .settings
+        .put_collection(0, s.media.to_str().unwrap().to_owned(), None)
+        .await
+        .unwrap();
+    s.cycle_later().await;
+    let mut adds: Vec<String> =
+        s.tr.calls_of("torrent-add")
+            .iter()
+            .map(|c| c.args["download-dir"].as_str().unwrap().to_owned())
+            .collect();
+    adds.sort();
+    let in_media = |dir: &str| s.media.join(dir).to_str().unwrap().to_owned();
+    let mut expected = [
+        in_media("Slime/Season 04"),
+        in_media("Sayonara Lara/Season 01"),
+        in_media("Sono Bisque Doll/Season 02"),
+    ];
+    expected.sort();
+    assert_eq!(adds, expected);
+    let items = s.history_items().await;
+    assert_eq!(items.len(), 7);
+    assert_eq!(
+        items
+            .iter()
+            .filter(|i| i.result == HistoryResult::Received)
+            .count(),
+        3
+    );
+    assert!(items.iter().all(|i| i.result != HistoryResult::AddFailed));
 }
