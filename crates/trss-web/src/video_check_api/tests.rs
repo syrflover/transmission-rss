@@ -91,25 +91,19 @@ async fn a_video_whose_name_gives_no_episode_is_a_to_do_until_a_person_checks_it
     let todos = app.get("/api/todo").await;
     let work = todos["needs"][0]["work"]["id"].as_str().unwrap().to_owned();
     let seen = format!("5:{MTIME_NS}");
+    // The card's composition is `trss-jobs`'; the screen reads these of it.
+    let card = &todos["needs"][0];
     assert_eq!(
-        todos,
-        json!({
-            "needs": [{
-                "kind": "video_check",
-                "key": format!("video:{work}:{ASKED}"),
-                "at": 1_700_000_000_123_i64,
-                "work": { "id": work, "name": "Show", "cover_url": null },
-                "title": "Show",
-                "season": 1,
-                "path": ASKED,
-                "reason": "이름에서 회차를 읽지 못했어요",
-                "seen": seen,
-                "badge": "episode_check",
-            }],
-            "count": 1,
-            "badges": { work.clone(): ["episode_check"] },
-        })
+        (&card["kind"], &card["path"], &card["seen"], &card["badge"]),
+        (
+            &json!("video_check"),
+            &json!(ASKED),
+            &json!(seen),
+            &json!("episode_check")
+        )
     );
+    assert_eq!(todos["count"], 1);
+    assert_eq!(todos["badges"], json!({ work.clone(): ["episode_check"] }));
     assert_eq!(app.badges().await, json!(["episode_check"]));
 
     // Only the video as the screen saw it is checked.

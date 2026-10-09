@@ -19,7 +19,10 @@ use trss_jobs::{
     todo::{self, TodoError, TodoList},
     Follow, JobViews, PlaceStore, Runner,
 };
-use trss_library::store::{artwork::ArtworkStore, library::LibraryStore};
+use trss_library::{
+    discovery::{Reason, SeenFile},
+    store::{artwork::ArtworkStore, library::LibraryStore},
+};
 use trss_subtitles::Sources;
 
 /// A clock that starts at 1_000 and ticks 10 ms at every call, the first call
@@ -172,6 +175,18 @@ impl Base {
                      VALUES ('{WORK}', '{path}', {season}, '{episode:02}', 'video');"
             ));
         }
+        for u in &shows.unplaced {
+            let (size, mtime_ns) = match u.seen {
+                Some(seen) => (seen.size.to_string(), seen.mtime_ns.to_string()),
+                None => ("NULL".to_owned(), "NULL".to_owned()),
+            };
+            sql.push_str(&format!(
+                "INSERT INTO unrecognized_files (work_id, path, reason, size, mtime_ns)
+                     VALUES ('{WORK}', '{}', '{}', {size}, {mtime_ns});",
+                u.path,
+                u.reason.code()
+            ));
+        }
         let root = root.to_string_lossy().into_owned();
         self.db
             .run(move |c| {
@@ -196,6 +211,16 @@ pub struct Shows {
     pub source: bool,
     /// The episode whose video is in a folder of its own, `Apart`.
     pub apart: Option<u32>,
+    /// The files of the work the scan could not place.
+    pub unplaced: Vec<Unplaced>,
+}
+
+/// A file of the work `Show` that the scan recorded as unrecognized, with the
+/// size and time it saw when it is a video a person is asked about.
+pub struct Unplaced {
+    pub path: &'static str,
+    pub reason: Reason,
+    pub seen: Option<SeenFile>,
 }
 
 impl Default for Shows {
@@ -206,6 +231,7 @@ impl Default for Shows {
             episodes: Vec::new(),
             source: false,
             apart: None,
+            unplaced: Vec::new(),
         }
     }
 }

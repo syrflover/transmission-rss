@@ -8,7 +8,7 @@
 
 use std::{future::Future, pin::Pin};
 
-use crate::world::{Base, Shows};
+use crate::world::{Base, Shows, Unplaced};
 
 use tokio_util::sync::CancellationToken;
 use trss_collect::store::history::{HistoryResult, HistoryStore, Observation};
@@ -17,6 +17,10 @@ use trss_jobs::{
     place::replace::records::{Decided, Plan},
     todo::{Changes, Todo},
     Created, ItemState, JobState, NewItem, NewJob, Runner, Wait,
+};
+use trss_library::{
+    discovery::{Reason, SeenFile},
+    store::library::LibraryStore,
 };
 use trss_subtitles::{
     fake::{self, FakeSource},
@@ -760,4 +764,87 @@ async fn the_waits_the_store_lists_are_the_jobs_their_rows_say_wait() {
     assert!(!checks.is_empty() && !placements.is_empty());
     assert_eq!(ids(views.auth_waits().await.unwrap()), checks);
     assert_eq!(ids(views.placement_waits().await.unwrap()), placements);
+}
+
+#[tokio::test]
+async fn a_video_whose_name_gives_no_episode_is_a_card_newest_first_until_it_is_checked() {
+    const FIRST: &str = "Season 01/[Group] Show - 03 (1080p).mkv";
+    const SECOND: &str = "Season 02/odd.mkv";
+    let base = Base::new().await;
+    base.library(&Shows {
+        unplaced: vec![
+            Unplaced {
+                path: FIRST,
+                reason: Reason::NoEpisode,
+                seen: Some(SeenFile {
+                    size: 5,
+                    mtime_ns: 1_700_000_000_123_456_789,
+                }),
+            },
+            Unplaced {
+                path: SECOND,
+                reason: Reason::NoEpisode,
+                seen: Some(SeenFile {
+                    size: 7,
+                    mtime_ns: 1_800_000_000_999_999_999,
+                }),
+            },
+            // A file the app does not ask about: no size and time were read.
+            Unplaced {
+                path: "Season 01/extra.ass",
+                reason: Reason::NoEpisode,
+                seen: None,
+            },
+        ],
+        ..Shows::default()
+    })
+    .await;
+    let card = |path: &str, season, at, seen: &str| Todo::VideoCheck {
+        key: format!("video:w1:{path}"),
+        at,
+        work: Some(trss_jobs::todo::WorkRef {
+            id: "w1".into(),
+            name: "Show".into(),
+            cover_url: None,
+        }),
+        title: "Show".into(),
+        season,
+        path: path.into(),
+        reason: "이름에서 회차를 읽지 못했어요".into(),
+        seen: seen.into(),
+    };
+
+    let list = base.todo().await;
+
+    // Newest first, as the other cards of a kind.
+    assert_eq!(
+        list.needs,
+        [
+            card(SECOND, 2, 1_800_000_000_999, "7:1800000000999999999"),
+            card(FIRST, 1, 1_700_000_000_123, "5:1700000000123456789"),
+        ]
+    );
+    assert_eq!(list.count, 2);
+    assert_eq!(list.badges.get("w1"), Some(&vec!["episode_check"]));
+    assert_eq!(list.badges.len(), 1);
+
+    // A person's check takes the card away while the video is the one seen.
+    LibraryStore::new(base.db.clone())
+        .check_video(
+            "w1",
+            FIRST,
+            SeenFile {
+                size: 5,
+                mtime_ns: 1_700_000_000_123_456_789,
+            },
+            2_000,
+        )
+        .await
+        .unwrap();
+    let list = base.todo().await;
+    assert_eq!(
+        list.needs,
+        [card(SECOND, 2, 1_800_000_000_999, "7:1800000000999999999")]
+    );
+    assert_eq!(list.count, 1);
 }
