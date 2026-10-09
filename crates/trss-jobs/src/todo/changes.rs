@@ -88,9 +88,7 @@ impl Received {
         if let Some((path, file)) = view.plan.current() {
             match view.applied.iter().find(|(p, _)| *p == path.path) {
                 Some((_, facts)) => self.current = self.current.max(Some(facts.received_at)),
-                None => {
-                    self.current_changed = self.current_changed.max(Some(file.mtime / 1_000_000))
-                }
+                None => self.current_changed = self.current_changed.max(Some(file.mtime_ms())),
             }
         }
         if let Some(new) = &view.new {

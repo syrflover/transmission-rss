@@ -271,7 +271,7 @@ fn view(v: &PlanView) -> ReplacementView {
         let facts = facts_of(path);
         VersionView {
             received_at: facts.map(|f| f.received_at),
-            changed_at: facts.is_none().then_some(file.mtime / 1_000_000),
+            changed_at: facts.is_none().then_some(file.mtime_ms()),
             size: file.size,
             lines: file.lines,
             creator: facts.and_then(|f| f.creator.clone()),

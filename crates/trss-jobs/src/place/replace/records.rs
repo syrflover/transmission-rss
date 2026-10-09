@@ -29,6 +29,14 @@ pub struct FileSeen {
     pub lines: Option<u64>,
 }
 
+impl FileSeen {
+    /// Its change time in milliseconds since the epoch (`mtime` is never
+    /// before it: a file changed before 1970 is not recorded).
+    pub fn mtime_ms(&self) -> i64 {
+        self.mtime / 1_000_000
+    }
+}
+
 /// What a plan does to one path (see the schema's comment).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlanPath {
@@ -1034,4 +1042,30 @@ pub fn views(c: &Connection, job_id: &str) -> rusqlite::Result<Vec<PlanView>> {
         });
     }
     Ok(views)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_files_change_time_is_told_in_whole_milliseconds() {
+        let seen = |mtime| FileSeen {
+            size: 0,
+            sha256: String::new(),
+            object: String::new(),
+            mtime,
+            lines: None,
+        };
+        for (nanoseconds, milliseconds) in [
+            (0, 0),
+            (999_999, 0),
+            (1_000_000, 1),
+            (1_999_999_999, 1_999),
+            (5_500_000_000, 5_500),
+            (1_790_000_000_123_456_789, 1_790_000_000_123),
+        ] {
+            assert_eq!(seen(nanoseconds).mtime_ms(), milliseconds, "{nanoseconds}");
+        }
+    }
 }
