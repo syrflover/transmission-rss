@@ -23,7 +23,7 @@ use std::{path::PathBuf, time::Duration};
 use tokio_util::sync::CancellationToken;
 
 use trss_core::{
-    queue::{run_item, Queue, LOCK_RETRY, POLL},
+    queue::{after, retry, run_item, Queue, Retry, LOCK_RETRY, POLL},
     LockFile,
 };
 
@@ -84,13 +84,10 @@ impl Seasons {
         why: &(dyn std::fmt::Display + Sync),
     ) -> Ran {
         let now = self.now();
-        let (retry_at, failed) = match busy {
-            Some(wait) => (Some(now + wait.as_millis() as i64), false),
-            None => match RETRY_DELAYS.get(job.attempts as usize) {
-                Some(delay) => (Some(now + delay.as_millis() as i64), true),
-                None => (None, true),
-            },
-        };
+        let Retry {
+            at: retry_at,
+            failed,
+        } = retry(now, job.attempts as usize, &RETRY_DELAYS, busy);
         eprintln!(
             "Season search for work {} season {}: {why}",
             job.work_id, job.season
@@ -181,7 +178,7 @@ impl Seasons {
     /// Puts the refresh of entry `id` off by `wait`; when even that cannot be
     /// written, pauses the queue so the entry is not taken again at once.
     async fn refresh_off(&self, id: i64, wait: Duration) -> Ran {
-        let retry_at = self.now() + wait.as_millis() as i64;
+        let retry_at = after(self.now(), wait);
         if let Err(e) = self.store.refresh_later(id, retry_at).await {
             eprintln!("{QUEUE}: cannot put off entry {id}: {e}");
             tokio::time::sleep(POLL).await;

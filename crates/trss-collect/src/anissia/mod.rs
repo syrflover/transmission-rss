@@ -36,7 +36,7 @@ use std::{path::PathBuf, time::Duration};
 use tokio_util::sync::CancellationToken;
 
 use trss_core::{
-    queue::{run_item, Queue, LOCK_RETRY, POLL},
+    queue::{after, run_item, Queue, LOCK_RETRY, POLL},
     LockFile, Millis,
 };
 
@@ -89,7 +89,7 @@ impl AnissiaQueue {
     /// Puts the refresh of `anime_nos` off by `wait`; when even that cannot be
     /// written, pauses the queue so they are not taken again at once.
     async fn put_off(&self, anime_nos: Vec<i64>, wait: Duration) {
-        let until = self.now() + wait.as_millis() as i64;
+        let until = after(self.now(), wait);
         if let Err(e) = self.store.refresh_later(anime_nos, until).await {
             eprintln!("{QUEUE}: cannot put off the refresh: {e}");
             tokio::time::sleep(POLL).await;
@@ -100,7 +100,7 @@ impl AnissiaQueue {
     /// `anime_nos`, and puts their refresh off by `wait`.
     async fn leave_unlisted(&self, anime_nos: Vec<i64>, wait: Duration, asked_from: Millis) {
         let at = self.now();
-        let until = at + wait.as_millis() as i64;
+        let until = after(at, wait);
         if let Err(e) = self
             .store
             .mark_unlisted(anime_nos, at, until, asked_from)

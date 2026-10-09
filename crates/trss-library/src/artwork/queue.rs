@@ -20,7 +20,7 @@ use std::{path::PathBuf, time::Duration};
 use tokio_util::sync::CancellationToken;
 
 use trss_core::{
-    queue::{run_item, Queue, LOCK_RETRY, POLL},
+    queue::{retry, run_item, Queue, Retry, LOCK_RETRY, POLL},
     LockFile,
 };
 
@@ -77,13 +77,10 @@ impl Artwork {
     /// a failure), else by the next of [`RETRY_DELAYS`] (a failure).
     async fn later(&self, job: &ClaimedJob, error: String, busy: Option<Duration>) -> Ran {
         let now = self.now();
-        let (retry_at, failed) = match busy {
-            Some(retry_after) => (Some(now + retry_after.as_millis() as i64), false),
-            None => match RETRY_DELAYS.get(job.attempts as usize) {
-                Some(delay) => (Some(now + delay.as_millis() as i64), true),
-                None => (None, true),
-            },
-        };
+        let Retry {
+            at: retry_at,
+            failed,
+        } = retry(now, job.attempts as usize, &RETRY_DELAYS, busy);
         eprintln!(
             "Artwork {} for work {}: {error}",
             job.kind.code(),

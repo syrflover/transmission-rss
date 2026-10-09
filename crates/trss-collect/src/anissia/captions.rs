@@ -52,7 +52,7 @@ use tokio_util::sync::CancellationToken;
 
 use trss_anissia::{Anissia, AnissiaError, CaptionLine};
 use trss_core::{
-    queue::{run_item, Queue, LOCK_RETRY, POLL},
+    queue::{after, run_item, Queue, LOCK_RETRY, POLL},
     LockFile, Millis,
 };
 
@@ -315,7 +315,7 @@ impl CaptionObserver {
                 return None;
             }
         }
-        let next_at = now + OBSERVE_EVERY.as_millis() as i64;
+        let next_at = after(now, OBSERVE_EVERY);
         *self.held_until.lock().unwrap_or_else(|e| e.into_inner()) = next_at;
         if let Err(e) = self.store.schedule_caption_poll(next_at, None).await {
             eprintln!("{QUEUE}: cannot write the schedule: {e}");
@@ -345,7 +345,7 @@ impl CaptionObserver {
             }
             End::Busy(wait) => {
                 eprintln!("{QUEUE}: asked to wait {}s; {counts}", wait.as_secs());
-                next_at = next_at.max(self.now() + wait.as_millis() as i64);
+                next_at = next_at.max(after(self.now(), *wait));
             }
             End::Failed(why) => eprintln!("{QUEUE} failed: {why}; {counts}"),
         }

@@ -13,6 +13,7 @@
 - 0101에서 trss-web의 보관 제안, 수집 이력, 규칙, 제목 후보, `in_place` 테스트를 나눴어요. 규칙 미리보기의 분류 테스트는 [0111](0111-web-and-screen-rules.md)에서 `build_preview`와 함께 내려요.
 - worker의 수집 영역 테스트 중 0101의 다섯 파일 밖에 있는 것도 같은 방식으로 나눠요. 2026-10-09 `a4bb97c`에서 `collect_folder.rs` 3개, `first_read.rs` 8개, `title_waiting.rs` 3개, `past_search.rs` 32개였어요.
 - trss-anilist와 trss-anissia의 `Retry-After` 클라이언트 테스트는 [0102](0102-request-pace-in-core.md) 뒤로 trss-core `response::retry_after`의 테스트와 같은 값을 확인해요. 클라이언트에는 헤더를 읽어 넘기는 연결만 남겨요.
+- [0103](0103-queue-loop-in-core.md) 뒤로 큐 루프와 잠금 파일 이름을 trss-core `queue::tests`와 `lock::tests`, `access::tests`가 확인해요. 그와 겹치는 7개를 나눠요. trss-collect의 `the_queue_holds_its_lock_and_a_second_observer_waits_for_it`, trss-library의 `the_queue_stops_on_shutdown_and_a_restart_resumes_it`, `hundreds_of_new_works_are_searched_one_at_a_time_at_the_pace`의 마지막 경로 비교, trss-collect `anissia/tests.rs`와 `anissia/captions_tests.rs`의 `the_lock_file_sits_next_to_the_database_and_apart_from_the_other_queues` 2개, worker의 `app_data_files_cover_every_lock_and_the_wake_socket`, `browser.rs`의 `one_worker_at_a_time_has_the_browser`의 경로 비교예요. 각 크레이트의 규칙(자막 목록의 읽기 주기, 표지 큐의 이어 하기, 브라우저의 잠금 쥐기)은 남겨요. 나눈 뒤 크레이트마다 남은 `lock_path_for` 감싸개를 지워요.
 - worker의 `app_data_folders_cover_the_receive_area_the_artwork_and_the_subtitle_files`는 [0096](0096-file-and-path-helpers.md)에서 두 목록이 trss-core의 같은 상수를 쓰게 되어 실패할 수 없어요. 지워요.
 
 [라이브러리와 작품](../specs/library.md), [설정과 이전](../specs/settings.md), [웹 앱 공통](../specs/web-app.md) 명세에 요구별 검증 표를 둬요.

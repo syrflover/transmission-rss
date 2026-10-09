@@ -8,14 +8,14 @@
 //! A panic in one item would end that task, and the queue would stand still
 //! until the worker restarted, so each item runs through [`run_item`], which
 //! catches the panic and hands it back to the queue to put the item off like
-//! a failure.
+//! a failure. [`retry`] and [`after`] are the arithmetic of putting an item off.
 
 use std::{any::Any, future::Future, panic::AssertUnwindSafe, path::PathBuf, time::Duration};
 
 use futures::FutureExt;
 use tokio_util::sync::CancellationToken;
 
-use crate::CycleLock;
+use crate::{CycleLock, Millis};
 
 /// How often an idle queue looks for new items.
 pub const POLL: Duration = Duration::from_secs(5);
@@ -120,6 +120,38 @@ impl Queue {
             }
         }
     }
+}
+
+/// When an item that could not be done is tried again.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Retry {
+    /// The moment of the next try; `None` when the item is given up.
+    pub at: Option<Millis>,
+    /// Whether this counts as a failed attempt (a wait the service asked for
+    /// does not).
+    pub failed: bool,
+}
+
+/// How an item is put off at `now`: for `busy` when the service asked to wait
+/// (a `429`; not a failure and not counted against the item), else by the
+/// delay in `delays` for the item's `attempts` so far (`delays[0]` after the
+/// first failed attempt), a failure; after the last delay it is given up.
+pub fn retry(now: Millis, attempts: usize, delays: &[Duration], busy: Option<Duration>) -> Retry {
+    match busy {
+        Some(wait) => Retry {
+            at: Some(after(now, wait)),
+            failed: false,
+        },
+        None => Retry {
+            at: delays.get(attempts).map(|delay| after(now, *delay)),
+            failed: true,
+        },
+    }
+}
+
+/// The moment `wait` after `now`.
+pub fn after(now: Millis, wait: Duration) -> Millis {
+    now + wait.as_millis() as Millis
 }
 
 /// Runs one item of the queue `queue` (the name its log lines use; `item`
@@ -454,6 +486,46 @@ mod tests {
         cancel.cancel();
         stops(task).await;
         assert_eq!(finished.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn an_item_is_put_off_by_the_next_delay_or_by_the_wait_it_was_asked_for() {
+        let delays = [
+            Duration::from_secs(60),
+            Duration::from_secs(600),
+            Duration::from_secs(3600),
+        ];
+        let now = 1_000;
+        let failed = |at| Retry {
+            at: Some(now + at),
+            failed: true,
+        };
+        assert_eq!(retry(now, 0, &delays, None), failed(60_000));
+        assert_eq!(retry(now, 1, &delays, None), failed(600_000));
+        assert_eq!(retry(now, 2, &delays, None), failed(3_600_000));
+        // After the last delay the item is given up, still as a failure.
+        assert_eq!(
+            retry(now, 3, &delays, None),
+            Retry {
+                at: None,
+                failed: true
+            }
+        );
+        // The wait a service asks for is no failure, whatever the attempts.
+        let asked = Retry {
+            at: Some(now + 90_500),
+            failed: false,
+        };
+        let wait = Some(Duration::from_millis(90_500));
+        assert_eq!(retry(now, 0, &delays, wait), asked);
+        assert_eq!(retry(now, 9, &delays, wait), asked);
+        assert_eq!(retry(now, 0, &[], None).at, None);
+    }
+
+    #[test]
+    fn after_adds_the_wait_in_milliseconds() {
+        assert_eq!(after(5, Duration::from_millis(1_500)), 1_505);
+        assert_eq!(after(5, Duration::ZERO), 5);
     }
 
     #[tokio::test]
