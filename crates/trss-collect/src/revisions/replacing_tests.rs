@@ -362,6 +362,50 @@ async fn a_revision_received_outside_the_rule_folder_stays_a_failure() {
     assert_eq!(read(&s.file(EPISODE_NAME)), OLD_BYTES);
 }
 
+/// A new video's torrent that holds several files is not one the
+/// replacement can name as the episode: both videos stay.
+#[tokio::test]
+async fn a_revision_whose_torrent_holds_several_files_does_not_replace_the_old_video() {
+    let s = World::new().await;
+    s.received_v1().await;
+    s.feed(&[(NEW_HASH, &v2()), (OLD_HASH, &v1())]);
+    s.tr.content_on_add(NEW_HASH, NEW_BYTES);
+    s.tr.unfinished_on_add(NEW_HASH);
+    s.cycle().await;
+    s.tr.set_files(NEW_HASH, &[v2().as_str(), "Extras.mkv"]);
+    s.complete(NEW_HASH);
+    s.cycle().await;
+
+    assert_eq!(s.state_of(&v2()).await, RevisionState::Failed);
+    assert_eq!(read(&s.file(EPISODE_NAME)), OLD_BYTES);
+    let failures = s.failures().await;
+    assert_eq!(
+        one_failure(&failures).reason.as_deref(),
+        Some(SEVERAL_FILES)
+    );
+}
+
+/// A new video's torrent whose one file sits inside the torrent's folder is
+/// not replaced either, and the reason names the folder rather than several
+/// files.
+#[tokio::test]
+async fn a_revision_whose_one_file_is_inside_a_folder_does_not_replace_the_old_video() {
+    let s = World::new().await;
+    s.received_v1().await;
+    s.feed(&[(NEW_HASH, &v2()), (OLD_HASH, &v1())]);
+    s.tr.content_on_add(NEW_HASH, NEW_BYTES);
+    s.tr.unfinished_on_add(NEW_HASH);
+    s.cycle().await;
+    s.tr.set_files(NEW_HASH, &[format!("Show/{}", v2()).as_str()]);
+    s.complete(NEW_HASH);
+    s.cycle().await;
+
+    assert_eq!(s.state_of(&v2()).await, RevisionState::Failed);
+    assert_eq!(read(&s.file(EPISODE_NAME)), OLD_BYTES);
+    let failures = s.failures().await;
+    assert_eq!(one_failure(&failures).reason.as_deref(), Some(IN_A_FOLDER));
+}
+
 /// Transmission names the old video's folder another way (through a
 /// symbolic link): the torrent is still found to hold the file, and removed
 /// with it, instead of the file being deleted under it.

@@ -561,6 +561,15 @@ impl FakeTransmission {
         }
     }
 
+    /// Makes `torrent-get` list `files`, relative to the torrent's folder, as
+    /// the files of the torrent `hash`.
+    pub fn set_files(&self, hash: &str, files: &[&str]) {
+        let mut st = self.state.lock().unwrap();
+        if let Some(t) = st.torrents.iter_mut().find(|t| t.hash == hash) {
+            t.files = files.iter().map(|f| f.to_string()).collect();
+        }
+    }
+
     /// Moves the single file of the torrent `hash` to `dir` and reports the
     /// torrent there, as a person moving it in Transmission would.
     pub fn relocate(&self, hash: &str, dir: impl AsRef<std::path::Path>) {

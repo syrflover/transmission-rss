@@ -726,6 +726,8 @@ const RECEIVE_STOPPED: &str =
     "새 영상의 토렌트가 Transmission에서 사라져 받기가 끝나지 않았어요. 이전 영상은 그대로 있어요.";
 const SEVERAL_FILES: &str =
     "새 영상의 토렌트에 파일이 여러 개라 대체하지 않았어요. 이전 영상은 그대로 있어요.";
+const IN_A_FOLDER: &str =
+    "새 영상이 토렌트의 폴더 안에 있어서 대체하지 않았어요. 이전 영상은 그대로 있어요.";
 const ELSEWHERE: &str =
     "새 영상이 규칙의 저장 폴더가 아닌 곳에 있어서 대체하지 않았어요. 이전 영상은 그대로 있어요.";
 const NOT_COMPLETE: &str = "새 영상 파일을 다 받지 않았어요. 이전 영상은 그대로 있어요.";
@@ -1041,7 +1043,7 @@ async fn received(ctx: &RevisionsContext, row: &Revision) -> Next {
         return failed(SEVERAL_FILES, None);
     };
     if file.name.contains('/') {
-        return failed(SEVERAL_FILES, None);
+        return failed(IN_A_FOLDER, None);
     }
     // Not received here: the received name would not be in the folder.
     if !same_folder(Path::new(&place.download_dir), Path::new(&row.folder)) {
