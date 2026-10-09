@@ -690,6 +690,28 @@ impl Worker {
         self.stop_watching();
     }
 
+    /// Waits for `task` to end. Once `cancel` fires, it gets
+    /// [`Worker::with_shutdown_grace`] more to wind down; a task still running
+    /// past that is aborted (and awaited, so it is gone when this returns) and
+    /// the answer is `None`.
+    async fn join_within_grace<T>(
+        &self,
+        mut task: tokio::task::JoinHandle<T>,
+        cancel: &CancellationToken,
+    ) -> Option<Result<T, tokio::task::JoinError>> {
+        tokio::select! {
+            joined = &mut task => Some(joined),
+            _ = async {
+                cancel.cancelled().await;
+                tokio::time::sleep(self.shutdown_grace).await;
+            } => {
+                task.abort();
+                let _ = task.await;
+                None
+            }
+        }
+    }
+
     async fn run_loop(&self, cancel: CancellationToken) {
         let mut ticker = tokio::time::interval(self.interval);
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -711,26 +733,18 @@ impl Worker {
             // In its own task so that a panic ends the cycle, not the worker.
             let worker = self.clone();
             let token = cancel.clone();
-            let mut cycle = tokio::spawn(async move { worker.tick(&token).await });
+            let cycle = tokio::spawn(async move { worker.tick(&token).await });
 
             // After shutdown was asked for, the cycle gets a grace period to wind
             // down. Past it, the cycle is aborted: dropping it aborts its item
             // tasks and releases its hold, and what Transmission had not yet
             // answered is left for the next start.
-            let joined = tokio::select! {
-                joined = &mut cycle => joined,
-                _ = async {
-                    cancel.cancelled().await;
-                    tokio::time::sleep(self.shutdown_grace).await;
-                } => {
-                    cycle.abort();
-                    let _ = cycle.await;
-                    println!(
-                        "Cycle abandoned: it did not wind down within {}s of the shutdown request",
-                        self.shutdown_grace.as_secs()
-                    );
-                    continue;
-                }
+            let Some(joined) = self.join_within_grace(cycle, &cancel).await else {
+                println!(
+                    "Cycle abandoned: it did not wind down within {}s of the shutdown request",
+                    self.shutdown_grace.as_secs()
+                );
+                continue;
             };
 
             match joined {

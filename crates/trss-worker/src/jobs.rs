@@ -274,21 +274,13 @@ impl Worker {
                 _ = ticker.tick() => {}
             }
             // In its own task so that a panic ends the run, not the loop.
-            let mut run = tokio::spawn({
+            let run = tokio::spawn({
                 let (worker, cancel) = (self.clone(), cancel.clone());
                 async move { worker.run_jobs_once(&cancel).await }
             });
-            let joined = tokio::select! {
-                joined = &mut run => joined,
-                _ = async {
-                    cancel.cancelled().await;
-                    tokio::time::sleep(self.shutdown_grace).await;
-                } => {
-                    run.abort();
-                    let _ = run.await;
-                    println!("Subtitle job abandoned: it did not wind down in time after the shutdown request");
-                    break;
-                }
+            let Some(joined) = self.join_within_grace(run, &cancel).await else {
+                println!("Subtitle job abandoned: it did not wind down in time after the shutdown request");
+                break;
             };
             match joined {
                 // A job that held a creator's episode may have ended; what it
