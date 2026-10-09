@@ -15,6 +15,8 @@ mod clock;
 pub mod commands;
 pub mod db;
 pub mod episode;
+#[cfg(any(test, feature = "test-support"))]
+pub mod fake_http;
 pub mod file_id;
 pub mod files;
 pub mod folder_check;

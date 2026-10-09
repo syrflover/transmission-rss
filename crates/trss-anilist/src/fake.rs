@@ -17,6 +17,7 @@ use axum::{
     Router,
 };
 use serde_json::{json, Value};
+use trss_core::fake_http::{chunks, padded, refuse};
 
 use super::AnilistConfig;
 
@@ -137,34 +138,33 @@ async fn graphql(State(fake): State<Fake>, body: Bytes) -> Response {
     let variables = body["variables"].clone();
     let mut state = fake.state.lock().unwrap();
     state.requests.push((Instant::now(), variables.clone()));
-    if state.rate_limited > 0 {
-        state.rate_limited -= 1;
-        return (
-            StatusCode::TOO_MANY_REQUESTS,
-            [(header::RETRY_AFTER, state.retry_after.to_string())],
-            "{}",
-        )
-            .into_response();
-    }
-    if state.failing > 0 {
-        state.failing -= 1;
-        return (StatusCode::INTERNAL_SERVER_ERROR, "{}").into_response();
+    // AniList always sends `Retry-After`.
+    let faults = &mut *state;
+    if let Some(refusal) = refuse(
+        &mut faults.rate_limited,
+        Some(faults.retry_after),
+        &mut faults.failing,
+    ) {
+        let mut response = (StatusCode::from_u16(refusal.status).unwrap(), "{}").into_response();
+        if let Some(seconds) = refusal.retry_after {
+            response
+                .headers_mut()
+                .insert(header::RETRY_AFTER, seconds.into());
+        }
+        return response;
     }
     let padding = state.padding;
     let chunked = state.chunked;
-    let answer = |status: StatusCode, mut value: Value| -> Response {
+    let answer = |status: StatusCode, value: Value| -> Response {
         if padding == 0 {
             return (status, axum::Json(value)).into_response();
         }
-        value["extensions"] = json!({ "padding": "x".repeat(padding) });
-        let text = value.to_string();
+        let text = padded(value, &["extensions", "padding"], padding);
         if chunked {
-            let chunks: Vec<Result<Bytes, std::io::Error>> = text
-                .into_bytes()
-                .chunks(64 * 1024)
+            let pieces: Vec<Result<Bytes, std::io::Error>> = chunks(text.as_bytes())
                 .map(|c| Ok(Bytes::copy_from_slice(c)))
                 .collect();
-            let body = axum::body::Body::from_stream(futures::stream::iter(chunks));
+            let body = axum::body::Body::from_stream(futures::stream::iter(pieces));
             return (status, [(header::CONTENT_TYPE, "application/json")], body).into_response();
         }
         (status, [(header::CONTENT_TYPE, "application/json")], text).into_response()

@@ -8,8 +8,8 @@ edition.workspace = true
 # older schema, `queue::testing`, for the tests of the queues above,
 # `files::testing`, for the tests of the writes above that look at which files
 # were synced, new databases copied from one migrated once (SQLite's backup
-# API), and `loopback`, for the tests that start a server on a loopback
-# address.
+# API), `loopback`, for the tests that start a server on a loopback address,
+# and `fake_http`, for the fake HTTP services of the tests.
 test-support = ["rusqlite/backup", "tokio/net"]
 
 [dependencies]

@@ -141,10 +141,10 @@ async fn serve_feed(
             let mut body = br#"<?xml version="1.0"?><rss version="2.0"><channel><title>t</title><link>http://x/</link><description>d</description></channel></rss><!--"#.to_vec();
             body.resize(len - 3, b' ');
             body.extend_from_slice(b"-->");
-            let parts: Vec<Result<Bytes, std::convert::Infallible>> = body
-                .chunks(64 * 1024)
-                .map(|c| Ok(Bytes::copy_from_slice(c)))
-                .collect();
+            let parts: Vec<Result<Bytes, std::convert::Infallible>> =
+                trss_core::fake_http::chunks(&body)
+                    .map(|c| Ok(Bytes::copy_from_slice(c)))
+                    .collect();
             (
                 [("content-type", "application/rss+xml")],
                 axum::body::Body::from_stream(futures::stream::iter(parts)),

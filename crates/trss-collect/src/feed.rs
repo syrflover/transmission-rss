@@ -298,10 +298,10 @@ mod tests {
             body
         }
         fn chunks(body: Vec<u8>) -> Body {
-            let parts: Vec<Result<Bytes, std::convert::Infallible>> = body
-                .chunks(64 * 1024)
-                .map(|c| Ok(Bytes::copy_from_slice(c)))
-                .collect();
+            let parts: Vec<Result<Bytes, std::convert::Infallible>> =
+                trss_core::fake_http::chunks(&body)
+                    .map(|c| Ok(Bytes::copy_from_slice(c)))
+                    .collect();
             Body::from_stream(futures::stream::iter(parts))
         }
 

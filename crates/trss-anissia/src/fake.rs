@@ -17,6 +17,7 @@ use axum::{
     Router,
 };
 use serde_json::{json, Value};
+use trss_core::fake_http::{chunks, padded, refuse};
 
 use super::AnissiaConfig;
 
@@ -172,19 +173,19 @@ fn answer(fake: &Fake, path: String, data: Option<Value>) -> Response {
     if fails {
         return (StatusCode::INTERNAL_SERVER_ERROR, "{}").into_response();
     }
-    if state.rate_limited > 0 {
-        state.rate_limited -= 1;
-        let mut response = (StatusCode::TOO_MANY_REQUESTS, "{}").into_response();
-        if let Some(seconds) = state.retry_after {
+    let faults = &mut *state;
+    if let Some(refusal) = refuse(
+        &mut faults.rate_limited,
+        faults.retry_after,
+        &mut faults.failing,
+    ) {
+        let mut response = (StatusCode::from_u16(refusal.status).unwrap(), "{}").into_response();
+        if let Some(seconds) = refusal.retry_after {
             response
                 .headers_mut()
                 .insert(header::RETRY_AFTER, seconds.into());
         }
         return response;
-    }
-    if state.failing > 0 {
-        state.failing -= 1;
-        return (StatusCode::INTERNAL_SERVER_ERROR, "{}").into_response();
     }
     if let Some(raw) = state.raw.clone() {
         return (
@@ -197,19 +198,16 @@ fn answer(fake: &Fake, path: String, data: Option<Value>) -> Response {
     let Some(data) = data else {
         return StatusCode::NOT_FOUND.into_response();
     };
-    let mut value = json!({ "code": "ok", "data": data });
+    let value = json!({ "code": "ok", "data": data });
     if state.padding == 0 {
         return (StatusCode::OK, axum::Json(value)).into_response();
     }
-    value["padding"] = json!("x".repeat(state.padding));
-    let text = value.to_string();
+    let text = padded(value, &["padding"], state.padding);
     if state.chunked {
-        let chunks: Vec<Result<Bytes, std::io::Error>> = text
-            .into_bytes()
-            .chunks(64 * 1024)
+        let pieces: Vec<Result<Bytes, std::io::Error>> = chunks(text.as_bytes())
             .map(|c| Ok(Bytes::copy_from_slice(c)))
             .collect();
-        let body = axum::body::Body::from_stream(futures::stream::iter(chunks));
+        let body = axum::body::Body::from_stream(futures::stream::iter(pieces));
         return (
             StatusCode::OK,
             [(header::CONTENT_TYPE, "application/json")],
