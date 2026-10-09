@@ -1,7 +1,7 @@
 import { Link } from "react-router-dom";
 
 import { useCached } from "@/lib/cached";
-import { sizeText } from "@/screens/todo/bytes";
+import { sizeText } from "@/lib/size";
 
 import { STORAGE_KEY, workPath } from "../../library/api";
 import { cleanableText, filesPath, kindTexts, type StorageOverview, type StorageWork } from "../../library/storage.ts";

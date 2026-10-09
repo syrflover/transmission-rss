@@ -1,4 +1,4 @@
-/** Bytes as `22 KB`, `1.4 MB`; a size under 1 KB is `512 B`. */
+/** Bytes as `22 KB`, `1.4 MB`; a size under 1 KB is `512 B`. Imports nothing, so the pure helpers that use it and their tests run without the app. */
 export function sizeText(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   const kb = bytes / 1024;

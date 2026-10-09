@@ -1,4 +1,4 @@
-import { sizeText } from "../todo/bytes.ts";
+import { sizeText } from "../../lib/size.ts";
 
 /**
  * The stored files of a work and what can be cleaned (`GET /api/library/works/{id}` `storage`, `GET

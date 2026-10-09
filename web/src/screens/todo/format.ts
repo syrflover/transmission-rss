@@ -1,5 +1,5 @@
 import type { FailureClass, FileFormat, JobRow, JobState, ItemState, UploadSummary, Wait } from "./api";
-import { sizeText } from "./bytes.ts";
+import { sizeText } from "../../lib/size.ts";
 import { findShown } from "./findState.ts";
 
 export { sizeText };

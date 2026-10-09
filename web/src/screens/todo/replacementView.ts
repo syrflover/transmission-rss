@@ -1,5 +1,5 @@
 import { when } from "../../lib/time.ts";
-import { sizeText } from "./bytes.ts";
+import { sizeText } from "../../lib/size.ts";
 import { todoTags } from "./changes.ts";
 import type { Replacement, ReplacementDecision, ReplacementPath, ReplacementVersion } from "./replacementTypes.ts";
 

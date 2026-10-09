@@ -27,7 +27,7 @@ import {
   type SentClean,
   type WorkStorage,
 } from "../storage.ts";
-import { sizeText } from "../../todo/bytes.ts";
+import { sizeText } from "../../../lib/size.ts";
 
 /** How often the page reads the work while a clean is waiting for the worker. */
 const POLL_MS = 3000;
