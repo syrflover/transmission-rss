@@ -217,35 +217,6 @@ async fn a_429_blocks_every_request_until_its_retry_after_has_passed() {
 }
 
 #[tokio::test]
-async fn a_429_without_a_retry_after_waits_a_minute_and_a_huge_one_is_cut_to_an_hour() {
-    let env = Env::new().await;
-    {
-        let mut state = env.fake.state.lock().unwrap();
-        state.rate_limited = 1;
-        state.retry_after = None;
-    }
-    match env.anissia.fetch_schedule(1, None).await {
-        Err(AnissiaError::Busy { retry_after }) => {
-            assert_eq!(retry_after, Duration::from_secs(60))
-        }
-        other => panic!("expected Busy, got {other:?}"),
-    }
-    // The minute passes before the next request, or it would wait for it.
-    env.advance(60_000);
-    {
-        let mut state = env.fake.state.lock().unwrap();
-        state.rate_limited = 1;
-        state.retry_after = Some(999_999);
-    }
-    match env.anissia.fetch_schedule(1, None).await {
-        Err(AnissiaError::Busy { retry_after }) => {
-            assert_eq!(retry_after, Duration::from_secs(3600))
-        }
-        other => panic!("expected Busy, got {other:?}"),
-    }
-}
-
-#[tokio::test]
 async fn an_answer_over_the_cap_is_refused_whether_or_not_it_says_its_length() {
     for chunked in [false, true] {
         let env = Env::new().await;
@@ -399,45 +370,6 @@ async fn a_searched_page_is_kept_for_five_minutes_and_only_a_few_are() {
 }
 
 #[tokio::test]
-async fn a_search_waits_after_a_429_and_asks_again_only_when_the_wait_is_over() {
-    let env = Env::new().await;
-    env.fake
-        .set_catalogue(vec![env.fake.finished(1, 5, "작품", "")]);
-    {
-        let mut state = env.fake.state.lock().unwrap();
-        state.rate_limited = 1;
-        state.retry_after = Some(30);
-    }
-    match env.anissia.search_anime("작품", 0, None).await {
-        Err(AnissiaError::Busy { retry_after }) => {
-            assert_eq!(retry_after, Duration::from_secs(30))
-        }
-        other => panic!("expected Busy, got {other:?}"),
-    }
-    // The block holds the next request back without sending it.
-    match env
-        .anissia
-        .search_anime("작품", 0, Some(Duration::from_secs(1)))
-        .await
-    {
-        Err(AnissiaError::Busy { retry_after }) => {
-            assert_eq!(retry_after, Duration::from_secs(30))
-        }
-        other => panic!("expected Busy, got {other:?}"),
-    }
-    assert_eq!(env.fake.requests().len(), 1);
-
-    env.advance(30_000);
-    let page = env
-        .anissia
-        .search_anime("작품", 0, Some(Duration::from_secs(1)))
-        .await
-        .unwrap();
-    assert_eq!(subjects(&page.page), ["작품"]);
-    assert_eq!(env.fake.requests().len(), 2);
-}
-
-#[tokio::test]
 async fn a_search_answer_that_is_not_the_lists_is_refused() {
     let env = Env::new().await;
     for (raw, expect) in [
@@ -519,7 +451,7 @@ async fn the_recent_captions_are_read_a_page_at_a_time_from_page_0_to_the_empty_
 }
 
 #[tokio::test]
-async fn the_caption_lines_of_an_anime_keep_the_text_as_written_and_a_429_is_busy() {
+async fn the_caption_lines_of_an_anime_keep_the_text_as_written() {
     let env = Env::new().await;
     env.fake.set_captions(
         3492,
@@ -532,11 +464,4 @@ async fn the_caption_lines_of_an_anime_keep_the_text_as_written_and_a_429_is_bus
     // An anime Anissia does not know has no lines.
     let (none, rows) = env.anissia.fetch_caption_lines(1, None).await.unwrap();
     assert_eq!((none.len(), rows), (0, 0));
-
-    env.fake.state.lock().unwrap().rate_limited = 1;
-    env.fake.state.lock().unwrap().retry_after = Some(120);
-    assert!(matches!(
-        env.anissia.fetch_recent_captions(0, None).await,
-        Err(AnissiaError::Busy { retry_after }) if retry_after == Duration::from_secs(120)
-    ));
 }

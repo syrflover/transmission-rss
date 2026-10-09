@@ -599,4 +599,40 @@ mod tests {
         }
         assert!(fake.api_requests().is_empty());
     }
+
+    /// The client reads `Retry-After` off the `429` it gets (what an hour or a
+    /// minute the header means is `trss_core::response::retry_after`'s).
+    #[tokio::test]
+    async fn a_429_with_a_retry_after_blocks_the_next_request_for_that_long_without_sending_it() {
+        let fake = fake::Fake::start().await;
+        let entry = fake.entry(1, "A", &[]);
+        {
+            let mut state = fake.state.lock().unwrap();
+            state.media.insert(1, entry);
+            state.rate_limited = 1;
+            state.retry_after = 30;
+        }
+        let anilist = Anilist::new(
+            fake.config(),
+            Db::open(":memory:").await.unwrap(),
+            std::sync::Arc::new(|| NOW),
+        )
+        .with_spacing(Duration::from_millis(5));
+
+        match anilist.media(1, None).await {
+            Err(AnilistError::Busy { retry_after }) => {
+                assert_eq!(retry_after, Duration::from_secs(30))
+            }
+            other => panic!("expected Busy, got {other:?}"),
+        }
+        // The clock stands still, so the block still holds: the next request is
+        // told to wait the 30 seconds and is not sent.
+        match anilist.media(1, Some(Duration::from_secs(1))).await {
+            Err(AnilistError::Busy { retry_after }) => {
+                assert_eq!(retry_after, Duration::from_secs(30))
+            }
+            other => panic!("expected Busy, got {other:?}"),
+        }
+        assert_eq!(fake.api_requests().len(), 1);
+    }
 }
