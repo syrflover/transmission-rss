@@ -461,10 +461,9 @@ mod tests {
     #[tokio::test]
     async fn a_video_the_library_records_puts_the_job_waiting_for_it_back_in_line() {
         let (_dir, worker, db, job) = with_a_job_waiting_for_a_video().await;
+        // That nothing is requeued before the video and the job is requeued
+        // once after it is trss-jobs' rule (`place` tests); this is the wiring.
         let cancel = tokio_util::sync::CancellationToken::new();
-        worker.run_jobs_once(&cancel).await.unwrap();
-        assert_eq!(video_came(&db, &job).await, 0);
-
         db.run(|c| {
             c.execute_batch(
                 "INSERT INTO episodes (work_id, season, episode) VALUES ('w1', 1, '01');

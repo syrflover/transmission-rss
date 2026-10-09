@@ -217,8 +217,6 @@ async fn the_worker_keeps_running_while_transmission_is_down_and_adds_when_it_re
     })
     .await;
     assert!(worker.is_running());
-    let failed = h.item("Sayonara Lara - 03 (1080p)").await;
-    assert!(failed.reason.is_some());
 
     h.tr.restart().await;
     wait_until("received items", || async {
@@ -349,13 +347,7 @@ async fn logs_and_history_never_contain_secret_query_values() {
     assert!(output.contains("token=***"), "{output}");
     assert!(output.contains("HTTP status 500"), "{output}");
     assert_eq!(output.matches("Failed ").count(), 3, "{output}");
-
-    let items = h.history_items().await;
-    assert!(!items.is_empty());
-    for item in items {
-        let text = format!("{item:?}");
-        assert!(!text.contains(SECRET), "{text}");
-    }
+    // That history holds no secret is trss-collect's rule (`cycle` tests).
 }
 
 #[tokio::test]

@@ -729,6 +729,13 @@ fn the_preview_agrees_with_the_plan_for_every_recorded_title() {
         "[Erai-raws] Unrelated - 05",
         "Slime - 62",
         "",
+        // The sample feed of the cycle tests, as the worker's channel recorded it.
+        "[SubsPlease] Sayonara Lara - 03 (1080p) [AAAA0001].mkv",
+        "[SubsPlease] Sayonara Lara - 03 (720p) [AAAA0002].mkv",
+        "[SubsPlease] Sono Bisque Doll - 13 (1080p) [AAAA0003].mkv",
+        "[SubsPlease] Tensei Shitara Slime Datta Ken - 62 (1080p) [AAAA0006].mkv",
+        "[SubsPlease] Sono Bisque Doll - 01~12 [Batch] (1080p).mkv",
+        "[SubsPlease] Unrelated Show - 05 (1080p) [AAAA0009].mkv",
     ];
     let items = recorded(&titles, 1_000);
 

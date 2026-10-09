@@ -18,7 +18,7 @@ use crate::{
     feed::MAX_FEED_BYTES,
     receive::{NAME_NOT_DERIVED, NAME_TAKEN, SEVERAL_FILES},
     store::{
-        channels::{ChannelInput, RuleInput, RuleState},
+        channels::{ChannelInput, OrderItem, RuleInput, RuleState},
         history::{HistoryItem, HistoryResult},
     },
     test_world::{feed_xml_of, magnet, World, SECRET},
@@ -239,6 +239,48 @@ async fn a_cycle_judges_each_item_by_the_first_rule_that_takes_it_and_adds_it_th
 }
 
 #[tokio::test]
+async fn after_the_rules_are_reordered_a_cycle_gives_an_item_to_the_first_rule_in_the_new_order() {
+    // In the stored order the case-insensitive rule takes the Sono Bisque Doll
+    // item (the sample feed's test above); here the overlap rule is moved in
+    // front of it before the first cycle.
+    let s = World::with_rules(vec![
+        RuleInput {
+            case_insensitive: true,
+            episode: -12,
+            ..rule("sono bisque doll", "Sono Bisque Doll/Season 02")
+        },
+        rule("Sono Bisque Doll", "Sono Bisque Doll (overlap)"),
+    ])
+    .await;
+    s.feed_numbered(&[(
+        3,
+        "[SubsPlease] Sono Bisque Doll - 13 (1080p) [AAAA0003].mkv",
+    )]);
+    let rules = s.ctx.channels.list_rules(&s.channel_id).await.unwrap();
+    let order = |r: &crate::store::channels::Rule| OrderItem {
+        id: r.id.clone(),
+        version: r.version,
+    };
+    s.ctx
+        .channels
+        .reorder_rules(&s.channel_id, vec![order(&rules[1]), order(&rules[0])])
+        .await
+        .unwrap();
+
+    s.cycle().await;
+
+    let picked = s.item_containing("Sono Bisque Doll - 13").await;
+    assert_eq!(picked.result, HistoryResult::Received);
+    assert_eq!(picked.rule_id.as_deref(), Some(rules[1].id.as_str()));
+    let adds = s.tr.calls_of("torrent-add");
+    assert_eq!(adds.len(), 1, "{adds:?}");
+    assert_eq!(
+        adds[0].args["download-dir"],
+        s.media.join("Sono Bisque Doll (overlap)").to_str().unwrap()
+    );
+}
+
+#[tokio::test]
 async fn items_that_differ_only_in_a_secret_named_value_are_all_added_and_recorded() {
     let s = World::bare().await;
     s.feed(&[]);
@@ -327,6 +369,12 @@ async fn secrets_are_masked_in_what_a_cycle_records_under_every_spelling_but_use
 
     s.cycle().await;
 
+    // The feed was fetched with the stored URL, secrets as they were saved.
+    let requests = s.feeds.requests();
+    assert!(
+        requests.contains(&format!("other-names?passkey={IN_URL}&r=1080")),
+        "{requests:?}"
+    );
     // Transmission was asked with the real link.
     assert!(s
         .tr
