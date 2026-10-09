@@ -96,6 +96,8 @@ use trss_core::commands::{Accepted, Command, CommandState, NewCommand};
 use trss_library::watch_rescan;
 
 #[cfg(test)]
+mod past_tests;
+#[cfg(test)]
 mod tests;
 
 pub fn routes() -> Router<AppState> {

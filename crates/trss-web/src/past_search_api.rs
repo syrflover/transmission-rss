@@ -549,3 +549,6 @@ async fn cancel(State(state): State<AppState>, Path(search_id): Path<String>) ->
     state.past_search.cancel(&search_id);
     StatusCode::NO_CONTENT
 }
+
+#[cfg(test)]
+mod tests;

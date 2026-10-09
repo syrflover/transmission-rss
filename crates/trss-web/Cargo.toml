@@ -34,7 +34,8 @@ trss-core = { workspace = true, features = ["test-support"] }
 trss-anissia = { workspace = true, features = ["test-support"] }
 trss-anilist = { workspace = true, features = ["test-support"] }
 trss-library = { workspace = true, features = ["test-support"] }
-trss-collect.workspace = true
+# The fake tracker of the past episode search tests (`trss_collect::fake`).
+trss-collect = { workspace = true, features = ["test-support"] }
 trss-subtitles = { workspace = true, features = ["test-support"] }
 # The sample ZIPs of the upload tests (`trss_archive::testing`).
 trss-archive = { workspace = true, features = ["test-support"] }

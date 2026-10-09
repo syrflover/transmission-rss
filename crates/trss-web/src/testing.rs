@@ -18,6 +18,8 @@ use tower::ServiceExt;
 
 use crate::AppState;
 
+pub(crate) mod past_search;
+
 /// The API under `/api`, as the app serves it.
 pub(crate) fn api(state: &AppState) -> Router {
     Router::new().nest("/api", bare_api(state))
