@@ -144,6 +144,14 @@
 | trss-web `subscriptions_api/title_tests.rs` `a_title_another_rule_already_handles_is_no_candidate` | trss-collect `subscriptions/candidates_tests.rs` `a_work_another_rule_handles_is_not_a_candidate` | 같은 입력이에요. |
 | trss-web `in_place/tests.rs` `a_retry_of_a_version_unknown_item_the_listing_places_is_refused` | trss-web `in_place/tests.rs` `a_retry_of_a_revision_the_episode_holds_already_is_refused_with_the_reason`의 `placed` 경우 | 목록에서 회차 이름에 놓인 더 높은 항목이 있을 때 `버전 미상` 항목의 `다시 받기`를 같은 문장의 400으로 거절하고 아무것도 저장하지 않아요. 지운 테스트를 남은 테스트의 한 경우로 합쳤어요. |
 
+### 명세와 코드가 다른 곳
+
+표를 쓰며 명세의 문장 14곳이 코드와 다르다고 보고 하나씩 확인했어요(2026-10-09).
+
+- 7곳은 명세가 코드의 동작이나 자리를 틀리게 적었어요. 규칙 미리보기의 입력, 받은 영상의 CRC32를 두는 곳, 이동 명령을 만드는 쪽, 체크한 지난 항목의 순서, 회차 변환 되돌리기의 대상, 수정본 대체의 거절 경우, 폴더의 쓰기 검사예요. 명세를 고쳤고, 쓰기 검사는 웹이 폴더를 읽기 전용으로 붙여 저장할 때 볼 수 없으므로 명세를 지금 동작에 맞추기로 했어요(사용자 결정, 2026-10-09).
+- 구독을 다른 Anissia 작품으로 다시 잇는 길은 명세에만 있고 코드에 없어요. 만들기로 하고 [0129](0129-relink-subscription.md)로 남겼어요(사용자 결정, 2026-10-09).
+- 6곳은 명세를 고칠 일이 아니었어요. `받는 중`의 쓰임과 보관한 규칙의 `자막 받기`는 명세대로이고, 앱 YAML 내보내기는 아직 만들지 않은 [목표 6](README.md#6-앱-yaml-내보내기와-가져오기)이에요. 릴리스 이름 묶음 테스트의 범위와 지난 티켓 두 곳의 기록은 명세의 요구가 아니에요.
+
 ### 실행 시간
 
 2026-10-09에 `-j 4`로 빌드한 뒤 다시 돌린 한 번씩의 `finished in`이에요. 앞은 `31202ad`, 뒤는 `a4bb97c`이고, 단계마다 다른 agent가 측정했고, 다른 작업과 겹쳤는지는 확인하지 않았어요.
