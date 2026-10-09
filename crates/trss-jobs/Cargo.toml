@@ -34,7 +34,9 @@ reqwest.workspace = true
 trss-subtitles = { workspace = true, features = ["test-support"] }
 serde_json.workspace = true
 tempfile.workspace = true
-tokio = { workspace = true, features = ["rt-multi-thread", "macros", "fs", "io-util", "time"] }
+# `test-util`: the remote-screen and find tests wait the page follower's and
+# the finish's polls in paused time (`start_paused`).
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "fs", "io-util", "time", "test-util"] }
 # The archives the child process of `tests/extract_process.rs` unpacks.
 zip.workspace = true
 # Encodes the CP949 subtitles the comparison tests read (`tests/it/replace.rs`).

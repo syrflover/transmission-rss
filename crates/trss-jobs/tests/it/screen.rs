@@ -1032,7 +1032,7 @@ async fn with_a_popup(s: &Setup) -> String {
     id
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_check_screen_follows_a_popup_that_stays_and_lists_its_pages() {
     let s = setup(true).await;
     let id = waiting(&s).await;
@@ -1061,7 +1061,7 @@ async fn a_check_screen_follows_a_popup_that_stays_and_lists_its_pages() {
     );
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_persons_switch_on_a_check_screen_is_kept_and_a_closed_shown_tab_goes_to_the_newest_left()
 {
     let s = setup(true).await;
@@ -1104,7 +1104,7 @@ async fn a_persons_switch_on_a_check_screen_is_kept_and_a_closed_shown_tab_goes_
     );
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn closing_a_tab_that_is_not_shown_closes_only_that_page() {
     let s = setup(true).await;
     let id = with_a_popup(&s).await;
@@ -1141,7 +1141,7 @@ async fn closing_a_tab_that_is_not_shown_closes_only_that_page() {
     assert_eq!(now.bound_at, first.bound_at);
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_request_for_another_binding_an_unlisted_page_or_the_first_page_is_refused() {
     let s = setup(true).await;
     let id = with_a_popup(&s).await;

@@ -366,7 +366,7 @@ async fn a_find_job_opens_the_creators_post_and_keeps_what_a_persons_click_downl
     assert_eq!(d.row.state, JobState::Waiting);
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn two_downloads_are_two_files_of_one_package_and_finishing_hands_them_to_placement() {
     let s = setup(true).await;
     let id = browsing(&s).await;
@@ -456,7 +456,7 @@ async fn finishing_with_nothing_received_ends_as_nothing_found() {
         .any(|e| e.message == "받은 파일 없이 받기를 끝냈어요"));
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn finishing_waits_for_a_download_under_way_and_keeps_it() {
     let s = setup(true).await;
     let id = browsing(&s).await;
@@ -483,7 +483,7 @@ async fn finishing_waits_for_a_download_under_way_and_keeps_it() {
 
 /// The browser may move a download into the job's folder after the watch
 /// saw none on its way and before the job's folder goes with its end.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_download_that_lands_as_the_watch_ends_the_job_is_kept() {
     let s = setup(true).await;
     let id = browsing(&s).await;
@@ -523,7 +523,7 @@ async fn a_download_that_lands_as_the_watch_ends_the_job_is_kept() {
     assert!(!staging.exists());
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_download_that_is_no_subtitle_is_dropped_with_why() {
     let s = setup(true).await;
     let id = browsing(&s).await;
@@ -688,7 +688,7 @@ async fn finishing_a_job_whose_run_closed_is_ended_by_the_workers_next_look() {
     assert_eq!(d.row.note.as_deref(), Some("받은 파일: 자막 1개"));
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_finish_asked_while_the_run_was_bound_ends_the_job_once_the_run_ends() {
     let s = setup(true).await;
     let id = browsing(&s).await;
@@ -842,7 +842,7 @@ async fn a_download_a_restart_left_in_the_folder_is_taken_by_the_next_watch() {
     assert!(!staging.join("maker-1.srt").exists());
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn the_screen_follows_a_page_the_post_opens_and_comes_back_when_it_closes() {
     let s = setup(true).await;
     let id = browsing(&s).await;
@@ -882,7 +882,7 @@ async fn shown(s: &Setup, id: &str) -> trss_jobs::Screen {
     s.screens.screen(id).await.unwrap().unwrap()
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_person_closes_a_popup_and_the_screen_goes_back_to_the_post() {
     let s = setup(true).await;
     let id = browsing(&s).await;
@@ -939,7 +939,7 @@ async fn shows(s: &Setup, id: &str, target: &str) {
     .await;
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_persons_choice_of_an_older_tab_is_kept_and_a_new_popup_is_shown_after_it() {
     let s = setup(true).await;
     let id = browsing(&s).await;
@@ -978,7 +978,7 @@ async fn a_persons_choice_of_an_older_tab_is_kept_and_a_new_popup_is_shown_after
     );
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn closing_a_hidden_tab_keeps_the_screen_and_closing_the_shown_one_shows_the_newest_left() {
     let s = setup(true).await;
     let id = browsing(&s).await;
@@ -1025,7 +1025,7 @@ async fn closing_a_hidden_tab_keeps_the_screen_and_closing_the_shown_one_shows_t
     assert_eq!(shown(&s, &id).await.pages, vec!["target-1".to_owned()]);
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn the_worker_never_asks_the_browser_to_close_the_first_page() {
     let s = setup(true).await;
     let id = browsing(&s).await;
@@ -1060,7 +1060,7 @@ async fn the_worker_never_asks_the_browser_to_close_the_first_page() {
     assert_eq!(shown(&s, &id).await.target_id.as_deref(), Some("target-1"));
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_page_that_opens_and_closes_at_once_is_not_followed() {
     let s = setup(true).await;
     let id = browsing(&s).await;
