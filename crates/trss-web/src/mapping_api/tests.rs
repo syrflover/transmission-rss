@@ -434,3 +434,177 @@ async fn reverting_a_source_with_no_mapping_is_refused_as_invalid_and_a_stale_ve
     assert_eq!(status, StatusCode::CONFLICT, "{body}");
     assert_eq!(body["current"]["mapping"]["version"], stored["version"]);
 }
+
+const PREVIEW: &str = "/api/library/works/w1/seasons/1/anissia/sources/s1/mapping/preview";
+
+impl App {
+    async fn preview(&self, body: Value) -> (StatusCode, Value) {
+        self.call(Method::POST, PREVIEW, Some(body)).await
+    }
+}
+
+#[tokio::test]
+async fn the_dialogs_input_is_previewed_against_the_sources_episodes_and_the_seasons_counts() {
+    let app = App::new().await;
+    // Newest observation of `01` is `1`; `13.5` fits no default mapping.
+    app.observe(&["01", "1", "2", "13.5"]).await;
+    let (status, shown) = app
+        .preview(json!({
+            "choice": "same",
+            "custom": "",
+            "exceptions": [{ "episode": "2", "target": "", "skip": true }],
+        }))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{shown}");
+    assert_eq!(
+        shown,
+        json!({
+            // Season 1 has no earlier season to continue on from.
+            "continue_reason": "앞 시즌이 없어서 고를 수 없어요.",
+            "previews": {
+                "same": "1화 → 1화 · 2화 → 받지 않음 · 13.5화 → 정해지지 않음",
+                "continue": "",
+                "custom": "",
+            },
+            "offset": 0,
+            "offset_problem": null,
+            "exceptions": [{ "episode": "2", "target": null }],
+            "exceptions_problem": null,
+            "warnings": [],
+            "to_add": ["13.5"],
+        })
+    );
+    // Typed text is read as the dialog always read it.
+    let (status, shown) = app
+        .preview(json!({
+            "choice": "custom",
+            "custom": "12.5",
+            "exceptions": [{ "episode": "", "target": "3", "skip": false }],
+        }))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{shown}");
+    assert_eq!(shown["offset"], Value::Null);
+    assert_eq!(
+        shown["offset_problem"],
+        "-9999에서 9999 사이의 정수를 써 주세요."
+    );
+    assert_eq!(shown["exceptions"], json!([]));
+    assert_eq!(shown["exceptions_problem"], "예외의 회차를 써 주세요.");
+    // No choice made yet is no offset and no problem.
+    let (_, shown) = app
+        .preview(json!({ "choice": null, "custom": "", "exceptions": [] }))
+        .await;
+    assert_eq!(
+        (shown["offset"].clone(), shown["offset_problem"].clone()),
+        (Value::Null, Value::Null)
+    );
+}
+
+#[tokio::test]
+async fn a_preview_changes_nothing_and_needs_no_version() {
+    let app = App::new().await;
+    app.observe(&["1", "2"]).await;
+    app.follow().await;
+    let before = app.mapping().await;
+    let received = app.received().await;
+    let (status, _) = app
+        .preview(json!({ "choice": "custom", "custom": "5", "exceptions": [] }))
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(app.mapping().await, before);
+    assert_eq!(app.received().await, received);
+}
+
+#[tokio::test]
+async fn a_preview_is_refused_for_a_body_it_cannot_read_and_not_found_for_a_source_or_season_that_is_not_there(
+) {
+    let app = App::new().await;
+    app.observe(&["1"]).await;
+    sql(
+        &app.state,
+        "INSERT INTO subtitle_sources (id, anime_no, creator_name, created_at)
+         VALUES ('other', 999, '다른', 1);
+         INSERT INTO seasons (work_id, number) VALUES ('w1', 2);"
+            .to_owned(),
+    )
+    .await;
+    // A field missing, a choice that is none, a row without its parts, and a field that is not known.
+    for body in [
+        json!({ "choice": "same", "custom": "" }),
+        json!({ "choice": "other", "custom": "", "exceptions": [] }),
+        json!({ "choice": "same", "custom": "", "exceptions": [{ "episode": "1" }] }),
+        json!({ "choice": "same", "custom": "", "exceptions": [], "version": 1 }),
+    ] {
+        let (status, answer) = app.preview(body.clone()).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}: {answer}");
+        assert_eq!(answer["error"], "invalid");
+    }
+    let body = json!({ "choice": "same", "custom": "", "exceptions": [] });
+    for uri in [
+        "/api/library/works/w1/seasons/1/anissia/sources/nope/mapping/preview",
+        "/api/library/works/w1/seasons/1/anissia/sources/other/mapping/preview",
+        "/api/library/works/nope/seasons/1/anissia/sources/s1/mapping/preview",
+    ] {
+        let (status, answer) = app.call(Method::POST, uri, Some(body.clone())).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{uri}: {answer}");
+    }
+    // A season with no Anissia anime linked has no source to map.
+    let (status, answer) = app
+        .call(
+            Method::POST,
+            "/api/library/works/w1/seasons/2/anissia/sources/s1/mapping/preview",
+            Some(body),
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{answer}");
+}
+
+#[tokio::test]
+async fn a_mapping_carries_the_line_its_group_shows_and_the_choice_the_dialog_opens_on() {
+    let app = App::new().await;
+    app.observe(&["1", "2", "13.5"]).await;
+    app.follow().await;
+    // The app's own: the grounds are the line, and the offset means `같은 번호`.
+    let auto = app.mapping().await;
+    assert_eq!(auto["kind"], "auto");
+    assert_eq!(
+        auto["line"],
+        format!("자동 · {}", auto["evidence"].as_str().unwrap())
+    );
+    assert_eq!(auto["choice"], "same");
+
+    let version = auto["version"].as_i64().unwrap();
+    let (status, saved) = app
+        .save(version, 5, json!([{ "episode": "13.50", "target": null }]))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{saved}");
+    assert_eq!(
+        saved["line"],
+        "직접 정함 · 1화 → 6화 · 예외 13.50 받지 않음"
+    );
+    // Season 1 has no earlier season, so an offset of 5 is a custom one.
+    assert_eq!(saved["choice"], "custom");
+    // The candidates and the conflict carry the same.
+    assert_eq!(app.mapping().await, saved);
+    let (status, late) = app.save(version, 0, json!([])).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{late}");
+    assert_eq!(late["current"]["mapping"]["line"], saved["line"]);
+    // Zero is the same number whoever decided it.
+    let (_, zero) = app
+        .save(saved["version"].as_i64().unwrap(), 0, json!([]))
+        .await;
+    assert_eq!(
+        (zero["line"].clone(), zero["choice"].clone()),
+        (json!("직접 정함 · 같은 번호"), json!("same"))
+    );
+    // Reverting answers the app's mapping with its own line.
+    let (_, reverted) = app
+        .call(
+            Method::POST,
+            &format!("{MAPPING}/revert"),
+            Some(json!({ "version": zero["version"] })),
+        )
+        .await;
+    let evidence = reverted["mapping"]["evidence"].as_str().unwrap();
+    assert_eq!(reverted["mapping"]["line"], format!("자동 · {evidence}"));
+}

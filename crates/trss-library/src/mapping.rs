@@ -90,6 +90,7 @@ use trss_core::{
     Millis,
 };
 
+pub mod preview;
 pub mod reason;
 
 /// How long after the last scheduled episode aired a post still belongs to it.

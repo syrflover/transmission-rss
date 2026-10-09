@@ -139,7 +139,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{
     commands_api::{ask_anissia_captions, CommandView},
-    mapping_api::MappingView,
+    mapping_api::{MappingView, SourceFacts},
     subscriptions_api::{scheduled_anime, unavailable, USER_MAX_WAIT},
     ApiError, AppState,
 };
@@ -827,7 +827,10 @@ async fn candidates(
     let creator_episodes = creator_episodes(&observed);
     let mut mappings: Vec<MappingView> = mappings
         .into_iter()
-        .map(|(source_id, m)| MappingView::of(source_id, m))
+        .map(|(source_id, m)| {
+            let source_facts = SourceFacts::of(&observed, &source_id, facts);
+            MappingView::of(source_id, m, &source_facts)
+        })
         .collect();
     mappings.sort_by(|a, b| a.source_id.cmp(&b.source_id));
     Ok(Json(CandidatesView {
