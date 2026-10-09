@@ -75,6 +75,7 @@ use std::collections::HashMap;
 use self::suggestions::{Pick, SubscriptionsResult, SuggestionView};
 use super::settings_api::check_folders;
 use super::{ApiError, AppState};
+use trss_collect::rss::regex_error;
 use trss_collect::store::channels::{
     import::{is_title_waiting_subscription, match_rules, ImportChannel, ImportedChannel},
     ChannelError, ChannelWithRules, Rule, Version,
@@ -224,12 +225,10 @@ struct CollectFolderView {
 
 fn invalid_regex(rule: &trss_collect::store::channels::RuleInput) -> bool {
     rule.regex
-        && rule.r#match.as_deref().is_some_and(|pattern| {
-            regex::RegexBuilder::new(pattern)
-                .case_insensitive(rule.case_insensitive)
-                .build()
-                .is_err()
-        })
+        && rule
+            .r#match
+            .as_deref()
+            .is_some_and(|pattern| regex_error(pattern, rule.case_insensitive).is_some())
 }
 
 fn channel_view(

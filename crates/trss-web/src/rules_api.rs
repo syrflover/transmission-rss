@@ -155,7 +155,7 @@ use trss_anissia::Anime;
 use trss_collect::{
     commands::rule_archive::{self, RuleArchive},
     plan::{preview, ChannelPlan, PastCause},
-    rss::{ChannelEvaluator, ChannelSpec, RuleSpec},
+    rss::regex_error,
     store::{
         channels::{
             Channel, ChannelError, ChannelWithRules, OrderItem, Rule, RuleInput, RuleState,
@@ -1049,26 +1049,13 @@ fn require_valid_regex(input: RuleInput) -> Result<RuleInput, ApiError> {
 }
 
 /// Whether the rule's regular expression fails to compile, decided by the same
-/// evaluation the worker uses.
+/// compilation the worker's evaluation uses ([`trss_collect::rss::regex_error`]).
 fn regex_problem_of(input: &RuleInput) -> Option<RegexProblem> {
     if !input.regex {
         return None;
     }
-    let evaluator = ChannelEvaluator::new(ChannelSpec {
-        directory: Default::default(),
-        excludes: Vec::new(),
-        rules: vec![RuleSpec {
-            pattern: input.r#match.clone(),
-            regex: true,
-            case_insensitive: input.case_insensitive,
-            directory: Default::default(),
-            episode: 0,
-        }],
-    });
-    evaluator
-        .rule_errors()
-        .first()
-        .map(|err| regex_problem(&err.source))
+    let pattern = input.r#match.as_deref()?;
+    regex_error(pattern, input.case_insensitive).map(|err| regex_problem(&err))
 }
 
 // ---------------------------------------------------------------------------

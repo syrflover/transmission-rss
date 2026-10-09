@@ -81,6 +81,21 @@ impl Evaluation {
     }
 }
 
+/// Compiles the regular expression of a rule that matches by regex. The one
+/// place that decides how a rule's pattern is compiled, so that every check of
+/// whether a pattern is valid agrees with what the evaluation does with it.
+pub fn compile_regex(pattern: &str, case_insensitive: bool) -> Result<Regex, regex::Error> {
+    RegexBuilder::new(pattern)
+        .case_insensitive(case_insensitive)
+        .build()
+}
+
+/// Why `pattern` does not compile as a rule's regular expression, or `None`
+/// when it does. Such a rule matches nothing ([`RuleError`]).
+pub fn regex_error(pattern: &str, case_insensitive: bool) -> Option<regex::Error> {
+    compile_regex(pattern, case_insensitive).err()
+}
+
 enum Matcher {
     /// No match phrase, or a regex that failed to compile.
     Never,
@@ -97,11 +112,7 @@ impl Matcher {
         };
 
         Ok(if rule.regex {
-            Self::Regex(
-                RegexBuilder::new(pattern)
-                    .case_insensitive(rule.case_insensitive)
-                    .build()?,
-            )
+            Self::Regex(compile_regex(pattern, rule.case_insensitive)?)
         } else if rule.case_insensitive {
             Self::SubstringIgnoreCase(pattern.to_lowercase())
         } else {
@@ -367,6 +378,28 @@ mod tests {
         let res = ev.evaluate("Show - 03");
         assert_eq!(res.applied_rule(), Some(2));
         assert!(res.overlapping.is_empty());
+    }
+
+    #[test]
+    fn regex_error_says_what_the_evaluation_would_fail_to_compile() {
+        assert!(regex_error(r"Show - \d+", false).is_none());
+        assert!(regex_error("", false).is_none());
+        for case_insensitive in [false, true] {
+            for pattern in ["Show (unclosed", "[z-a]", r"\p{NoSuchClass}", "*"] {
+                assert!(
+                    regex_error(pattern, case_insensitive).is_some(),
+                    "{pattern:?} case_insensitive={case_insensitive}"
+                );
+            }
+        }
+        // A pattern the library refuses for its size is an error too.
+        assert!(matches!(
+            regex_error(r"((a{100}){100}){100}", false),
+            Some(regex::Error::CompiledTooBig(_))
+        ));
+        // The flag is the one the evaluation compiles with.
+        assert!(compile_regex("show", true).unwrap().is_match("SHOW"));
+        assert!(!compile_regex("show", false).unwrap().is_match("SHOW"));
     }
 
     #[test]

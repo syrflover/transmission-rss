@@ -7,5 +7,6 @@
 mod evaluate;
 
 pub use evaluate::{
-    save_path, ChannelEvaluator, ChannelSpec, Evaluation, Outcome, RuleError, RuleSpec, SkipReason,
+    compile_regex, regex_error, save_path, ChannelEvaluator, ChannelSpec, Evaluation, Outcome,
+    RuleError, RuleSpec, SkipReason,
 };
