@@ -912,9 +912,9 @@ pub fn sort_arrival(
     let flat = first_free(last, &mut used);
     let target = job_dir.join(&flat);
     trss_core::files::rename_noreplace(staged, &target)?;
-    area::sync_dir(&job_dir)?;
+    trss_core::files::sync_dir(&job_dir)?;
     if let Some(folder) = job_dir.parent() {
-        area::sync_dir(folder)?;
+        trss_core::files::sync_dir(folder)?;
     }
     let meta = std::fs::symlink_metadata(&target)?;
     Ok(Arrived::Kept(UploadedFile {
@@ -1017,8 +1017,8 @@ fn keep_the_files(
                 archive: kept.archive,
             });
         }
-        area::sync_dir(&job_dir)?;
-        area::sync_dir(&folder)?;
+        trss_core::files::sync_dir(&job_dir)?;
+        trss_core::files::sync_dir(&folder)?;
         Ok(out)
     })();
     match moved {

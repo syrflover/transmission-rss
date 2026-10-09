@@ -5,20 +5,24 @@
 //! Every effect writes its own temporary file in the work folder's
 //! `.trss/tmp/` (the app data folder's `subtitle-files/.tmp/`), on the file
 //! system of where it is published, and publishes
-//! it by a rename that replaces nothing ([`rename_noreplace`]). A rename keeps
+//! it by a rename that replaces nothing
+//! ([`trss_core::files::rename_noreplace_synced`]). A rename keeps
 //! the file's object, so the published file is known for this effect's by
 //! the object recorded before the rename.
 
 use std::{
-    fs::{self, File, OpenOptions},
+    fs::{self, File},
     io::{self, Read, Write},
     path::{Path, PathBuf},
 };
 
 use sha2::{Digest, Sha256};
-use trss_core::{file_id::FileId, files::rename_noreplace};
+use trss_core::{
+    file_id::FileId,
+    files::{create_dir_all_synced, rename_noreplace_synced, sync_dir, write_new},
+};
 
-use crate::area::{hex, read_facts, sync_dir};
+use crate::area::{hex, read_facts};
 
 /// The hidden folder of the app in a work folder.
 pub const TRSS_DIR: &str = ".trss";
@@ -49,7 +53,7 @@ pub enum Copied {
 /// `temp` was made removes it again.
 pub fn copy_to_temp(source: &Path, temp: &Path, size: u64, sha256: &str) -> Copied {
     if let Some(parent) = temp.parent() {
-        if let Err(err) = make_dirs(parent) {
+        if let Err(err) = create_dir_all_synced(parent) {
             return Copied::Failed(err);
         }
     }
@@ -57,11 +61,7 @@ pub fn copy_to_temp(source: &Path, temp: &Path, size: u64, sha256: &str) -> Copi
         Ok(file) => file,
         Err(err) => return Copied::Failed(err),
     };
-    let mut writer = match OpenOptions::new().write(true).create_new(true).open(temp) {
-        Ok(file) => file,
-        Err(err) => return Copied::Failed(err),
-    };
-    let written = (|| -> io::Result<(u64, String)> {
+    let written = write_new(temp, None, |writer| {
         let mut hasher = Sha256::new();
         let mut buf = vec![0u8; 64 * 1024];
         let mut total = 0u64;
@@ -74,16 +74,14 @@ pub fn copy_to_temp(source: &Path, temp: &Path, size: u64, sha256: &str) -> Copi
             writer.write_all(&buf[..n])?;
             total += n as u64;
         }
-        writer.sync_all()?;
         Ok((total, hex(&hasher.finalize())))
-    })();
-    drop(writer);
+    });
     let gone = |result: Copied| {
         let _ = fs::remove_file(temp);
         result
     };
     match written {
-        Err(err) => gone(Copied::Failed(err)),
+        Err(err) => Copied::Failed(err),
         Ok((n, sum)) if n != size || sum != sha256 => gone(Copied::SourceChanged(format!(
             "복사할 파일이 기록과 달라요 (크기 {n}, 기록 {size})"
         ))),
@@ -99,27 +97,6 @@ pub fn copy_to_temp(source: &Path, temp: &Path, size: u64, sha256: &str) -> Copi
             ))),
             Err(err) => gone(Copied::Failed(err)),
         },
-    }
-}
-
-/// Makes `dir` and the folders above it that are missing, syncing the
-/// folder each new one is in: a synced file is kept by a power loss only
-/// while its folders are.
-fn make_dirs(dir: &Path) -> io::Result<()> {
-    if dir.is_dir() {
-        return Ok(());
-    }
-    if let Some(parent) = dir.parent() {
-        make_dirs(parent)?;
-    }
-    match fs::create_dir(dir) {
-        Ok(()) => {}
-        Err(err) if err.kind() == io::ErrorKind::AlreadyExists && dir.is_dir() => return Ok(()),
-        Err(err) => return Err(err),
-    }
-    match dir.parent() {
-        Some(parent) => sync_dir(parent),
-        None => Ok(()),
     }
 }
 
@@ -150,21 +127,15 @@ pub enum Published {
 /// syncs both folders.
 pub fn publish(temp: &Path, target: &Path) -> Published {
     if let Some(parent) = target.parent() {
-        if let Err(err) = make_dirs(parent) {
+        if let Err(err) = create_dir_all_synced(parent) {
             return Published::Failed(err);
         }
     }
-    match rename_noreplace(temp, target) {
-        Ok(()) => {}
-        Err(err) if err.kind() == io::ErrorKind::AlreadyExists => return Published::Occupied,
-        Err(err) => return Published::Failed(err),
+    match rename_noreplace_synced(temp, target) {
+        Ok(()) => Published::Done,
+        Err(err) if err.kind() == io::ErrorKind::AlreadyExists => Published::Occupied,
+        Err(err) => Published::Failed(err),
     }
-    for folder in [target.parent(), temp.parent()].into_iter().flatten() {
-        if let Err(err) = sync_dir(folder) {
-            return Published::Failed(err);
-        }
-    }
-    Published::Done
 }
 
 /// A regular file's length, SHA-256 and object; `None` when nothing is at

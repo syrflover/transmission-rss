@@ -104,7 +104,7 @@
 use std::path::Path;
 
 use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
-use trss_core::Millis;
+use trss_core::{files::sync_dir, Millis};
 
 use super::{
     blocking,
@@ -113,7 +113,6 @@ use super::{
     Placer,
 };
 use crate::{
-    area::sync_dir,
     model::{AssetKind, SubtitleFormat},
     store::JobError,
 };

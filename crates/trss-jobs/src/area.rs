@@ -237,11 +237,6 @@ pub fn read_facts(path: &Path) -> io::Result<(u64, String, String)> {
     Ok((size, hex(&hasher.finalize()), object_of(&meta)))
 }
 
-/// Syncs a folder, so a rename into it outlives a power loss.
-pub fn sync_dir(path: &Path) -> io::Result<()> {
-    std::fs::File::open(path)?.sync_all()
-}
-
 #[cfg(test)]
 mod tests {
     use std::os::unix::fs::MetadataExt;

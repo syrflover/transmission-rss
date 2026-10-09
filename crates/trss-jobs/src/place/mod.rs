@@ -2134,7 +2134,7 @@ impl Placer {
                     (Ok(None), Ok(g)) if ours(&g) => {
                         let target = files::within(&folder, &effect.target);
                         let synced = blocking(move || match target.parent() {
-                            Some(dir) => crate::area::sync_dir(dir),
+                            Some(dir) => trss_core::files::sync_dir(dir),
                             None => Ok(()),
                         })
                         .await;

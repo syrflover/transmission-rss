@@ -1786,14 +1786,14 @@ impl Runner {
             std::fs::create_dir_all(folder)?;
             let mut level = folder;
             while let Some(parent) = level.parent() {
-                area::sync_dir(parent)?;
+                trss_core::files::sync_dir(parent)?;
                 if parent == self.area.root() {
                     break;
                 }
                 level = parent;
             }
             trss_core::files::rename_noreplace(&temp, &target)?;
-            area::sync_dir(folder)
+            trss_core::files::sync_dir(folder)
         })();
         if let Err(err) = published {
             let reason = match err.kind() {

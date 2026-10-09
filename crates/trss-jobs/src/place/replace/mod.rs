@@ -98,7 +98,10 @@ use std::{
     time::UNIX_EPOCH,
 };
 
-use trss_core::{file_id::same_recorded_file, files::rename_noreplace};
+use trss_core::{
+    file_id::same_recorded_file,
+    files::{rename_noreplace, sync_renamed},
+};
 
 use super::{
     blocking, files,
@@ -109,7 +112,7 @@ use super::{
     row_label, video_parts, Choice, Placer, SUBTITLE_EXTENSIONS,
 };
 use crate::{
-    area::{object_of, read_facts, sync_dir},
+    area::{object_of, read_facts},
     model::{
         AssetKind, Chosen, EffectKind, EffectState, Outcome, PathAction, PlanAction, PlanState,
         SubtitleFormat,
@@ -1345,9 +1348,7 @@ impl Placer {
                 }
                 Err(err) => return Ok(Aside::Failed(err)),
             }
-            for dir in [from.parent(), aside.parent()].into_iter().flatten() {
-                sync_dir(dir)?;
-            }
+            sync_renamed(&from, &aside)?;
             let found = files::facts(&aside).ok().flatten();
             if same_file(&found, &seen) {
                 return Ok(Aside::Done);
@@ -1355,9 +1356,7 @@ impl Placer {
             // Not the file the plan saw: it goes back where it was.
             match rename_noreplace(&aside, &from) {
                 Ok(()) => {
-                    for dir in [from.parent(), aside.parent()].into_iter().flatten() {
-                        sync_dir(dir)?;
-                    }
+                    sync_renamed(&aside, &from)?;
                     Ok(Aside::Untouched(format!(
                         "기존 자막이 비교한 뒤 바뀌었어요 ({shown})"
                     )))

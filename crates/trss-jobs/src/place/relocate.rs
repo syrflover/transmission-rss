@@ -88,10 +88,12 @@
 use std::{collections::BTreeMap, path::Path};
 
 use rusqlite::{params, Connection, OptionalExtension};
-use trss_core::{files::rename_noreplace, Millis};
+use trss_core::{
+    files::{rename_noreplace, rename_noreplace_synced, sync_dir, sync_renamed},
+    Millis,
+};
 
 use crate::{
-    area::sync_dir,
     mapping::{self, Mapped, Mapping},
     model::{JobState, RemovalState, StepKind},
     place::{
@@ -1086,11 +1088,7 @@ impl Placer {
             if let Some(dir) = to.parent() {
                 std::fs::create_dir_all(dir)?;
             }
-            rename_noreplace(&from, &to)?;
-            for dir in [from.parent(), to.parent()].into_iter().flatten() {
-                sync_dir(dir)?;
-            }
-            Ok(())
+            rename_noreplace_synced(&from, &to)
         })
         .await;
         match renamed {
@@ -1143,16 +1141,12 @@ impl Placer {
             Found::Copy => Aside::Done,
             Found::Gone => Aside::Gone,
             Found::Other(_) => match rename_noreplace(&aside, &at) {
-                Ok(()) => {
-                    for dir in [at.parent(), aside.parent()].into_iter().flatten() {
-                        if let Err(err) = sync_dir(dir) {
-                            return Aside::Unsure(format!(
-                                "{label}을 되돌린 뒤 폴더를 동기화하지 못했어요: {err}"
-                            ));
-                        }
-                    }
-                    Aside::Kept("적용한 뒤 바뀐 파일이라 그대로 뒀어요".to_owned())
-                }
+                Ok(()) => match sync_renamed(&aside, &at) {
+                    Ok(()) => Aside::Kept("적용한 뒤 바뀐 파일이라 그대로 뒀어요".to_owned()),
+                    Err(err) => Aside::Unsure(format!(
+                        "{label}을 되돌린 뒤 폴더를 동기화하지 못했어요: {err}"
+                    )),
+                },
                 Err(err) => Aside::Unsure(format!(
                     "옮긴 {label}이 적용한 파일과 달라 되돌리려 했지만 하지 못했어요: {err}"
                 )),
