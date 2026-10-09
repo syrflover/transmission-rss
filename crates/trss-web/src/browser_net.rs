@@ -151,7 +151,7 @@ pub async fn find(launcher: &Url) -> Result<Subnet, String> {
     }
     let routes = tokio::fs::read_to_string(net_route::PATH)
         .await
-        .map_err(|e| format!("cannot read this host's routes (/proc/net/route): {e}"))?;
+        .map_err(|e| format!("cannot read this host's routes ({}): {e}", net_route::PATH))?;
     let mut subnets = addresses.iter().filter_map(|ip| match ip {
         IpAddr::V4(v4) => Some((v4, subnet_of(&routes, *v4))),
         IpAddr::V6(_) => None,
