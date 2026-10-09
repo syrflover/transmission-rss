@@ -34,7 +34,7 @@
   - 실제 서버(j4105, 2026-10-01): 기존 YAML에서 채널 2개와 규칙 26개를 가져왔어요. worker의 첫 주기는 cron이 넣은 토렌트를 같은 폴더에서 모두 알아봤어요. 전환 전에 저장한 토렌트 목록과 견줘 빠진 토렌트, 새 토렌트, 폴더가 바뀐 토렌트가 없었어요. 수집 이력의 한 번 받기 두 건이 `received`로 끝났어요. 웹만 재시작하는 동안 worker는 계속 돌았어요.
   - 서버의 cron 항목은 2026-10-01에 지웠고, 옛 실행 파일과 그 코드는 2026-10-02에 걷어냈어요. 0.5.0으로 컨테이너를 다시 만든 뒤 첫 주기는 새 항목 0개였어요. DB의 이력이 남은 거예요.
   - 사용자 확인(2026-10-04): 휴대폰 LTE에서 공인 IP로 웹과 Transmission에 닿지 않아요. 휴대폰에서 0003·0006을 했고, `.torrent` 추가 응답 시간도 봤다고 알렸어요. 관찰한 값은 받지 않았어요.
-- 시험으로 확인한 것: 웹에서 고친 규칙이 다음 처리에 쓰이는 것과, 미리보기의 예측이 다음 주기의 처리와 같은 것이에요. 0006의 통합 시험 `what_the_preview_predicts_for_an_edit_is_what_the_next_cycle_does_after_it_is_saved`와 `after_a_reorder_through_the_api_the_next_cycle_picks_the_first_match_in_the_new_order`예요. 실제 서버에서 규칙을 고친 뒤 다음 주기를 따로 관찰한 기록은 없어요.
+- 시험으로 확인한 것: 웹에서 고친 규칙이 다음 처리에 쓰이는 것과, 미리보기의 예측이 다음 주기의 처리와 같은 것이에요. 0006의 통합 시험 `what_the_preview_predicts_for_an_edit_is_what_the_next_cycle_does_after_it_is_saved`와 `after_a_reorder_through_the_api_the_next_cycle_picks_the_first_match_in_the_new_order`였고, [0113](0113-remaining-area-tests.md)에서 trss-collect의 `the_preview_agrees_with_the_plan_for_every_recorded_title`(`plan/preview/tests.rs`)과 `after_the_rules_are_reordered_a_cycle_gives_an_item_to_the_first_rule_in_the_new_order`(`cycle/tests.rs`)로 옮겼어요. 실제 서버에서 규칙을 고친 뒤 다음 주기를 따로 관찰한 기록은 없어요.
 - 남은 것이에요. 티켓마다의 다른 한계는 보관한 각 티켓의 `남은 일`에 있어요.
   - 원격 인증 화면(목표 3)의 보호를 실제 배포 경로에서 확인하는 일은 결과 목표 5로 넘겼어요. 서버는 0.5.0이라 원격 화면이 아직 없어요.
   - Transmission OOM 관찰과 자원 한도는 [0058](0058-server-oom-and-resource-limits.md)에서 이어가요.
