@@ -14,7 +14,7 @@ use std::{
 use futures::{stream, StreamExt};
 use tokio::{task, task::JoinSet};
 use tokio_util::sync::CancellationToken;
-use transmission_rpc::types::{TorrentGetField, TorrentStatus};
+use transmission_rpc::types::TorrentGetField;
 
 use trss_collect::{
     context::CollectContext,
@@ -24,7 +24,7 @@ use trss_collect::{
     revisions::{self, Listing},
     store::{
         channels::ChannelError,
-        status::{ChannelReadResult, StatusStore, TransmissionCounts},
+        status::{ChannelReadResult, StatusStore, TransmissionLook},
     },
 };
 use trss_core::{settings::SettingsError, Millis};
@@ -548,35 +548,15 @@ async fn record_transmission_counts(ctx: &CollectContext, at: Millis, redactor: 
         }
     };
 
-    let count = |kinds: [TorrentStatus; 2]| {
-        torrents
-            .iter()
-            .filter(|torrent| torrent.status.is_some_and(|status| kinds.contains(&status)))
-            .count() as u32
-    };
-    let counts = TransmissionCounts {
-        downloading: count([TorrentStatus::Downloading, TorrentStatus::QueuedToDownload]),
-        seeding: count([TorrentStatus::Seeding, TorrentStatus::QueuedToSeed]),
-        taken_at: at,
-    };
-    let downloading: Vec<String> = torrents
-        .iter()
-        .filter(|torrent| {
-            torrent.status.is_some_and(|status| {
-                [TorrentStatus::Downloading, TorrentStatus::QueuedToDownload].contains(&status)
-            })
-        })
-        .filter_map(|torrent| torrent.hash_string.clone())
-        .collect();
-    let everything: Vec<String> = torrents
-        .iter()
-        .filter_map(|torrent| torrent.hash_string.clone())
-        .collect();
+    let look = TransmissionLook::of(&torrents, at);
     let status = StatusStore::new(ctx.channels.db().clone());
-    if let Err(err) = status.record_transmission(counts, downloading).await {
+    if let Err(err) = status
+        .record_transmission(look.counts, look.downloading)
+        .await
+    {
         eprintln!("Cannot record the Transmission counts: {err}");
     }
-    if let Err(err) = status.record_listing(at, everything).await {
+    if let Err(err) = status.record_listing(at, look.everything).await {
         eprintln!("Cannot record the torrents in Transmission: {err}");
     }
 }

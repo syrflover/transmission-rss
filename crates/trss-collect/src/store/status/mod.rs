@@ -25,6 +25,7 @@
 use std::collections::HashSet;
 
 use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
+use transmission_rpc::types::{Torrent, TorrentStatus};
 
 use trss_core::{
     db::{Db, DbError},
@@ -113,6 +114,49 @@ impl TransmissionCounts {
         let seen_until = busy_cycle_started_at.map_or(now, |started| started.min(now));
         seen_until.saturating_sub(self.taken_at)
             <= interval_ms.saturating_mul(DOWNLOADING_FRESH_CYCLES)
+    }
+}
+
+/// What one look at Transmission's torrent list leaves for the status board and
+/// the past episode search.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TransmissionLook {
+    pub counts: TransmissionCounts,
+    /// The hashes of the torrents that are downloading or queued to download.
+    pub downloading: Vec<String>,
+    /// The hashes of every torrent, whatever its status.
+    pub everything: Vec<String>,
+}
+
+impl TransmissionLook {
+    /// Sorts the torrents of a look taken at `at`. Queued torrents count with
+    /// their kind: `Downloading` and `QueuedToDownload` are downloading,
+    /// `Seeding` and `QueuedToSeed` are seeding. A torrent in any other
+    /// status (stopped, verifying or waiting to verify) or without a status is
+    /// in neither count, and one without a hash is in no list.
+    pub fn of(torrents: &[Torrent], at: Millis) -> Self {
+        const DOWNLOADING: [TorrentStatus; 2] =
+            [TorrentStatus::Downloading, TorrentStatus::QueuedToDownload];
+        const SEEDING: [TorrentStatus; 2] = [TorrentStatus::Seeding, TorrentStatus::QueuedToSeed];
+        let is = |torrent: &Torrent, kinds: &[TorrentStatus; 2]| {
+            torrent.status.is_some_and(|status| kinds.contains(&status))
+        };
+        TransmissionLook {
+            counts: TransmissionCounts {
+                downloading: torrents.iter().filter(|t| is(t, &DOWNLOADING)).count() as u32,
+                seeding: torrents.iter().filter(|t| is(t, &SEEDING)).count() as u32,
+                taken_at: at,
+            },
+            downloading: torrents
+                .iter()
+                .filter(|t| is(t, &DOWNLOADING))
+                .filter_map(|t| t.hash_string.clone())
+                .collect(),
+            everything: torrents
+                .iter()
+                .filter_map(|t| t.hash_string.clone())
+                .collect(),
+        }
     }
 }
 

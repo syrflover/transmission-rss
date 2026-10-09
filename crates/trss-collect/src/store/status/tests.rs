@@ -502,3 +502,83 @@ fn a_look_four_minutes_old_is_kept_only_by_a_busy_workers_cycle_that_began_withi
     // A cycle that began before the look's age passed three intervals.
     assert!(!look.look_is_fresh(MINUTE, now, Some(now - MINUTE / 2)));
 }
+
+fn torrent(status: Option<u8>, hash: Option<&str>) -> Torrent {
+    let mut json = serde_json::Map::new();
+    if let Some(status) = status {
+        json.insert("status".into(), status.into());
+    }
+    if let Some(hash) = hash {
+        json.insert("hashString".into(), hash.into());
+    }
+    serde_json::from_value(json.into()).unwrap()
+}
+
+#[test]
+fn a_look_counts_each_status_by_its_kind_and_lists_the_downloading_hashes_and_all_of_them() {
+    // Transmission's status numbers: 0 stopped, 1 queued to verify, 2 verifying,
+    // 3 queued to download, 4 downloading, 5 queued to seed, 6 seeding.
+    let table: [(u8, u32, u32); 7] = [
+        (0, 0, 0),
+        (1, 0, 0),
+        (2, 0, 0),
+        (3, 1, 0),
+        (4, 1, 0),
+        (5, 0, 1),
+        (6, 0, 1),
+    ];
+    for (status, downloading, seeding) in table {
+        let look = TransmissionLook::of(&[torrent(Some(status), Some("h"))], 77);
+        assert_eq!(
+            look.counts,
+            TransmissionCounts {
+                downloading,
+                seeding,
+                taken_at: 77,
+            },
+            "status {status}",
+        );
+        assert_eq!(
+            look.downloading,
+            if downloading == 1 {
+                ids(&["h"])
+            } else {
+                vec![]
+            },
+            "status {status}",
+        );
+        assert_eq!(look.everything, ids(&["h"]), "status {status}");
+    }
+
+    let look = TransmissionLook::of(
+        &[
+            torrent(Some(4), Some("a")),
+            torrent(Some(6), Some("b")),
+            torrent(Some(3), Some("c")),
+            torrent(Some(5), Some("d")),
+            torrent(Some(0), Some("e")),
+            torrent(Some(4), None),
+            torrent(None, Some("f")),
+            torrent(None, None),
+        ],
+        200,
+    );
+    assert_eq!(
+        look,
+        TransmissionLook {
+            counts: TransmissionCounts {
+                downloading: 3,
+                seeding: 2,
+                taken_at: 200,
+            },
+            // A torrent without a hash is counted but not listed; one without a
+            // status is listed among all of them and counted in neither kind.
+            downloading: ids(&["a", "c"]),
+            everything: ids(&["a", "b", "c", "d", "e", "f"]),
+        },
+    );
+
+    let nothing = TransmissionLook::of(&[], 5);
+    assert_eq!(nothing.counts.downloading + nothing.counts.seeding, 0);
+    assert!(nothing.downloading.is_empty() && nothing.everything.is_empty());
+}
