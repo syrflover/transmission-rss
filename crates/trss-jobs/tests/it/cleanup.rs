@@ -492,6 +492,7 @@ async fn a_stored_subtitle_a_running_or_held_job_uses_is_not_cleanable() {
     let entry = s.entry("Show - 05.ass").await;
     assert_eq!(entry.blocked, None);
     let assets: Vec<String> = entry.with.iter().map(|f| f.id.clone()).collect();
+    assert_eq!(s.store.place.storage().await.unwrap()[0].cleanable, 1);
 
     for (state, reason) in [
         ("pending", cleanup::RUNNING_JOB),
@@ -503,6 +504,11 @@ async fn a_stored_subtitle_a_running_or_held_job_uses_is_not_cleanable() {
         ))
         .await;
         assert_eq!(s.entry("Show - 05.ass").await.blocked, Some(reason));
+        assert_eq!(
+            s.store.place.storage().await.unwrap()[0].cleanable,
+            0,
+            "{state}"
+        );
         let asked = s
             .store
             .place
@@ -522,6 +528,7 @@ async fn a_stored_subtitle_a_running_or_held_job_uses_is_not_cleanable() {
         s.entry("Show - 05.ass").await.blocked,
         Some(cleanup::WAITING_JOB)
     );
+    assert_eq!(s.store.place.storage().await.unwrap()[0].cleanable, 0);
     // Nothing was cleaned.
     assert_eq!(
         s.one::<i64>("SELECT count(*) FROM subtitle_cleanups".to_owned())
@@ -885,6 +892,73 @@ async fn nothing_is_cleaned_while_the_work_folder_is_away() {
     std::fs::rename(&moved, s.work()).unwrap();
     assert_eq!(s.entry("Show - 02.ass").await.blocked, None);
     assert_eq!(s.store.place.storage().await.unwrap()[0].cleanable, 1);
+}
+
+// A share not mounted can leave an empty folder at the work's place: the work
+// folder is there, its `.trss/subtitles` is not.
+#[tokio::test]
+async fn nothing_is_cleaned_where_the_work_folder_has_no_stored_subtitles_folder() {
+    let s = setup().await;
+    past_alone(&s, "Solo.ttf").await;
+    let entry = s.entry("Show - 02.ass").await;
+    std::fs::remove_dir_all(s.work().join(".trss")).unwrap();
+
+    assert!(s.work().is_dir());
+    assert_eq!(
+        s.entry("Show - 02.ass").await.blocked,
+        Some(cleanup::FOLDER_AWAY)
+    );
+    let assets = entry.with.iter().map(|f| f.id.clone()).collect();
+    assert_eq!(
+        s.store
+            .place
+            .clean_stored(WORK, &entry.id, assets, 60_000)
+            .await
+            .unwrap(),
+        Asked::Refused(cleanup::FOLDER_AWAY)
+    );
+    assert_eq!(
+        s.one::<i64>("SELECT count(*) FROM subtitle_cleanups".to_owned())
+            .await,
+        0
+    );
+}
+
+// A copy is its own work's, and from the confirmation of its cleanup it is
+// no stored copy: not to clean again, and not to apply.
+#[tokio::test]
+async fn a_copy_of_another_work_or_one_already_asked_to_be_cleaned_is_not_found() {
+    let s = setup().await;
+    past_alone(&s, "Solo.ttf").await;
+    let entry = s.entry("Show - 02.ass").await;
+    let assets: Vec<String> = entry.with.iter().map(|f| f.id.clone()).collect();
+    assert_eq!(
+        s.store
+            .place
+            .clean_stored("other", &entry.id, assets.clone(), 60_000)
+            .await
+            .unwrap(),
+        Asked::NotFound
+    );
+
+    s.ask("Show - 02.ass").await;
+
+    assert_eq!(
+        s.store
+            .place
+            .clean_stored(WORK, &entry.id, assets, 60_000)
+            .await
+            .unwrap(),
+        Asked::NotFound
+    );
+    assert_eq!(
+        s.store
+            .place
+            .choose_stored(WORK, &entry.id, Chosen::Apply, 70_000)
+            .await
+            .unwrap(),
+        StoredChoice::NotFound
+    );
 }
 
 // The same subtitle and font received in two posts are one stored subtitle

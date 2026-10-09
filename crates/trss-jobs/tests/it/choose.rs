@@ -17,9 +17,11 @@ use trss_core::{
     Db,
 };
 use trss_jobs::{
-    model::{Chosen, Outcome, PathAction, PlanState, StepKind, StepState, SubtitleFormat},
+    model::{
+        Chosen, Outcome, PathAction, PlanAction, PlanState, StepKind, StepState, SubtitleFormat,
+    },
     place::{
-        records::{PlanRow, StoredChoice, ADD_REFUSED},
+        records::{PlanRow, StoredChoice, StoredCopy, ADD_REFUSED},
         replace::{
             records::{Decided, Plan, PlanView},
             ADOPTED,
@@ -363,6 +365,11 @@ async fn a_copy_on_an_episode_with_no_subtitle_is_applied_at_once_and_marked_cho
         }
     );
     assert_eq!(chosen_of(&s, &job, &three).await, Some(Chosen::Apply));
+    // The row asks to be applied again, with no outcome yet, and the job is
+    // back in line.
+    let row = row_of(&s, &job, &three).await;
+    assert_eq!((row.action, row.outcome), (PlanAction::Apply, None));
+    assert_eq!(detail(&s, &job).await.row.state, JobState::Pending);
     run(&s).await;
     done(&detail(&s, &job).await);
     assert_eq!(
@@ -647,6 +654,17 @@ async fn an_add_is_for_the_creators_other_format_and_the_other_refusals_stand() 
     );
     // A refusal changes nothing: the row is not marked.
     assert_eq!(chosen_of(&s, &second, &v2).await, None);
+    // A copy is its own work's: another work's name finds none.
+    for mode in [Chosen::Apply, Chosen::Add] {
+        assert_eq!(
+            s.store
+                .place
+                .choose_stored("other", &v2, mode, 5_000_000)
+                .await
+                .unwrap(),
+            StoredChoice::NotFound
+        );
+    }
     assert_eq!(detail(&s, &second).await.row.state, JobState::Done);
 
     // A copy applied already, an unknown one, one of a format the app does
@@ -702,6 +720,93 @@ async fn a_copy_with_no_creator_is_never_added() {
         s.choose(&srt, Chosen::Add).await,
         StoredChoice::Queued { .. }
     ));
+}
+
+#[tokio::test]
+async fn the_works_copies_come_by_episode_and_newest_first_and_say_why_one_cannot_be_chosen() {
+    let s = setup().await;
+    // Episode 2: the creator's ASS applied, and two of another creator's
+    // revisions kept stored only. Episode 3 has no subtitle: the creator's
+    // copy is applied at once.
+    let (_, other_b) = other_kept(&s, OTHER).await;
+    let third = make(&s, "c3", OTHER, "/ok/Show-02c", false).await;
+    run(&s).await;
+    waiting_for_approval(&detail(&s, &third).await);
+    let plan = view(&s, &third).await.plan;
+    decide(&s, &third, &plan, false).await;
+    run(&s).await;
+    done(&detail(&s, &third).await);
+    let four = make_at(&s, "c4", CREATOR, "/ok/Show-03", false, "3").await;
+    run(&s).await;
+    done(&detail(&s, &four).await);
+    let (applied, other_c, on_three) = (
+        s.stored("Show-02.ass").await,
+        s.stored("Show-02c.ass").await,
+        s.stored("Show-03.ass").await,
+    );
+    s.sql(format!(
+        "UPDATE subtitle_stored SET stored_at = CASE id WHEN '{applied}' THEN 100
+            WHEN '{other_c}' THEN 200 WHEN '{other_b}' THEN 300 ELSE 50 END"
+    ))
+    .await;
+    let ids =
+        |copies: &[StoredCopy]| -> Vec<String> { copies.iter().map(|c| c.id.clone()).collect() };
+
+    // By season, episode and then the newest stored.
+    let copies = s.store.place.work_copies(WORK).await.unwrap();
+    assert_eq!(
+        ids(&copies),
+        [&other_b, &other_c, &applied, &on_three].map(String::clone)
+    );
+    let (b, a) = (&copies[0], &copies[2]);
+    assert_eq!(
+        (b.season, b.episode, b.creator.as_deref()),
+        (1, 2, Some(OTHER))
+    );
+    assert_eq!(b.name, "Show-02b.ass");
+    assert!(b.applied.is_empty());
+    assert_eq!(
+        (
+            b.options.applied,
+            b.options.has_subtitle,
+            &b.options.apply,
+            &b.options.add
+        ),
+        (false, true, &Ok(true), &Err(ADD_REFUSED))
+    );
+    assert_eq!(a.applied.len(), 1);
+    assert_eq!(
+        a.options.apply,
+        Err("이 보관본은 이미 영상 옆에 적용했어요.")
+    );
+
+    // Every job running: each copy still to choose says its job is.
+    s.sql("UPDATE subtitle_jobs SET state = 'running'".into())
+        .await;
+    let busy = s.store.place.work_copies(WORK).await.unwrap();
+    for copy in [&busy[0], &busy[1]] {
+        assert_eq!(
+            copy.options.apply,
+            Err("이 보관본을 받은 작업이 진행 중이에요. 끝난 뒤에 다시 적용해 주세요."),
+            "{}",
+            copy.id
+        );
+    }
+    assert_eq!(
+        busy[2].options.apply,
+        Err("이 보관본은 이미 영상 옆에 적용했어요.")
+    );
+
+    // A copy a person cleaned is not listed.
+    s.sql(format!(
+        "UPDATE subtitle_stored SET cleaned_at = 5 WHERE id = '{other_c}'"
+    ))
+    .await;
+    let cleaned = s.store.place.work_copies(WORK).await.unwrap();
+    assert_eq!(
+        ids(&cleaned),
+        [&other_b, &applied, &on_three].map(String::clone)
+    );
 }
 
 #[tokio::test]
