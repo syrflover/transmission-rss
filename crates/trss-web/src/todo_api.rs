@@ -185,7 +185,7 @@ use trss_collect::{
     revisions::received_again_on_retry,
     store::{
         history::{HistoryQuery, HistoryResult},
-        revisions::{Revision, RevisionState},
+        revisions::{NewVideo, Revision},
     },
 };
 use trss_core::trname_names::season_episode;
@@ -210,7 +210,7 @@ pub struct FailureFile {
     /// `old` (the video being replaced) or `new` (the revision).
     pub role: &'static str,
     pub path: Option<String>,
-    /// `kept`, `removed`, `received_name` or `not_received`.
+    /// `kept`, `removed`, `received_name`, `missing` or `not_received`.
     pub state: &'static str,
 }
 
@@ -299,30 +299,27 @@ pub fn failure_of(row: &Revision, base: Option<&FsPath>) -> RevisionFailure {
     let old = FailureFile {
         role: "old",
         path: Some(path(&row.episode_name)),
-        // A replacement received again that has not got its video yet
-        // removed the old one before.
-        state: if matches!(row.state, RevisionState::Removed | RevisionState::Abandoned)
-            || (row.not_received() && row.claimed_at.is_some())
-        {
+        state: if row.old_video_removed() {
             "removed"
         } else {
             "kept"
         },
     };
-    let new = match &row.received_name {
-        Some(name) => FailureFile {
-            role: "new",
-            path: Some(path(name)),
-            state: if row.state == RevisionState::Abandoned {
-                "missing"
-            } else {
-                "received_name"
-            },
-        },
-        None => FailureFile {
+    let new = match row.new_video() {
+        NewVideo::NotReceived => FailureFile {
             role: "new",
             path: None,
             state: "not_received",
+        },
+        NewVideo::Received(name) => FailureFile {
+            role: "new",
+            path: Some(path(name)),
+            state: "received_name",
+        },
+        NewVideo::Missing(name) => FailureFile {
+            role: "new",
+            path: Some(path(name)),
+            state: "missing",
         },
     };
     RevisionFailure {

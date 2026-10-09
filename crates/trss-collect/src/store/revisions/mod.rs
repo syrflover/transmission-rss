@@ -295,6 +295,39 @@ impl Revision {
     pub fn not_received(&self) -> bool {
         self.state == RevisionState::Failed && self.received_name.is_none()
     }
+
+    /// Whether the old video is gone: the replacement went ahead to remove it
+    /// ([`RevisionState::Removed`], [`RevisionState::Abandoned`]), or it is a
+    /// replacement received again that has not got its video yet but removed
+    /// the old one before ([`Revision::not_received`] with a claim).
+    pub fn old_video_removed(&self) -> bool {
+        matches!(
+            self.state,
+            RevisionState::Removed | RevisionState::Abandoned
+        ) || (self.not_received() && self.claimed_at.is_some())
+    }
+
+    /// What became of the new video: not received in the rule's folder, there
+    /// under the name it was received with, or gone from there (a replacement
+    /// that ended after the old video was removed, so the episode has none).
+    pub fn new_video(&self) -> NewVideo<'_> {
+        match self.received_name.as_deref() {
+            None => NewVideo::NotReceived,
+            Some(name) if self.state == RevisionState::Abandoned => NewVideo::Missing(name),
+            Some(name) => NewVideo::Received(name),
+        }
+    }
+}
+
+/// The new video of a replacement ([`Revision::new_video`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NewVideo<'a> {
+    /// Its download did not complete or is not in the rule's folder.
+    NotReceived,
+    /// In the rule's folder under this name.
+    Received(&'a str),
+    /// Received under this name and gone from there.
+    Missing(&'a str),
 }
 
 /// A row to create.

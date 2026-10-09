@@ -962,3 +962,99 @@ async fn a_replacement_received_again_claims_what_it_finds_and_keeps_the_old_rel
         (Some(Mark::Superseded), Some(Mark::Superseded))
     );
 }
+
+/// A stored replacement in `state` with the given `reason`, received name and
+/// claim; the fields the file states do not read are made up.
+fn row(
+    state: RevisionState,
+    reason: Option<&str>,
+    received_name: Option<&str>,
+    claimed_at: Option<Millis>,
+) -> Revision {
+    Revision {
+        id: 1,
+        item_id: 7,
+        old_item_id: None,
+        rule_id: "r1".into(),
+        folder: "/media/Show/Season 01".into(),
+        episode_name: "Show S01E14.mkv".into(),
+        old_version: Some(1),
+        new_version: 2,
+        old_crc: None,
+        old_torrent_hash: None,
+        expected_crc: Some("8F2EFECC".into()),
+        torrent_hash: None,
+        received_name: received_name.map(str::to_owned),
+        file_crc: None,
+        file_identity: None,
+        new_missing_at: None,
+        folder_away_since: None,
+        claimed_at,
+        superseded_hash: None,
+        state,
+        reason: reason.map(str::to_owned),
+        created_at: 10,
+        updated_at: 20,
+        replaced_at: None,
+        overtaken_by: None,
+    }
+}
+
+/// What a failed replacement says of its two videos comes from the row alone:
+/// the old video is removed once the replacement went ahead to remove it (or
+/// was received again after that) and kept before, the new one is under its
+/// received name, missing after the replacement ended, or not received yet.
+#[test]
+fn the_videos_of_a_failed_replacement_are_told_by_its_row() {
+    use RevisionState::*;
+    const NEW: &str = "[SubsPlease] Show - 14v2 (1080p) [8F2EFECC].mkv";
+    // (what, the row, whether the old video is removed, the new video)
+    let cases = [
+        (
+            "a check or a removal failed",
+            row(Failed, Some("CRC32"), Some(NEW), None),
+            false,
+            NewVideo::Received(NEW),
+        ),
+        (
+            "the download stopped",
+            row(Failed, Some("stopped"), None, None),
+            false,
+            NewVideo::NotReceived,
+        ),
+        (
+            "received again after the old video was removed",
+            row(Failed, Some("stopped"), None, Some(15)),
+            true,
+            NewVideo::NotReceived,
+        ),
+        (
+            "the rename has not gone through",
+            row(Removed, Some("busy"), Some(NEW), Some(15)),
+            true,
+            NewVideo::Received(NEW),
+        ),
+        (
+            "the replacement ended with no video left",
+            row(Abandoned, Some("no video"), Some(NEW), Some(15)),
+            true,
+            NewVideo::Missing(NEW),
+        ),
+        (
+            "the old file is waited for",
+            row(Removing, Some("waits"), Some(NEW), Some(15)),
+            false,
+            NewVideo::Received(NEW),
+        ),
+        (
+            "the new file was missing on one look",
+            row(Verified, Some("missing once"), Some(NEW), None),
+            false,
+            NewVideo::Received(NEW),
+        ),
+    ];
+    for (what, row, old_removed, new) in cases {
+        assert_eq!(row.old_video_removed(), old_removed, "{what}: old video");
+        assert_eq!(row.new_video(), new, "{what}: new video");
+    }
+}
