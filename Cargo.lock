@@ -3031,6 +3031,7 @@ version = "0.1.0"
 dependencies = [
  "regex",
  "serde",
+ "trss-anissia",
  "trss-collect",
  "trss-core",
  "url",

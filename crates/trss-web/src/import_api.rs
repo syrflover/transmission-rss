@@ -72,7 +72,7 @@ mod suggestions;
 
 use std::collections::HashMap;
 
-use self::suggestions::{Pick, SubscriptionsResult, SuggestionView};
+use self::suggestions::SuggestionView;
 use super::settings_api::check_folders;
 use super::{ApiError, AppState};
 use trss_collect::rss::regex_error;
@@ -80,6 +80,7 @@ use trss_collect::store::channels::{
     import::{is_title_waiting_subscription, match_rules, ImportChannel, ImportedChannel},
     ChannelError, ChannelWithRules, Rule, Version,
 };
+use trss_import::picks::{self, Pick, SubscriptionsResult};
 use trss_import::{
     fit::{fit, Fit, Fitted},
     legacy::{self, LegacyChannel},
@@ -619,7 +620,7 @@ async fn apply(
     let (indexes, actions): (Vec<usize>, Vec<_>) = plan.actions.into_iter().unzip();
     let indexes: Vec<usize> = indexes.into_iter().map(|local| positions[local]).collect();
     let skipped: Vec<usize> = plan.skipped.iter().map(|&local| positions[local]).collect();
-    let picked = suggestions::pick(
+    let picked = picks::pick(
         &request.subscriptions,
         &suggested,
         &rules_of,
@@ -650,8 +651,8 @@ async fn apply(
     // Anissia is asked only for the checked suggestions, and never blocks the
     // import: what it cannot say is left for the worker's daily refresh.
     let resolved = suggestions::resolve(&state, &picked.anime_nos()).await;
-    let picked = suggestions::settle(picked, &resolved);
-    let to_subscribe = suggestions::subscriptions(&picked.wanted, &resolved);
+    let picked = picks::settle(picked, &resolved);
+    let to_subscribe = picks::subscriptions(&picked.wanted, &resolved);
     // The import is stamped with the time read inside its transaction.
     let anissia = state.anissia.clone();
     let (results, outcomes) = state
@@ -678,7 +679,7 @@ async fn apply(
             eprintln!("import: cannot record that the import was applied: {e}");
         }
     }
-    let subscriptions = suggestions::result(picked, &resolved, &outcomes);
+    let subscriptions = picks::result(picked, &resolved, &outcomes);
 
     let mut response = ApplyResponse {
         added: Vec::new(),

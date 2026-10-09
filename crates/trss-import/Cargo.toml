@@ -4,8 +4,9 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
-trss-core.workspace = true
+trss-anissia.workspace = true
 trss-collect.workspace = true
+trss-core.workspace = true
 
 regex.workspace = true
 serde = { workspace = true, features = ["derive"] }
