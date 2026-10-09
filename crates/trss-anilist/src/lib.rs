@@ -24,7 +24,10 @@ use serde::Deserialize;
 use serde_json::json;
 use url::Url;
 
-use trss_core::{Clock, Db, DbError};
+use trss_core::{
+    response::{self, BodyError},
+    Clock, Db, DbError,
+};
 
 use pace::RequestPace;
 use title::Candidate;
@@ -65,11 +68,7 @@ pub const SEARCH_PAGE_SIZE: u32 = 50;
 pub const MAX_SEARCH_PAGES: u32 = 4;
 /// The largest API answer read. A search page of 50 entries or one entry
 /// with its airing schedule is far below it.
-pub const MAX_ANSWER_BYTES: usize = 2 * 1024 * 1024;
-/// How long to wait when a `429` answer names no time.
-const DEFAULT_RETRY_AFTER: Duration = Duration::from_secs(60);
-/// The longest `Retry-After` honoured as given.
-const MAX_RETRY_AFTER: Duration = Duration::from_secs(3600);
+pub const MAX_ANSWER_BYTES: usize = response::MAX_ANSWER_BYTES;
 
 /// Where the client goes.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -346,14 +345,12 @@ impl Anilist {
 
         let status = response.status();
         if status == StatusCode::TOO_MANY_REQUESTS {
-            let retry_after = response
-                .headers()
-                .get(header::RETRY_AFTER)
-                .and_then(|v| v.to_str().ok())
-                .and_then(|v| v.trim().parse::<u64>().ok())
-                .map(Duration::from_secs)
-                .unwrap_or(DEFAULT_RETRY_AFTER)
-                .min(MAX_RETRY_AFTER);
+            let retry_after = response::retry_after(
+                response
+                    .headers()
+                    .get(header::RETRY_AFTER)
+                    .and_then(|v| v.to_str().ok()),
+            );
             let until = (self.clock)() + retry_after.as_millis() as i64;
             self.pace.block_requests(until).await?;
             return Err(AnilistError::Busy { retry_after });
@@ -489,7 +486,7 @@ impl Anilist {
             return Err(ImageFetchError::NotAllowed);
         }
         let download = async {
-            let mut response = self
+            let response = self
                 .images
                 .get(url)
                 .send()
@@ -498,27 +495,19 @@ impl Anilist {
             if !response.status().is_success() {
                 return Err(ImageFetchError::Status(response.status().as_u16()));
             }
-            if response
-                .content_length()
-                .is_some_and(|n| n > MAX_IMAGE_BYTES as u64)
-            {
-                return Err(ImageFetchError::TooLarge);
-            }
-            // Reserved once (the declared length, else the limit, of which only
-            // what arrives is touched), so the buffer is never grown by
-            // copying into a larger one beside the old.
             let declared = response.content_length();
-            let mut bytes = Vec::with_capacity(declared.map_or(MAX_IMAGE_BYTES, |n| n as usize));
-            while let Some(chunk) = response
-                .chunk()
-                .await
-                .map_err(|e| ImageFetchError::Unreachable(e.without_url().to_string()))?
-            {
-                if bytes.len() + chunk.len() > MAX_IMAGE_BYTES {
-                    return Err(ImageFetchError::TooLarge);
-                }
-                bytes.extend_from_slice(&chunk);
-            }
+            let bytes = response::read_or_refuse(
+                MAX_IMAGE_BYTES,
+                declared,
+                true,
+                response,
+                reqwest::Response::chunk,
+            )
+            .await
+            .map_err(|e| match e {
+                BodyError::TooLarge => ImageFetchError::TooLarge,
+                BodyError::Read(e) => ImageFetchError::Unreachable(e.without_url().to_string()),
+            })?;
             // A body that ended short of the length the response announced is
             // a cut image, not a smaller one.
             if declared.is_some_and(|n| n != bytes.len() as u64) {
@@ -535,26 +524,22 @@ impl Anilist {
 }
 
 /// The body of an API answer, refused once it passes [`MAX_ANSWER_BYTES`].
-async fn read_answer(mut response: reqwest::Response) -> Result<Vec<u8>, AnilistError> {
-    let too_large = || AnilistError::Invalid(format!("larger than {MAX_ANSWER_BYTES} bytes"));
-    if response
-        .content_length()
-        .is_some_and(|n| n > MAX_ANSWER_BYTES as u64)
-    {
-        return Err(too_large());
-    }
-    let mut body = Vec::new();
-    while let Some(chunk) = response
-        .chunk()
-        .await
-        .map_err(|e| AnilistError::Unreachable(e.without_url().to_string()))?
-    {
-        if body.len() + chunk.len() > MAX_ANSWER_BYTES {
-            return Err(too_large());
+async fn read_answer(response: reqwest::Response) -> Result<Vec<u8>, AnilistError> {
+    let announced = response.content_length();
+    response::read_or_refuse(
+        MAX_ANSWER_BYTES,
+        announced,
+        false,
+        response,
+        reqwest::Response::chunk,
+    )
+    .await
+    .map_err(|e| match e {
+        BodyError::TooLarge => {
+            AnilistError::Invalid(format!("larger than {MAX_ANSWER_BYTES} bytes"))
         }
-        body.extend_from_slice(&chunk);
-    }
-    Ok(body)
+        BodyError::Read(e) => AnilistError::Unreachable(e.without_url().to_string()),
+    })
 }
 
 #[cfg(test)]

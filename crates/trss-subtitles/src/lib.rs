@@ -67,7 +67,7 @@ use tistory::TistorySource;
 /// The most bytes one file may have: far more than any subtitle or its
 /// series ZIP. A source stops receiving past it ([`FailureKind::NotAFile`]),
 /// and the check refuses a larger file ([`verify::check`]).
-pub const MAX_FILE_BYTES: u64 = 200 * 1024 * 1024;
+pub const MAX_FILE_BYTES: u64 = trss_core::response::MAX_DOWNLOAD_FILE_BYTES;
 
 /// How long one file may take to come, from its request to its last byte.
 pub const FILE_DEADLINE: Duration = Duration::from_secs(15 * 60);

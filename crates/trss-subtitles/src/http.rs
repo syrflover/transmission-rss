@@ -403,17 +403,6 @@ pub(crate) async fn error_size(response: Response) -> Option<u64> {
     }
 }
 
-pub(crate) async fn read_capped(
-    mut response: Response,
-    cap: usize,
-) -> Result<Vec<u8>, reqwest::Error> {
-    let mut body = Vec::new();
-    while let Some(piece) = response.chunk().await? {
-        body.extend_from_slice(&piece);
-        if body.len() >= cap {
-            body.truncate(cap);
-            break;
-        }
-    }
-    Ok(body)
+pub(crate) async fn read_capped(response: Response, cap: usize) -> Result<Vec<u8>, reqwest::Error> {
+    trss_core::response::read_cut(cap, response, Response::chunk).await
 }

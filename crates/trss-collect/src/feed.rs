@@ -5,26 +5,21 @@ use std::time::Duration;
 use reqwest::header;
 
 use crate::store::history::{identity_key, stored_link};
+use trss_core::response::{self, BodyError};
 use trss_transmission::Redactor;
 
 /// How long one feed request may take in total. The former binary had no
 /// limit, which a process that never exits cannot afford.
 pub const FETCH_TIMEOUT: Duration = Duration::from_secs(60);
 
-/// The most bytes of a feed body that are read. Real feeds are far smaller (a
-/// tracker's RSS of 75 to 100 items is 50 to 300 KB), so 2 MiB leaves a wide
-/// margin, as [`trss_anissia::MAX_ANSWER_BYTES`] does for its answers. The
-/// worker container has 256M, most of it kept for unpacking an archive in a
-/// child process; up to `FETCH_CONCURRENCY` feeds are held at once
-/// and each is parsed into a structure several times its size, so a bigger cap
-/// would let a few oversized or endless bodies exhaust it. The cap counts the
-/// bytes after any content decoding, so a compressed bomb is stopped too.
-pub const MAX_FEED_BYTES: usize = 2 * 1024 * 1024;
-
-/// How long to wait when a `429` answer names no time.
-const DEFAULT_RETRY_AFTER: Duration = Duration::from_secs(60);
-/// The longest `Retry-After` honoured as given.
-const MAX_RETRY_AFTER: Duration = Duration::from_secs(3600);
+/// The most bytes of a feed body that are read, [`response::MAX_ANSWER_BYTES`]:
+/// 2 MiB, far above any real feed. The worker container has 256M, most of it
+/// kept for unpacking an archive in a child process; up to `FETCH_CONCURRENCY`
+/// feeds are held at once and each is parsed into a structure several times
+/// its size, so a bigger cap would let a few oversized or endless bodies
+/// exhaust it. The cap counts the bytes after any content decoding, so a
+/// compressed bomb is stopped too.
+pub const MAX_FEED_BYTES: usize = response::MAX_ANSWER_BYTES;
 
 /// A failure to read a feed. Its text never contains the request URL, because
 /// the URL carries the channel's secret query values.
@@ -66,13 +61,12 @@ pub async fn fetch(client: &reqwest::Client, url: &str) -> Result<rss::Channel, 
 
     let status = response.status();
     if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
-        let wait = response
-            .headers()
-            .get(header::RETRY_AFTER)
-            .and_then(|v| v.to_str().ok())
-            .and_then(|v| v.trim().parse::<u64>().ok())
-            .map_or(DEFAULT_RETRY_AFTER, Duration::from_secs)
-            .min(MAX_RETRY_AFTER);
+        let wait = response::retry_after(
+            response
+                .headers()
+                .get(header::RETRY_AFTER)
+                .and_then(|v| v.to_str().ok()),
+        );
         return Err(FetchError::Busy(wait));
     }
     if !status.is_success() {
@@ -88,25 +82,20 @@ pub async fn fetch(client: &reqwest::Client, url: &str) -> Result<rss::Channel, 
 /// once when the response announces a longer body, otherwise as soon as the
 /// chunks read so far do. (The announced length is not trusted to be true, so
 /// the chunks are counted either way.)
-async fn read_body(mut response: reqwest::Response) -> Result<Vec<u8>, FetchError> {
-    if response
-        .content_length()
-        .is_some_and(|n| n > MAX_FEED_BYTES as u64)
-    {
-        return Err(FetchError::TooLarge);
-    }
-    let mut body = Vec::new();
-    while let Some(chunk) = response
-        .chunk()
-        .await
-        .map_err(|e| FetchError::Http(e.without_url()))?
-    {
-        if body.len() + chunk.len() > MAX_FEED_BYTES {
-            return Err(FetchError::TooLarge);
-        }
-        body.extend_from_slice(&chunk);
-    }
-    Ok(body)
+async fn read_body(response: reqwest::Response) -> Result<Vec<u8>, FetchError> {
+    let announced = response.content_length();
+    response::read_or_refuse(
+        MAX_FEED_BYTES,
+        announced,
+        false,
+        response,
+        reqwest::Response::chunk,
+    )
+    .await
+    .map_err(|e| match e {
+        BodyError::TooLarge => FetchError::TooLarge,
+        BodyError::Read(e) => FetchError::Http(e.without_url()),
+    })
 }
 
 /// One RSS item as the worker sees it.

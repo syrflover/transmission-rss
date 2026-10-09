@@ -66,7 +66,10 @@ pub use observe::{CaptionLine, RecentPage};
 pub use parse::{AnimePage, Caption, Creator, ScheduleEntry};
 
 use pace::RequestPace;
-use trss_core::{system_clock, Clock, Db, DbError, Millis};
+use trss_core::{
+    response::{self, BodyError},
+    system_clock, Clock, Db, DbError, Millis,
+};
 
 /// Anissia's API.
 pub const DEFAULT_URL: &str = "https://api.anissia.net";
@@ -80,15 +83,11 @@ pub const REQUEST_SPACING: Duration = Duration::from_secs(2);
 pub const API_TIMEOUT: Duration = Duration::from_secs(20);
 /// The largest answer read. A week's schedule is about 55 KB (182 entries
 /// listed as upcoming) and an anime's captions a few KB.
-pub const MAX_ANSWER_BYTES: usize = 2 * 1024 * 1024;
+pub const MAX_ANSWER_BYTES: usize = response::MAX_ANSWER_BYTES;
 /// How long the web keeps an answer it was given.
 pub const CACHE_TTL: Duration = Duration::from_secs(5 * 60);
 /// How many pages of title searches the client keeps.
 pub const MAX_CACHED_PAGES: usize = 32;
-/// How long to wait when a `429` answer names no time.
-const DEFAULT_RETRY_AFTER: Duration = Duration::from_secs(60);
-/// The longest `Retry-After` honoured as given.
-const MAX_RETRY_AFTER: Duration = Duration::from_secs(3600);
 
 /// The highest week number: `8`, `신작`.
 pub const LAST_WEEK: u8 = WEEK_UPCOMING;
@@ -302,14 +301,12 @@ impl Anissia {
 
         let status = response.status();
         if status == StatusCode::TOO_MANY_REQUESTS {
-            let retry_after = response
-                .headers()
-                .get(header::RETRY_AFTER)
-                .and_then(|v| v.to_str().ok())
-                .and_then(|v| v.trim().parse::<u64>().ok())
-                .map(Duration::from_secs)
-                .unwrap_or(DEFAULT_RETRY_AFTER)
-                .min(MAX_RETRY_AFTER);
+            let retry_after = response::retry_after(
+                response
+                    .headers()
+                    .get(header::RETRY_AFTER)
+                    .and_then(|v| v.to_str().ok()),
+            );
             let until = self.now() + retry_after.as_millis() as i64;
             self.pace.block_requests(until).await?;
             return Err(AnissiaError::Busy { retry_after });
@@ -513,25 +510,21 @@ impl Anissia {
     }
 }
 
-/// The body of an answer, refused once it passes [`MAX_ANSWER_BYTES`].
-async fn read_answer(mut response: reqwest::Response) -> Result<Vec<u8>, AnissiaError> {
-    let too_large = || AnissiaError::Invalid(format!("larger than {MAX_ANSWER_BYTES} bytes"));
-    if response
-        .content_length()
-        .is_some_and(|n| n > MAX_ANSWER_BYTES as u64)
-    {
-        return Err(too_large());
-    }
-    let mut body = Vec::new();
-    while let Some(chunk) = response
-        .chunk()
-        .await
-        .map_err(|e| AnissiaError::Unreachable(e.without_url().to_string()))?
-    {
-        if body.len() + chunk.len() > MAX_ANSWER_BYTES {
-            return Err(too_large());
+/// The body of an API answer, refused once it passes [`MAX_ANSWER_BYTES`].
+async fn read_answer(response: reqwest::Response) -> Result<Vec<u8>, AnissiaError> {
+    let announced = response.content_length();
+    response::read_or_refuse(
+        MAX_ANSWER_BYTES,
+        announced,
+        false,
+        response,
+        reqwest::Response::chunk,
+    )
+    .await
+    .map_err(|e| match e {
+        BodyError::TooLarge => {
+            AnissiaError::Invalid(format!("larger than {MAX_ANSWER_BYTES} bytes"))
         }
-        body.extend_from_slice(&chunk);
-    }
-    Ok(body)
+        BodyError::Read(e) => AnissiaError::Unreachable(e.without_url().to_string()),
+    })
 }

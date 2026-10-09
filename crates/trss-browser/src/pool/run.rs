@@ -23,7 +23,7 @@ const PAGE_READY_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// The most one download may be: a file longer than this is canceled while it
 /// comes (Tistory's and Naver's downloads have the same limit).
-pub const MAX_DOWNLOAD_BYTES: u64 = 200 * 1024 * 1024;
+pub const MAX_DOWNLOAD_BYTES: u64 = trss_core::response::MAX_DOWNLOAD_FILE_BYTES;
 /// The most the downloads of one run may come to, those under way included.
 /// Downloads share the disk of the app's database, so a page that keeps
 /// offering files cannot fill it.
