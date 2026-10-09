@@ -8,12 +8,10 @@ use std::{
 };
 
 use rustix::{
-    fs::{
-        fstat, linkat, open, openat, renameat_with, statat, unlinkat, AtFlags, FileType, Mode,
-        OFlags, RenameFlags, Stat,
-    },
+    fs::{fstat, linkat, open, openat, statat, unlinkat, AtFlags, FileType, Mode, OFlags, Stat},
     io::Errno,
 };
+use trss_core::files::{noreplace_unsupported, rename_noreplace_at};
 
 use super::BrowserError;
 
@@ -111,16 +109,16 @@ pub(super) fn move_into(
     )
     .map_err(io::Error::from)?;
 
-    match renameat_with(&run_fd, guid, &dir_fd, name, RenameFlags::NOREPLACE) {
+    match rename_noreplace_at(&run_fd, guid, &dir_fd, name) {
         Ok(()) => {}
-        Err(errno) => match io::Error::from(errno).kind() {
+        Err(err) => match err.kind() {
             io::ErrorKind::AlreadyExists => {
                 return Err(BrowserError::AlreadyExists(name.to_owned()))
             }
             io::ErrorKind::CrossesDevices => copy_across(&run_fd, guid, &dir_fd, name)?,
             // A filesystem without `RENAME_NOREPLACE`: a link fails on a name
             // that exists too.
-            io::ErrorKind::InvalidInput | io::ErrorKind::Unsupported => {
+            _ if noreplace_unsupported(&err) => {
                 match linkat(&run_fd, guid, &dir_fd, name, AtFlags::empty()) {
                     Ok(()) => forget(&run_fd, guid)?,
                     Err(errno) if errno == Errno::EXIST => {
@@ -129,7 +127,7 @@ pub(super) fn move_into(
                     Err(_) => copy_across(&run_fd, guid, &dir_fd, name)?,
                 }
             }
-            _ => return Err(io::Error::from(errno).into()),
+            _ => return Err(err.into()),
         },
     }
 
@@ -192,13 +190,13 @@ fn copy_across(
         let _ = unlinkat(dir_fd, &partial, AtFlags::empty());
         return Err(err.into());
     }
-    let placed = renameat_with(dir_fd, &partial, dir_fd, name, RenameFlags::NOREPLACE);
-    if let Err(errno) = placed {
+    let placed = rename_noreplace_at(dir_fd, &partial, dir_fd, name);
+    if let Err(err) = placed {
         let _ = unlinkat(dir_fd, &partial, AtFlags::empty());
-        return Err(if errno == Errno::EXIST {
+        return Err(if err.kind() == io::ErrorKind::AlreadyExists {
             BrowserError::AlreadyExists(name.to_owned())
         } else {
-            io::Error::from(errno).into()
+            err.into()
         });
     }
     forget(run_fd, guid)

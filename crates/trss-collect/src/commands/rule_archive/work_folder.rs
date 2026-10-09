@@ -70,7 +70,7 @@ use std::{
 use tokio_util::sync::CancellationToken;
 use transmission_rpc::TransClient;
 use trss_core::{
-    files::{part_name, rename_noreplace},
+    files::{noreplace_unsupported, part_name, rename_noreplace},
     folder_check::{conflict, resolve_folder, Conflict, Folder},
     folders::has_parent_dir,
 };
@@ -465,12 +465,7 @@ fn probe_renames(request: &Request, disk: &dyn Disk) -> Result<(), String> {
     match renamed {
         Ok(()) => Ok(()),
         Err(e) if e.kind() == io::ErrorKind::CrossesDevices => Err(different_filesystems()),
-        Err(e)
-            if matches!(
-                e.kind(),
-                io::ErrorKind::InvalidInput | io::ErrorKind::Unsupported
-            ) =>
-        {
+        Err(e) if noreplace_unsupported(&e) => {
             Err(
                 "이 파일시스템은 덮어쓰지 않는 이름 바꾸기(RENAME_NOREPLACE)를 지원하지 않아서 옮기지 않았어요. 지원하는 파일시스템의 폴더여야 해요."
                     .to_owned(),
