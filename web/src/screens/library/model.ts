@@ -52,20 +52,9 @@ export function prepare(works: LibraryWork[]): Work[] {
 
 // --- status lines -------------------------------------------------------------------
 
-/** An episode as shown: leading zeros of a whole number go (`01` is `1`); anything else stays as written. */
-function shown(episode: string): string {
-  return /^\d+$/.test(episode) ? episode.replace(/^0+(?=\d)/, "") : episode;
-}
-
-/** `1–3·5–12`: the ranges of consecutive episodes, a single episode alone. */
+/** `1–3·5–12`: the ranges of consecutive episodes as the server shows them, a single episode alone. */
 export function formatRanges(ranges: EpisodeRange[]): string {
-  return ranges
-    .map(({ first, last }) => {
-      const a = shown(first);
-      const b = shown(last);
-      return a === b ? a : `${a}–${b}`;
-    })
-    .join("·");
+  return ranges.map(({ text }) => text).join("·");
 }
 
 /** The video line: `영상 1–12화`, `영상 없음`, or `폴더 없음` when the work's folder is gone. */

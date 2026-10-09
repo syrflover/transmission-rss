@@ -33,6 +33,7 @@ const copy = (id: string, over: Partial<SubtitleCopy> = {}): SubtitleCopy => ({
   id,
   season: 1,
   episode: "02",
+  episode_shown: "2",
   name: `Show - ${id}.ass`,
   format: "ass",
   stored_at: at(9, 7),
@@ -99,7 +100,7 @@ test("a copy is received on a day, with the time only when another of its episod
 
   const nextDay = copy("c", { stored_at: at(9, 8) });
   assert.equal(copyView(one, [one, nextDay]).received, "9월 7일 받음");
-  const otherEpisode = copy("d", { episode: "03", stored_at: at(9, 7, 21, 40) });
+  const otherEpisode = copy("d", { episode: "03", episode_shown: "3", stored_at: at(9, 7, 21, 40) });
   assert.equal(copyView(one, [one, otherEpisode]).received, "9월 7일 받음");
   const otherFormat = copy("e", { format: "srt", stored_at: at(9, 7, 21, 40) });
   assert.equal(copyView(one, [one, otherFormat]).received, "9월 7일 받음");
@@ -109,15 +110,15 @@ test("a copy is received on a day, with the time only when another of its episod
 
 test("the same episode written `02` and `2` is one episode for the date", () => {
   const one = copy("a", { episode: "02", stored_at: at(9, 7, 9, 3) });
-  const other = copy("b", { episode: "2", stored_at: at(9, 7, 18, 30) });
+  const other = copy("b", { episode: "2", episode_shown: "2", stored_at: at(9, 7, 18, 30) });
   assert.equal(copyView(one, [one, other]).received, "9월 7일 09:03 받음");
 });
 
 test("a copy names its episode and format", () => {
-  const view = copyView(copy("a", { episode: "02", format: "smi" }), []);
+  const view = copyView(copy("a", { episode: "02", episode_shown: "2", format: "smi" }), []);
   assert.equal(view.episode, "2화");
   assert.equal(view.format, "SMI");
-  assert.equal(copyView(copy("b", { episode: "SP" }), []).episode, "SP");
+  assert.equal(copyView(copy("b", { episode: "SP", episode_shown: "SP" }), []).episode, "SP");
   assert.equal(copyView(copy("c", { format: "vtt" }), []).format, OTHER_FORMAT);
 });
 

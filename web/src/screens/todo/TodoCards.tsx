@@ -28,7 +28,7 @@ import { VideoCheckActions } from "./VideoCheck";
 export function receiveFailedPath(todo: ReceiveFailedTodo): string {
   if (todo.context === "revision" && todo.work !== null) {
     const params = new URLSearchParams();
-    const first = todo.episodes[0];
+    const first = todo.episodes_shown[0];
     if (todo.season !== null && first !== undefined) {
       params.set("season", String(todo.season));
       params.set("episode", first);

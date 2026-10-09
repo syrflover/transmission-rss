@@ -228,7 +228,7 @@ export function FilesCard({
                       <ul className="m-0 flex list-none flex-col gap-2 p-0">
                         {season.episodes.map((episode) => (
                           <li key={episode.episode} className="grid grid-cols-[3.6em_minmax(0,1fr)] gap-x-2 text-[12px] leading-snug">
-                            <span className="font-bold">{episodeLabel(episode.episode)}</span>
+                            <span className="font-bold">{episodeLabel(episode.episode_shown)}</span>
                             <span className="flex min-w-0 flex-col gap-0.5 font-mono break-all text-text-secondary">
                               {episode.video.map((f) => (
                                 <span key={f.path}>영상 {baseName(f.path)}</span>

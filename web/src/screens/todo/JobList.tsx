@@ -169,7 +169,7 @@ function JobRowItem({ job }: { job: JobRow }) {
             )}
             {job.revises_attributed && <Field name="수정본">제작자를 붙인 자막의 수정본</Field>}
             {job.source !== null && <Field name="출처">{job.source}</Field>}
-            {episodes.length > 0 && <Field name="회차">{episodeList(episodes)}</Field>}
+            {episodes.length > 0 && <Field name="회차">{episodeList(job.episodes_shown)}</Field>}
             {job.origin === "upload" || job.origin === "find" ? (
               <>
                 {job.upload !== null && uploadKept(job.upload) !== null && (

@@ -88,7 +88,7 @@ function CandidateItem({
   const { candidate: c, kind } = row;
   const id = useId();
   const held = isHeld(c);
-  const label = candidateLabel(c.episode);
+  const label = candidateLabel(c);
   return (
     <li className="flex items-start gap-1.5 border-t border-hairline-soft py-1 first:border-t-0" data-testid="candidate-row">
       <label

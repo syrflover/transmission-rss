@@ -34,19 +34,14 @@ export function uploadKept(upload: Pick<UploadSummary, "subtitles" | "fonts" | "
   return parts.length > 0 ? parts.join(" · ") : null;
 }
 
-/** An episode as shown: leading zeros of a whole number go (`01` is `1`); anything else stays as written. */
-function shown(episode: string): string {
-  return /^\d+$/.test(episode) ? episode.replace(/^0+(?=\d)/, "") : episode;
+/** The episodes of a job or an item as the server shows them (`episodes_shown`), whole, for the expanded row (`11, 12, 14화`). */
+export function episodeList(shown: readonly string[]): string {
+  return `${shown.join(", ")}화`;
 }
 
-/** The episodes of a job or an item, whole, for the expanded row (`11, 12, 14화`). */
-export function episodeList(episodes: readonly string[]): string {
-  return `${episodes.map(shown).join(", ")}화`;
-}
-
-/** The label of a done, failed or waiting item: `11` is `11화`. */
-export function episodeName(episode: string): string {
-  return `${shown(episode)}화`;
+/** The label of a done, failed or waiting item, from its episode as the server shows it: `11` is `11화`. */
+export function episodeName(shown: string): string {
+  return `${shown}화`;
 }
 
 /**

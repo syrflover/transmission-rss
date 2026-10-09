@@ -32,6 +32,8 @@ export type {
 export interface EpisodeRange {
   first: string;
   last: string;
+  /** How the screen shows it: the ends without leading zeros (`1–3`), the end alone for one episode. */
+  text: string;
 }
 
 /** How many of the episodes with a video also have a subtitle; `null` for a work whose folder is gone. */
@@ -191,6 +193,8 @@ export interface EpisodeFailure {
 export interface WorkEpisode {
   /** As written in the file names; `01` and `13`/`013` are one episode. */
   episode: string;
+  /** `episode` without the leading zeros of a whole number (`1` for `01`). */
+  episode_shown: string;
   /** The episode as a number, `null` when it is no number. */
   sort: number | null;
   /** When AniList schedules it (Unix milliseconds); only for a releasing entry with a schedule, else `null`. */
@@ -633,6 +637,8 @@ export interface Candidate {
   post_url: string;
   /** Anissia's text as written (`12`, `13.5`, `0`): not a number to compute with. */
   episode: string;
+  /** `episode` without the leading zeros of a whole number. */
+  episode_shown: string;
   /** Anissia's `updDt` as received. */
   updated: string;
   updated_at: number | null;

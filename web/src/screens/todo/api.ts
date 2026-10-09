@@ -113,6 +113,8 @@ export interface ReceiveFailedTodo extends Badged {
   season: number | null;
   /** `revision`: the episodes whose replacement failed. Empty for `add_failed`. */
   episodes: string[];
+  /** `episodes` without the leading zeros of a whole number (`1` for `01`). */
+  episodes_shown: string[];
   /** `episodes` as runs. */
   episode_segments: EpisodeSegment[];
   /** How many failures the to-do gathers. */
@@ -386,6 +388,8 @@ export interface JobRow {
   season: number | null;
   /** The items' episodes in order, as Anissia writes them. */
   episodes: string[];
+  /** `episodes` without the leading zeros of a whole number. */
+  episodes_shown: string[];
   /** `episodes` as runs, in numeric order. */
   episode_segments: EpisodeSegment[];
   creator: string | null;
@@ -473,6 +477,8 @@ export interface JobFile {
   path: string | null;
   /** The episode of the item that received this same file, when another item of the job did. */
   shared_with: string | null;
+  /** `shared_with` without the leading zeros of a whole number. */
+  shared_with_shown: string | null;
   reason: string | null;
   /** What its bytes were checked to be, once received. */
   format: FileFormat | null;
@@ -508,6 +514,8 @@ export interface DroppedFile {
 export interface JobItem {
   id: number;
   episode: string;
+  /** `episode` without the leading zeros of a whole number. */
+  episode_shown: string;
   /** The post the candidate names: a public page, never a signed download address. */
   post_url: string;
   state: ItemState;

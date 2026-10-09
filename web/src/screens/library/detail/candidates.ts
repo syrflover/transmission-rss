@@ -42,9 +42,9 @@ export function matchesEpisode(text: string, episode: WorkEpisode): boolean {
 }
 
 /** A candidate's episode as shown, always with its own label: `24화`; text that is no episode number (`0`, `SP`) as written. */
-export function candidateLabel(text: string): string {
-  const n = numericKey(text);
-  return n === null || n === "0" ? text : episodeLabel(text);
+export function candidateLabel(c: Pick<Candidate, "episode" | "episode_shown">): string {
+  const n = numericKey(c.episode);
+  return n === null || n === "0" ? c.episode : episodeLabel(c.episode_shown);
 }
 
 /** Orders two numeric keys by value without making a float. */

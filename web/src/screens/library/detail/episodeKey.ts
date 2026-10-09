@@ -24,14 +24,8 @@ export function episodeKey(text: string): string {
   return n === null ? `t:${text}` : `n:${n}`;
 }
 
-/** An episode as shown: leading zeros of a whole number go (`01` is `1`); anything else stays as written. */
-export function shownEpisode(episode: string): string {
-  return /^\d+$/.test(episode) ? episode.replace(/^0+(?=\d)/, "") : episode;
-}
-
-/** `12화` for a number, the text itself for anything else (`SP`). */
-export function episodeLabel(episode: string): string {
-  const shown = shownEpisode(episode);
+/** `12화` for an episode as the server shows it (`episode_shown`) when it starts as a number, the text itself for anything else (`SP`). */
+export function episodeLabel(shown: string): string {
   return /^\d/.test(shown) ? `${shown}화` : shown;
 }
 

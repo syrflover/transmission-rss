@@ -1,5 +1,5 @@
 import { creatorText, receivedAt, sameDay } from "../storage.ts";
-import { episodeLabel, shownEpisode } from "./episodeKey.ts";
+import { episodeLabel } from "./episodeKey.ts";
 
 /**
  * The pure parts of the `자막` card (`library.md`, 오른쪽 카드 열): what each stored copy says of itself and which
@@ -23,6 +23,8 @@ export interface SubtitleCopy {
   season: number;
   /** As written in the file names. */
   episode: string;
+  /** `episode` without the leading zeros (`2` for `02`). */
+  episode_shown: string;
   name: string;
   /** A format code; a code the app does not apply is read as `그 밖의 형식`. */
   format: string;
@@ -153,14 +155,14 @@ export function copyView(copy: SubtitleCopy, group: readonly SubtitleCopy[]): Co
     (other) =>
       other.id !== copy.id &&
       other.season === copy.season &&
-      shownEpisode(other.episode) === shownEpisode(copy.episode) &&
+      other.episode_shown === copy.episode_shown &&
       other.format === copy.format &&
       sameDay(other.stored_at, copy.stored_at),
   );
   const isApplied = copy.applied.length > 0;
   return {
     id: copy.id,
-    episode: episodeLabel(copy.episode),
+    episode: episodeLabel(copy.episode_shown),
     format: formatText(copy.format),
     received: receivedAt(copy.stored_at, shared),
     name: copy.name,

@@ -114,7 +114,7 @@ function ItemBlock({
       )}
     >
       <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1.5">
-        <b className="text-[14.5px] font-bold">{episodeName(item.episode)}</b>
+        <b className="text-[14.5px] font-bold">{episodeName(item.episode_shown)}</b>
         <ItemBadge shown={shownItem(item.state, item.wait)} />
         {((item.reason !== null && item.reason !== "") ||
           item.failure !== null) && (
@@ -411,9 +411,9 @@ function FileLine({
           </span>
         )}
         {file.state !== "done" && <ItemBadge shown={FILE_STATE[file.state]} />}
-        {file.shared_with !== null && (
+        {file.shared_with_shown !== null && (
           <span className="text-xs text-text-muted">
-            같은 파일 · {episodeName(file.shared_with)}에서 받음
+            같은 파일 · {episodeName(file.shared_with_shown)}에서 받음
           </span>
         )}
       </div>

@@ -357,7 +357,7 @@ function Row({
   onRetried: () => Promise<void>;
   onCreatorChanged: () => void;
 }) {
-  const id = rowId(season, episode.episode);
+  const id = rowId(season, episode.episode_shown);
   const detailId = `${id}-files`;
   const { awaiting, approval, note } = storedOf(episode);
   return (
@@ -373,7 +373,7 @@ function Row({
           open && "bg-[color-mix(in_srgb,var(--focus-ring)_5%,var(--surface-1))]",
         )}
       >
-        <span className="text-sm font-bold">{episodeLabel(episode.episode)}</span>
+        <span className="text-sm font-bold">{episodeLabel(episode.episode_shown)}</span>
         <span className="flex min-w-0 flex-col gap-1">
           <span className="flex flex-wrap items-center gap-x-4 gap-y-1">
             <Hold label="영상" on={episode.video.length > 0} missing={missing} />

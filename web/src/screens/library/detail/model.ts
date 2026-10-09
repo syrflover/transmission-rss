@@ -1,5 +1,4 @@
 import type { FuzzyDate, SeasonInfo, WorkEpisode, WorkSeason } from "../api";
-import { shownEpisode } from "./episodeKey.ts";
 
 /**
  * What the work detail screen derives from the answer. It only reads the
@@ -7,12 +6,12 @@ import { shownEpisode } from "./episodeKey.ts";
  * file is recorded for it (never a later state such as applied or approved).
  */
 
-/** `episodeLabel` and `shownEpisode` live in `episodeKey.ts`, which the pure helpers import without the app. */
-export { episodeLabel, shownEpisode } from "./episodeKey.ts";
+/** `episodeLabel` lives in `episodeKey.ts`, which the pure helpers import without the app. */
+export { episodeLabel } from "./episodeKey.ts";
 
-/** The id of an episode's row, so a link can find it. */
-export function rowId(season: number, episode: string): string {
-  return `ep-s${season}-e${shownEpisode(episode)}`;
+/** The id of an episode's row, so a link can find it; `shown` is the episode as the server shows it (`episode_shown`). */
+export function rowId(season: number, shown: string): string {
+  return `ep-s${season}-e${shown}`;
 }
 
 export interface SeasonSummary {
