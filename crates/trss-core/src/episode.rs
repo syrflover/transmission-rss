@@ -15,6 +15,8 @@
 
 use std::{cmp::Ordering, collections::BTreeMap, fmt};
 
+use serde::Serialize;
+
 /// An episode text that is a decimal number, by value.
 ///
 /// The parts are kept as digits, in the form that has no leading zeros in the
@@ -180,6 +182,11 @@ pub fn signed(value: i64) -> String {
 
 /// `1–12, 14` for the episodes given in ascending order.
 pub fn ranges(episodes: &[u32]) -> String {
+    range_texts(episodes).join(", ")
+}
+
+/// The runs of [`ranges`] one by one: `["1–12", "14"]`.
+pub fn range_texts(episodes: &[u32]) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     let mut at = 0;
     while at < episodes.len() {
@@ -194,7 +201,7 @@ pub fn ranges(episodes: &[u32]) -> String {
         });
         at = end + 1;
     }
-    out.join(", ")
+    out
 }
 
 /// An episode text as the screens show it: the leading zeros of a text of
@@ -324,16 +331,45 @@ impl EpisodeRun {
     /// The run as the screens show it, its ends through [`shown`]: `1–4`, or
     /// `7` for a single episode.
     pub fn text(&self) -> String {
-        match self.first == self.last {
-            true => shown(&self.first).to_owned(),
-            false => format!("{}–{}", shown(&self.first), shown(&self.last)),
-        }
+        range_text(&self.first, &self.last)
+    }
+}
+
+/// A run from `first` to `last` as the screens show it: the ends through
+/// [`shown`], and the end alone for a run of one episode (`1–4`, `7`).
+pub fn range_text(first: &str, last: &str) -> String {
+    match shown(first) == shown(last) {
+        true => shown(first).to_owned(),
+        false => format!("{}–{}", shown(first), shown(last)),
     }
 }
 
 /// The runs of the episodes `texts` name ([`EpisodeSet::runs`]).
 pub fn runs<'a>(texts: impl IntoIterator<Item = &'a str>) -> Vec<EpisodeRun> {
     texts.into_iter().collect::<EpisodeSet>().runs()
+}
+
+/// A run as an answer carries it, for a screen to name and shorten.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct EpisodeSegment {
+    /// `1–4`, `7`, `SP` ([`EpisodeRun::text`]).
+    pub text: String,
+    /// How many episodes it holds.
+    pub count: usize,
+    /// Whether it is a run of whole numbers.
+    pub whole: bool,
+}
+
+/// The runs of the episodes `texts` name, as answer segments.
+pub fn segments<'a>(texts: impl IntoIterator<Item = &'a str>) -> Vec<EpisodeSegment> {
+    runs(texts)
+        .into_iter()
+        .map(|run| EpisodeSegment {
+            text: run.text(),
+            count: run.count,
+            whole: run.whole,
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -481,6 +517,8 @@ mod tests {
     fn episodes_are_written_as_ranges() {
         assert_eq!(ranges(&[1, 2, 3, 5, 7, 8]), "1–3, 5, 7–8");
         assert_eq!(ranges(&[4]), "4");
+        assert_eq!(range_texts(&[1, 2, 3, 5, 7, 8]), ["1–3", "5", "7–8"]);
+        assert_eq!(range_texts(&[]), Vec::<String>::new());
     }
 
     #[test]
@@ -588,6 +626,15 @@ mod tests {
             pairs(&["13.5", "14"]),
             written(&[("14", "14"), ("13.5", "13.5")])
         );
+        let segments = segments(["SP", "13.5", "2", "1"]);
+        let flags: Vec<(&str, usize, bool)> = segments
+            .iter()
+            .map(|s| (s.text.as_str(), s.count, s.whole))
+            .collect();
+        assert_eq!(
+            flags,
+            [("1–2", 2, true), ("13.5", 1, false), ("SP", 1, false)]
+        );
     }
 
     #[test]
@@ -622,6 +669,9 @@ mod tests {
         assert_eq!(text(&["13.0", "14"]), ["13.0–14"]);
         assert_eq!(text(&["013"]), ["13"]);
         assert_eq!(text(&["SP01"]), ["SP01"]);
+        assert_eq!(range_text("01", "03"), "1–3");
+        assert_eq!(range_text("013", "013"), "13");
+        assert_eq!(range_text("0", "00"), "0");
         assert_eq!(text(&[]), Vec::<String>::new());
     }
 

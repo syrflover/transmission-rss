@@ -21,6 +21,10 @@
 //!   site's check, one to-do per work (per job when it has no work). `at` is
 //!   since when its oldest job waits, `job_id` that job, `episodes` the items
 //!   that wait.
+//! - `auth`, `receive_failed`, `episode_check` and `replacement` also carry
+//!   `episode_segments`: their `episodes` as runs for a line to name and
+//!   shorten, `{ "text": "1–4", "count": 4, "whole": true }`, `{ "text": "7",
+//!   … }`, the other texts (`SP`) after them ([`trss_core::episode::segments`]).
 //! - `receive_failed` (`받기 실패`): the failures listed below, one to-do per
 //!   work for revisions (`context: "revision"`, the work's folder when the
 //!   library has no work there) and one per rule for add failures
@@ -166,7 +170,8 @@
 //!
 //! `title` is the anime's Anissia title, else the work's name; `episodes` are
 //! the candidates' episodes as Anissia writes them, once each in the order
-//! first seen; `since` is when the first candidate was seen.
+//! first seen, and `episode_segments` the same as runs; `since` is when the
+//! first candidate was seen.
 
 use std::{collections::HashMap, path::Path as FsPath};
 
@@ -185,7 +190,10 @@ use trss_collect::{
     revisions::received_again_on_retry,
     store::revisions::{NewVideo, Revision},
 };
-use trss_core::trname_names::season_episode;
+use trss_core::{
+    episode::{segments, EpisodeSegment},
+    trname_names::season_episode,
+};
 use trss_jobs::todo::{receive_failures, AddFailed, FailedRevision, Sources, TodoError, TodoList};
 
 pub fn routes() -> Router<AppState> {
@@ -411,6 +419,7 @@ struct FollowSuggestionView {
     rule_id: String,
     anime_no: i64,
     episodes: Vec<String>,
+    episode_segments: Vec<EpisodeSegment>,
     creators: usize,
     since: i64,
 }
@@ -450,6 +459,7 @@ async fn follow_suggestions(
                 season: s.season,
                 rule_id: s.rule_id,
                 anime_no: s.anime_no,
+                episode_segments: segments(s.episodes.iter().map(String::as_str)),
                 episodes: s.episodes,
                 creators: s.creators,
                 since: s.since,

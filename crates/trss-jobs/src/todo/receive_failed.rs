@@ -7,7 +7,7 @@ use trss_collect::store::{
     history::{HistoryItem, HistoryQuery, HistoryResult, HistoryStore},
     revisions::{Revision, RevisionStore, WorkRef as FolderWork},
 };
-use trss_core::trname_names::season_episode;
+use trss_core::{episode::segments, trname_names::season_episode};
 
 use super::{gather::Sources, Todo, TodoError, WorkRef};
 
@@ -222,6 +222,7 @@ pub(super) async fn todos(sources: &Sources<'_>) -> Result<Vec<Todo>, TodoError>
                 .map(|(id, name)| -> WorkRef { sources.work(id, name, &covers) }),
             title: g.title,
             season: g.season,
+            episode_segments: segments(g.episodes.iter().map(String::as_str)),
             episodes: g.episodes,
             count: g.count,
             reason: g.reason,

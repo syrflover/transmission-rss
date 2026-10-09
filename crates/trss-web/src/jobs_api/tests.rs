@@ -377,6 +377,144 @@ async fn a_job_with_one_of_three_failed_shows_each_episode_with_its_reason() {
     assert_eq!(items[0]["state"], "done");
 }
 
+/// The rule is `trss_core::episode`'s; this is where a job's answers carry it:
+/// the runs of the episodes in any order, and each episode text shown.
+#[tokio::test]
+async fn a_job_tells_its_episodes_as_runs_and_shown_without_leading_zeros() {
+    let (state, router) = app();
+    linked_season(&state).await;
+    let item = |episode: &str, i: usize| NewItem {
+        observation_id: None,
+        episode: episode.to_owned(),
+        post_url: format!("https://fake.trss.invalid/ok/z-{i}"),
+        found_at: 1,
+    };
+    let made = state
+        .job_requests
+        .create(
+            NewJob {
+                command_id: "z1".into(),
+                request: "{}".into(),
+                origin: "pick".into(),
+                work_id: Some("w1".into()),
+                season: Some(1),
+                anime_no: Some(ANIME),
+                source_id: Some("s1".into()),
+                creator: Some("에루샤".into()),
+                revision_of: None,
+                revises_attributed: false,
+                items: ["03", "SP", "1", "2", "08", "13.0"]
+                    .iter()
+                    .enumerate()
+                    .map(|(i, e)| item(e, i))
+                    .collect(),
+            },
+            100,
+        )
+        .await
+        .unwrap();
+    let Created::Created(id) = made else { panic!() };
+
+    let (_, detail) = get(&router, &format!("/api/subtitle-jobs/{id}")).await;
+    assert_eq!(
+        detail["episodes"],
+        json!(["03", "SP", "1", "2", "08", "13.0"])
+    );
+    assert_eq!(
+        detail["episodes_shown"],
+        json!(["3", "SP", "1", "2", "8", "13.0"])
+    );
+    assert_eq!(
+        detail["episode_segments"],
+        json!([
+            { "text": "1–3", "count": 3, "whole": true },
+            { "text": "8", "count": 1, "whole": true },
+            { "text": "13.0", "count": 1, "whole": true },
+            { "text": "SP", "count": 1, "whole": false },
+        ])
+    );
+    let items = detail["items"].as_array().unwrap();
+    let shown: Vec<&str> = items
+        .iter()
+        .map(|i| i["episode_shown"].as_str().unwrap())
+        .collect();
+    assert_eq!(shown, ["3", "SP", "1", "2", "8", "13.0"]);
+
+    // A file another item's file is the same as names that item's episode.
+    let run = JobRun::new(state.db().clone());
+    let rows = state.jobs.items(&id).await.unwrap();
+    run.set_item(rows[0].id, ItemState::Running, None, None, 100)
+        .await
+        .unwrap();
+    run.set_item(rows[1].id, ItemState::Running, None, None, 100)
+        .await
+        .unwrap();
+    run.file_intend(trss_jobs::store::FileRow {
+        id: "a0".into(),
+        item_id: rows[0].id,
+        file_key: "k0".into(),
+        name: "0.ass".into(),
+        state: trss_jobs::FileState::Intended,
+        same_as: None,
+        temp_dir: Some(".tmp/a0".into()),
+        expected_size: None,
+        size: None,
+        sha256: None,
+        object: None,
+        path: None,
+        reason: None,
+        created_at: 100,
+        format: None,
+        failure: None,
+        http_status: None,
+        content_type: None,
+        response_size: None,
+        snapshot: None,
+        kind: None,
+        archive: None,
+        folder: None,
+        cleared_at: None,
+        volume_of: None,
+        unpacked_at: None,
+        unpack_error: None,
+        unpack_tries: 0,
+        unpack_failure: None,
+        unpack_retry_at: None,
+        unchanged_asset: None,
+    })
+    .await
+    .unwrap();
+    let original = state.jobs.items(&id).await.unwrap()[0].files[0].clone();
+    run.file_share("a1", rows[1].id, &original, 100)
+        .await
+        .unwrap();
+    let (_, detail) = get(&router, &format!("/api/subtitle-jobs/{id}")).await;
+    let file = &detail["items"][1]["files"][0];
+    assert_eq!(
+        (
+            file["shared_with"].as_str(),
+            file["shared_with_shown"].as_str()
+        ),
+        (Some("03"), Some("3"))
+    );
+    assert_eq!(
+        detail["items"][0]["files"][0]["shared_with_shown"],
+        Value::Null
+    );
+
+    // The list carries the same.
+    let (_, list) = get(&router, "/api/subtitle-jobs").await;
+    let row = list["waiting"]
+        .as_array()
+        .into_iter()
+        .chain(list["running"].as_array())
+        .flatten()
+        .find(|row| row["id"] == id.as_str())
+        .unwrap();
+    assert_eq!(row["episode_segments"], detail["episode_segments"]);
+    assert_eq!(row["episodes_shown"], detail["episodes_shown"]);
+}
+
 #[tokio::test]
 async fn an_unfinished_file_is_receiving_only_while_its_episode_runs() {
     let (state, router) = app();

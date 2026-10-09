@@ -107,6 +107,25 @@ async fn the_first_page_has_sixty_works_a_cursor_and_the_counts() {
 }
 
 #[tokio::test]
+async fn a_range_carries_the_text_the_screen_shows_beside_its_ends_as_written() {
+    let state = state();
+    let episodes = ["01", "02", "03", "04", "07", "SP"];
+    let files = episodes.map(|e| file(e, FileKind::Video)).to_vec();
+    add_folder(&state, "/a", vec![work("Show", files, vec![])]).await;
+
+    let (status, body) = get(&state, "/library/works").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        body["items"][0]["video"],
+        serde_json::json!([
+            { "first": "01", "last": "04", "text": "1–4" },
+            { "first": "07", "last": "07", "text": "7" },
+            { "first": "SP", "last": "SP", "text": "SP" },
+        ])
+    );
+}
+
+#[tokio::test]
 async fn following_next_reaches_every_work_once_for_every_sort_and_the_last_page_has_no_next() {
     let state = state();
     add_folder(&state, "/a", plain(130)).await;

@@ -15,8 +15,9 @@
 //!   "seasons": [{
 //!     "number": 1,
 //!     "info": { "version": 2, "entries": [ … ], … },
+//!     "video_ranges": ["1–3", "5"], "subtitle_ranges": ["1–2"],
 //!     "episodes": [{
-//!       "episode": "01", "sort": 1.0, "air_at": null,
+//!       "episode": "01", "episode_shown": "1", "sort": 1.0, "air_at": null,
 //!       "video":    [{ "path": "Season 01/… S01E01.mkv", "added_at": null }],
 //!       "subtitle": [{ "path": "Season 01/… S01E01.ko.ass", "added_at": 1760000100000,
 //!                      "creator": { "source_id": "…", "name": "하느", "anime_no": 3441 },
@@ -45,8 +46,8 @@
 //!     "creators": [{
 //!       "creator": "하느",
 //!       "copies": [{
-//!         "id": "…", "season": 1, "episode": "02", "name": "Show - 02.ass", "format": "ass",
-//!         "stored_at": 1760000300000,
+//!         "id": "…", "season": 1, "episode": "02", "episode_shown": "2",
+//!         "name": "Show - 02.ass", "format": "ass", "stored_at": 1760000300000,
 //!         "stored_path": ".trss/subtitles/하느/Show - 02.ass",
 //!         "applied": [{ "path": "Season 01/Show S01E02.ass", "applied_at": 1760000400000 }],
 //!         "choice": null, "can_add": false, "blocked": null
@@ -78,7 +79,12 @@
 //!   names (`01` and `013`/`13` are one episode, written as the smallest form);
 //!   `sort` is its number, `null` when it is no number (`SP`). `added_at` is
 //!   Unix milliseconds, `null` when unknown (the file was there before the app
-//!   first looked).
+//!   first looked). `episode_shown` is `episode` without the leading zeros of
+//!   a whole number (`1` for `01`, [`trss_core::episode::shown`]). A season's
+//!   `video_ranges` and `subtitle_ranges` are the episodes that have a video
+//!   and those that have a subtitle as runs, each episode once and in numeric
+//!   order, the ends of a run through `shown`
+//!   ([`trss_core::episode::runs`]); a run of one episode is its text alone.
 //! - A subtitle file's `creator` is the creator the user named for it
 //!   (`null` is `제작자 알 수 없음`, which is what every file found in a watch
 //!   folder is until then), and `creator_version` the version a change of it
@@ -135,7 +141,7 @@
 //!   subtitles on an episode that were not cleaned, by `creator` (`null` is
 //!   `제작자 알 수 없음`, last; the others by name), a creator's copies by
 //!   season, episode and then newest stored first. `episode` is written as
-//!   an episode's row is. `stored_path` is the stored file and `applied`
+//!   an episode's row is (with `episode_shown`). `stored_path` is the stored file and `applied`
 //!   its copies beside a video (`path`, `applied_at`), each relative to the
 //!   work folder; `applied` is empty for a copy not applied. `choice` is what
 //!   choosing it does (`POST …/apply` with no mode): `apply` for an episode with
@@ -249,7 +255,9 @@ use trss_collect::{
     store::{channels::ChannelWithRules, revisions::Revision},
 };
 use trss_core::{
-    episode::EpisodeNumber, settings::policy::FormatOrder, trname_names::season_episode,
+    episode::{runs, shown, EpisodeNumber, EpisodeRun},
+    settings::policy::FormatOrder,
+    trname_names::season_episode,
 };
 use trss_jobs::place::{
     cleanup,
@@ -342,6 +350,8 @@ impl From<FileRecord> for SubtitleView {
 #[derive(Serialize)]
 struct EpisodeView {
     episode: String,
+    /// `episode` without the leading zeros of a whole number (`02` is `2`).
+    episode_shown: String,
     sort: Option<f64>,
     air_at: Option<i64>,
     video: Vec<FileView>,
@@ -402,6 +412,7 @@ struct RevisionView {
 impl From<EpisodeDetail> for EpisodeView {
     fn from(episode: EpisodeDetail) -> Self {
         EpisodeView {
+            episode_shown: shown(&episode.episode).to_owned(),
             episode: episode.episode,
             sort: episode.number,
             air_at: None,
@@ -424,6 +435,11 @@ struct SeasonView {
     info: SeasonInfoView,
     /// The Anissia anime the season is linked to (see [`super::seasons_anissia_api`]).
     anissia: AnissiaLinkView,
+    /// The episodes that have a video, as runs (`1–3`, `5`), their ends
+    /// without leading zeros ([`trss_core::episode::EpisodeRun::text`]).
+    video_ranges: Vec<String>,
+    /// The episodes that have a subtitle, as `video_ranges`.
+    subtitle_ranges: Vec<String>,
     episodes: Vec<EpisodeView>,
 }
 
@@ -517,6 +533,8 @@ struct CopyView {
     season: u32,
     /// As the library writes the episode (`02`).
     episode: String,
+    /// `episode` without the leading zeros (`2`).
+    episode_shown: String,
     name: String,
     /// `ass`, `srt`, `smi` or `other`.
     format: &'static str,
@@ -559,6 +577,7 @@ fn creators_of(copies: Vec<StoredCopy>) -> Vec<CreatorCopies> {
                     id: copy.id,
                     season: copy.season,
                     episode: format!("{:02}", copy.episode),
+                    episode_shown: shown(&format!("{:02}", copy.episode)).to_owned(),
                     name: copy.name,
                     format: copy.format.code(),
                     stored_at: copy.stored_at,
@@ -759,6 +778,7 @@ fn attach_stored(seasons: &mut [SeasonView], stored: Vec<trss_jobs::place::recor
                     index,
                     EpisodeView {
                         episode: format!("{:02}", one.episode),
+                        episode_shown: shown(&format!("{:02}", one.episode)).to_owned(),
                         sort: Some(number),
                         air_at: None,
                         video: Vec::new(),
@@ -814,6 +834,7 @@ fn attach_revisions(
                     index,
                     EpisodeView {
                         episode: episode.clone(),
+                        episode_shown: shown(&episode).to_owned(),
                         sort: number,
                         air_at: None,
                         video: Vec::new(),
@@ -939,9 +960,25 @@ async fn show(
                 .filter(|_| numbers.contains(&(season.number - 1)));
             let air_times = trss_library::seasons::combine::air_times(&link.entries);
             let info = season_view(link, previous, first);
+            let ranges = |has: fn(&EpisodeDetail) -> bool| -> Vec<String> {
+                runs(
+                    season
+                        .episodes
+                        .iter()
+                        .filter(|e| has(e))
+                        .map(|e| e.episode.as_str()),
+                )
+                .iter()
+                .map(EpisodeRun::text)
+                .collect()
+            };
+            let video_ranges = ranges(|e| !e.video.is_empty());
+            let subtitle_ranges = ranges(|e| !e.subtitle.is_empty());
             SeasonView {
                 number: season.number,
                 info,
+                video_ranges,
+                subtitle_ranges,
                 anissia: anissia_links
                     .remove(&season.number)
                     .expect("a link view is made for every season of the work"),

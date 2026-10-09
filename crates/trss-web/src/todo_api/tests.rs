@@ -204,7 +204,9 @@ async fn a_work_without_a_creator_is_one_suggestion_with_no_names_and_no_badge()
         json!({ "suggestions": [{
             "work": { "id": "w1", "name": "Show", "cover_url": null },
             "title": "작품", "season": 1, "rule_id": app.rule.id, "anime_no": ANIME,
-            "episodes": ["1", "2", "3", "04"], "creators": 2, "since": 7 }] })
+            "episodes": ["1", "2", "3", "04"],
+            "episode_segments": [{ "text": "1–4", "count": 4, "whole": true }],
+            "creators": 2, "since": 7 }] })
     );
     assert!(!shown.to_string().contains("에루샤"));
     // A suggestion is no to-do: the badge does not count it.

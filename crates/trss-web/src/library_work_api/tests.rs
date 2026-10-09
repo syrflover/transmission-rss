@@ -126,6 +126,97 @@ async fn answers_the_work_with_its_seasons_files_and_leftovers() {
     assert_eq!(body["rules"], serde_json::json!([]));
 }
 
+/// The rule is `trss_core::episode`'s; this is where the answer carries it: a
+/// season's runs, and the episode texts the screen shows.
+#[tokio::test]
+async fn a_season_tells_its_episodes_with_a_video_and_with_a_subtitle_as_runs() {
+    let state = state();
+    let video = |e: &str| file(1, e, &format!("S01E{e}.mkv"), FileKind::Video);
+    let subtitle = |e: &str| file(1, e, &format!("S01E{e}.ass"), FileKind::Subtitle);
+    let work = ScannedWork {
+        dir_name: "Show".into(),
+        seasons: BTreeSet::from([1]),
+        files: vec![
+            video("01"),
+            video("02"),
+            video("03"),
+            video("05"),
+            video("SP"),
+            subtitle("01"),
+            subtitle("02"),
+        ],
+        unrecognized: vec![],
+    };
+    state
+        .library
+        .add_folder(
+            "/c".into(),
+            Scan {
+                works: vec![WorkRead::Read(work)],
+            },
+            100,
+            &[],
+        )
+        .await
+        .unwrap();
+    let id = state.library.overview().await.unwrap()[0].id.clone();
+
+    let (status, body) = get(&state, &format!("/library/works/{id}")).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let season = &body["seasons"][0];
+    assert_eq!(
+        season["video_ranges"],
+        serde_json::json!(["1–3", "5", "SP"])
+    );
+    assert_eq!(season["subtitle_ranges"], serde_json::json!(["1–2"]));
+    let shown: Vec<(&str, &str)> = season["episodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| {
+            (
+                e["episode"].as_str().unwrap(),
+                e["episode_shown"].as_str().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        shown,
+        [
+            ("01", "1"),
+            ("02", "2"),
+            ("03", "3"),
+            ("05", "5"),
+            ("SP", "SP")
+        ]
+    );
+}
+
+/// A season without a file of a kind has no runs of it, and the rows the
+/// answer adds for a stored subtitle and its copy are written as shown too.
+#[tokio::test]
+async fn a_season_with_no_subtitle_has_no_runs_of_it_and_stored_rows_and_copies_are_shown() {
+    let (state, id) = state_with_work().await;
+    stored_only(&state, &id, &[5]).await;
+    let (status, body) = get(&state, &format!("/library/works/{id}")).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["seasons"][1]["video_ranges"], serde_json::json!(["1"]));
+    assert_eq!(body["seasons"][1]["subtitle_ranges"], serde_json::json!([]));
+    let episodes = body["seasons"][0]["episodes"].as_array().unwrap();
+    let stored_row = episodes.iter().find(|e| e["episode"] == "05").unwrap();
+    assert_eq!(stored_row["episode_shown"], "5");
+    // A row with no files adds nothing to the runs.
+    assert_eq!(
+        body["seasons"][0]["video_ranges"],
+        serde_json::json!(["1–2"])
+    );
+    let copy = copy(&body, "s5");
+    assert_eq!(
+        (copy["episode"].as_str(), copy["episode_shown"].as_str()),
+        (Some("05"), Some("5"))
+    );
+}
+
 /// The wire shape of a subtitle file's `applied`: `null` for a file a person
 /// put there, `{ "creator": … }` for a copy the app applied (the rule that makes
 /// it so is the library's).

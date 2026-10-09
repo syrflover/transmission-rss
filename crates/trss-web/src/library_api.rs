@@ -19,8 +19,9 @@
 //!     "id": "…", "name": "Lycoris Recoil", "missing": false,
 //!     "watch_folder": { "id": "…", "path": "/media/anime" },
 //!     "latest_season": 2,
-//!     "video":    [{ "first": "01", "last": "03" }, { "first": "05", "last": "12" }],
-//!     "subtitle": [{ "first": "01", "last": "03" }],
+//!     "video":    [{ "first": "01", "last": "03", "text": "1–3" },
+//!                  { "first": "05", "last": "12", "text": "5–12" }],
+//!     "subtitle": [{ "first": "01", "last": "03", "text": "1–3" }],
 //!     "subtitle_coverage": "some",
 //!     "subtitle_check_needed": false,
 //!     "added_at": 1760000000000,
@@ -53,6 +54,8 @@
 //!   consecutive episodes written as in the file names. `01` and `1` are one
 //!   episode, and an episode that is not a whole number (`17.5`) is a range of
 //!   its own. See [`trss_library::store::library`]'s overview for the rules.
+//!   A range's `text` is how the screen shows it: its ends without the leading
+//!   zeros of a whole number ([`trss_core::episode::range_text`]).
 //! - `subtitle_coverage` is `all` (there is a video and every episode with a
 //!   video has a subtitle), `some`, or `none`; `null` for a work whose folder is
 //!   gone (`missing`), which has no holdings counted.
@@ -83,6 +86,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 use super::{artwork_api::image_url, todo_api::todo_list, ApiError, AppState};
+use trss_core::episode::range_text;
 use trss_library::store::library::{
     Cursor, EpisodeRange, Filter, LibraryError, ListQuery, Sort, WorkOverview,
 };
@@ -101,11 +105,15 @@ struct WatchFolderRef {
 struct RangeView {
     first: String,
     last: String,
+    /// The run as the screen shows it: the ends without leading zeros
+    /// (`1–3`), the end alone for one episode.
+    text: String,
 }
 
 impl From<EpisodeRange> for RangeView {
     fn from(range: EpisodeRange) -> Self {
         RangeView {
+            text: range_text(&range.first, &range.last),
             first: range.first,
             last: range.last,
         }

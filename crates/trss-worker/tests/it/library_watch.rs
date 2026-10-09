@@ -1552,9 +1552,15 @@ async fn the_library_list_answers_ranges_flags_and_times_of_every_work() {
 
     let alpha = by("Alpha");
     assert_eq!(alpha["latest_season"], 2);
-    assert_eq!(alpha["video"], json!([{ "first": "01", "last": "05" }]));
+    assert_eq!(
+        alpha["video"],
+        json!([{ "first": "01", "last": "05", "text": "1–5" }])
+    );
     // Episode 3's subtitle arrived after the first check.
-    assert_eq!(alpha["subtitle"], json!([{ "first": "01", "last": "05" }]));
+    assert_eq!(
+        alpha["subtitle"],
+        json!([{ "first": "01", "last": "05", "text": "1–5" }])
+    );
     assert_eq!(alpha["subtitle_coverage"], "all");
     assert_eq!(alpha["subtitle_check_needed"], false);
     assert_eq!(alpha["added_at"], Value::Null);
@@ -1667,9 +1673,15 @@ async fn a_library_of_520_works_and_10_000_files_is_read_and_recorded() {
     let seven = works.iter().find(|w| w["name"] == "Work 007").unwrap();
     assert_eq!(
         seven["video"],
-        json!([{ "first": "01", "last": "12" }, { "first": "14", "last": "14" }])
+        json!([
+            { "first": "01", "last": "12", "text": "1–12" },
+            { "first": "14", "last": "14", "text": "14" }
+        ])
     );
-    assert_eq!(seven["subtitle"], json!([{ "first": "01", "last": "06" }]));
+    assert_eq!(
+        seven["subtitle"],
+        json!([{ "first": "01", "last": "06", "text": "1–6" }])
+    );
     assert_eq!(seven["subtitle_coverage"], "some");
 
     eprintln!(

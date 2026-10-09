@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use trss_collect::store::{
     channels::ChannelStore, history::HistoryStore, revisions::RevisionStore,
 };
-use trss_core::settings::SettingsStore;
+use trss_core::{episode::segments, settings::SettingsStore};
 use trss_library::store::{artwork::ArtworkStore, library::LibraryStore};
 
 use super::{Changes, Received, Todo, TodoError, WorkRef};
@@ -117,6 +117,7 @@ pub(super) async fn auth(sources: &Sources<'_>) -> Result<Vec<Todo>, TodoError> 
             work: sources.work_of(oldest, &covers),
             title: oldest.title(),
             season: oldest.season,
+            episode_segments: segments(episodes.iter().map(String::as_str)),
             episodes,
             creator: oldest.creator.clone(),
             reason: reason.unwrap_or_default(),
@@ -161,12 +162,14 @@ pub(super) async fn replacements(sources: &Sources<'_>) -> Result<Vec<Todo>, Tod
             }
         }
         episodes.sort();
+        let texts: Vec<String> = episodes.iter().map(i64::to_string).collect();
         todos.push(Todo::Replacement {
             key,
             at: oldest.state_at,
             work: sources.work_of(oldest, &covers),
             title: oldest.title(),
             season: oldest.season,
+            episode_segments: segments(texts.iter().map(String::as_str)),
             episodes,
             creator: oldest.creator.clone(),
             job_id: oldest.id.clone(),
@@ -262,6 +265,7 @@ pub(super) async fn episode_checks(sources: &Sources<'_>) -> Result<Vec<Todo>, T
             season: check.season,
             creator: check.creator,
             source_id: check.source_id,
+            episode_segments: segments(check.episodes.iter().map(String::as_str)),
             episodes: check.episodes,
             reason: check.undecided,
             sources: sources_count,

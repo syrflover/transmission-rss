@@ -1934,6 +1934,44 @@ async fn an_episode_the_user_does_not_receive_is_left_while_the_others_follow_th
 }
 
 #[tokio::test]
+async fn an_episode_check_card_tells_its_episodes_as_runs() {
+    let w = World::new(Sub::aired(FIRST, 12)).await;
+    for (episode, k) in [("1", 1), ("2", 2)] {
+        w.observe_at(
+            "에루샤",
+            episode,
+            &format!("/ok/ep{episode}"),
+            Some(at(FIRST, k, 3_600)),
+        )
+        .await;
+    }
+    // Neither of these fits the mapping.
+    w.observe_at("에루샤", "SP", "/ok/sp", Some(at(FIRST, 3, 3_600)))
+        .await;
+    w.observe_at("에루샤", "13.5", "/ok/ep13_5", Some(at(FIRST, 3, 3_600)))
+        .await;
+    w.evaluate().await;
+
+    let cards = episode_checks_of(&w).await;
+
+    assert_eq!(cards.len(), 1, "{cards:?}");
+    let Todo::EpisodeCheck {
+        episodes,
+        episode_segments,
+        ..
+    } = &cards[0]
+    else {
+        unreachable!()
+    };
+    assert_eq!(episodes, &["13.5", "SP"]);
+    let segments: Vec<(&str, usize, bool)> = episode_segments
+        .iter()
+        .map(|s| (s.text.as_str(), s.count, s.whole))
+        .collect();
+    assert_eq!(segments, [("13.5", 1, false), ("SP", 1, false)]);
+}
+
+#[tokio::test]
 async fn an_exception_receives_an_episode_as_the_season_episode_it_names() {
     let w = World::new(Sub::default()).await;
     // The creator's 14 is past the season's 12: a conflict, and the ask.

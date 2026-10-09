@@ -979,6 +979,65 @@ async fn candidates_of_a_season_with_no_link_are_none() {
 }
 
 #[tokio::test]
+async fn each_creators_episodes_come_as_runs_with_zero_inside_them() {
+    let app = App::new().await;
+    app.schedule_3320();
+    // A reading holds each creator's latest line: the episodes pile up over
+    // the readings.
+    let observer = app.observer();
+    for (episode, other) in [("2", "05"), ("0", "05"), ("SP", "05"), ("1", "05")] {
+        let line = |episode: &str, creator: &str| {
+            let url = format!("https://blog.test/{creator}-{episode}");
+            app.fake
+                .recent_line(3320, episode, "2026-10-02T11:00:00", &url, creator)
+        };
+        app.fake
+            .set_recent(vec![line(episode, "에루샤"), line(other, "코코렛")]);
+        observer.run_due().await.unwrap();
+        app.now.fetch_add(30 * 60_000, Ordering::SeqCst);
+    }
+    let (status, linked) = app
+        .link(1, json!({ "version": 0, "anime_no": 3320, "week": 3 }))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{linked}");
+
+    let shown = app.candidates(1).await;
+    let source_of = |creator: &str| {
+        shown["candidates"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["creator"] == creator)
+            .unwrap()["source_id"]
+            .clone()
+    };
+    let by_source = |creator: &str| {
+        let source = source_of(creator);
+        shown["creator_episodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["source_id"] == source)
+            .unwrap()["episode_segments"]
+            .clone()
+    };
+    assert_eq!(
+        by_source("에루샤"),
+        json!([
+            { "text": "0–2", "count": 3, "whole": true },
+            { "text": "SP", "count": 1, "whole": false },
+        ])
+    );
+    assert_eq!(
+        by_source("코코렛"),
+        json!([{ "text": "5", "count": 1, "whole": true }])
+    );
+    assert_eq!(shown["creator_episodes"].as_array().unwrap().len(), 2);
+    // A season with no link has no creators.
+    assert_eq!(app.candidates(2).await["creator_episodes"], json!([]));
+}
+
+#[tokio::test]
 async fn linking_after_observations_exist_shows_the_earlier_ones_at_once_and_asks_the_worker_to_read(
 ) {
     let app = App::new().await;

@@ -19,6 +19,10 @@
 //! [`trss_collect::past_search::service::KEEP`] (30 minutes) after it started, however
 //! often it is polled, and when the web restarts: the screen then says the
 //! search is gone and the person searches again.
+//!
+//! A finished search's `missing` and `not_found` are the release numbers in
+//! ascending order; `missing_ranges` and `not_found_ranges` are the same as
+//! runs of consecutive ones (`["4–6", "9"]`) for the sentence that names them.
 
 use std::path::Path as FsPath;
 
@@ -46,6 +50,7 @@ use trss_collect::{
         history::{HistoryItem, HistoryQuery, HistoryResult, MAX_PAGE_SIZE},
     },
 };
+use trss_core::episode::range_texts;
 
 pub fn routes() -> Router<AppState> {
     Router::new()
@@ -360,7 +365,11 @@ pub struct ResultView {
     pub out_of_range: usize,
     pub not_picked: usize,
     pub missing: Vec<u32>,
+    /// `missing` as runs: `["4–6", "9"]` ([`trss_core::episode::range_texts`]).
+    pub missing_ranges: Vec<String>,
     pub not_found: Vec<u32>,
+    /// `not_found` as runs, as `missing_ranges`.
+    pub not_found_ranges: Vec<String>,
     pub notes: Vec<String>,
     pub first_full: bool,
     pub extra_sent: usize,
@@ -408,7 +417,9 @@ fn result_view(outcome: &Outcome) -> ResultView {
         out_of_range: outcome.preview.out_of_range,
         not_picked: outcome.preview.not_picked,
         missing: outcome.preview.missing.clone(),
+        missing_ranges: range_texts(&outcome.preview.missing),
         not_found: outcome.preview.not_found.clone(),
+        not_found_ranges: range_texts(&outcome.preview.not_found),
         notes: outcome.notes.clone(),
         first_full: outcome.first_full,
         extra_sent: outcome.extra_sent,

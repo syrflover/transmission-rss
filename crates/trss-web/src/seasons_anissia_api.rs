@@ -65,6 +65,10 @@
 //!       "sort_at": 1789009800000,
 //!       "revision": { "of": 7, "same_post": true },
 //!       "job": { "id": "1f0c…", "state": "done", "wait": null } } ],
+//!   "creator_episodes": [
+//!     { "source_id": "6f0c…", "episode_segments": [
+//!       { "text": "1–4", "count": 4, "whole": true },
+//!       { "text": "SP", "count": 1, "whole": false } ] } ],
 //!   "mappings": [
 //!     { "source_id": "6f0c…", "kind": "auto", "offset": -12,
 //!       "evidence": "13화가 1화 방영 뒤에 올라왔고 앞 시즌 회차 수(12)만큼 이어 셌어요",
@@ -102,6 +106,11 @@
 //!   command for the anime (`pending`, `running`, `done` or `failed` with its
 //!   outcome), or `null`: the read made when the season was linked and the
 //!   user's `새로고침` both show there.
+//! - `creator_episodes` are the episodes each creator's candidates are about
+//!   (`source_id`, in that order), as runs for the creator's group to name
+//!   ([`trss_core::episode::segments`]): the whole numbers as runs of
+//!   consecutive ones, `0` among them, then every other text (`13.5`, `SP`)
+//!   alone, each as `{ "text", "count", "whole" }`.
 //! - `mappings` are the sources' episode mappings to the season, one per
 //!   source the app decided one for (the subscribed creator's,
 //!   [`trss_jobs::mapping`]): `kind` `auto` (`offset` is added to Anissia's
@@ -135,6 +144,7 @@ use trss_collect::store::{
     anissia::{mark_attributed, Attributed},
     channels::{Rule, SeasonAnimeError},
 };
+use trss_core::episode::{segments, EpisodeSegment};
 use trss_library::store::seasons::SeasonError;
 
 #[cfg(test)]
@@ -651,12 +661,20 @@ struct RevisionView {
 }
 
 #[derive(Serialize)]
+struct CreatorEpisodes {
+    source_id: String,
+    episode_segments: Vec<EpisodeSegment>,
+}
+
+#[derive(Serialize)]
 struct CandidatesView {
     season: u32,
     anime_no: Option<i64>,
     read_at: Option<i64>,
     refresh: Option<CommandView>,
     candidates: Vec<CandidateObservation>,
+    /// The episodes each creator's candidates are about, as runs.
+    creator_episodes: Vec<CreatorEpisodes>,
     mappings: Vec<MappingView>,
     /// The episodes of the earlier seasons together, when each is known.
     previous_episodes: Option<u32>,
@@ -686,6 +704,25 @@ impl From<&trss_collect::store::anissia::Candidate> for CandidateObservation {
     }
 }
 
+/// The episodes each creator's candidates are about, as runs, in the order of
+/// the creators' source IDs.
+fn creator_episodes(observed: &[trss_collect::store::anissia::Candidate]) -> Vec<CreatorEpisodes> {
+    let mut by_source: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+    for c in observed {
+        by_source
+            .entry(c.source_id.as_str())
+            .or_default()
+            .push(c.episode.as_str());
+    }
+    by_source
+        .into_iter()
+        .map(|(source_id, episodes)| CreatorEpisodes {
+            source_id: source_id.to_owned(),
+            episode_segments: segments(episodes),
+        })
+        .collect()
+}
+
 async fn candidates(
     State(state): State<AppState>,
     Path((id, season)): Path<(String, u32)>,
@@ -710,6 +747,7 @@ async fn candidates(
             read_at,
             refresh: None,
             candidates: Vec::new(),
+            creator_episodes: Vec::new(),
             mappings: Vec::new(),
             previous_episodes: None,
             season_episodes: None,
@@ -773,6 +811,7 @@ async fn candidates(
         .season_facts(&id, season)
         .await
         .map_err(|e| internal(&e))?;
+    let creator_episodes = creator_episodes(&observed);
     let mut mappings: Vec<MappingView> = mappings
         .into_iter()
         .map(|(source_id, m)| MappingView::of(source_id, m))
@@ -794,6 +833,7 @@ async fn candidates(
                 ..CandidateObservation::from(c)
             })
             .collect(),
+        creator_episodes,
         mappings,
         previous_episodes: facts.previous,
         season_episodes: facts.total,

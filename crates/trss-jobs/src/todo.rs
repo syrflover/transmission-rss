@@ -23,6 +23,7 @@ use serde::{Serialize, Serializer};
 use thiserror::Error;
 
 use trss_collect::store::channels::ChannelError;
+use trss_core::episode::EpisodeSegment;
 use trss_library::discovery::SeenFile;
 
 pub use changes::{Changes, Received};
@@ -67,6 +68,8 @@ pub enum Todo {
         title: String,
         season: Option<i64>,
         episodes: Vec<String>,
+        /// `episodes` as the lines name them: runs, shown without leading zeros.
+        episode_segments: Vec<EpisodeSegment>,
         creator: Option<String>,
         reason: String,
         job_id: String,
@@ -80,6 +83,8 @@ pub enum Todo {
         title: String,
         season: Option<u32>,
         episodes: Vec<String>,
+        /// `episodes` as the lines name them: runs, shown without leading zeros.
+        episode_segments: Vec<EpisodeSegment>,
         count: usize,
         reason: Option<String>,
         channel_id: Option<String>,
@@ -93,6 +98,8 @@ pub enum Todo {
         creator: String,
         source_id: String,
         episodes: Vec<String>,
+        /// `episodes` as the lines name them: runs, shown without leading zeros.
+        episode_segments: Vec<EpisodeSegment>,
         reason: Option<String>,
         sources: usize,
     },
@@ -126,6 +133,8 @@ pub enum Todo {
         title: String,
         season: Option<i64>,
         episodes: Vec<i64>,
+        /// `episodes` as the lines name them: runs.
+        episode_segments: Vec<EpisodeSegment>,
         creator: Option<String>,
         job_id: String,
         jobs: usize,

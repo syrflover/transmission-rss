@@ -171,6 +171,13 @@
 //! creator the user named: nothing of it was received before, so the other two
 //! stay `null`.
 //!
+//! A job row's `episodes_shown` are its `episodes` without the leading zeros of
+//! a whole number (`01` is `1`), and its `episode_segments` are the episodes
+//! as runs for a line to name: `{ "text": "1–4", "count": 4, "whole": true }`,
+//! `{ "text": "7", … }` and the other texts (`SP`) after them
+//! ([`trss_core::episode::segments`]); an item has `episode_shown` and a file
+//! `shared_with_shown` likewise.
+//!
 //! A job's `title` is its anime's Anissia title, else its work's name. No
 //! answer carries a cookie, a token or a signed address: posts are public
 //! pages, and the files are named by their place in the receive area.
@@ -187,6 +194,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use trss_collect::store::anissia::PickError;
+use trss_core::episode::{segments, shown as shown_episode, EpisodeSegment};
 use trss_jobs::{
     place::{
         unchanged,
@@ -270,6 +278,10 @@ pub struct JobRowView {
     pub title: String,
     pub season: Option<i64>,
     pub episodes: Vec<String>,
+    /// `episodes` without the leading zeros of a whole number (`01` is `1`).
+    pub episodes_shown: Vec<String>,
+    /// The episodes as runs for a line to name and shorten (`1–4`, `7`).
+    pub episode_segments: Vec<EpisodeSegment>,
     pub creator: Option<String>,
     pub source: Option<String>,
     pub progress: ProgressView,
@@ -320,6 +332,12 @@ fn view(row: &JobRow, covers: &HashMap<String, String>) -> JobRowView {
         title: row.title(),
         season: row.season,
         episodes: row.episodes.clone(),
+        episodes_shown: row
+            .episodes
+            .iter()
+            .map(|e| shown_episode(e).to_owned())
+            .collect(),
+        episode_segments: segments(row.episodes.iter().map(String::as_str)),
         creator: row.creator.clone(),
         source: row.source.clone(),
         progress: ProgressView {
@@ -442,6 +460,8 @@ struct FileView {
     sha256: Option<String>,
     path: Option<String>,
     shared_with: Option<String>,
+    /// `shared_with` without the leading zeros of a whole number.
+    shared_with_shown: Option<String>,
     reason: Option<String>,
     format: Option<&'static str>,
     failure: Option<&'static str>,
@@ -502,6 +522,8 @@ struct DroppedView {
 struct ItemView {
     id: i64,
     episode: String,
+    /// `episode` without the leading zeros of a whole number.
+    episode_shown: String,
     post_url: String,
     state: &'static str,
     wait: Option<&'static str>,
@@ -707,6 +729,11 @@ fn file_view(
     // Only a received file is at its path; a held one's path may hold
     // another file or nothing.
     let received = file.state == FileState::Done;
+    let shared_with = file
+        .same_as
+        .as_deref()
+        .and_then(|id| owners.get(id))
+        .copied();
     Some(FileView {
         id: file.id.clone(),
         name: file.name.clone(),
@@ -719,11 +746,8 @@ fn file_view(
             .as_ref()
             .filter(|_| received && file.cleared_at.is_none())
             .map(|p| state.receive_root.join(p).to_string_lossy().into_owned()),
-        shared_with: file
-            .same_as
-            .as_deref()
-            .and_then(|id| owners.get(id))
-            .map(|ep| (*ep).to_owned()),
+        shared_with: shared_with.map(str::to_owned),
+        shared_with_shown: shared_with.map(|ep| shown_episode(ep).to_owned()),
         reason: file.reason.clone(),
         format: file.format.map(|f| f.code()),
         failure: file.failure.map(|f| f.code()),
@@ -796,6 +820,7 @@ async fn detail(
         .map(|item| ItemView {
             id: item.id,
             episode: item.episode.clone(),
+            episode_shown: shown_episode(&item.episode).to_owned(),
             post_url: item.post_url.clone(),
             state: item.state.code(),
             wait: item.wait.map(Wait::code),

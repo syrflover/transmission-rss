@@ -408,6 +408,27 @@ async fn row_3_episodes_in_the_folder_or_received_from_another_release_are_shown
     assert_eq!(s.added().len(), 1);
 }
 
+/// The result also tells the missing and the not found release numbers as runs,
+/// for the sentence that names them.
+#[tokio::test]
+async fn the_missing_and_not_found_releases_are_also_told_as_runs() {
+    let s = Setup::new(Options::show()).await;
+    let titles: Vec<String> = [9, 8, 6, 5]
+        .into_iter()
+        .map(|n| episode("SubsPlease", "Show", n, ""))
+        .collect();
+    s.nyaa.set_releases(&titles);
+
+    let poll = s.search("[SubsPlease] Show 1080p", 5, 10).await;
+
+    assert_eq!(poll["state"], "done", "{poll}");
+    let result = &poll["result"];
+    assert_eq!(result["missing"], json!([5, 6, 7, 8, 9, 10]));
+    assert_eq!(result["missing_ranges"], json!(["5–10"]));
+    assert_eq!(result["not_found"], json!([7, 10]));
+    assert_eq!(result["not_found_ranges"], json!(["7", "10"]));
+}
+
 /// Row 4: a video of unknown version whose CRC32 differs from the result's.
 #[tokio::test]
 async fn row_4_a_video_of_unknown_version_with_another_crc_makes_the_result_unknown_and_unselected()

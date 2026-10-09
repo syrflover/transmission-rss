@@ -233,6 +233,46 @@ async fn the_checks_of_a_work_are_one_card_at_its_oldest_job_and_no_other_job_is
     assert_eq!(episodes, &["1", "2"]);
 }
 
+/// The rule of the runs is `trss_core::episode`'s; this is where a card carries
+/// them beside its `episodes`, which stay as the items listed them.
+#[tokio::test]
+async fn a_card_tells_its_episodes_as_runs_whatever_the_order_the_items_listed_them_in() {
+    let s = setup().await;
+    s.make(
+        "c1",
+        &[
+            ("3", "/auth/3"),
+            ("01", "/auth/1"),
+            ("SP", "/auth/4"),
+            ("2", "/auth/2"),
+        ],
+    )
+    .await;
+    s.run().await;
+
+    let list = s.base.todo().await;
+
+    let Todo::Auth {
+        episodes,
+        episode_segments,
+        ..
+    } = &list.needs[0]
+    else {
+        panic!()
+    };
+    assert_eq!(episodes, &["3", "01", "SP", "2"]);
+    let segments: Vec<(&str, usize, bool)> = episode_segments
+        .iter()
+        .map(|s| (s.text.as_str(), s.count, s.whole))
+        .collect();
+    assert_eq!(segments, [("1–3", 3, true), ("SP", 1, false)]);
+    let json = serde_json::to_value(&list.needs[0]).unwrap();
+    assert_eq!(
+        json["episode_segments"][0],
+        serde_json::json!({ "text": "1–3", "count": 3, "whole": true })
+    );
+}
+
 // --- the replacement cards ----------------------------------------------------------
 
 type Prepare = for<'a> fn(&'a Setup) -> Pin<Box<dyn Future<Output = ()> + 'a>>;
@@ -538,6 +578,21 @@ async fn the_replacement_card_sums_what_its_open_plans_change_and_says_when_thei
             assert!(time.holds(shown), "{}: {time:?} {shown:?}", case.name);
         }
     }
+}
+
+#[tokio::test]
+async fn the_replacement_card_tells_its_episodes_as_runs() {
+    let s = setup().await;
+    s.revision_waiting().await;
+
+    let list = s.base.todo().await;
+
+    let json = serde_json::to_value(&list.needs[0]).unwrap();
+    assert_eq!(json["episodes"], serde_json::json!([2]));
+    assert_eq!(
+        json["episode_segments"],
+        serde_json::json!([{ "text": "2", "count": 1, "whole": true }])
+    );
 }
 
 #[tokio::test]
