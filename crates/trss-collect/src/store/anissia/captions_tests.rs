@@ -485,3 +485,49 @@ async fn the_sources_mapping_moves_the_candidates_episode_to_the_seasons_before_
         None
     );
 }
+
+#[tokio::test]
+async fn without_an_offset_an_episode_that_is_no_whole_number_is_compared_as_it_is() {
+    let store = store();
+    store
+        .observe(
+            vec![
+                line(1, "하느", "SP", "https://a.test/a", NOON_UTC),
+                line(
+                    1,
+                    "하느",
+                    "99999999999999999999",
+                    "https://a.test/b",
+                    NOON_UTC + MIN,
+                ),
+            ],
+            1000,
+        )
+        .await
+        .unwrap();
+    let special = observed_of(&store, "하느", "SP").await;
+    let huge = observed_of(&store, "하느", "99999999999999999999").await;
+    let id = special.source_id.clone();
+    let mark = Some(Revision {
+        of: None,
+        same_post: None,
+    });
+
+    assert_eq!(
+        revision_by_attribution(&special, 0, &[held(&id, "SP")]),
+        mark
+    );
+    assert_eq!(
+        revision_by_attribution(&huge, 0, &[held(&id, "99999999999999999999")]),
+        mark
+    );
+    // A mapping moves whole episodes only, and this one does not fit a number.
+    assert_eq!(
+        revision_by_attribution(&special, -1, &[held(&id, "SP")]),
+        None
+    );
+    assert_eq!(
+        revision_by_attribution(&huge, -1, &[held(&id, "99999999999999999999")]),
+        None
+    );
+}

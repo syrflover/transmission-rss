@@ -22,10 +22,8 @@ use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 use uuid::Uuid;
 
 use super::{AnissiaStore, Result};
-use trss_core::{
-    episode::{stored_key, EpisodeNumber},
-    Millis,
-};
+use trss_core::{episode::stored_key, Millis};
+use trss_library::mapping::shifted;
 
 /// A line as the worker read it, ready to be compared with the last
 /// observation of its creator.
@@ -181,19 +179,19 @@ pub fn revision_by_attribution(
     // Anissia's episode `0` and a mapped number that is not above `0` are no
     // episode of the season (as the subscribed creator's receipt reads them),
     // so there is nothing to revise.
-    let wanted = if offset == 0 {
-        let key = episode_key(&candidate.episode);
-        if key == "n:0" {
-            return None;
+    let wanted = match shifted(&candidate.episode, offset) {
+        Some(mapped) if mapped > 0 => format!("n:{mapped}"),
+        Some(_) => return None,
+        // Without a mapping a text that is no whole episode (`5.5`, `SP`) is
+        // compared as it is, which the mapping cannot do.
+        None if offset == 0 => {
+            let key = episode_key(&candidate.episode);
+            if key == "n:0" {
+                return None;
+            }
+            key
         }
-        key
-    } else {
-        let n = i64::try_from(EpisodeNumber::parse(&candidate.episode)?.whole()?).ok()?;
-        let mapped = n.checked_add(offset)?;
-        if n <= 0 || mapped <= 0 {
-            return None;
-        }
-        format!("n:{mapped}")
+        None => return None,
     };
     held.iter()
         .any(|a| a.source_id == candidate.source_id && episode_key(&a.episode) == wanted)
