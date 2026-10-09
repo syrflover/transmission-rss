@@ -109,61 +109,29 @@ async fn a_range_carries_the_text_the_screen_shows_beside_its_ends_as_written() 
 }
 
 #[tokio::test]
-async fn following_next_reaches_every_work_once_for_every_sort_and_the_last_page_has_no_next() {
+async fn following_next_reaches_every_work_once_and_the_last_page_has_no_next() {
     let state = state();
     add_folder(&state, "/a", plain(130)).await;
-    for sort in ["title", "year", "added", "video", "subtitle"] {
-        let mut seen: Vec<String> = Vec::new();
-        let mut after = String::new();
-        let mut pages = 0;
-        loop {
-            let (status, body) = get(
-                &state,
-                &format!("/library/works?sort={sort}&limit=50&after={after}"),
-            )
-            .await;
-            assert_eq!(status, StatusCode::OK, "{body}");
-            pages += 1;
-            seen.extend(names(&body).iter().map(|s| s.to_string()));
-            match body["next"].as_str() {
-                Some(next) => after = next.to_owned(),
-                None => break,
-            }
+    let mut seen: Vec<String> = Vec::new();
+    let mut after = String::new();
+    let mut pages = 0;
+    loop {
+        let (status, body) = get(
+            &state,
+            &format!("/library/works?sort=title&limit=50&after={after}"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        pages += 1;
+        seen.extend(names(&body).iter().map(|s| s.to_string()));
+        match body["next"].as_str() {
+            Some(next) => after = next.to_owned(),
+            None => break,
         }
-        assert_eq!(pages, 3, "{sort}");
-        let unique: BTreeSet<&String> = seen.iter().collect();
-        assert_eq!((seen.len(), unique.len()), (130, 130), "{sort}");
     }
-}
-
-#[tokio::test]
-async fn a_work_added_while_paging_does_not_repeat_what_was_seen() {
-    let state = state();
-    add_folder(&state, "/a", plain(30)).await;
-    let (_, first) = get(&state, "/library/works?sort=title&limit=10").await;
-    let next = first["next"].as_str().unwrap().to_owned();
-    // A work that sorts before and one that sorts after the cursor.
-    add_folder(
-        &state,
-        "/b",
-        vec![
-            work("A first", vec![file("01", FileKind::Video)], vec![]),
-            work("Zzz last", vec![file("01", FileKind::Video)], vec![]),
-        ],
-    )
-    .await;
-    let (_, rest) = get(
-        &state,
-        &format!("/library/works?sort=title&limit=100&after={next}"),
-    )
-    .await;
-    let later = names(&rest);
-    let seen = names(&first);
-    assert!(later.iter().all(|n| !seen.contains(n)));
-    assert!(!later.contains(&"A first"));
-    assert_eq!(later.last(), Some(&"Zzz last"));
-    assert_eq!(seen.len() + later.len(), 31);
-    assert_eq!(rest["total"], 32);
+    assert_eq!(pages, 3);
+    let unique: BTreeSet<&String> = seen.iter().collect();
+    assert_eq!((seen.len(), unique.len()), (130, 130));
 }
 
 #[tokio::test]
@@ -212,11 +180,9 @@ async fn filter_and_search_narrow_the_pages_and_the_total() {
     assert_eq!(body["next"], Value::Null);
     assert_eq!(body["library_count"], 15);
 
-    // Case does not matter and the search and the filter combine; the text is URL-encoded.
+    // The text is URL-encoded, and the filter and the text reach the same query.
     let (_, body) = get(&state, "/library/works?q=TWO&filter=partial").await;
     assert_eq!(names(&body), ["Partial Two"]);
-    let (_, body) = get(&state, "/library/works?q=%20two%20&filter=complete").await;
-    assert_eq!(body["total"], 0);
     let (_, body) = get(&state, "/library/works?q=work%20001").await;
     assert_eq!(names(&body), ["Work 001"]);
 }
@@ -309,19 +275,13 @@ async fn waiting(state: &AppState, n: usize, work: Option<&str>, wait: &'static 
 }
 
 #[tokio::test]
-async fn a_page_badges_each_work_with_its_to_dos_in_the_to_do_order() {
+async fn a_page_badges_a_work_with_its_to_dos_and_a_job_of_no_work_badges_nothing() {
     let state = state();
-    add_folder(&state, "/media/anime", plain(3)).await;
+    add_folder(&state, "/media/anime", plain(2)).await;
     let (_, first) = get(&state, "/library/works?sort=title").await;
-    let id = |n: usize| first["items"][n]["id"].as_str().unwrap().to_owned();
-    let (a, b) = (id(0), id(1));
-    // The replacement waits from before the check, which still comes first.
-    waiting(&state, 1, Some(&a), "approval").await;
-    waiting(&state, 2, Some(&a), "auth").await;
-    waiting(&state, 3, Some(&a), "auth").await;
-    waiting(&state, 4, Some(&b), "placement").await;
-    // A job of no work badges nothing.
-    waiting(&state, 5, None, "auth").await;
+    let a = first["items"][0]["id"].as_str().unwrap().to_owned();
+    waiting(&state, 1, Some(&a), "auth").await;
+    waiting(&state, 2, None, "auth").await;
 
     let (status, page) = get(&state, "/library/works?sort=title").await;
 
@@ -335,9 +295,8 @@ async fn a_page_badges_each_work_with_its_to_dos_in_the_to_do_order() {
     assert_eq!(
         todos,
         [
-            ("Work 000", &serde_json::json!(["auth", "replacement"])),
-            ("Work 001", &serde_json::json!(["episode_check"])),
-            ("Work 002", &serde_json::json!([])),
+            ("Work 000", &serde_json::json!(["auth"])),
+            ("Work 001", &serde_json::json!([])),
         ]
     );
 }

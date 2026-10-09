@@ -614,6 +614,35 @@ mod tests {
         assert_eq!(search("").1, 4);
     }
 
+    #[test]
+    fn a_search_and_a_filter_narrow_together_and_the_total_counts_what_both_match() {
+        let mut complete = work("c", "Complete One");
+        complete.subtitle_coverage = Some(SubtitleCoverage::All);
+        let mut partial = work("p", "Partial Two");
+        partial.subtitle_coverage = Some(SubtitleCoverage::Some);
+        let works = vec![complete, partial, work("n", "Work 001")];
+        let both = |search: &str, filter| {
+            let p = page(
+                works.clone(),
+                &ListQuery {
+                    search: search.into(),
+                    filter,
+                    ..query(Sort::Title)
+                },
+            );
+            (
+                ids(&p).iter().map(|s| s.to_string()).collect::<Vec<_>>(),
+                p.total,
+                p.library_count,
+            )
+        };
+        // The case of the text does not matter, and the filter still applies.
+        assert_eq!(both("TWO", Filter::Partial), (vec!["p".to_string()], 1, 3));
+        // The text matches a work the filter leaves out: nothing is listed.
+        assert_eq!(both(" two ", Filter::Complete), (vec![], 0, 3));
+        assert_eq!(both("two", Filter::All).1, 1);
+    }
+
     /// A work with what its linked entries say: the airing year, whether one is
     /// airing now, and the titles.
     fn linked(
