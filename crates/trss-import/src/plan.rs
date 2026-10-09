@@ -431,6 +431,131 @@ mod tests {
         assert_eq!(plan.actions.len(), 3);
     }
 
+    /// An existing channel whose rules are `(phrase, folder, is a subscription)`.
+    fn existing_with_rules(id: &str, rules: &[(&str, &str, bool)]) -> ChannelWithRules {
+        use trss_collect::store::channels::{Subscription, SubtitleMode};
+
+        let mut channel = existing_channel(id, 1, "https://feeds.example/rss?token=old");
+        let template = channel.rules.remove(0);
+        channel.rules = rules
+            .iter()
+            .enumerate()
+            .map(|(index, (phrase, directory, subscribed))| Rule {
+                id: format!("{id}-r{index}"),
+                position: index as i64,
+                r#match: Some((*phrase).into()),
+                directory: (*directory).into(),
+                subscription: subscribed.then(|| Subscription {
+                    anissia_anime_no: 100 + index as i64,
+                    subtitles: SubtitleMode::Undecided,
+                    creator: None,
+                    season_id: None,
+                    subscribed_at: 100,
+                    season_blocked: None,
+                    titled_at: None,
+                }),
+                ..template.clone()
+            })
+            .collect();
+        channel
+    }
+
+    fn file_with_rules(rules: &[(&str, &str)]) -> ImportChannel {
+        ImportChannel {
+            input: ChannelInput::new("https://feeds.example/rss?token=new"),
+            rules: rules
+                .iter()
+                .map(|(phrase, directory)| RuleInput {
+                    r#match: Some((*phrase).into()),
+                    directory: (*directory).into(),
+                    ..RuleInput::default()
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn a_replacement_keeps_the_folder_of_a_subscription_the_file_gives_no_work_folder() {
+        // `Plain` is no subscription; `Sub`, `Climb`, `Fine` and `Same` are.
+        let existing = existing_with_rules(
+            "a",
+            &[
+                ("Plain", "plain old", false),
+                ("Sub", "Sub Work", true),
+                ("Climb", "Climb Work", true),
+                ("Fine", "Fine Old", true),
+                ("Same", ".", true),
+            ],
+        );
+        // The file gives the collect folder itself (`.`), a parent folder
+        // (`../elsewhere`), a work folder, and again the folder it has.
+        let mut channel = file_with_rules(&[
+            ("Plain", "."),
+            ("Sub", "."),
+            ("Climb", "../elsewhere"),
+            ("Fine", "Fine New"),
+            ("Same", "."),
+            ("Added", "."),
+        ]);
+        let kept = keep_subscription_folders(&mut channel, &existing);
+
+        // Only a subscription whose file folder is no work folder keeps its own,
+        // and one that has it already keeps nothing to report.
+        assert_eq!(
+            kept,
+            [
+                KeptFolder {
+                    rule: 1,
+                    directory: "Sub Work".into()
+                },
+                KeptFolder {
+                    rule: 2,
+                    directory: "Climb Work".into()
+                },
+            ]
+        );
+        let folders: Vec<_> = channel.rules.iter().map(|r| r.directory.as_str()).collect();
+        // A rule that is no subscription, a work folder in the file and a rule
+        // the existing channel does not have take the file's folder.
+        assert_eq!(
+            folders,
+            [".", "Sub Work", "Climb Work", "Fine New", ".", "."]
+        );
+    }
+
+    #[test]
+    fn the_plan_names_the_folders_a_replacement_keeps_and_an_added_copy_keeps_none() {
+        let existing = [existing_with_rules("a", &[("Sub", "Sub Work", true)])];
+        let file = || vec![file_with_rules(&[("Sub", ".")])];
+
+        let plan =
+            build_actions(file(), &existing, &[choice(0, "a", 1, Decision::Replace)]).unwrap();
+        assert_eq!(
+            plan.kept_folders,
+            [(
+                0,
+                vec![KeptFolder {
+                    rule: 0,
+                    directory: "Sub Work".into()
+                }]
+            )]
+        );
+        let ImportAction::Replace { channel, .. } = &plan.actions[0].1 else {
+            unreachable!()
+        };
+        assert_eq!(channel.rules[0].directory, "Sub Work");
+
+        // A copy is a new channel with new rules: the file's folder stands.
+        let plan = build_actions(file(), &existing, &[choice(0, "a", 1, Decision::Add)]).unwrap();
+        assert!(plan.kept_folders.is_empty());
+        let ImportAction::Add(channel) = &plan.actions[0].1 else {
+            unreachable!()
+        };
+        assert_eq!(channel.rules[0].directory, ".");
+        let plan = build_actions(file(), &existing, &[choice(0, "a", 1, Decision::Skip)]).unwrap();
+        assert!(plan.kept_folders.is_empty());
+    }
+
     #[test]
     fn displayed_urls_never_carry_query_values_or_credentials() {
         assert_eq!(

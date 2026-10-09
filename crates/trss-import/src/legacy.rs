@@ -302,6 +302,21 @@ mod tests {
     }
 
     #[test]
+    fn a_given_zero_or_positive_episode_is_kept_and_only_an_omitted_one_reads_as_1() {
+        let channels = parse(
+            "- url: https://x.test/rss\n  directory: /m\n  rules:\n    - match: a\n      directory: A\n      episode: 0\n    - match: b\n      directory: B\n      episode: 13\n    - match: c\n      directory: C\n",
+        )
+        .unwrap();
+        let episodes: Vec<_> = channels[0]
+            .channel
+            .rules
+            .iter()
+            .map(|r| r.episode)
+            .collect();
+        assert_eq!(episodes, [0, 13, 1]);
+    }
+
+    #[test]
     fn an_empty_match_is_refused_naming_the_rule() {
         let message = err(
             "- url: https://x.test/rss\n  directory: /m\n  rules:\n    - match: a\n      directory: A\n    - match: ''\n      directory: Later\n",

@@ -1,6 +1,8 @@
 use std::path::PathBuf;
 
 use tempfile::TempDir;
+use trss_core::settings::SettingsStore;
+use trss_library::store::library::LibraryStore;
 
 use crate::store::channels::{
     import::{match_rules, ImportAction, ImportChannel, ImportedChannel},
@@ -11,16 +13,20 @@ struct Fixture {
     _dir: TempDir,
     path: PathBuf,
     store: ChannelStore,
+    settings: SettingsStore,
+    library: LibraryStore,
 }
 
 async fn fixture() -> Fixture {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("app.db");
-    let store = ChannelStore::new(Db::open(&path).await.unwrap());
+    let db = Db::open(&path).await.unwrap();
     Fixture {
         _dir: dir,
         path,
-        store,
+        store: ChannelStore::new(db.clone()),
+        settings: SettingsStore::new(db.clone()),
+        library: LibraryStore::new(db),
     }
 }
 
@@ -607,4 +613,70 @@ async fn replacing_leaves_title_waiting_subscriptions_as_they_are() {
             .map(|s| s.anissia_anime_no),
         Some(7)
     );
+}
+
+#[tokio::test]
+async fn an_import_sets_the_collect_folder_once_and_makes_it_an_automatic_watch_folder() {
+    let f = fixture().await;
+    let import = |folder: &str, url: &str| {
+        f.store.import_channels_setting_folder(
+            vec![ImportAction::Add(import_channel(url, vec![rule("A", "A")]))],
+            Some(folder.to_owned()),
+        )
+    };
+
+    // None is set: the import sets it, and it becomes a watch folder that the
+    // app registered, as every collect folder is.
+    import("/media", "https://one.example/rss").await.unwrap();
+    let collection = f.settings.collection().await.unwrap().unwrap();
+    assert_eq!(
+        (collection.folder.as_str(), collection.archive_folder),
+        ("/media", None)
+    );
+    let folders = f.library.folders().await.unwrap();
+    assert_eq!(folders.len(), 1);
+    assert_eq!(folders[0].path, "/media");
+    assert!(folders[0].automatic);
+
+    // One was set meanwhile: the import conflicts and none of it is applied.
+    let error = import("/downloads", "https://two.example/rss")
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(
+            error,
+            ChannelError::Conflict {
+                kind: "collect folder",
+                expected: 0,
+                ..
+            }
+        ),
+        "{error:?}"
+    );
+    assert_eq!(f.store.list_channels_with_rules().await.unwrap().len(), 1);
+    assert_eq!(
+        f.settings.collection().await.unwrap().unwrap().folder,
+        "/media"
+    );
+    assert_eq!(f.library.folders().await.unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn an_empty_collect_folder_is_refused_before_anything_is_written() {
+    let f = fixture().await;
+    let error = f
+        .store
+        .import_channels_setting_folder(
+            vec![ImportAction::Add(import_channel(
+                "https://one.example/rss",
+                vec![rule("A", "A")],
+            ))],
+            Some(String::new()),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(error, ChannelError::Invalid(_)), "{error:?}");
+    assert!(f.store.list_channels_with_rules().await.unwrap().is_empty());
+    assert_eq!(f.settings.collection().await.unwrap(), None);
+    assert!(f.library.folders().await.unwrap().is_empty());
 }
