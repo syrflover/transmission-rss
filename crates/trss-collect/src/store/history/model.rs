@@ -283,3 +283,12 @@ pub struct CycleState {
     /// `None` while that cycle is running or if the worker died in it.
     pub finished_at: Option<Millis>,
 }
+
+impl From<CycleState> for trss_core::heartbeat::CycleMarks {
+    fn from(cycle: CycleState) -> Self {
+        trss_core::heartbeat::CycleMarks {
+            started_at: cycle.started_at,
+            finished_at: cycle.finished_at,
+        }
+    }
+}

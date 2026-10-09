@@ -85,6 +85,37 @@ pub struct TransmissionCounts {
     pub taken_at: Millis,
 }
 
+/// How many collection cycles old the worker's look at Transmission may be
+/// for `영상 받는 중` to be believed. The worker looks every cycle, and a failed
+/// look keeps the earlier list, so a worker that is down (or a Transmission it
+/// cannot reach) would otherwise leave an episode downloading for good. Three
+/// cycles ride out a slow or failed one.
+pub const DOWNLOADING_FRESH_CYCLES: i64 = 3;
+
+impl TransmissionCounts {
+    /// Whether the look this was taken from is fresh enough to believe as of
+    /// `now`: not older than [`DOWNLOADING_FRESH_CYCLES`] cycle intervals.
+    ///
+    /// While the worker is busy (`trss_core::heartbeat::worker_busy`) it is
+    /// alive, and the look it left is the one before the cycle it is in; a
+    /// cycle longer than the allowance would otherwise age the look out before
+    /// the cycle can leave a newer one. So the caller passes the start of that
+    /// cycle as `busy_cycle_started_at` and the look's age is counted up to it.
+    /// `None` (the worker is not busy, or has no cycle) counts the age up to
+    /// `now`: a worker that died in a cycle, or holds the lock past the bound,
+    /// does not hold the look.
+    pub fn look_is_fresh(
+        &self,
+        interval_ms: i64,
+        now: Millis,
+        busy_cycle_started_at: Option<Millis>,
+    ) -> bool {
+        let seen_until = busy_cycle_started_at.map_or(now, |started| started.min(now));
+        seen_until.saturating_sub(self.taken_at)
+            <= interval_ms.saturating_mul(DOWNLOADING_FRESH_CYCLES)
+    }
+}
+
 /// Every torrent Transmission held when the worker last looked.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TorrentListing {

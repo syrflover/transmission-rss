@@ -55,7 +55,8 @@
 //! - `downloading`: a torrent the rule received for the episode (release
 //!   episode plus the rule's offset) is among the hashes the worker last saw
 //!   Transmission download, provided that look is recent: not older than
-//!   [`DOWNLOADING_FRESH_CYCLES`] cycle intervals, so a worker that is down
+//!   [`DOWNLOADING_FRESH_CYCLES`](trss_collect::store::status::DOWNLOADING_FRESH_CYCLES) cycle intervals
+//!   ([`look_is_fresh`](trss_collect::store::status::TransmissionCounts::look_is_fresh)), so a worker that is down
 //!   does not leave an episode downloading for good. History is read only for
 //!   the cards' rules, only when something is downloading, and only for the
 //!   torrents downloading.
@@ -72,7 +73,6 @@ use serde::Serialize;
 use super::{
     artwork_api::image_url,
     setup_api::{self, FirstRunView},
-    status_api::worker_busy,
     subscriptions_api::{quarter_of, QuarterView},
     ApiError, AppState,
 };
@@ -88,6 +88,7 @@ use trss_collect::{
 };
 use trss_core::{
     calendar::{date_text, day_of, week_start, weekday},
+    heartbeat::worker_busy,
     Millis,
 };
 use trss_library::{seasons::combine::air_times, store::library::Held};
@@ -264,24 +265,11 @@ struct Airing<'a> {
     slot: Slot,
 }
 
-/// How many collection cycles old the worker's look at Transmission may be
-/// for `영상 받는 중` to be believed. The worker looks every cycle, and a failed
-/// look keeps the earlier list, so a worker that is down (or a Transmission it
-/// cannot reach) would otherwise leave an episode downloading for good. Three
-/// cycles ride out a slow or failed one.
-const DOWNLOADING_FRESH_CYCLES: i64 = 3;
-
 /// The torrents Transmission is downloading as of `now`: what the worker saw
-/// last, provided that look is not older than [`DOWNLOADING_FRESH_CYCLES`]
-/// cycle intervals. Without a recorded interval (no worker of this version has
-/// run) nothing is believed.
-///
-/// While the worker is busy ([`worker_busy`]: it beats while it holds the worker
-/// lock, through the folder reading after the cycle's RSS work too) it is alive,
-/// and the look it left is the one before this cycle; a cycle longer than the
-/// allowance would otherwise age it out before the cycle can leave a newer
-/// one. So the look's age is counted up to the cycle's start. A worker that
-/// died in a cycle, or holds the lock past the bound, does not hold the look.
+/// last, provided that look is not older than [`DOWNLOADING_FRESH_CYCLES`](trss_collect::store::status::DOWNLOADING_FRESH_CYCLES)
+/// cycle intervals ([`look_is_fresh`](trss_collect::store::status::TransmissionCounts::look_is_fresh), which also says how
+/// a busy worker's long cycle counts). Without a recorded interval (no worker
+/// of this version has run) nothing is believed.
 async fn downloading_hashes(state: &AppState, now: Millis) -> Result<HashSet<String>, ApiError> {
     let Some(counts) = state.status.transmission().await.map_err(internal)? else {
         return Ok(HashSet::new());
@@ -291,15 +279,10 @@ async fn downloading_hashes(state: &AppState, now: Millis) -> Result<HashSet<Str
     };
     let last = state.history.last_cycle().await.map_err(internal)?;
     let beat = state.heartbeat.read().await.map_err(internal)?;
-    let seen_until = match last {
-        Some(cycle) if worker_busy(&cycle, beat.as_ref(), interval, now) => {
-            cycle.started_at.min(now)
-        }
-        _ => now,
-    };
-    if seen_until.saturating_sub(counts.taken_at)
-        > interval.saturating_mul(DOWNLOADING_FRESH_CYCLES)
-    {
+    let busy_cycle_started_at = last
+        .filter(|&cycle| worker_busy(cycle.into(), beat.as_ref(), interval, now))
+        .map(|cycle| cycle.started_at);
+    if !counts.look_is_fresh(interval, now, busy_cycle_started_at) {
         return Ok(HashSet::new());
     }
     state.status.downloading_hashes().await.map_err(internal)

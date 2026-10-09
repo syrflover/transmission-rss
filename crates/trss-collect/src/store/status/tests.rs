@@ -462,3 +462,24 @@ async fn a_database_from_before_the_heartbeat_has_none_until_the_worker_writes_o
     heartbeat.record(500, Some(400)).await.unwrap();
     assert_eq!(heartbeat.read().await.unwrap().unwrap().beat_at, 500);
 }
+
+#[test]
+fn a_look_is_believed_for_three_intervals_and_a_busy_workers_look_ages_only_up_to_its_cycle() {
+    const MINUTE: i64 = 60_000;
+    let look = TransmissionCounts {
+        downloading: 1,
+        seeding: 0,
+        taken_at: 1_000_000,
+    };
+    let at = |minutes: i64| look.taken_at + minutes * MINUTE;
+
+    // Three five-minute intervals old is the oldest look believed.
+    assert!(look.look_is_fresh(5 * MINUTE, at(15), None));
+    assert!(!look.look_is_fresh(5 * MINUTE, at(15) + 1, None));
+
+    // A busy worker's look is counted up to the start of its cycle.
+    assert!(look.look_is_fresh(5 * MINUTE, at(60), Some(at(15))));
+    assert!(!look.look_is_fresh(5 * MINUTE, at(60), Some(at(15) + 1)));
+    // A cycle start after `now` (a clock a little behind) counts `now`.
+    assert!(!look.look_is_fresh(5 * MINUTE, at(16), Some(at(60))));
+}

@@ -10,9 +10,9 @@
 //! The worker's lock ([`crate::WorkerLock`]) starts the beat when the first of
 //! them takes the lock and stops it when the last lets go.
 //! A timestamp that stops ageing means the worker is busy; one that has aged
-//! for a minute means it died or is stopped, whatever the cycle's own marker
-//! says. The web reads it with [`HeartbeatStore::read`] (`status_api` in
-//! `trss-web`).
+//! for [`FRESH_FOR_MS`] means it died or is stopped, whatever the cycle's own
+//! marker says. The web reads it with [`HeartbeatStore::read`] and judges it
+//! with [`worker_busy`] and [`cycle_stalled`] below.
 
 use std::time::Duration;
 
@@ -23,9 +23,22 @@ use rusqlite::OptionalExtension;
 
 use crate::{Clock, Db, DbError, Millis};
 
-/// How often the heartbeat is written. The web calls the worker busy for a
-/// minute after a beat, so this leaves room for three missed beats.
+/// How often the heartbeat is written. A beat shows the worker alive for
+/// [`FRESH_FOR_MS`] (a minute), so this leaves room for three missed beats.
 pub const BEAT_EVERY: Duration = Duration::from_secs(15);
+
+/// How old the worker's heartbeat may be and still show it busy: four beats.
+/// This allows three missed beats, and one slow database write, before a
+/// worker that died is told from one that works, which is why a killed worker
+/// shows as stalled within about a minute.
+pub const FRESH_FOR_MS: i64 = BEAT_EVERY.as_millis() as i64 * 4;
+
+/// The shortest bound on how long a cycle may run and still be taken for
+/// running.
+const RUNNING_FLOOR_MS: i64 = 30 * 60_000;
+/// How many intervals a cycle may run and still be taken for running, when that
+/// is longer than [`RUNNING_FLOOR_MS`].
+const RUNNING_INTERVALS: i64 = 10;
 
 /// The worker's pulse while it holds the worker lock.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -36,6 +49,92 @@ pub struct WorkerHeartbeat {
     /// When the worker took the lock; `None` once it has let go. A worker that
     /// died while holding it leaves this set and a `beat_at` that ages.
     pub held_since: Option<Millis>,
+}
+
+impl WorkerHeartbeat {
+    /// Whether the heartbeat says the worker is alive as of `now`: it was
+    /// written within [`FRESH_FOR_MS`]. (A beat dated after `now` is a clock a
+    /// little ahead and counts as fresh.)
+    pub fn is_beating(&self, now: Millis) -> bool {
+        now.saturating_sub(self.beat_at) <= FRESH_FOR_MS
+    }
+
+    /// Whether the worker has held the worker lock past [`running_bound`] while
+    /// it goes on beating: alive, but stuck (in a cycle, or a command, or work
+    /// that overlapped without a break).
+    pub fn is_hung(&self, interval_ms: i64, now: Millis) -> bool {
+        self.held_since
+            .is_some_and(|since| now.saturating_sub(since) > running_bound(interval_ms))
+    }
+}
+
+/// How long a worker may hold the worker lock, or (with no heartbeat) a cycle
+/// run without an end, and still be taken for busy rather than hung or dead:
+/// the larger of 30 minutes and ten intervals, so that a short interval does not
+/// call a slow cycle stopped.
+pub fn running_bound(interval_ms: i64) -> i64 {
+    RUNNING_FLOOR_MS.max(interval_ms.saturating_mul(RUNNING_INTERVALS))
+}
+
+/// When the worker last started a cycle and whether it ended: the cycle's own
+/// marker, which is all there is to go on without a heartbeat.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CycleMarks {
+    pub started_at: Millis,
+    /// `None` while that cycle is running or if the worker died in it.
+    pub finished_at: Option<Millis>,
+}
+
+/// Whether the worker is busy as of `now`, so that what it left (the look at
+/// Transmission, the cycle's marker) is expected to be replaced soon.
+///
+/// With a heartbeat (a worker of this version has run), the worker is busy
+/// while it beats, and until it has held the lock past [`running_bound`]. That
+/// covers the whole time under the worker lock, including the watch folder
+/// reading after the cycle's RSS work ended, and a worker killed in a cycle
+/// stops being busy as soon as its beat is stale. Without one (an older
+/// worker), the cycle's own marker is all there is: a cycle that has started
+/// and not ended, and has not gone on past [`running_bound`].
+pub fn worker_busy(
+    cycle: CycleMarks,
+    beat: Option<&WorkerHeartbeat>,
+    interval_ms: i64,
+    now: Millis,
+) -> bool {
+    match beat {
+        Some(beat) => beat.is_beating(now) && !beat.is_hung(interval_ms, now),
+        None => {
+            cycle.finished_at.is_none()
+                && now.saturating_sub(cycle.started_at) <= running_bound(interval_ms)
+        }
+    }
+}
+
+/// Whether the worker is taken to have stopped checking as of `now`.
+///
+/// While the heartbeat is fresh the worker is alive: it is stopped only when it
+/// has held the lock past [`running_bound`]. Once the heartbeat is stale, a
+/// cycle that never ended means the worker died in it, and otherwise the
+/// next check is stopped once it is more than one interval overdue. Without a
+/// heartbeat (an older worker) a cycle that has no end is running until it has
+/// outlived [`running_bound`].
+pub fn cycle_stalled(
+    cycle: CycleMarks,
+    beat: Option<&WorkerHeartbeat>,
+    interval_ms: i64,
+    now: Millis,
+) -> bool {
+    let overdue = || {
+        now > cycle
+            .started_at
+            .saturating_add(interval_ms.saturating_mul(2))
+    };
+    match beat {
+        Some(beat) if beat.is_beating(now) => beat.is_hung(interval_ms, now),
+        Some(_) => cycle.finished_at.is_none() || overdue(),
+        None if cycle.finished_at.is_none() => !worker_busy(cycle, None, interval_ms, now),
+        None => overdue(),
+    }
 }
 
 /// Async access to the heartbeat the worker writes and the web reads. Cheap
@@ -169,6 +268,16 @@ mod tests {
     fn ticking_clock() -> Clock {
         let now = Arc::new(AtomicI64::new(1_000_000));
         Arc::new(move || now.fetch_add(1_000, Ordering::SeqCst))
+    }
+
+    #[test]
+    fn a_beat_is_fresh_for_a_minute_and_a_cycle_runs_for_half_an_hour_at_least() {
+        const MINUTE: i64 = 60_000;
+        assert_eq!(FRESH_FOR_MS, MINUTE);
+        assert_eq!(running_bound(MINUTE), 30 * MINUTE);
+        assert_eq!(running_bound(3 * MINUTE), 30 * MINUTE);
+        assert_eq!(running_bound(10 * MINUTE), 100 * MINUTE);
+        assert_eq!(running_bound(i64::MAX), i64::MAX);
     }
 
     async fn heartbeat_of(store: &HeartbeatStore) -> Option<WorkerHeartbeat> {
