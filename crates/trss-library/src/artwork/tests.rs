@@ -356,6 +356,32 @@ async fn two_entries_with_the_same_title_leave_the_cover_empty_and_the_work_as_i
 }
 
 #[tokio::test]
+async fn a_pick_of_an_entry_without_a_usable_cover_changes_nothing() {
+    let env = Env::new(&["Lycoris Recoil"]).await;
+    let id = env.id("Lycoris Recoil").await;
+    let v = env.selection("Lycoris Recoil").await.version;
+    // An entry whose cover is on a host that is not AniList's image host has
+    // no usable cover; an ID AniList does not have has no entry at all.
+    env.fake.state.lock().unwrap().media.insert(
+        3,
+        json!({ "id": 3, "title": { "romaji": "X" }, "synonyms": [],
+                "coverImage": { "extraLarge": "https://evil.example/x.jpg" } }),
+    );
+    assert!(matches!(
+        env.art.pick(&id, v, 3).await,
+        Err(ActionError::NoCover)
+    ));
+    assert!(matches!(
+        env.art.pick(&id, v, 999).await,
+        Err(ActionError::NoEntry)
+    ));
+    let s = env.selection("Lycoris Recoil").await;
+    assert_eq!((s.version, s.anilist_media_id), (v, None));
+    assert!(s.image.is_none());
+    assert!(env.files().is_empty());
+}
+
+#[tokio::test]
 async fn a_search_counts_only_when_read_to_its_last_page() {
     let env = Env::new(&["A", "B", "C", "A 2"]).await;
     let filler = |from: i64| -> Vec<serde_json::Value> {

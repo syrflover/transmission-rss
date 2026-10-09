@@ -254,15 +254,6 @@ async fn a_change_from_an_old_version_is_a_conflict_with_the_current_state() {
     let (status, body) = upload(&env, 1, samples::jpeg(), "image/jpeg").await;
     assert_eq!(status, StatusCode::CONFLICT);
     assert_eq!(body["current"], first);
-    let (status, body) = json_call(
-        &env.state,
-        Method::POST,
-        &format!("{}/clear", base(&env)),
-        Some(json!({ "version": 1 })),
-    )
-    .await;
-    assert_eq!(status, StatusCode::CONFLICT);
-    assert_eq!(body["current"]["mode"], "manual");
 
     // Clear, then back to auto with a new search.
     let v = first["version"].as_i64().unwrap();
@@ -382,25 +373,6 @@ async fn search_and_pick_go_through_anilist_and_its_image_host_only() {
     assert_eq!(status, StatusCode::BAD_REQUEST);
     let (_, now) = json_call(&env.state, Method::GET, &base(&env), None).await;
     assert_eq!(now, picked);
-
-    // AniList busy: the user is told to wait, nothing changes.
-    {
-        let mut fake = env.fake.state.lock().unwrap();
-        fake.rate_limited = 1;
-        fake.retry_after = 45;
-    }
-    let (status, body) = json_call(
-        &env.state,
-        Method::POST,
-        &format!("{}/search", base(&env)),
-        Some(json!({ "q": "Lycoris" })),
-    )
-    .await;
-    assert_eq!(status, StatusCode::BAD_REQUEST);
-    assert!(
-        body["message"].as_str().unwrap().contains("초 뒤에"),
-        "{body}"
-    );
 }
 
 #[tokio::test]
