@@ -180,6 +180,12 @@ pub fn whole(text: &str) -> Option<i64> {
     (n > 0).then_some(n)
 }
 
+/// The season episode the whole episode `text` is under `offset`; `None` when
+/// the text is no whole episode ([`whole`]) or the sum does not fit a number.
+pub fn shifted(text: &str, offset: i64) -> Option<i64> {
+    whole(text)?.checked_add(offset)
+}
+
 impl Mapping {
     /// The exception that covers the episode text, if the user set one.
     pub fn exception_of(&self, text: &str) -> Option<&Exception> {
@@ -199,9 +205,12 @@ impl Mapping {
                 None => Mapped::NotReceived,
             };
         }
-        match (self.decided_offset(), whole(text)) {
-            (Some(offset), Some(n)) => Mapped::Episode(n + offset),
-            _ => Mapped::Unmapped,
+        match self
+            .decided_offset()
+            .and_then(|offset| shifted(text, offset))
+        {
+            Some(n) => Mapped::Episode(n),
+            None => Mapped::Unmapped,
         }
     }
 

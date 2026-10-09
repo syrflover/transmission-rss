@@ -337,6 +337,21 @@ mod mapped {
     }
 
     #[test]
+    fn a_whole_episode_the_offset_cannot_be_added_to_is_unmapped() {
+        let m = user_mapping(1, &[]);
+        assert_eq!(
+            m.season_episode("9223372036854775806"),
+            Mapped::Episode(i64::MAX)
+        );
+        assert_eq!(m.season_episode("9223372036854775807"), Mapped::Unmapped);
+        let m = user_mapping(-9999, &[]);
+        assert_eq!(
+            m.season_episode("9223372036854775807"),
+            Mapped::Episode(i64::MAX - 9999)
+        );
+    }
+
+    #[test]
     fn an_exception_of_a_number_the_offset_would_put_outside_still_stands() {
         let m = user_mapping(-12, &[("1", Some(1)), ("13", None)]);
         assert_eq!(m.season_episode("1"), Mapped::Episode(1));
@@ -565,6 +580,23 @@ mod whole_episodes {
             assert_eq!(whole(text), None, "{text:?}");
         }
         assert_eq!(whole("9223372036854775807"), Some(i64::MAX));
+    }
+}
+
+mod shifting {
+    use super::*;
+
+    #[test]
+    fn a_whole_episode_is_moved_by_the_offset_and_nothing_else_is() {
+        assert_eq!(shifted("14", -12), Some(2));
+        assert_eq!(shifted("014", 0), Some(14));
+        assert_eq!(shifted("3", -12), Some(-9));
+        for text in ["0", "13.5", "SP", ""] {
+            assert_eq!(shifted(text, 5), None, "{text:?}");
+        }
+        assert_eq!(shifted("9223372036854775807", 1), None);
+        assert_eq!(shifted("9223372036854775807", 0), Some(i64::MAX));
+        assert_eq!(shifted("1", i64::MIN), Some(i64::MIN + 1));
     }
 }
 
