@@ -201,3 +201,5 @@
 | 티켓 | 제목 | 상태 | 막는 티켓 |
 | --- | --- | --- | --- |
 | [0058](0058-server-oom-and-resource-limits.md) | 실제 서버의 Transmission OOM과 자원 한도를 지켜봐요 | 진행 중 | 없음 |
+
+마이그레이션이 있는 릴리스는 실제 서버에 올리기 전에 서버 DB의 새 복사본으로 먼저 확인해요([0080](../archive/tickets/5-deployed-verification/0080-server-db-migration-check.md)의 절차). DB 구조는 데이터를 보존하는 마이그레이션으로만 바꿔요. 리팩터링을 위해 정한 규칙(사용자 결정, 2026-10-07)을 그 뒤에도 지켜요(사용자 결정, 2026-10-10).

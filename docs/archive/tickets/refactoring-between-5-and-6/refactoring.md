@@ -198,7 +198,7 @@ worker 잠금은 멈춘 worker가 마지막 하트비트 뒤에 따로 띄운 ta
 
 - 되풀이해 쓰는 SQL 문을 `prepare_cached`로 받는 것은 trss-core `db.rs`의 `STATEMENT_CACHE_CAPACITY` 문서가 전제로만 적어요. 검사하는 테스트나 lint는 없고, 한 번만 쓰는 문은 일부러 `prepare`로 남겼어요.
 - 테스트 전용 경로(trss-core의 `test-support`)가 제품 빌드에 켜지지 않는 것은 0093에서 한 번 봤어요. 다시 확인하는 테스트나 배포 단계는 없어요.
-- 마이그레이션을 실제 서버에 올리기 전에 서버 DB 복사본에서 확인하는 규칙(사용자 결정, 2026-10-07)은 이 문서와 [0080](../5-deployed-verification/0080-server-db-migration-check.md)의 절차에만 있어요. 리팩터링 뒤에도 지킬지는 정하지 않았어요.
+- 마이그레이션을 실제 서버에 올리기 전에 서버 DB 복사본에서 확인하는 규칙(사용자 결정, 2026-10-07)은 이 문서와 [0080](../5-deployed-verification/0080-server-db-migration-check.md)의 절차에만 있었어요. 같은 날 사용자가 리팩터링 뒤에도 지키기로 해서, [티켓 목록의 운영](../../../tickets/README.md#운영)에 옮겼어요.
 - 한 개념은 한 곳에 둔다는 원칙은 [ADR 0016](../../../adr/0016-shared-parts-in-core.md)에 있고, 모은 곳은 각 모듈의 `//!` 문서가 적어요. 복사본이 다시 생기는 것을 막는 테스트나 lint는 없어요. trss-jobs를 `JobViews`·`JobRequests`·`JobRun`·`place::PlaceStore`로 나눈 선도 코드 문서에만 있어요.
 - 웹이 수정본 `다시 받기`를 trss-collect의 판정보다 먼저 거절하는 까닭은 trss-web `in_place.rs`의 문서에만 있어요.
 - 한 번 받기 전용 칸(`add_unconfirmed`, `original_name`)의 뜻은 테스트와 [RSS 수집 명세의 검증 표](../../../specs/collection.md#검증-표)가 담고, 그 뜻을 적은 문서는 없어요.
