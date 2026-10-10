@@ -1,18 +1,18 @@
 # 0103 worker 백그라운드 큐의 루프를 trss-core로 모아요
 
 - 상태: 완료
-- 출처: [흩어진 개념 모으기](refactoring.md#흩어진-개념-모으기), [ADR 0016](../adr/0016-shared-parts-in-core.md), [ADR 0006](../adr/0006-separate-web-worker-binaries.md)
+- 출처: [흩어진 개념 모으기](refactoring.md#흩어진-개념-모으기), [ADR 0016](../../../adr/0016-shared-parts-in-core.md), [ADR 0006](../../../adr/0006-separate-web-worker-binaries.md)
 - 막는 티켓: [0092](0092-refactor-baseline.md)(기준값)
 
 ## 작업
 
 worker의 백그라운드 큐 네 개(표지, 시즌 정보, Anissia 편성, Anissia 자막 목록)는 같은 루프를 각자 가져요. 큐마다 파일 잠금을 쥐고, 못 쥐면 60초 뒤 다시 하고, 할 일이 없으면 5초마다 봐요.
 잠금 파일의 경로를 만드는 함수가 네 큐와 서버 브라우저에 5개 있고, trss-core의 쓰기 검사가 그 이름을 손으로 나열해요.
-표지와 시즌 정보의 다시 하기 규칙은 거의 같고, Anissia의 두 큐는 `429` 뒤 미루는 규칙을 각자 가져요. 패닉 격리는 [0088](../archive/tickets/5-deployed-verification/0088-queue-survives-panic.md)에서 trss-core의 `queue::run_item`으로 들어갔고, 네 큐가 각자 그것을 불러요.
+표지와 시즌 정보의 다시 하기 규칙은 거의 같고, Anissia의 두 큐는 `429` 뒤 미루는 규칙을 각자 가져요. 패닉 격리는 [0088](../5-deployed-verification/0088-queue-survives-panic.md)에서 trss-core의 `queue::run_item`으로 들어갔고, 네 큐가 각자 그것을 불러요.
 
 - 루프를 trss-core의 한 구현으로 모으고, 큐마다의 간격, 다시 하기, 미루기는 큐가 넘기는 값으로 지켜요.
 - 잠금 파일의 이름은 한 곳에서 정하고, 쓰기 검사가 그 목록을 써요.
-- 큐마다 파일 잠금을 쥐는 까닭은 두 번째 worker를 막는 것이에요. worker는 하나만 돌고([ADR 0006](../adr/0006-separate-web-worker-binaries.md)) worker 잠금이 이미 그것을 막아요. 큐마다의 잠금을 남길지 이 티켓에서 사용자 결정을 받아요.
+- 큐마다 파일 잠금을 쥐는 까닭은 두 번째 worker를 막는 것이에요. worker는 하나만 돌고([ADR 0006](../../../adr/0006-separate-web-worker-binaries.md)) worker 잠금이 이미 그것을 막아요. 큐마다의 잠금을 남길지 이 티켓에서 사용자 결정을 받아요.
 
 ## 완료 기준
 
@@ -52,7 +52,7 @@ worker의 백그라운드 큐 네 개(표지, 시즌 정보, Anissia 편성, Ani
 
 ### 검증한 것
 
-2026-10-09에 `cargo test --locked --workspace -j 4`로 확인했어요. 기존 테스트는 고치지도, 옮기지도, 지우지도 않았어요. 그래서 [RSS 수집 명세의 검증 표](../specs/collection.md#검증-표)는 고칠 것이 없어요.
+2026-10-09에 `cargo test --locked --workspace -j 4`로 확인했어요. 기존 테스트는 고치지도, 옮기지도, 지우지도 않았어요. 그래서 [RSS 수집 명세의 검증 표](../../../specs/collection.md#검증-표)는 고칠 것이 없어요.
 
 | 커밋 | 통과 | 실패 | 무시 |
 | --- | ---: | ---: | ---: |

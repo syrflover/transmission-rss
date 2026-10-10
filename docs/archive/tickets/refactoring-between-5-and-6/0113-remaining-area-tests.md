@@ -1,7 +1,7 @@
 # 0113 라이브러리, 설정, 웹 앱 공통 영역의 테스트를 나누고 검증 표를 둬요
 
 - 상태: 완료
-- 출처: [그 밖의 테스트 정리](refactoring.md#그-밖의-테스트-정리), [영역별 검증 표](refactoring.md#영역별-검증-표), [ADR 0015](../adr/0015-test-a-rule-once-in-its-crate.md)
+- 출처: [그 밖의 테스트 정리](refactoring.md#그-밖의-테스트-정리), [영역별 검증 표](refactoring.md#영역별-검증-표), [ADR 0015](../../../adr/0015-test-a-rule-once-in-its-crate.md)
 - 막는 티켓: [0094](0094-file-identity-in-core.md), [0095](0095-episode-text-key-in-core.md), [0096](0096-file-and-path-helpers.md), [0102](0102-request-pace-in-core.md), [0103](0103-queue-loop-in-core.md), [0104](0104-durable-file-writes-in-core.md), [0111](0111-web-and-screen-rules.md), [0112](0112-small-helpers-and-test-helpers.md)
 
 ## 작업
@@ -16,7 +16,7 @@
 - [0103](0103-queue-loop-in-core.md) 뒤로 큐 루프와 잠금 파일 이름을 trss-core `queue::tests`와 `lock::tests`, `access::tests`가 확인해요. 그와 겹치는 7개를 나눠요. trss-collect의 `the_queue_holds_its_lock_and_a_second_observer_waits_for_it`, trss-library의 `the_queue_stops_on_shutdown_and_a_restart_resumes_it`, `hundreds_of_new_works_are_searched_one_at_a_time_at_the_pace`의 마지막 경로 비교, trss-collect `anissia/tests.rs`와 `anissia/captions_tests.rs`의 `the_lock_file_sits_next_to_the_database_and_apart_from_the_other_queues` 2개, worker의 `app_data_files_cover_every_lock_and_the_wake_socket`, `browser.rs`의 `one_worker_at_a_time_has_the_browser`의 경로 비교예요. 각 크레이트의 규칙(자막 목록의 읽기 주기, 표지 큐의 이어 하기, 브라우저의 잠금 쥐기)은 남겨요. 나눈 뒤 크레이트마다 남은 `lock_path_for` 감싸개를 지워요.
 - worker의 `app_data_folders_cover_the_receive_area_the_artwork_and_the_subtitle_files`는 [0096](0096-file-and-path-helpers.md)에서 두 목록이 trss-core의 같은 상수를 쓰게 되어 실패할 수 없어요. 지워요.
 
-[라이브러리와 작품](../specs/library.md), [설정과 이전](../specs/settings.md), [웹 앱 공통](../specs/web-app.md) 명세에 요구별 검증 표를 둬요.
+[라이브러리와 작품](../../../specs/library.md), [설정과 이전](../../../specs/settings.md), [웹 앱 공통](../../../specs/web-app.md) 명세에 요구별 검증 표를 둬요.
 
 ## 완료 기준
 
@@ -34,7 +34,7 @@
 - 웹에 남긴 규칙 사본 두 개는 옮기지 않았어요(리드가 정함). 아래 [남은 것](#남은-것)에 있어요.
 - 지울 때는 같은 입력과 같은 기대값을 가진 남은 테스트를 열어 견줬어요. 남은 테스트에 경우나 기대값이 빠졌으면 그것을 아래 크레이트에 먼저 더하고 지웠고, 아래에 새로 쓴 테스트가 대신하는 것은 "내림"으로 셌어요.
 - 검증 표의 칸과 단위는 [0101](0101-receive-line-tests.md)·0110과 같아요(사용자 결정, 2026-10-09).
-- 표를 쓰며 찾은 명세와 코드의 차이는 사용자가 정했어요(2026-10-10). 명세에만 있고 만들지 않은 라이브러리 요구는 표에 `만들지 않았어요`로 적고 리팩터링 뒤 [0132](0132-library-unbuilt-parts.md)에서 만들어요. 웹 앱 표기 규칙과 다른 화면은 코드를 명세에 맞추는 [0133](0133-web-notation-rules.md), 설정의 두 결함은 [0134](0134-settings-version-and-first-run-badge.md)예요. 표에는 그때까지 `코드가 이 요구와 달라요`로 적었어요. 그 뒤 표를 마저 쓰며 찾은 같은 종류의 차이는 리드가 같은 결정에 따라 티켓에 더했고, [명세와 코드가 다른 곳](#명세와-코드가-다른-곳)에 누가 정했는지와 함께 있어요.
+- 표를 쓰며 찾은 명세와 코드의 차이는 사용자가 정했어요(2026-10-10). 명세에만 있고 만들지 않은 라이브러리 요구는 표에 `만들지 않았어요`로 적고 리팩터링 뒤 [0132](../../../tickets/0132-library-unbuilt-parts.md)에서 만들어요. 웹 앱 표기 규칙과 다른 화면은 코드를 명세에 맞추는 [0133](../../../tickets/0133-web-notation-rules.md), 설정의 두 결함은 [0134](../../../tickets/0134-settings-version-and-first-run-badge.md)예요. 표에는 그때까지 `코드가 이 요구와 달라요`로 적었어요. 그 뒤 표를 마저 쓰며 찾은 같은 종류의 차이는 리드가 같은 결정에 따라 티켓에 더했고, [명세와 코드가 다른 곳](#명세와-코드가-다른-곳)에 누가 정했는지와 함께 있어요.
 
 ### 바꾼 것
 
@@ -166,9 +166,9 @@
 
 ### 명세를 고친 것
 
-- 표를 쓰며 기록과 맞지 않는 명세 문장 네 곳을 고쳤어요(`docs(specs): correct observation records in the library and web app specs (0113)`). 라이브러리 명세의 방영 시각 표본 숫자는 기록이 없어서 [0051](../archive/tickets/3-subtitle-candidates-and-receiving/0051-airtime-episode-mapping.md)의 표본으로 바꿨고, 장치 번호가 바뀐 관찰은 표지 파일이 아니라 영상 파일의 것이라 그렇게 적었어요. 구독하지 않은 작품에 앱이 후보를 제안한다는 문장은 바로 아래의 사용자 결정(2026-10-02)과 맞지 않아 앱이 후보를 정하지 않는다고 고쳤어요. 웹 앱 명세의 접근 경계는 LAN에서 확인한 [0082](../archive/tickets/5-deployed-verification/0082-deployed-access-boundary.md)를 적었어요.
-- 지우거나 옮긴 테스트를 인용하던 [RSS 수집 명세의 검증 표](../specs/collection.md#검증-표) 16곳, [자막 명세의 검증 표](../specs/subtitles.md#검증-표) 1곳, [티켓 목록](README.md)의 목표 1 요약을 지금 그 경우를 확인하는 테스트로 바꿨어요.
-- [작업과 인증 명세의 검증 표](../specs/jobs.md#검증-표) 두 행은 실제 erulabo 수신의 Drive ID가 DB에 없었다고 적었지만, [0041](../archive/tickets/3-subtitle-candidates-and-receiving/0041-source-erulabo.md)은 DB 전체에서 받은 파일의 스냅샷 한 곳에서 찾았어요. 그렇게 고쳤어요. 자막 명세에서 이름에 backtick이 든 테스트 하나는 code span이 끊겨 보여서 두 겹 backtick으로 감쌌어요.
+- 표를 쓰며 기록과 맞지 않는 명세 문장 네 곳을 고쳤어요(`docs(specs): correct observation records in the library and web app specs (0113)`). 라이브러리 명세의 방영 시각 표본 숫자는 기록이 없어서 [0051](../3-subtitle-candidates-and-receiving/0051-airtime-episode-mapping.md)의 표본으로 바꿨고, 장치 번호가 바뀐 관찰은 표지 파일이 아니라 영상 파일의 것이라 그렇게 적었어요. 구독하지 않은 작품에 앱이 후보를 제안한다는 문장은 바로 아래의 사용자 결정(2026-10-02)과 맞지 않아 앱이 후보를 정하지 않는다고 고쳤어요. 웹 앱 명세의 접근 경계는 LAN에서 확인한 [0082](../5-deployed-verification/0082-deployed-access-boundary.md)를 적었어요.
+- 지우거나 옮긴 테스트를 인용하던 [RSS 수집 명세의 검증 표](../../../specs/collection.md#검증-표) 16곳, [자막 명세의 검증 표](../../../specs/subtitles.md#검증-표) 1곳, [티켓 목록](../../../tickets/README.md)의 목표 1 요약을 지금 그 경우를 확인하는 테스트로 바꿨어요.
+- [작업과 인증 명세의 검증 표](../../../specs/jobs.md#검증-표) 두 행은 실제 erulabo 수신의 Drive ID가 DB에 없었다고 적었지만, [0041](../3-subtitle-candidates-and-receiving/0041-source-erulabo.md)은 DB 전체에서 받은 파일의 스냅샷 한 곳에서 찾았어요. 그렇게 고쳤어요. 자막 명세에서 이름에 backtick이 든 테스트 하나는 code span이 끊겨 보여서 두 겹 backtick으로 감쌌어요.
 
 ### 검증 표
 
@@ -176,14 +176,14 @@
 
 | 명세 | 요구 절 | 행 | 실제 사용에서 본 것이 있는 행 | 테스트가 있는 행 | 둘 다 없는 행 |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| [라이브러리와 작품](../specs/library.md#검증-표) | 14 | 88 | 53 | 75 | 4 |
-| [설정과 이전](../specs/settings.md#검증-표) | 14 | 111 | 25 | 43 | 65 |
-| [웹 앱 공통](../specs/web-app.md#검증-표) | 6 | 48 | 22 | 27 | 17 |
+| [라이브러리와 작품](../../../specs/library.md#검증-표) | 14 | 88 | 53 | 75 | 4 |
+| [설정과 이전](../../../specs/settings.md#검증-표) | 14 | 111 | 25 | 43 | 65 |
+| [웹 앱 공통](../../../specs/web-app.md#검증-표) | 6 | 48 | 22 | 27 | 17 |
 
 - 둘 다 없는 행은 표 끝의 `확인하지 않은 요구`에 모았어요. 실제 사용에서 본 것은 날짜가 있는 관찰만 셌고, `근거만:`, `관련만:`, `참고(…):`는 세지 않았어요. 같은 방법으로 세면 작업과 인증 명세의 "실제 사용에서 본 것이 있는 행"이 0110의 기록과 같은 61행으로 나와요.
 - 처음 쓴 표는 라이브러리 105 KB(두 부분 48.9 KB와 56.7 KB), 설정 67.8 KB, 웹 앱 55.5 KB였어요. 0110과 같이 테스트는 부분마다 가장 직접 겨눈 것 하나(행마다 셋까지), 관찰은 행마다 둘까지 남기고 확인하지 않은 것은 모두 남겨 라이브러리 66.1 KB, 설정 46.1 KB, 웹 앱 38.1 KB로 줄였어요. 설정 표는 명세 본문(36.8 KB)보다 커요. 요구 문장이 길고, 목표 6에서 만들 행 63개도 행마다 그 표시와 링크를 남겨서예요.
 - 표를 쓴 agent가 이름만 보고 적은 테스트는 줄이는 단계에서 본문을 읽어, 그 행을 확인하지 않으면 빼거나 행을 확인하는 다른 테스트로 바꿨어요. 4·5단계가 지우거나 옮긴 테스트도 이때 지금 이름으로 바꿨어요. 실제 사용의 관찰은 인용한 티켓을 다시 읽어 날짜와 환경을 맞췄어요.
-- [웹 앱 공통](../specs/web-app.md#검증-표), [라이브러리와 작품](../specs/library.md#검증-표), [RSS 수집](../specs/collection.md#검증-표), [자막](../specs/subtitles.md#검증-표), [작업과 인증](../specs/jobs.md#검증-표), [설정과 이전](../specs/settings.md#검증-표)의 여섯 명세에 모두 검증 표가 있어요.
+- [웹 앱 공통](../../../specs/web-app.md#검증-표), [라이브러리와 작품](../../../specs/library.md#검증-표), [RSS 수집](../../../specs/collection.md#검증-표), [자막](../../../specs/subtitles.md#검증-표), [작업과 인증](../../../specs/jobs.md#검증-표), [설정과 이전](../../../specs/settings.md#검증-표)의 여섯 명세에 모두 검증 표가 있어요.
 
 ### 명세와 코드가 다른 곳
 
@@ -191,12 +191,12 @@
 
 | 티켓 | 내용 | 누가 정했나 |
 | --- | --- | --- |
-| [0132](0132-library-unbuilt-parts.md) | 라이브러리 명세에만 있는 여섯 가지. 감시 폴더의 `연결한 작품 수`, 회차 목록의 방영 전 회차 줄, `최근 활동` 카드, 표지 자동 결정의 Anissia 힌트와 시즌별 관찰, `자막 확인 필요`의 원인 중 파일 누락·검증 실패, 극장판의 `본편` 이름이에요. | 앞의 셋은 사용자(2026-10-10), 뒤의 셋은 같은 결정에 따라 리드 |
-| [0133](0133-web-notation-rules.md) | 웹 앱 공통 명세의 표기 규칙 일곱 가지. 상대 시각, ` · `로 잇기, `더 보기` 버튼, 빨간 할 일 배지, Transmission 관리 화면 링크, 올해가 아닌 날짜의 연도, `교체 승인` 배지의 물음표예요. | 앞의 다섯은 사용자(2026-10-10), 뒤의 둘은 같은 결정에 따라 리드 |
-| [0134](0134-settings-version-and-first-run-badge.md) | 작품별 자막 형식 순서의 저장·삭제에 버전이 없는 것과 처음 실행 중의 할 일 배지예요. 설정 목록의 이름 두 가지(`파일 용량·정리`, `내보내기`·`가져오기`)는 그 티켓에서 사용자에게 물어요. | 사용자(2026-10-10) |
-| [0135](0135-deploy-settings-item.md) | 설정의 `배포 설정`이 빈 상태만 보여주는 것이에요. | 기능을 더해야 맞출 차이는 리팩터링 뒤에 한다는 결정(2026-10-09)에 따라 리드 |
+| [0132](../../../tickets/0132-library-unbuilt-parts.md) | 라이브러리 명세에만 있는 여섯 가지. 감시 폴더의 `연결한 작품 수`, 회차 목록의 방영 전 회차 줄, `최근 활동` 카드, 표지 자동 결정의 Anissia 힌트와 시즌별 관찰, `자막 확인 필요`의 원인 중 파일 누락·검증 실패, 극장판의 `본편` 이름이에요. | 앞의 셋은 사용자(2026-10-10), 뒤의 셋은 같은 결정에 따라 리드 |
+| [0133](../../../tickets/0133-web-notation-rules.md) | 웹 앱 공통 명세의 표기 규칙 일곱 가지. 상대 시각, ` · `로 잇기, `더 보기` 버튼, 빨간 할 일 배지, Transmission 관리 화면 링크, 올해가 아닌 날짜의 연도, `교체 승인` 배지의 물음표예요. | 앞의 다섯은 사용자(2026-10-10), 뒤의 둘은 같은 결정에 따라 리드 |
+| [0134](../../../tickets/0134-settings-version-and-first-run-badge.md) | 작품별 자막 형식 순서의 저장·삭제에 버전이 없는 것과 처음 실행 중의 할 일 배지예요. 설정 목록의 이름 두 가지(`파일 용량·정리`, `내보내기`·`가져오기`)는 그 티켓에서 사용자에게 물어요. | 사용자(2026-10-10) |
+| [0135](../../../tickets/0135-deploy-settings-item.md) | 설정의 `배포 설정`이 빈 상태만 보여주는 것이에요. | 기능을 더해야 맞출 차이는 리팩터링 뒤에 한다는 결정(2026-10-09)에 따라 리드 |
 
-- 감시 폴더의 등록(`POST`)과 해제(`DELETE`)도 버전을 받지 않지만, 있는 값을 고치는 편집이 아니라서 [버전 계약](../specs/web-app.md#웹-명령과-상태-갱신)과 다르다고 보지 않았어요(리드가 정함).
+- 감시 폴더의 등록(`POST`)과 해제(`DELETE`)도 버전을 받지 않지만, 있는 값을 고치는 편집이 아니라서 [버전 계약](../../../specs/web-app.md#웹-명령과-상태-갱신)과 다르다고 보지 않았어요(리드가 정함).
 
 ### 실행 시간
 

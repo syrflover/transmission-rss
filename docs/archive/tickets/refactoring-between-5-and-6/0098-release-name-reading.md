@@ -1,8 +1,8 @@
 # 0098 릴리스 이름과 회차 읽기를 모아요
 
 - 상태: 완료 (2026-10-08)
-- 출처: [흩어진 개념 모으기](refactoring.md#흩어진-개념-모으기), [수집 받기 줄기의 재구성](refactoring.md#수집-받기-줄기의-재구성), [영상 회차 변환](../specs/collection.md#영상-회차-변환)
-- 막는 티켓: [0090](../archive/tickets/5-deployed-verification/0090-release-name-corpus.md)(이름 묶음), [0091](../archive/tickets/5-deployed-verification/0091-trname-long-and-half-episodes.md)(trname 수정), [0092](0092-refactor-baseline.md)(기준값)
+- 출처: [흩어진 개념 모으기](refactoring.md#흩어진-개념-모으기), [수집 받기 줄기의 재구성](refactoring.md#수집-받기-줄기의-재구성), [영상 회차 변환](../../../specs/collection.md#영상-회차-변환)
+- 막는 티켓: [0090](../5-deployed-verification/0090-release-name-corpus.md)(이름 묶음), [0091](../5-deployed-verification/0091-trname-long-and-half-episodes.md)(trname 수정), [0092](0092-refactor-baseline.md)(기준값)
 
 ## 작업
 
@@ -21,7 +21,7 @@ trname이 쓴 이름(`<작품> SxxEyy.ext`)과 시즌 폴더를 읽는 곳도 tr
 - 받은 영상의 회차를 예상할 때는 trname의 읽기와 변환을 그대로 써서, 예상과 실제 파일 이름이 같은 규칙에서 나와요.
   이 요구는 사용자 결정(2026-10-08)으로 바뀌었어요. 예상은 trss-collect의 읽기로 하고, 묶음 테스트가 예상과 실제 이름이 같은지 확인해요. 결과 절을 봐요.
 - trname은 번호 없는 영상 이름(극장판, BD)에서 해상도나 CRC의 숫자를 회차로 읽어요(0090의 묶음에서 공개 피드 6개). trname의 마지막 규칙은 CLI로 손수 바꾸는 자막 이름(`nogame01.ass`)을 읽으므로 trname은 그대로 두고, trss-collect가 회차 없음이나 묶음으로 읽는 이름은 trname으로 바꾸지 않고 받은 이름을 남겨요(사용자 결정, 2026-10-07). 동작 변경이므로 정리 커밋과 따로 커밋해요.
-- [0090](../archive/tickets/5-deployed-verification/0090-release-name-corpus.md)의 묶음 테스트가 읽기가 바뀌지 않았는지 지켜요. 모은 뒤 묶음의 어느 이름이라도 읽는 결과가 달라지면, 그것은 동작 변경이에요. 맞는 쪽을 정해 결과 절에 적고 정리 커밋과 따로 커밋해요.
+- [0090](../5-deployed-verification/0090-release-name-corpus.md)의 묶음 테스트가 읽기가 바뀌지 않았는지 지켜요. 모은 뒤 묶음의 어느 이름이라도 읽는 결과가 달라지면, 그것은 동작 변경이에요. 맞는 쪽을 정해 결과 절에 적고 정리 커밋과 따로 커밋해요.
 
 ## 완료 기준
 
@@ -38,7 +38,7 @@ trname이 쓴 이름(`<작품> SxxEyy.ext`)과 시즌 폴더를 읽는 곳도 tr
   - 지난 회차 검색이 판단하는 피드 제목은 대개 확장자가 없어 trname이 읽지 못해요. `.mkv`를 붙여 읽혀도 묶음의 제목 65개를 틀리게 읽었어요(`Beyblade X - Episode 130 [720p]` → 20).
   - 작품 폴더가 `<작품>/Season NN`이 아닌 규칙은 trname이 시즌을 정하지 못해 예상이 모두 사라져요.
   - 아래의 이름 규칙 뒤로는 묶음의 영상 파일 이름 168개에서 두 쪽이 모두 같아요. 165개는 둘 다 맞고, 코난 극장판 3개는 둘 다 30화로 같게 틀려요.
-- **회차 없음·묶음 이름**: trname으로 바꾸지 않고 받은 이름을 남겨요(사용자 결정, 2026-10-07). [수집 명세의 영상 회차 변환](../specs/collection.md#영상-회차-변환)에 두 결정을 적었어요.
+- **회차 없음·묶음 이름**: trname으로 바꾸지 않고 받은 이름을 남겨요(사용자 결정, 2026-10-07). [수집 명세의 영상 회차 변환](../../../specs/collection.md#영상-회차-변환)에 두 결정을 적었어요.
 - 읽기마다 다르던 범위는 다음처럼 맞췄어요(리드가 정함). 묶음의 어느 이름도 읽기가 바뀌지 않는 쪽을 골랐어요.
   - 확장자는 `.[A-Za-z0-9]{2,4}`와 `torrent`를 합친 것이에요.
   - 수정 번호는 수정본 대체가 쓰던 `(?i)v\d{1,2}`예요. 수정본 대체는 파일을 지우므로 그 읽기를 바꾸지 않았어요.

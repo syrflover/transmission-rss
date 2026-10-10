@@ -1,7 +1,7 @@
 # 0105 회차 대응의 계산과 까닭 문구를 trss-library로 옮겨요
 
 - 상태: 완료
-- 출처: [자막의 회차 대응](../specs/library.md#자막의-회차-대응), [자막 작업 줄기의 재구성](refactoring.md#자막-작업-줄기의-재구성), [ADR 0015](../adr/0015-test-a-rule-once-in-its-crate.md)
+- 출처: [자막의 회차 대응](../../../specs/library.md#자막의-회차-대응), [자막 작업 줄기의 재구성](refactoring.md#자막-작업-줄기의-재구성), [ADR 0015](../../../adr/0015-test-a-rule-once-in-its-crate.md)
 - 막는 티켓: [0095](0095-episode-text-key-in-core.md)(회차 텍스트의 키)
 
 ## 작업
@@ -27,7 +27,7 @@ trss-collect의 Anissia 자막 목록은 trss-jobs의 대응을 볼 수 없어�
 | --- | --- | --- |
 | 회차 대응의 계산 | trss-library `mapping`이에요. 시즌 회차 구하기(`Mapping::season_episode`, `whole`, `shifted`), 게시 시각으로 이동값 정하기(`decide`, `offsets`), 충돌(`conflicts`), 사용자 대응 검사(`UserMapping`)와 근거 문구가 있어요. 앱이 스스로 다른 이동값을 받아들이지 않는 규칙은 `store_in`에서 `reconcile`로 떼어 냈어요. | trss-jobs `mapping`의 순수 계산. trss-jobs `mapping`에는 행을 읽고 쓰는 SQL(`store_in`, `set_user_in`, `revert_in`, 충돌 표)과 `Saved`만 남았고, 옮긴 것을 다시 내보내요. |
 | 까닭 문구 | trss-library `mapping::reason`이에요. 보이는 곳(`Wording`: 후보, 파일, 보관한 자막)마다 문구를 만들고, 범위 표기(`season_range`)와 시즌 안 검사(`in_season`)도 여기 있어요. | trss-jobs 5곳(`place/episode`의 `candidate_target`·`of_candidate`, `package`의 `other`·`named_target`, `relocate`의 `target`, `records`의 `confirm_placement`)이 손으로 만들던 문구와 범위 표기 |
-| 이동값과 회차 범위의 표기 | trss-core `episode`의 `signed`와 `ranges`예요. trss-library는 trss-collect를 부를 수 없고, 회차 표기 `N화`가 이미 trss-core에 있어서 그 옆에 뒀어요([ADR 0016](../adr/0016-shared-parts-in-core.md)). | trss-collect `episode_offset`의 같은 함수 |
+| 이동값과 회차 범위의 표기 | trss-core `episode`의 `signed`와 `ranges`예요. trss-library는 trss-collect를 부를 수 없고, 회차 표기 `N화`가 이미 trss-core에 있어서 그 옆에 뒀어요([ADR 0016](../../../adr/0016-shared-parts-in-core.md)). | trss-collect `episode_offset`의 같은 함수 |
 | Anissia 자막 목록의 회차 이동 | trss-collect `revision_by_attribution`이 `trss_library::mapping::shifted`를 불러요. | 회차를 직접 읽어 이동값을 더하던 코드 |
 
 - 범위 표기는 티켓이 적은 4곳이 아니라 5곳에서 만들었어요. `records`는 `1–N화`만 만들었어요.
@@ -83,4 +83,4 @@ trss-collect의 Anissia 자막 목록은 trss-jobs의 대응을 볼 수 없어�
 - 회차 수를 알 때 파일 쪽의 시즌 밖 문구 "{l}가 시즌의 1–{N}화 밖이에요"는 대응이 회차를 옮겼어도 원래 회차만 말해요. 예를 들어 5화를 −7화로 옮겼으면 "5화가 시즌의 1–12화 밖이에요"가 돼요. 결정 범위 밖이라 바꾸지 않았어요.
 - 파일 이름을 읽는 문구("파일 이름에 회차 번호가 없어요", "파일 이름이 회차 여럿을 가리켜요")는 세 곳에 있어요. 회차 대응의 문구가 아니라 옮기지 않았어요.
 - trss-web `seasons_anissia_api.rs`가 "예외 먼저, 그다음 이동값"의 순서를 `revision_by_attribution` 둘레에서 되풀이해요. 정한 대응이면 `Mapping::season_episode`를 쓸 수 있지만, 이동값 0이면 글을 그대로 비교하는 차이가 있어 바꾸지 않았어요.
-- trss-collect의 `1–N화` 문구(`past_search/range.rs`, `episode_offset.rs`)는 영상 회차 변환의 것이라 옮기지 않았어요. [라이브러리 명세](../specs/library.md#자막의-회차-대응)는 회차 대응과 회차 변환을 서로 전용하지 않는다고 해요.
+- trss-collect의 `1–N화` 문구(`past_search/range.rs`, `episode_offset.rs`)는 영상 회차 변환의 것이라 옮기지 않았어요. [라이브러리 명세](../../../specs/library.md#자막의-회차-대응)는 회차 대응과 회차 변환을 서로 전용하지 않는다고 해요.

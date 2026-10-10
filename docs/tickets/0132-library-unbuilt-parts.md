@@ -1,8 +1,8 @@
 # 0132 라이브러리 명세에만 있고 만들지 않은 것을 만들어요
 
 - 상태: 대기
-- 출처: [작품 발견과 감시 폴더](../specs/library.md#작품-발견과-감시-폴더), [자동 판정](../specs/library.md#자동-판정), [라이브러리 화면](../specs/library.md#라이브러리-화면), [할 일과 회차 목록](../specs/library.md#할-일과-회차-목록), [오른쪽 카드 열](../specs/library.md#오른쪽-카드-열), [0113](0113-remaining-area-tests.md)에서 만든 [검증 표](../specs/library.md#검증-표)(2026-10-10)
-- 막는 티켓: [0114](0114-refactor-final-check.md)(리팩터링 마지막 확인)
+- 출처: [작품 발견과 감시 폴더](../specs/library.md#작품-발견과-감시-폴더), [자동 판정](../specs/library.md#자동-판정), [라이브러리 화면](../specs/library.md#라이브러리-화면), [할 일과 회차 목록](../specs/library.md#할-일과-회차-목록), [오른쪽 카드 열](../specs/library.md#오른쪽-카드-열), [0113](../archive/tickets/refactoring-between-5-and-6/0113-remaining-area-tests.md)에서 만든 [검증 표](../specs/library.md#검증-표)(2026-10-10)
+- 막는 티켓: [0114](../archive/tickets/refactoring-between-5-and-6/0114-refactor-final-check.md)(리팩터링 마지막 확인)
 
 ## 작업
 

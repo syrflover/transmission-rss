@@ -318,7 +318,7 @@ API의 Rust 응답 구조체와 화면의 TypeScript 타입은 생성 도구 없
 ## 검증 표
 
 요구마다 실제 사용에서 본 것(날짜와 티켓), 테스트로 확인한 것(크레이트와 파일, 테스트 이름), 확인하지 않은 것을 나눠 적었어요. 테스트는 요구를 가장 직접 겨눈 것만 골라 적었고 같은 요구를 다루는 다른 테스트는 나열하지 않았어요.
-이 표는 2026-10-10에 `6e46ef1`에서, [0113](../tickets/0113-remaining-area-tests.md)이 남은 영역의 테스트를 나눈 뒤 만들었어요. 실제 사용은 배포한 서버(j4105)와 로컬 개발 환경이고, 무엇으로 봤는지(서버 DB 사본, iPhone Safari 등)를 티켓이 적은 경우 괄호에 적었어요. `서버(0.5.0)`은 원격 화면이 생기기 전의 0.5.0을 본 것이에요.
+이 표는 2026-10-10에 `6e46ef1`에서, [0113](../archive/tickets/refactoring-between-5-and-6/0113-remaining-area-tests.md)이 남은 영역의 테스트를 나눈 뒤 만들었어요. 실제 사용은 배포한 서버(j4105)와 로컬 개발 환경이고, 무엇으로 봤는지(서버 DB 사본, iPhone Safari 등)를 티켓이 적은 경우 괄호에 적었어요. `서버(0.5.0)`은 원격 화면이 생기기 전의 0.5.0을 본 것이에요.
 행은 요구의 항목 하나(최상위 글머리 기호, 규칙을 담은 문단, 입력·결과 표의 행)이고, 한 항목 안에서 확인 방법이 갈리는 부분은 칸 안에서 `<br>`로 나누고 `(1)`, `(2)`로 번호를 붙였어요. 외부 서비스, 브라우저, 디스크를 본 기록은 trss를 본 것이 아니라서 `근거만:`으로, 가짜 출처나 바꿔 넣은 응답으로 본 개발 환경의 확인은 `참고(가짜 출처):`로, 실제 데이터 없이 빈 화면이나 스크래치 DB를 헤드리스 브라우저로 본 확인은 `참고(헤드리스 브라우저):`로 따로 적었어요.
 코드가 명세와 다른 요구는 `코드가 이 요구와 달라요`로 적고, 리팩터링 뒤에 그것을 고칠 티켓을 붙였어요.
 
@@ -445,4 +445,4 @@ API의 Rust 응답 구조체와 화면의 TypeScript 타입은 생성 도구 없
 [0119]: ../archive/tickets/5-deployed-verification/0119-refresh-after-stored-apply.md
 [0123]: ../archive/tickets/5-deployed-verification/0123-collect-moves-archived-work-folder.md
 [0127]: ../archive/tickets/5-deployed-verification/0127-row-waits-for-library-after-apply.md
-[0114]: ../tickets/0114-refactor-final-check.md#실제-서버-2026-10-10-070
+[0114]: ../archive/tickets/refactoring-between-5-and-6/0114-refactor-final-check.md#실제-서버-2026-10-10-070

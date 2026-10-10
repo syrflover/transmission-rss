@@ -537,7 +537,7 @@ worker가 돌리는 작업의 줄을 대응 변경이 옮기면 작업에 표시
 ## 검증 표
 
 요구마다 실제 사용에서 본 것(날짜와 티켓), 테스트로 확인한 것(크레이트와 파일, 테스트 이름), 확인하지 않은 것을 나눠 적었어요. 테스트는 요구를 가장 직접 겨눈 것만 골라 적었고 같은 요구를 다루는 다른 테스트는 나열하지 않았어요.
-이 표는 2026-10-09에 `5d1fb3b`에서, [0110](../tickets/0110-job-line-tests.md)이 자막 작업 줄기의 테스트를 나눈 뒤 만들었어요. 실제 사용은 배포한 서버(j4105), 로컬 개발 환경에서 돌린 서버 DB 사본과 실제 외부 사이트, 서버에서 돌리던 worker 밖에서 실행한 trss 코드(`서버(일회용 컨테이너)`)예요.
+이 표는 2026-10-09에 `5d1fb3b`에서, [0110](../archive/tickets/refactoring-between-5-and-6/0110-job-line-tests.md)이 자막 작업 줄기의 테스트를 나눈 뒤 만들었어요. 실제 사용은 배포한 서버(j4105), 로컬 개발 환경에서 돌린 서버 DB 사본과 실제 외부 사이트, 서버에서 돌리던 worker 밖에서 실행한 trss 코드(`서버(일회용 컨테이너)`)예요.
 행은 요구의 항목 하나(최상위 글머리 기호, 규칙을 담은 문단, 입력·결과 표의 행)이고, 한 항목 안에서 확인 방법이 갈리는 부분은 칸 안에서 `<br>`로 나누고 `(1)`, `(2)`로 번호를 붙였어요. 외부 서비스, 브라우저, 디스크를 본 기록은 trss를 본 것이 아니라서 `근거만:`으로, 가짜 출처나 바꿔 넣은 응답으로 본 개발 환경의 확인은 `참고(가짜 출처):`로 따로 적었어요.
 
 ### 할 일
@@ -759,4 +759,4 @@ worker가 돌리는 작업의 줄을 대응 변경이 옮기면 작업에 표시
 [0083]: ../archive/tickets/5-deployed-verification/0083-deployed-end-to-end.md
 [0085]: ../archive/tickets/5-deployed-verification/0085-phone-and-tablet-flows.md
 [0088]: ../archive/tickets/5-deployed-verification/0088-queue-survives-panic.md
-[0114]: ../tickets/0114-refactor-final-check.md#실제-서버-2026-10-10-070
+[0114]: ../archive/tickets/refactoring-between-5-and-6/0114-refactor-final-check.md#실제-서버-2026-10-10-070

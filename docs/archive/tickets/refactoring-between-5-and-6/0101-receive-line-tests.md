@@ -1,7 +1,7 @@
 # 0101 수집 받기 줄기의 테스트를 나누고 RSS 수집 명세에 검증 표를 둬요
 
 - 상태: 완료
-- 출처: [수집 받기 줄기의 재구성](refactoring.md#수집-받기-줄기의-재구성), [영역별 검증 표](refactoring.md#영역별-검증-표), [ADR 0015](../adr/0015-test-a-rule-once-in-its-crate.md)
+- 출처: [수집 받기 줄기의 재구성](refactoring.md#수집-받기-줄기의-재구성), [영역별 검증 표](refactoring.md#영역별-검증-표), [ADR 0015](../../../adr/0015-test-a-rule-once-in-its-crate.md)
 - 막는 티켓: [0097](0097-shared-transmission-fake.md)(가짜 서버), [0098](0098-release-name-reading.md)(이름 읽기), [0099](0099-one-receive-path.md)(받기 경로), [0100](0100-worker-lock-release.md)(잠금 해제)
 
 ## 작업
@@ -15,7 +15,7 @@
 - 구조 조사는 그대로 겹치는 테스트를 30–60개, 내릴 규칙 테스트를 약 100개로 추정했어요. 실제로 나눌 때 테스트마다 몸통을 견줘 정해요.
 - trss-web의 수집 API 테스트 중 수집 규칙을 다시 확인하는 것도 같이 나눠요. 웹에는 요청과 응답의 모양, 상태 코드, Host·Origin 검사만 남겨요.
 
-[RSS 수집 명세](../specs/collection.md)에 요구별 검증 표를 둬요. 요구마다 실제 사용에서 관찰한 것(날짜와 티켓), 테스트로 확인한 것(테스트 이름이나 파일), 확인하지 않은 것을 나눠 적어요.
+[RSS 수집 명세](../../../specs/collection.md)에 요구별 검증 표를 둬요. 요구마다 실제 사용에서 관찰한 것(날짜와 티켓), 테스트로 확인한 것(테스트 이름이나 파일), 확인하지 않은 것을 나눠 적어요.
 
 ## 완료 기준
 
@@ -52,7 +52,7 @@
 | `test(collect): test the archive move of a work folder in trss-collect, not through the worker` | 작품 폴더의 보관 이동을 내렸어요. |
 | `test(web): leave the rules of the collect API tests to trss-collect, keep the web's part` | trss-web의 보관 제안, 수집 이력, 규칙, 제목 후보 테스트를 나눴어요. |
 | `test(web): test the in-place rule on Evidence::held, not through the router` | `in_place` 규칙 테스트를 `Evidence::held`를 바로 부르는 테스트로 바꿨어요. |
-| `docs(collect): add the verification table to the RSS collection spec`(이 결과를 담은 커밋) | [RSS 수집 명세의 검증 표](../specs/collection.md#검증-표)와 이 결과예요. |
+| `docs(collect): add the verification table to the RSS collection spec`(이 결과를 담은 커밋) | [RSS 수집 명세의 검증 표](../../../specs/collection.md#검증-표)와 이 결과예요. |
 
 제품 코드는 테스트 모듈 선언과 테스트에 필요한 공개 범위 말고는 바꾸지 않았어요. 내린 테스트 중 trss-collect 코드에서 실패한 것은 없었어요.
 
@@ -149,8 +149,8 @@
 표를 쓰며 명세의 문장 14곳이 코드와 다르다고 보고 하나씩 확인했어요(2026-10-09).
 
 - 7곳은 명세가 코드의 동작이나 자리를 틀리게 적었어요. 규칙 미리보기의 입력, 받은 영상의 CRC32를 두는 곳, 이동 명령을 만드는 쪽, 체크한 지난 항목의 순서, 회차 변환 되돌리기의 대상, 수정본 대체의 거절 경우, 폴더의 쓰기 검사예요. 명세를 고쳤고, 쓰기 검사는 웹이 폴더를 읽기 전용으로 붙여 저장할 때 볼 수 없으므로 명세를 지금 동작에 맞추기로 했어요(사용자 결정, 2026-10-09).
-- 구독을 다른 Anissia 작품으로 다시 잇는 길은 명세에만 있고 코드에 없어요. 만들기로 하고 [0129](0129-relink-subscription.md)로 남겼어요(사용자 결정, 2026-10-09).
-- 6곳은 명세를 고칠 일이 아니었어요. `받는 중`의 쓰임과 보관한 규칙의 `자막 받기`는 명세대로이고, 앱 YAML 내보내기는 아직 만들지 않은 [목표 6](README.md#6-앱-yaml-내보내기와-가져오기)이에요. 릴리스 이름 묶음 테스트의 범위와 지난 티켓 두 곳의 기록은 명세의 요구가 아니에요.
+- 구독을 다른 Anissia 작품으로 다시 잇는 길은 명세에만 있고 코드에 없어요. 만들기로 하고 [0129](../../../tickets/0129-relink-subscription.md)로 남겼어요(사용자 결정, 2026-10-09).
+- 6곳은 명세를 고칠 일이 아니었어요. `받는 중`의 쓰임과 보관한 규칙의 `자막 받기`는 명세대로이고, 앱 YAML 내보내기는 아직 만들지 않은 [목표 6](../../../tickets/README.md#6-앱-yaml-내보내기와-가져오기)이에요. 릴리스 이름 묶음 테스트의 범위와 지난 티켓 두 곳의 기록은 명세의 요구가 아니에요.
 
 ### 실행 시간
 

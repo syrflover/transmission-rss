@@ -1,8 +1,8 @@
 # 0135 설정의 `배포 설정`에 배포 값을 읽기 전용으로 보여줘요
 
 - 상태: 대기
-- 출처: [설정 화면](../specs/settings.md#설정-화면), [앱이 소유하는 설정](../specs/settings.md#앱이-소유하는-설정), [0113](0113-remaining-area-tests.md)에서 만든 [검증 표](../specs/settings.md#검증-표)(2026-10-10)
-- 막는 티켓: [0114](0114-refactor-final-check.md)(리팩터링 마지막 확인)
+- 출처: [설정 화면](../specs/settings.md#설정-화면), [앱이 소유하는 설정](../specs/settings.md#앱이-소유하는-설정), [0113](../archive/tickets/refactoring-between-5-and-6/0113-remaining-area-tests.md)에서 만든 [검증 표](../specs/settings.md#검증-표)(2026-10-10)
+- 막는 티켓: [0114](../archive/tickets/refactoring-between-5-and-6/0114-refactor-final-check.md)(리팩터링 마지막 확인)
 
 ## 작업
 

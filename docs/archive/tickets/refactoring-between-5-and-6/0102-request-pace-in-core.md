@@ -1,14 +1,14 @@
 # 0102 요청 간격과 외부 응답 다루기를 trss-core로 모아요
 
 - 상태: 완료
-- 출처: [흩어진 개념 모으기](refactoring.md#흩어진-개념-모으기), [ADR 0016](../adr/0016-shared-parts-in-core.md)
+- 출처: [흩어진 개념 모으기](refactoring.md#흩어진-개념-모으기), [ADR 0016](../../../adr/0016-shared-parts-in-core.md)
 - 막는 티켓: [0092](0092-refactor-baseline.md)(기준값)
 
 ## 작업
 
 2026-10-07에 web과 worker가 함께 쓰는 요청 간격이 DB에 세 벌 있었어요.
 trss-anilist와 trss-anissia의 `pace`는 표 이름(`anilist_pace`, `anissia_pace`)만 다르고, trss-collect의 `search_pace`는 호스트마다 간격을 둬요.
-차례를 기다리는 코드도 AniList, Anissia, 지난 회차 검색에 따로 있어요. 기다린 뒤 막힘을 다시 읽는 일은 [0087](../archive/tickets/5-deployed-verification/0087-pace-block-while-waiting.md)에서 세 곳 모두에 들어갔어요.
+차례를 기다리는 코드도 AniList, Anissia, 지난 회차 검색에 따로 있어요. 기다린 뒤 막힘을 다시 읽는 일은 [0087](../5-deployed-verification/0087-pace-block-while-waiting.md)에서 세 곳 모두에 들어갔어요.
 응답을 다루는 일도 흩어져 있어요.
 
 - `Retry-After`를 초로 읽고 기본값 60초, 상한 1시간을 두는 코드가 trss-anilist, trss-anissia, trss-collect의 피드에 3벌 있어요.
@@ -34,15 +34,15 @@ ADR 0016대로 trss-core의 모듈에 둬요.
 | 부품 | 지금 | 지운 복사본 |
 | --- | --- | --- |
 | 요청 간격 저장 | trss-core `pace::RequestPace`. `anilist(db)`, `anissia(db)`, `host(db, 호스트)`로 열고, 호스트는 안에서 소문자로 바꿔요. 표 이름과 열 이름은 정해진 세 가지에서만 골라 SQL을 만들어요. | trss-anilist와 trss-anissia의 `pace.rs`, trss-collect `SearchPace`의 SQL |
-| 차례 기다리기 | `RequestPace::wait_for_turn`. 자리를 잡고 기다린 뒤 막힘을 다시 읽어요([0087](../archive/tickets/5-deployed-verification/0087-pace-block-while-waiting.md)). 부르는 곳은 `TurnError`를 자기 오류(`Busy`, `SearchError::Wait`)로 바꿔요. | trss-anilist와 trss-anissia의 `turn()`, trss-collect `SearchClient::page` 안의 기다리기 |
+| 차례 기다리기 | `RequestPace::wait_for_turn`. 자리를 잡고 기다린 뒤 막힘을 다시 읽어요([0087](../5-deployed-verification/0087-pace-block-while-waiting.md)). 부르는 곳은 `TurnError`를 자기 오류(`Busy`, `SearchError::Wait`)로 바꿔요. | trss-anilist와 trss-anissia의 `turn()`, trss-collect `SearchClient::page` 안의 기다리기 |
 | `Retry-After` 읽기 | trss-core `response::retry_after`(`DEFAULT_RETRY_AFTER` 60초, `MAX_RETRY_AFTER` 1시간). 헤더를 찾는 네 줄은 부르는 곳에 남아요. | trss-anilist, trss-anissia, trss-collect `feed`의 3벌 |
 | 크기를 제한한 읽기 | trss-core `response::read_or_refuse`(넘으면 실패)와 `read_cut`(상한에서 자름). 응답 대신 조각을 읽는 함수(`reqwest::Response::chunk`)를 받아서 trss-core는 reqwest에 의존하지 않아요. | trss-anilist와 trss-anissia의 `read_answer`, AniList 표지 읽기, trss-collect `feed`의 `read_body`, trss-subtitles의 `read_capped` |
-| 2 MiB와 200 MiB 상한 | trss-core `MAX_ANSWER_BYTES`, `MAX_DOWNLOAD_FILE_BYTES`. 예전 이름(`trss_anilist::MAX_ANSWER_BYTES`, `trss_anissia::MAX_ANSWER_BYTES`, `trss_collect::feed::MAX_FEED_BYTES`, `trss_browser::MAX_DOWNLOAD_BYTES`, `trss_subtitles::MAX_FILE_BYTES`)은 이 값을 가리켜요. 테스트, trss-library, trss-jobs와 [작업 명세](../specs/jobs.md)가 그 이름을 써요. | 각 크레이트의 숫자 |
+| 2 MiB와 200 MiB 상한 | trss-core `MAX_ANSWER_BYTES`, `MAX_DOWNLOAD_FILE_BYTES`. 예전 이름(`trss_anilist::MAX_ANSWER_BYTES`, `trss_anissia::MAX_ANSWER_BYTES`, `trss_collect::feed::MAX_FEED_BYTES`, `trss_browser::MAX_DOWNLOAD_BYTES`, `trss_subtitles::MAX_FILE_BYTES`)은 이 값을 가리켜요. 테스트, trss-library, trss-jobs와 [작업 명세](../../../specs/jobs.md)가 그 이름을 써요. | 각 크레이트의 숫자 |
 
 - 자막 출처의 메모리 안 간격(`trss-subtitles` `http.rs`의 `Pace`)은 결정대로 남겼어요.
 - trss-archive와 trss-probe는 이 부품을 쓰지 않아 복사본이 필요 없었어요.
 - 200 MiB 상한은 서버 브라우저와 자막 출처가 함께 쓰는 가장 아래 크레이트인 trss-core에 뒀어요.
-- [ADR 0016](../adr/0016-shared-parts-in-core.md)은 응답 부품 때문에 trss-core가 reqwest에 의존하게 된다고 봤지만, 그 의존은 생기지 않았어요. ADR에 적었어요.
+- [ADR 0016](../../../adr/0016-shared-parts-in-core.md)은 응답 부품 때문에 trss-core가 reqwest에 의존하게 된다고 봤지만, 그 의존은 생기지 않았어요. ADR에 적었어요.
 
 ### 다른 점마다 정한 것
 
@@ -66,7 +66,7 @@ ADR 0016대로 trss-core의 모듈에 둬요.
 | trss-collect `past_search/client/tests.rs`의 기다리기 테스트 | 2 | 1 | 한 시간 막힌 호스트에서 검색이 곧바로 실패하는 연결 테스트를 남기고, `a_block_that_comes_while_a_request_waits_for_its_slot_stops_the_request`를 지웠어요. |
 
 간격에 관한 테스트는 이 파일들과 trss-core를 합쳐 15개에서 11개가 됐어요. 지운 테스트는 모두 trss-core의 같은 이름이나 같은 경우의 테스트가 확인해요.
-[RSS 수집 명세의 검증 표](../specs/collection.md#검증-표)가 인용하던 `requests_are_given_slots_a_spacing_apart`는 trss-core의 `requests_take_turns_and_a_block_holds_them_all`로 바꿔 적었어요.
+[RSS 수집 명세의 검증 표](../../../specs/collection.md#검증-표)가 인용하던 `requests_are_given_slots_a_spacing_apart`는 trss-core의 `requests_take_turns_and_a_block_holds_them_all`로 바꿔 적었어요.
 
 ### 검증한 것
 

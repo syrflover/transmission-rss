@@ -1,8 +1,8 @@
 # 0134 작품별 자막 형식 순서에 버전 계약을 두고 처음 실행 중의 할 일 배지를 살펴요
 
 - 상태: 대기
-- 출처: [앱이 소유하는 설정](../specs/settings.md#앱이-소유하는-설정), [처음 실행](../specs/settings.md#처음-실행), [0113](0113-remaining-area-tests.md)에서 만든 [검증 표](../specs/settings.md#검증-표)(2026-10-10)
-- 막는 티켓: [0114](0114-refactor-final-check.md)(리팩터링 마지막 확인)
+- 출처: [앱이 소유하는 설정](../specs/settings.md#앱이-소유하는-설정), [처음 실행](../specs/settings.md#처음-실행), [0113](../archive/tickets/refactoring-between-5-and-6/0113-remaining-area-tests.md)에서 만든 [검증 표](../specs/settings.md#검증-표)(2026-10-10)
+- 막는 티켓: [0114](../archive/tickets/refactoring-between-5-and-6/0114-refactor-final-check.md)(리팩터링 마지막 확인)
 
 ## 작업
 

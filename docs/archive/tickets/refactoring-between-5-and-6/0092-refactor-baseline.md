@@ -2,7 +2,7 @@
 
 - 상태: 완료 (2026-10-08)
 - 출처: [잣대와 기록](refactoring.md#잣대와-기록)
-- 막는 티켓: 목표 5의 모든 티켓([0079](../archive/tickets/5-deployed-verification/0079-musl-test-run.md)–[0091](../archive/tickets/5-deployed-verification/0091-trname-long-and-half-episodes.md), 0.6.1의 [0118](../archive/tickets/5-deployed-verification/0118-applied-copy-creator.md)–[0123](../archive/tickets/5-deployed-verification/0123-collect-moves-archived-work-folder.md)), 0.6.1 뒤에 찾아 리팩터링 전에 고치는 [0124](../archive/tickets/5-deployed-verification/0124-kept-copy-off-episode-row.md)–[0126](../archive/tickets/5-deployed-verification/0126-offset-suggestion-before-first-receive.md)
+- 막는 티켓: 목표 5의 모든 티켓([0079](../5-deployed-verification/0079-musl-test-run.md)–[0091](../5-deployed-verification/0091-trname-long-and-half-episodes.md), 0.6.1의 [0118](../5-deployed-verification/0118-applied-copy-creator.md)–[0123](../5-deployed-verification/0123-collect-moves-archived-work-folder.md)), 0.6.1 뒤에 찾아 리팩터링 전에 고치는 [0124](../5-deployed-verification/0124-kept-copy-off-episode-row.md)–[0126](../5-deployed-verification/0126-offset-suggestion-before-first-receive.md)
 
 ## 작업
 

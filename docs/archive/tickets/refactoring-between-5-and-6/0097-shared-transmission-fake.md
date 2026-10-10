@@ -1,7 +1,7 @@
 # 0097 Transmission 가짜 서버를 trss-collect의 테스트도 쓰게 옮겨요
 
 - 상태: 완료 (2026-10-08)
-- 출처: [수집 받기 줄기의 재구성](refactoring.md#수집-받기-줄기의-재구성), [ADR 0015](../adr/0015-test-a-rule-once-in-its-crate.md)
+- 출처: [수집 받기 줄기의 재구성](refactoring.md#수집-받기-줄기의-재구성), [ADR 0015](../../../adr/0015-test-a-rule-once-in-its-crate.md)
 - 막는 티켓: [0092](0092-refactor-baseline.md)(기준값)
 
 ## 작업

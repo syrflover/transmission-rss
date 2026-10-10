@@ -427,7 +427,7 @@ Anissia의 `subject`, 선택적인 `originalSubject`와 `startDate`는 해당 �
 ## 검증 표
 
 요구마다 실제 사용에서 본 것(날짜와 티켓), 테스트로 확인한 것(크레이트와 파일, 테스트 이름), 확인하지 않은 것을 나눠 적었어요. 테스트는 요구를 가장 직접 겨눈 것만 골라 적었고 같은 요구를 다루는 다른 테스트는 나열하지 않았어요.
-이 표는 2026-10-10에 `6e46ef1`에서, [0113](../tickets/0113-remaining-area-tests.md)이 남은 영역의 테스트를 나눈 뒤 만들었어요. 실제 사용은 배포한 서버(j4105)와 로컬 개발 환경이고, 개발 환경에서 무엇으로 봤는지(개발 환경 자체, 서버 DB 사본, 개발 DB 사본, 실제 외부 사이트, 시험 자막)를 괄호에 적었어요. 화면을 시험하려고 가짜 작품으로 채운 `임시 DB`의 확인은 실제 사용으로 세지 않고 확인하지 않은 것에 적었어요.
+이 표는 2026-10-10에 `6e46ef1`에서, [0113](../archive/tickets/refactoring-between-5-and-6/0113-remaining-area-tests.md)이 남은 영역의 테스트를 나눈 뒤 만들었어요. 실제 사용은 배포한 서버(j4105)와 로컬 개발 환경이고, 개발 환경에서 무엇으로 봤는지(개발 환경 자체, 서버 DB 사본, 개발 DB 사본, 실제 외부 사이트, 시험 자막)를 괄호에 적었어요. 화면을 시험하려고 가짜 작품으로 채운 `임시 DB`의 확인은 실제 사용으로 세지 않고 확인하지 않은 것에 적었어요.
 행은 요구의 항목 하나(최상위 글머리 기호, 규칙을 담은 문단, 입력·결과 표의 행)이고, 한 항목 안에서 확인 방법이 갈리는 부분은 칸 안에서 `<br>`로 나누고 `(1)`, `(2)`로 번호를 붙였어요. 외부 서비스, 브라우저, 디스크를 본 기록은 trss를 본 것이 아니라서 `근거만:`으로, 가짜 출처나 바꿔 넣은 응답으로 본 개발 환경의 확인은 `참고(가짜 출처):`로 따로 적었어요.
 명세에만 있고 만들지 않은 부분은 `만들지 않았어요`로 적고, 리팩터링 뒤에 그것을 만들 [0132](../tickets/0132-library-unbuilt-parts.md)를 붙였어요(사용자 결정, 2026-10-10).
 
@@ -659,4 +659,4 @@ Anissia의 `subject`, 선택적인 `originalSubject`와 `startDate`는 해당 �
 [0123]: ../archive/tickets/5-deployed-verification/0123-collect-moves-archived-work-folder.md
 [0124]: ../archive/tickets/5-deployed-verification/0124-kept-copy-off-episode-row.md
 [0127]: ../archive/tickets/5-deployed-verification/0127-row-waits-for-library-after-apply.md
-[0114]: ../tickets/0114-refactor-final-check.md#실제-서버-2026-10-10-070
+[0114]: ../archive/tickets/refactoring-between-5-and-6/0114-refactor-final-check.md#실제-서버-2026-10-10-070

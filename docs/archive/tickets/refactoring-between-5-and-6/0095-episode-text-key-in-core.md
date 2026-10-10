@@ -1,7 +1,7 @@
 # 0095 회차 텍스트의 키, 정렬, 표기를 trss-core 하나로 모아요
 
 - 상태: 완료 (2026-10-08)
-- 출처: [흩어진 개념 모으기](refactoring.md#흩어진-개념-모으기), [ADR 0016](../adr/0016-shared-parts-in-core.md)
+- 출처: [흩어진 개념 모으기](refactoring.md#흩어진-개념-모으기), [ADR 0016](../../../adr/0016-shared-parts-in-core.md)
 - 막는 티켓: [0092](0092-refactor-baseline.md)(기준값)
 
 ## 작업
@@ -69,4 +69,4 @@ trss-subtitles는 trss-core와 trss-browser에만 의존하므로, 모두가 볼
 - 앞은 통과 2,825개, 실패 0개, 무시 14개였어요.
 - `e03223e` 뒤에는 2,826·0·14예요. 목록이 `12`, `13.0`, `14`, `13.5`를 `12–14화`와 그 뒤의 `13.5`로 보이는지, `13.0`만 있으면 쓴 그대로 보이는지, `13.0` 자막이 `13` 영상을 덮는지 확인하는 테스트를 더했어요. 기존 테스트는 고치지 않았어요.
 - `eb58482` 뒤에는 2,832·0·14예요. 저장 꼴 `n:13`, `n:13.5`, `n:15`를 확인하는 trss-collect와 trss-jobs의 기존 테스트가 고치지 않고 통과했어요.
-- [ADR 0015](../adr/0015-test-a-rule-once-in-its-crate.md)대로 trss-subtitles의 `the_key_is_the_apps`와 trss-library의 `episodes_order_as_numbers_and_other_text_comes_last`를 지우고, 그 단언을 trss-core로 옮겼어요. trss-core의 테스트 8개는 키, 받지 않는 글자, 한 수의 여러 표기, 순서, `whole`과 `is_key`, `to_f64`, 저장 꼴, 두 표기를 확인해요.
+- [ADR 0015](../../../adr/0015-test-a-rule-once-in-its-crate.md)대로 trss-subtitles의 `the_key_is_the_apps`와 trss-library의 `episodes_order_as_numbers_and_other_text_comes_last`를 지우고, 그 단언을 trss-core로 옮겼어요. trss-core의 테스트 8개는 키, 받지 않는 글자, 한 수의 여러 표기, 순서, `whole`과 `is_key`, `to_f64`, 저장 꼴, 두 표기를 확인해요.

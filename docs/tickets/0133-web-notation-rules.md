@@ -1,8 +1,8 @@
 # 0133 화면을 웹 앱 공통 명세의 표기 규칙에 맞춰요
 
 - 상태: 대기
-- 출처: [접근 경계와 기기](../specs/web-app.md#접근-경계와-기기), [메뉴와 탐색](../specs/web-app.md#메뉴와-탐색), [시각 방향과 테마](../specs/web-app.md#시각-방향과-테마), [문구와 표기](../specs/web-app.md#문구와-표기), [0113](0113-remaining-area-tests.md)에서 만든 [검증 표](../specs/web-app.md#검증-표)(2026-10-10)
-- 막는 티켓: [0114](0114-refactor-final-check.md)(리팩터링 마지막 확인)
+- 출처: [접근 경계와 기기](../specs/web-app.md#접근-경계와-기기), [메뉴와 탐색](../specs/web-app.md#메뉴와-탐색), [시각 방향과 테마](../specs/web-app.md#시각-방향과-테마), [문구와 표기](../specs/web-app.md#문구와-표기), [0113](../archive/tickets/refactoring-between-5-and-6/0113-remaining-area-tests.md)에서 만든 [검증 표](../specs/web-app.md#검증-표)(2026-10-10)
+- 막는 티켓: [0114](../archive/tickets/refactoring-between-5-and-6/0114-refactor-final-check.md)(리팩터링 마지막 확인)
 
 ## 작업
 
@@ -22,7 +22,7 @@
   수집 상태(`StatusBoard.tsx`)는 개수만 보여주고, 관리 화면으로 가는 링크는 어느 화면에도 없어요. 링크 주소를 어디에서 얻을지 이 티켓에서 정해요.
 - **올해가 아닌 날짜의 연도**: 명세는 시각과 날짜에 올해가 아니면 연도를 붙인다고 해요.
   `web/src/lib/time.ts`의 `when()`과 `dateTime()`은 연도를 붙이지 않아요. `ago()`도 한 달이 지나면 `dateTime()`을 써요.
-  작품 상세 후보 목록의 갱신 시각(`web/src/screens/library/detail/candidates.ts`의 `updatedText`)은 연도를 붙이는 날짜 표기를 따로 가져요. [0114](0114-refactor-final-check.md)에서 찾았고, 이 규칙을 `lib/time.ts`에 맞출 때 그 한 곳을 쓰게 해요.
+  작품 상세 후보 목록의 갱신 시각(`web/src/screens/library/detail/candidates.ts`의 `updatedText`)은 연도를 붙이는 날짜 표기를 따로 가져요. [0114](../archive/tickets/refactoring-between-5-and-6/0114-refactor-final-check.md)에서 찾았고, 이 규칙을 `lib/time.ts`에 맞출 때 그 한 곳을 쓰게 해요.
 - **`교체 승인` 배지의 물음표**: 명세는 물음표 아이콘을 `확인 필요`에만 쓴다고 해요.
   할 일의 배지(`web/src/screens/todo/badges.tsx`)는 `교체 승인`에도 `QuestionIcon`을 써요. [0131](0131-waiting-state-names.md)이 이 이름을 `교체 승인 대기`로 바꾸므로, 아이콘은 그 이름에 맞게 정해요.
 
