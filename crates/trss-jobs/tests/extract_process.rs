@@ -17,9 +17,11 @@ use trss_archive::{
     Refusal,
 };
 
-/// A script that is written and then run can fail to start while another
-/// thread of the tests is starting a process ("text file busy"), so the tests
-/// start their processes one at a time.
+/// A script that is written and then run can fail to start ("text file busy")
+/// when another thread of the tests starts a process while the script is open
+/// for writing: the new process keeps a copy of the open file until it runs
+/// its program. So the tests write their scripts and start every process,
+/// `mkfifo` too, with this held.
 static START: Mutex<()> = Mutex::new(());
 
 const EXTRACT: &str = env!("CARGO_BIN_EXE_trss-extract");
@@ -48,10 +50,15 @@ impl Case {
     /// A named pipe nobody writes to: opening it for reading blocks.
     fn fifo(&self, name: &str) -> PathBuf {
         let path = self.dir.path().join(name);
-        let made = std::process::Command::new("mkfifo")
-            .arg(&path)
-            .status()
-            .unwrap();
+        let made = {
+            let _start = START
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            std::process::Command::new("mkfifo")
+                .arg(&path)
+                .status()
+                .unwrap()
+        };
         assert!(made.success());
         path
     }
@@ -424,16 +431,22 @@ fn the_child_is_the_process_the_oom_killer_picks_and_leaves_no_core_dump() {
     let case = Case::new();
     // The child blocks on opening the input, after it has put its limits on.
     let fifo = case.fifo("pack.zip");
-    let mut child = std::process::Command::new(EXTRACT)
-        .arg(case.out())
-        .arg("pack.zip")
-        .arg(&fifo)
-        .env_clear()
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .unwrap();
+    // Held only while the child starts: it runs on while the test reads it.
+    let mut child = {
+        let _start = START
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        std::process::Command::new(EXTRACT)
+            .arg(case.out())
+            .arg("pack.zip")
+            .arg(&fifo)
+            .env_clear()
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap()
+    };
     let pid = child.id();
     let read = |pid: u32| {
         (
