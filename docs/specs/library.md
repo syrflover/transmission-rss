@@ -24,6 +24,10 @@
 - 감시 폴더의 변경은 inotify 알림으로 받아 바뀐 작품만 곧바로 다시 읽고, 알림으로 알 수 없는 때(worker 시작, 알림 큐 넘침, 감시를 걸지 못한 폴더)와 1시간마다의 안전망은 폴더 수정 시각으로 바뀐 폴더를 찾아요(사용자 결정, 2026-10-01).
   폴더 수정 시각은 바뀐 폴더를 찾는 데만 쓰고 추가 시각으로 쓰지 않아요.
   감시 폴더 관리 화면의 위치는 [설정 화면](settings.md#설정-화면)을 따라요.
+- [극장판(Movie)](../glossary.md)은 라이브러리에서 알아보고 자막을 받지만, RSS 규칙으로 받지는 않아요(사용자 결정, 2026-10-11). 극장판 영상은 사람이 작품 폴더에 넣어요. 자리와 판정을 고른 까닭은 [극장판 ADR](../adr/0017-movies-by-place-and-anissia-link.md)에 있어요.
+  - 극장판만 있는 작품은 작품 폴더 바로 아래에 영상을 둬요(사용자 결정, 2026-10-11). 시즌 폴더가 없고 바로 아래 영상이 하나뿐인 작품은 그 영상을 극장판으로 알아봐요. 2026-10-10 서버의 `Chou Kaguya-hime!/Chou Kaguya-hime!.mkv`가 이 꼴이고, 0.7.0은 이 영상을 알아보지 못해요.
+  - 시즌이 있는 작품의 극장판은 `Season 00`에 `S00Exx` 이름으로 둬요(사용자 결정, 2026-10-11). 2026-10-10 서버의 Re Zero, Made in Abyss, Konosuba가 이 꼴이에요. `Season 00` 회차가 극장판인지는 그 회차에 Anissia 작품을 이었는지로 정해요([작품 연결과 제외](#작품-연결과-제외)).
+  - 시즌 폴더가 없는 작품 폴더의 바로 아래 영상이 여럿이거나, 시즌 폴더가 있는 작품 폴더의 바로 아래에 영상이 있으면 지금처럼 극장판으로 보지 않고 `파일` 카드의 `회차를 확인하지 못한 파일`에 둬요.
 
 ### 작품 연결과 제외
 
@@ -44,6 +48,8 @@
   구독을 삭제해도 시즌의 연결은 남고(사용자 결정, 2026-10-02), 그 뒤 작품 상세에서 바꾸거나 끊어요.
   [보관 폴더 병합](collection.md#규칙-보관)으로 두 작품이 합쳐질 때 합쳐지는 쪽 시즌의 연결은 남는 쪽 시즌에 연결 기록이 없을 때만 넘어가고, 남는 쪽이 끊어 둔 시즌은 합쳐지는 쪽의 연결을 받지 않고 끊어진 채예요. 다만 합쳐지는 쪽 구독이 그 시즌에 옮겨 와 이어지면, 구독의 작품이 그 시즌의 연결을 채워요. 합쳐지는 쪽 시즌에 이어진 구독은 남는 쪽의 같은 시즌으로 옮겨 가요. 남는 쪽 시즌이 다른 구독이나 다른 작품의 연결에 이미 잡혀 있으면 구독을 잇지 않고 [그 사실을 규칙 상세에 알려요](collection.md#방영작-구독).
   두 화면이 동시에 바꾸면 늦은 쪽이 버전 충돌로 거절되고, 고르던 검색어와 작품은 그대로 남아요.
+  극장판은 Anissia 연결을 극장판마다 가져요(사용자 결정, 2026-10-11). 극장판만 있는 작품은 작품 상세에서 그 극장판을, 시즌이 있는 작품은 `Season 00`의 회차 줄에서 그 회차를 Anissia 작품에 이어요. Re Zero처럼 `Season 00`에 극장판이 둘이면 Anissia 작품도 둘이라서, 시즌 하나에 Anissia 작품 하나를 잇는 시즌 연결로는 담을 수 없기 때문이에요.
+  `Season 00` 회차는 Anissia 작품을 이으면 극장판이 되고, 끊으면 보통 회차로 돌아가요. AniList의 MOVIE 항목으로 극장판을 정하지 않는 것은, `Season 00` 번호는 사용자가 매긴 것이고 OVA·스페셜이 섞여 있어 틀리게 붙을 수 있기 때문이에요. 극장판을 잇는 창과 찾기, 바꾸기, 끊기, 버전 충돌은 시즌 연결과 같아요.
   전체 목록 검색은 Anissia 공식 문서에 없는 `/anime/list/<page>?q=` 응답을 쓰므로, 응답 형식이 바뀌거나 실패하면 검색 실패를 알리고 편성표 고르기와 이미 저장한 연결은 그대로 둬요.
   Anissia 요청은 편성표와 같은 요청 간격·`429` 대기를 함께 지켜요.
 - 같은 작품의 다음 회차에서 확인한 연결을 재사용하며, 이름이 비슷하다는 이유만으로 다른 작품·시즌에 확정 연결하지 않아요.
@@ -135,6 +141,10 @@
 이 대응은 숫자 해석과 연결의 계약이며, 미지원 영상 이름이나 특수편을 자동 식별한다는 약속은 아니에요.
 자막의 회차 대응은 영상 이름을 바꿀 때 쓰는 규칙의 [회차 변환](collection.md#영상-회차-변환)과 다른 값이며, 서로 전용하거나 복사하지 않아요.
 
+극장판은 회차가 하나뿐이라 회차 대응을 두지 않아요. 극장판에 이은 Anissia 작품의 자막 후보는 회차 표시와 상관없이 그 극장판에 붙여요.
+Anissia는 극장판 자막의 회차를 대개 `0`으로 적어요. 2026-10-02 조사에서 작품별 자막 55줄 가운데 `0`이면서 주소가 있는 줄은 극장판, 유튜브 영상, 블로그 첫 화면이었어요([0033](../archive/tickets/3-subtitle-candidates-and-receiving/0033-source-paths-spike.md)).
+극장판에도 후보 받기와 [자막 올리기](subtitles.md#직접-찾기와-자막-올리기)가 돼요. `직접 찾기`는 제작자의 가장 새 게시물을 여는 방영 중 시즌의 길이라서 극장판에는 두지 않아요.
+
 ### 작품 표지
 
 [표지 ADR](../adr/0007-anilist-work-artwork.md)에 따라 등록된 작품에 필요한 AniList 검색으로 명확한 표지만 자동 지정하고, 사용자는 검색 결과를 직접 선택하거나 이미지 파일을 업로드할 수 있어요.
@@ -214,6 +224,8 @@ Anissia의 `subject`, 선택적인 `originalSubject`와 `startDate`는 해당 �
   표지 이미지는 [이미지 파일의 수명](#이미지-파일의-수명)대로 받아 검증한 뒤에 바꾸고, 받지 못하면 기존 표지를 그대로 두고 연결은 저장해요.
   이렇게 바뀐 표지도 자동 상태이므로, 나중에 가장 앞 시즌의 연결이 바뀌면 다시 따라가요.
   가장 앞 시즌은 시즌 1 이상에서 세며 스페셜(시즌 0)은 따라가지 않고, 연결이 모두 없어지면 표지를 그대로 둬요(사용자 결정, 2026-10-02).
+  극장판만 있는 작품은 시즌이 없으므로 그 극장판에 이은 AniList 항목을 같은 규칙으로 따라가요.
+- 극장판만 있는 작품은 시즌 대신 그 극장판에 AniList 항목을 이어 시즌 정보 칸을 채워요. 이 연결을 정하는 규칙(가장 앞 시즌의 자동 연결, `자동` 표시, 고치기)은 가장 앞 시즌과 같아요.
 
 - 한 로컬 시즌에 AniList 항목을 하나 이상 순서대로 연결해요(사용자 결정, 2026-10-01). TheTVDB 시즌 하나가 AniList에서 1쿨·2쿨 두 항목으로 나뉘는 일이 흔하기 때문이에요.
   여러 항목이면 방영은 첫 항목의 시작일부터 마지막 항목의 종료일까지, 분량은 회차 수의 합, 제작사·장르는 순서를 지킨 합친 목록이에요. 한 항목의 회차 수가 미상이면 분량도 미상이에요.
@@ -233,6 +245,12 @@ Anissia의 `subject`, 선택적인 `originalSubject`와 `startDate`는 해당 �
 고른 보기는 페이지가 열려 있는 동안 유지하고, 새로고침하거나 새 페이지로 열면 표지 격자로 시작해요(사용자 결정, 2026-10-04).
 목록은 서버가 정렬·필터·검색한 결과를 페이지로 나눠, 끝에 닿으면 다음 페이지를 이어서 불러와요(사용자 결정, 2026-10-01). 작품 수와 작품마다 붙는 정보가 늘어도 한 번에 받는 양이 커지지 않게 하려는 거예요.
 라이브러리의 작품은 500편을 넘을 것으로 보고, 약 520편의 자료로 격자·목록·정렬·검색이 느려지거나 스크롤 위치를 잃지 않는지 확인해요.
+
+[작품명(Work Title)](../glossary.md)은 Anissia에 이은 가장 앞 시즌(시즌 1 이상)의 Anissia 제목이에요. 구독으로 이었든 작품 상세에서 손으로 이었든 같아요(사용자 결정, 2026-10-11).
+가장 앞 시즌을 고르는 규칙은 [자동 표지](#시즌-정보)와 같아서, `Season 00`의 극장판 연결은 작품명에 쓰지 않아요(사용자 결정, 2026-10-11). 그래서 2기를 구독해도 작품명은 `도망을 잘 치는 도련님`처럼 1기 제목으로 남아요.
+극장판만 있는 작품의 작품명은 그 극장판에 이은 Anissia 제목이에요. Anissia에 이은 것이 없으면 작품 폴더 이름이에요.
+0.7.0은 한국어 제목을 작품 상세 머리에만 쓰고, 그것도 구독이 이어진 시즌에서만 가져와요. 그래서 손으로 이은 `All Works Maid`도 폴더 이름으로 보이고, 라이브러리 격자와 목록은 모든 작품이 폴더 이름이에요.
+작품명은 라이브러리 격자와 목록, 작품 상세 머리, 할 일처럼 라이브러리 작품을 부르는 곳에 같게 써요. `제목순` 정렬은 작품명을 따르고, 검색은 작품명과 작품 폴더 이름으로 모두 찾아요.
 
 - 격자 보기는 표지와 제목 아래에 영상·자막 상태를 두 줄로 보여주고, 할 일이 있으면 그 배지를 표지 왼쪽 위에 올려요.
   배지는 처리 필요의 종류(`인증 필요`·`받기 실패`·`교체 승인`·`회차 확인 필요`)를 [할 일 화면](jobs.md#할-일-화면)과 같은 이름·색으로, 작품에 있는 종류마다 하나씩 할 일 순서로 쌓아요. 제안은 배지로 올리지 않아요(구현 결정, 2026-10-06).
@@ -257,7 +275,7 @@ Anissia의 `subject`, 선택적인 `originalSubject`와 `startDate`는 해당 �
 추가 기록과 출처 갱신일·파일시스템 수정 시각을 혼동하지 않아요.
 영상·자막 파일의 추가 시각은 앱이 감시 폴더를 확인하다 그 파일을 처음 본 시각이고, 감시 폴더를 등록할 때의 첫 확인에 이미 있던 파일은 미상이에요. 작품 추가 시각도 같은 규칙으로 첫 확인 뒤 새로 나타난 작품 폴더만 가져요.
 필터는 `전체`·`방영 중`·`자막 다 갖춤`·`자막 일부`·`자막 없음`·`확인 필요`이고, 정렬과 함께 사용할 수 있어요.
-제목·원제·영문명으로 작품과 등록 시즌을 찾아요.
+작품명·작품 폴더 이름·원제·영문명으로 작품과 등록 시즌을 찾아요.
 작품 상세 방문·뒤로 가기에서 보기·정렬·검색·필터·스크롤 위치를 잃지 않으며, 정렬 변경만으로 작업 선택이나 다운로드·승인이 생기지 않아요.
 보기·정렬·검색·필터는 페이지가 열려 있는 동안만 유지해요. 새로고침하거나 새 페이지로 열면 표지 격자·최근 자막 추가순·빈 검색·`전체`로 시작해요(사용자 결정, 2026-10-04).
 정렬은 다섯 기준의 서로 다른 기대 순서를 가진 자료로 상세 이동·뒤로 가기와 새로고침 뒤의 기본 정렬까지 확인해요.
@@ -270,7 +288,7 @@ Anissia의 `subject`, 선택적인 `originalSubject`와 `startDate`는 해당 �
 
 #### 머리와 시즌
 
-- 머리에는 표지·한국어 작품명·원제와 선택한 시즌의 자막 제작자를 둬요.
+- 머리에는 표지·[작품명](#라이브러리-화면)·원제와 선택한 시즌의 자막 제작자를 둬요.
   자막 제작자는 시즌마다 다르거나 한 시즌에 여럿일 수 있으므로 선택한 시즌의 제작자를 모두 보여주고, 구독 제작자가 정해지지 않았으면 `제작자 미정`, 직접 넣은 파일처럼 제작자를 모르면 `제작자 알 수 없음`이에요.
   제작자는 이름만 보여주고, 구독 제작자에 `따라 받기`를 붙이지 않아요(사용자 결정, 2026-10-02). 이름표가 이미 자막 제작자라고 말하기 때문이에요. 제작자를 고르는 목록의 선택지도 이름만 두며, 무엇을 고르는지는 목록의 제목이 알려요.
   구독 제작자는 머리의 `제작자 변경`에서 바꿔요.
@@ -331,7 +349,8 @@ Anissia의 `subject`, 선택적인 `originalSubject`와 `startDate`는 해당 �
 자막 체크는 확인된 파일 보유만 뜻하며 배치 완료·후보 발견·교체 승인을 뜻하지 않아요.
 보기만 하거나 골라도 되는 상태는 색 없이 해당 회차 줄에 조용히 적어요.
 정상 회차에 적용 위치나 같은 폴더에 배치했다는 설명을 반복하지 않아요.
-극장판은 `본편`으로 구분해요.
+극장판만 있는 작품의 회차 목록은 `본편` 한 줄이고, 시즌 타일과 `시즌 변경`을 두지 않아요. Anissia 연결은 작품 상세의 시즌 연결 자리에서 그 극장판에 해요.
+`Season 00`에서 Anissia 작품을 이은 회차 줄은 회차 번호 옆에 `극장판`과 이은 Anissia 제목을 둬요(사용자 결정, 2026-10-11). `Season 00`의 회차 줄을 펼친 자리에는 Anissia 극장판을 잇거나 바꾸거나 끊는 버튼을 둬요.
 
 | 입력·상태 | 필요한 화면 결과 |
 | --- | --- |
@@ -359,6 +378,7 @@ Anissia의 `subject`, 선택적인 `originalSubject`와 `startDate`는 해당 �
   `직접 찾기`는 후보 목록 바로 아래에 있고, 후보의 제작자 가운데 하나(처음 값은 목록의 첫 제작자)와 그 제작자 게시물의 호스트를 보여줘요. 누르면 작업을 만들고 그 작업 상세로 가요.
   후보가 없는 시즌(Anissia 연결이 없거나 관찰한 제작자가 없는 시즌)에는 `직접 찾기`가 없어요.
 - Anissia 연결이 없는 시즌에는 후보 대신 `Anissia 연결`과 자막 올리기만 둬요.
+- 극장판만 있는 작품은 그 극장판에 이은 Anissia 작품의 후보를 보여주고, `Season 00`은 시즌 연결의 후보와 함께 극장판마다 이은 Anissia 작품의 후보를 보여줘요. 극장판의 후보는 [회차 대응](#자막의-회차-대응)대로 그 극장판의 줄 하나에 모이고, 극장판에는 `직접 찾기`와 `회차 대응 정하기`가 없어요.
 - 펼친 제작자 묶음의 `회차 대응 정하기`는 제작자의 [회차 대응](#자막의-회차-대응)을 정하는 창을 열고, 직접 정한 대응에는 `자동으로 되돌리기`를 함께 둬요.
   [`회차 확인 필요`](jobs.md#할-일) 할 일이 이 구역의 그 제작자 묶음을 펼쳐서 열어요.
   창은 휴대폰 너비에서도 가로로 스크롤하지 않고 쓸 수 있어요.
@@ -443,6 +463,7 @@ Anissia의 `subject`, 선택적인 `originalSubject`와 `startDate`는 해당 �
 | 감시 폴더의 등록 해제와 제자리 확인 | 없음 | `trss-web` `watch_folders_api/tests.rs` `unregistering_takes_the_works_out_and_the_same_path_brings_them_back_under_their_ids`; `trss-library` `store/library/tests.rs` `unregistering_keeps_the_works_out_of_the_library_until_the_same_path_comes_back` | 저장한 자막 기록(자막 후보·보관본)이 남는 것을 겨눈 테스트는 찾지 못했고, 작품 행이 남는 것까지만 봐요. 제자리 확인은 화면 코드라 테스트가 없어요. |
 | 폴더 줄의 경로·작품 수·연결한 작품 수·새로 발견한 작품 수·마지막 확인 시각과 `다시 확인`·`등록 해제` | 없음 | `trss-web` `watch_folders_api/tests.rs` `the_row_counts_new_works_found_within_a_week_after_the_first_reading`; `trss-worker` `tests/it/library_watch.rs` `a_rescan_the_web_accepted_is_run_by_the_worker_once_per_command_id` | `연결한 작품 수`는 만들지 않았어요. 응답이 늘 0을 담아요(`crates/trss-web/src/watch_folders_api.rs`) ([0132](../tickets/0132-library-unbuilt-parts.md)). 폴더 줄 화면(`FoldersPanel.tsx`)은 테스트도 본 기록도 없어요. |
 | inotify 알림으로 바뀐 작품만 다시 읽기, 알림이 없을 때와 1시간 안전망의 폴더 수정 시각 | 2026-10-02 서버: 새 회차가 알림으로 3초 만에 읽혀 다음 주기보다 21초 앞섰어요 ([0016])<br>2026-10-07 서버: 감시가 폴더 76개와 154개에 걸렸고 걸지 못한 폴더는 없었어요 ([0081]) | `trss-library` `live/tests.rs` `a_file_added_while_the_worker_runs_is_recorded_without_a_cycle_and_only_its_work_is_read`; `watch/scan_tests.rs` `the_periodic_scan_skips_unchanged_directories_and_a_full_scan_reads_everything` | 실제 `fs.inotify.max_user_watches` 소진(`ENOSPC`)은 시험 경계와 오류 번호 해석만 봤어요. 변경 없는 실제 1시간은 기다리지 않았고 실제 프로세스는 100초만 봤어요 ([0016]). worker 시작과 알림 큐 넘침 뒤 읽기는 본 기록이 없어요. |
+| 극장판의 위치(극장판만 있는 작품은 바로 아래 영상 하나, 시즌이 있는 작품은 `Season 00`), 극장판으로 보지 않는 바로 아래 영상, RSS 규칙으로는 받지 않음 | 없음 | 없음 | 만들지 않았어요([0139](../tickets/0139-movie-only-works.md), [0140](../tickets/0140-movies-in-season-00.md)). 2026-10-10 서버의 `Chou Kaguya-hime!` 영상은 0.7.0이 알아보지 못해요. |
 
 ### 작품 연결과 제외
 
@@ -455,6 +476,7 @@ Anissia의 `subject`, 선택적인 `originalSubject`와 `startDate`는 해당 �
 | 시즌마다 저장하는 Anissia 연결과 `Anissia 연결` 창 | 2026-10-02 개발(서버 DB 사본, 실제 사이트): `메이드` 검색으로 3492를 연결하자 200(버전 1)이었고, 낡은 버전 저장은 409, 구독이 이은 시즌 변경은 400이었어요 ([0034])<br>2026-10-07 서버: 사용자가 휴대폰에서 `All Works Maid` 시즌 1을 3492에 연결했어요 ([0083])<br>근거만: Anissia 전체 목록 검색은 한국어 `subject`만 찾았어요 ([0034]) | `trss-web` `seasons_anissia_api/tests.rs`: (3) `a_finished_show_is_found_by_the_folder_name_and_saved_as_the_seasons_link`; (4) 없음; (5) `the_view_lists_the_titles_to_read_without_empty_or_repeated_ones`; (8) `a_season_a_subscription_holds_cannot_be_changed_from_the_work_detail`; (11) `a_late_save_from_a_second_screen_is_a_version_conflict_that_carries_the_current_link`; (12) `a_search_that_fails_says_so_and_neither_the_schedule_nor_the_stored_link_is_affected`<br>`trss-collect` `store/channels/season_anime_tests.rs`: (2) `an_unsubscribed_season_is_linked_to_a_finished_anime_changed_and_cut`; (9) `deleting_the_subscription_leaves_the_link_and_frees_the_season`<br>`trss-library`: (1) `store/seasons/anissia_tests.rs` `a_season_never_linked_has_version_zero_and_each_change_moves_the_version_on`; (6) `store/seasons/tests.rs` `an_entrys_korean_titles_are_stored_and_replaced_when_it_is_received_again`; (10) `store/seasons/anissia_tests.rs` `an_archive_move_that_merges_two_works_fills_only_the_seasons_the_kept_work_has_no_row_for`<br>(7) `trss-web` `library_work_api/tests.rs` `the_head_of_a_work_names_the_subscription_of_its_season_and_the_anissia_title`<br>(13) `trss-anissia` `tests.rs` `a_429_blocks_every_request_until_its_retry_after_has_passed` | (1) 시즌별 저장 (2) 연결·바꾸기·끊기 (3) 전체 목록 검색·편성표 (4) 검색어를 사용자가 씀 (5) 빈 창과 참고 제목 (6) 한국어 제목 저장 (7) 연결 이름 표시 (8) 구독이 이은 시즌 (9) 구독 삭제 뒤 (10) 보관 폴더 병합 (11) 두 화면의 충돌 (12) 검색 실패 (13) 요청 간격·`429`.<br>(4) 앱이 검색어를 정하지 않는 것은 테스트가 없고, (3)의 테스트는 요청이 보낸 검색어로 찾는 것만 봐요. (5)의 빈 검색어 창, (7) 연결 이름, (11)의 입력 유지는 화면 코드(`SeasonAnissiaDialog.tsx`)라 테스트가 없어요.<br>편성표 고르기, (6) 서버에서 한국어 제목이 채워지는 것, (10) 병합은 본 기록이 없어요. (13) 실제 `429`는 받은 기록을 찾지 못했어요. |
 | 같은 작품의 다음 회차에서 확인한 연결을 재사용하고 이름이 비슷하다는 이유만으로 확정 연결하지 않음 | 없음 | `trss-collect` `season_link/tests.rs` `videos_a_person_put_in_or_other_rules_received_connect_nothing`, `a_season_another_anime_holds_is_not_taken_and_the_rule_notes_it` | 이름이 비슷한 다른 작품·시즌에 잇지 않는 것은 위 두 경우만 봐요. |
 | 같은 회차의 중복 영상을 임의의 대상에 배치하지 않음 | 없음 | `trss-collect` `revisions/deciding_tests.rs` `another_release_of_the_episode_is_held_as_a_duplicate_not_a_replacement` | 같은 릴리스의 높은 수정본은 [영상 수정본의 대체](collection.md#영상-수정본의-대체)가 다뤄요. 나머지 중복의 선택 흐름은 명세가 보류해서 만들지 않았어요. |
+| 극장판마다의 Anissia 연결(극장판만 있는 작품, `Season 00` 회차), 이으면 극장판이고 끊으면 보통 회차 | 없음 | 없음 | 만들지 않았어요([0139](../tickets/0139-movie-only-works.md), [0140](../tickets/0140-movies-in-season-00.md)). |
 
 ### 자막의 회차 대응
 
@@ -468,6 +490,7 @@ Anissia의 `subject`, 선택적인 `originalSubject`와 `startDate`는 해당 �
 | 회차 대응을 수정했을 때 보관본과 미완료 작업의 재평가, 재배치 작업 | 2026-10-06 개발(서버 DB 사본): 대응을 `+1`로 저장하자 파일은 그대로 있었고 표에 `1화 적용본 제거 → 2화 적용`이 나왔어요 ([0071]) | `trss-jobs` `tests/it/relocate.rs`(파일 전체); `trss-jobs` `mapping/tests.rs` `the_user_saving_while_the_app_is_about_to_store_its_decision_keeps_the_users_mapping` | 못 찾은 줄의 `바뀐 회차 대응으로 회차를 정하지 못했어요: <까닭>` 문장을 겨눈 테스트가 없어요. 재평가가 대응을 쓰는 것과 같은 트랜잭션인 것은 코드(`crates/trss-jobs/src/mapping.rs`)를 읽어 확인했고, 두 쓰기가 겹치는 경우는 둘째 테스트가 하나만 봐요. 이전을 실제 `Db::open`으로 개발 DB에 적용해 본 기록과 서버에서 대응을 고쳐 재배치가 일어난 기록이 없어요. |
 | 대응의 구성(출처 연결과 회차 근거마다 기본 대응 하나와 예외)과 숫자 회차의 비교 키 | 없음 | `trss-core` `episode.rs` `spellings_of_one_number_are_one_key`, `a_number_larger_than_any_float_keeps_its_digits` | 같은 출처 연결과 근거에 기본 대응을 하나만 두는 제약을 겨눈 테스트는 찾지 못했어요. |
 | 대응 적용 순서와 보류, 회차 변환과 다른 값 | 없음 | `trss-library` `mapping/tests.rs` `an_exception_is_applied_before_the_offset_and_the_others_follow_the_offset`; `trss-jobs` `place/episode.rs` `what_the_mapping_cannot_place_is_asked` | 순서의 앞 두 단계(연결 확인, 회차 관찰값 확인)와 잘못된 출처·시즌, 후보 번호와 첨부 번호의 불일치를 구분하는 것은 테스트가 없어요(첨부 번호 견주기는 [묶음 분석](subtitles.md#파일의-회차)이 다뤄요). 회차 대응과 규칙의 회차 변환을 서로 쓰지 않는 것도 테스트가 없어요. |
+| 극장판의 후보는 회차 표시와 상관없이 그 극장판에 붙음, 후보 받기와 자막 올리기, `직접 찾기` 없음 | 없음 | 없음 | 만들지 않았어요([0139](../tickets/0139-movie-only-works.md), [0140](../tickets/0140-movies-in-season-00.md)). |
 
 ### 작품 표지
 
@@ -520,6 +543,7 @@ Anissia의 `subject`, 선택적인 `originalSubject`와 `startDate`는 해당 �
 | `방영연도순`, `방영 중`, 연결한 항목의 제목으로 하는 검색 | 없음 | `trss-web` `seasons_api/tests.rs` `the_library_list_takes_the_year_sort_the_airing_filter_and_the_titles_of_linked_entries` | 실제 데이터로 이 정렬·필터·검색을 본 기록은 찾지 못했어요. |
 | 방영 전·방영 중 항목은 하루 한 번 다시 받고 끝난 항목은 요청할 때만, 표지와 같은 간격·`429` 대기 | 없음 | `trss-library` `seasons/tests.rs` `entries_that_are_not_finished_are_received_again_a_day_later_and_finished_ones_are_not`, `a_429_holds_the_refresh_for_as_long_as_it_says_and_a_failure_waits_an_hour` | 하루 갱신은 손으로 옮기는 시계 시험으로만 봤고 실제로 하루를 기다리지 않았어요 ([0017]). 실제 AniList의 `429`는 받은 기록이 없어요. |
 | 연결이 없거나 받기 전이면 시즌 정보 칸은 `미상`, 다른 시즌의 정보나 파일 상태로 채우지 않음 | 2026-10-02 서버: AniList를 잇지 않은 `Re Zero kara Hajimeru Isekai Seikatsu`의 시즌 정보가 모두 `미상`으로 그려졌어요 ([0014]) | `trss-web` `seasons_api/tests.rs` `a_season_without_a_link_is_unknown_and_never_filled_from_another_season` | `미상` 글자를 그리는 화면은 테스트가 없어요. 연결은 있으나 항목을 아직 받지 못한 상태는 본 기록이 없어요. |
+| 극장판만 있는 작품의 AniList 연결과 자동 표지 | 없음 | 없음 | 만들지 않았어요([0139](../tickets/0139-movie-only-works.md)). |
 
 ### 라이브러리 화면
 
@@ -528,6 +552,7 @@ Anissia의 `subject`, 선택적인 `originalSubject`와 `startDate`는 해당 �
 | 요구 | 실제 사용에서 본 것 | 테스트로 확인한 것 | 확인하지 않은 것 |
 | --- | --- | --- | --- |
 | 한 목록, 표지 격자와 목록 보기 전환, 페이지로 이어 받기, 520편 규모 | 2026-10-02 서버: 작품 29편(뒤에 30편)이 떴어요 ([0013])<br>2026-10-04 개발(개발 환경, 작품 89편): 새로고침하면 기본 보기로 첫 페이지 60편이 열리고 나머지 29편이 이어졌어요 ([0013]) | (1) 없음<br>(2) `trss-web` `src/library_api/tests.rs` `following_next_reaches_every_work_once_and_the_last_page_has_no_next`<br>(3) 없음 | (1) 보기 전환·유지의 화면 시험이 없어요 ([0013])<br>(3) 520편은 사람이 본 확인이 아니고 실제 기기에서는 89편만 스크롤했어요(520편 확인은 하지 않기로 했어요, 사용자 결정 2026-10-04). Firefox는 보지 않았어요 |
+| 작품명(가장 앞 시즌의 Anissia 제목, 극장판만 있는 작품, 폴더 이름), 작품명을 쓰는 곳, `제목순`과 검색 | 없음 | 없음 | 만들지 않았어요([0138](../tickets/0138-work-title-from-anissia.md)). 0.7.0은 작품 상세 머리에만 구독이 이은 시즌의 제목을 써요(`trss-web` `library_work_api.rs`). |
 | 격자 보기와 할 일 배지 | 2026-10-06 개발(개발 DB 사본): 한 작품에 `인증 필요`·`교체 승인`·`회차 확인 필요` 배지가 표지 왼쪽 위에 올랐고, 할 일을 처리하자 사라졌어요 ([0075]) | `trss-web` `src/library_api/tests.rs` `a_page_badges_a_work_with_its_to_dos_and_a_job_of_no_work_badges_nothing`<br>`web` `src/screens/todo/kinds.test.ts` `kept works take the badges of the list read again, and the unchanged ones stay the same objects` | 이름·색이 할 일 화면과 같은지와 쌓는 모양은 시험이 없어요. `받기 실패` 배지를 격자에서 본 적이 없어요 |
 | 목록 보기, 48px 폭의 표지와 한 줄 상태 | 2026-10-04 개발(개발 환경): iPhone Safari로 목록 끝까지 스크롤했고 가로로 밀리지 않았어요 ([0013]) | 없음 | 표지 폭 48px은 임시 DB에서만 측정했어요. 키보드 초점 표시와 글자 대비는 측정하지 않았어요 ([0013]) |
 | 이미지가 없거나 불러오지 못할 때의 목록 | 2026-10-06 개발(개발 DB 사본): 표지 파일이 없는 채로 작품을 열었고 콘솔 오류는 표지 404뿐이었어요 ([0075]) | 없음 | 표지를 못 불러올 때의 모양을 겨냥한 확인은 없고 서버에서는 보지 않았어요 |
@@ -565,7 +590,7 @@ Anissia의 `subject`, 선택적인 `originalSubject`와 `startDate`는 해당 �
 | 요구 | 실제 사용에서 본 것 | 테스트로 확인한 것 | 확인하지 않은 것 |
 | --- | --- | --- | --- |
 | 위쪽 `할 일`(사용자가 해야 하는 것만 카드, 없으면 빈 구역 없음, 처리하면 사라짐, 카드 구성, 교체 승인·인증·회차 확인·자막 작업·회차 대응·`받기 실패` 카드) | 2026-10-06 개발(개발 DB 사본): `교체 승인` 카드에 받은 시각·숫자 태그·`비교`가 있어 작업 상세가 열렸고, 승인 작업 9건을 SQL로 끝내자 카드가 사라졌어요 ([0075])<br>2026-10-06 개발(서버 DB 사본): `확인함`을 누르면 카드가 없어지고 메뉴 개수가 11에서 10이 됐어요 ([0078]) | `trss-jobs` `src/todo/tests.rs` `the_list_has_auth_then_receive_failed_then_replacement_then_the_checks_each_newest_first` | 카드의 색, 표지와 제목을 빼는 배치, 대상 줄의 시즌은 화면 시험이 없어요. `올림` 태그와 자막 작업의 회차 확인 카드(`확인`)는 화면에서 본 적이 없고 배치 확인 카드는 가짜 출처의 보류 파일로만 봤어요 ([0075]). `회차 대응 정하기`·`회차 보기` 버튼이 구역을 여는 것은 시험이 없어요. 서버에서는 카드를 본 적이 없어요 |
-| 회차 목록(순서, 회차 줄, 보유 표시, 조용한 상태, 극장판 `본편`) | (1) 2026-10-04 개발(개발 환경): `1화부터`를 누르면 1화가 위로 왔고 새로고침하면 최신 화부터였어요 ([0014])<br>(2) 같은 날 같은 환경: 줄을 펼치면 파일 이름과 추가 시각이 보였어요 ([0014])<br>(3) 없음<br>(4) 2026-10-08 개발(서버 DB 사본, 시험 자막): 영상 대기 자막이 `영상 −`·`자막 ✓`로 떴어요 ([0083])<br>(5) 2026-10-08 서버: `보관본 있음`이 1화와 5–8화 줄에 조용히 적혔어요 ([0120])<br>(6) 없음 | (1) 없음<br>(2) `trss-web` `src/library_work_api/tests.rs` `a_season_with_no_subtitle_has_no_runs_of_it_and_stored_rows_and_copies_are_shown`<br>(3) 없음<br>(4) 같은 파일 `a_stored_subtitle_waiting_for_its_video_says_so`<br>(5) 없음<br>(6) 없음 | (1) 고른 순서가 다른 작품에 이어지는 것은 시험이 없어요<br>(2) 줄 배치와 예외 배지 모양은 시험이 없어요. `예외 배지`라는 이름은 코드에 없고 `영상 대기`·`교체 승인`·`받기 실패`·`보관본 있음`이 만들어져 있어요. 수백 회차는 측정하지 않았어요(60회차까지, [0014])<br>(3) 스크린 리더로 의미를 들은 적과 체크 크기 측정이 없어요 ([0014])<br>(4) 후보·교체 승인 상태에서 체크가 안 켜지는 것은 화면 시험이 없고 영상 대기는 서버에서 보지 않았어요<br>(5) 색이 없는 것과 정상 회차에 설명이 없는 것은 시험이 없고 `교체 비교` 줄은 휴대폰 크기 흉내로만 봤어요 ([0120])<br>(6) 만들지 않았어요 ([0132](../tickets/0132-library-unbuilt-parts.md)). 코드에 `본편`이 없고 극장판 표시를 `web/src`와 `crates`에서 찾지 못했어요 |
+| 회차 목록(순서, 회차 줄, 보유 표시, 조용한 상태, 극장판의 `본편` 줄과 `Season 00`의 `극장판` 줄) | (1) 2026-10-04 개발(개발 환경): `1화부터`를 누르면 1화가 위로 왔고 새로고침하면 최신 화부터였어요 ([0014])<br>(2) 같은 날 같은 환경: 줄을 펼치면 파일 이름과 추가 시각이 보였어요 ([0014])<br>(3) 없음<br>(4) 2026-10-08 개발(서버 DB 사본, 시험 자막): 영상 대기 자막이 `영상 −`·`자막 ✓`로 떴어요 ([0083])<br>(5) 2026-10-08 서버: `보관본 있음`이 1화와 5–8화 줄에 조용히 적혔어요 ([0120])<br>(6) 없음 | (1) 없음<br>(2) `trss-web` `src/library_work_api/tests.rs` `a_season_with_no_subtitle_has_no_runs_of_it_and_stored_rows_and_copies_are_shown`<br>(3) 없음<br>(4) 같은 파일 `a_stored_subtitle_waiting_for_its_video_says_so`<br>(5) 없음<br>(6) 없음 | (1) 고른 순서가 다른 작품에 이어지는 것은 시험이 없어요<br>(2) 줄 배치와 예외 배지 모양은 시험이 없어요. `예외 배지`라는 이름은 코드에 없고 `영상 대기`·`교체 승인`·`받기 실패`·`보관본 있음`이 만들어져 있어요. 수백 회차는 측정하지 않았어요(60회차까지, [0014])<br>(3) 스크린 리더로 의미를 들은 적과 체크 크기 측정이 없어요 ([0014])<br>(4) 후보·교체 승인 상태에서 체크가 안 켜지는 것은 화면 시험이 없고 영상 대기는 서버에서 보지 않았어요<br>(5) 색이 없는 것과 정상 회차에 설명이 없는 것은 시험이 없고 `교체 비교` 줄은 휴대폰 크기 흉내로만 봤어요 ([0120])<br>(6) 만들지 않았어요([0139](../tickets/0139-movie-only-works.md), [0140](../tickets/0140-movies-in-season-00.md)). 코드에 `본편`이 없고 극장판 표시를 `web/src`와 `crates`에서 찾지 못했어요 |
 | 표: 영상이 있고 자막은 4·6화만 없는 비연속 누락 | 2026-10-02 서버: 목록에 `자막 1–4·6–8화`처럼 빈 회차로 나뉜 범위가 보였어요 ([0013]) | `trss-web` `src/library_work_api/tests.rs` `a_season_tells_its_episodes_with_a_video_and_with_a_subtitle_as_runs` | 4·6화 두 줄의 `영상 ✓`·`자막 −` 화면은 시험이 없고 같은 모양의 실제 작품 상세도 본 적이 없어요 |
 | 표: 구독 제작자가 올리지 않은 회차에 다른 제작자의 후보 | 2026-10-03 개발(서버 DB 사본): `Kimi ga Shinu made Koi wo Shitai`의 회차 줄에 후보 안내와 `받기`가 있었어요 ([0037]) | `trss-jobs` `tests/it/follow.rs` `another_creators_episode_is_never_received_by_itself` | 후보가 받은 자막 범위와 보유 체크에 안 드는 것은 화면 시험이 없어요 |
 | 표: 고르지 않은 회차로 보관만 한 자막(`보관본 있음`, `적용`·`교체 비교`, `현재 유지`한 보관본은 줄에서 숨김) | 2026-10-08 서버: `All Works Maid`의 1화와 5–8화에 `보관본 있음`과 `교체 비교`가 보였어요 ([0120])<br>2026-10-08 서버: `현재 유지` 뒤 1화의 `stored`가 비고 `자막` 카드에는 `choice: compare`로 남았어요(API로만) ([0124]) | `trss-jobs` `tests/it/replace.rs` `a_copy_kept_off_the_episode_leaves_its_row_until_chosen_again_or_the_subtitle_goes`<br>`trss-jobs` `tests/it/choose.rs` `a_copy_on_an_episode_with_no_subtitle_is_applied_at_once_and_marked_chosen` | 같은 회차의 자막이 없어지면 `적용`과 함께 다시 보이는 것은 보지 못했어요. `현재 유지` 뒤 줄의 모양은 브라우저로 보지 않았어요 ([0124]). 5–8화의 바이트가 같은지는 확인하지 않았어요 ([0121]). 0.6.1에서 본 `현재 유지` 뒤 줄이 남는 모습은 0124가 바꿔서 지금 요구를 뒷받침하지 않아요 ([0122]) |
@@ -590,6 +615,7 @@ Anissia의 `subject`, 선택적인 `originalSubject`와 `startDate`는 해당 �
 | Anissia 연결이 없는 시즌의 `Anissia 연결`과 자막 올리기 | 참고(가짜 출처): 2026-10-03 개발(서버 DB 사본)에서 Anissia 연결이 없는 구역을 가짜 출처로 봤어요 ([0037]) | `trss-web` `src/seasons_anissia_api/tests.rs` `candidates_of_a_season_with_no_link_are_none`<br>`trss-web` `src/subtitle_upload_api/tests.rs` | 서버에서는 본 적이 없어요 |
 | `회차 대응 정하기`, `자동으로 되돌리기`, `회차 확인 필요` 할 일이 묶음을 펼쳐 열기, 휴대폰 너비의 창 | 2026-10-03 개발(서버 DB 사본): `?source=`가 묶음을 열었고 375px에서 가로 넘침이 없었으며 되돌리면 `auto` 0으로 다시 정해졌어요 ([0052])<br>2026-10-06 개발: `+1` 대응을 저장하자 `회차 확인 필요`가 떴어요 ([0071]) | `trss-web` `src/mapping_api/tests.rs` `a_mapping_carries_the_line_its_group_shows_and_the_choice_the_dialog_opens_on` | 할 일 카드가 묶음을 펼치는 것과 `회차 확인 필요` 카드는 화면에서 본 적이 없어요 ([0052]). 회차 대응 자체의 규칙은 [자막의 회차 대응](#자막의-회차-대응) 표가 맡아요 |
 | 구독 제작자가 정해지지 않은 작품의 구역 머리에서 구독 제작자 정하기, `자막 구독` 할 일의 `제작자 지정`, 후보의 제작자 이름 | 2026-10-04 개발: `자막 구독` 제안이 떴다가 사라졌어요(일부 사본에는 제작자 미정 구독이 없었어요) ([0045]) | `trss-jobs` `tests/it/follow.rs` `an_undecided_work_with_candidates_is_one_suggestion_until_a_creator_is_chosen` | 구역 머리에서 구독 제작자를 정하는 조작과 `제작자 지정` 링크가 이 자리로 이어지는 것은 본 적이 없어요 |
+| 극장판의 후보(극장판만 있는 작품, `Season 00`의 극장판마다), `직접 찾기`·`회차 대응 정하기` 없음 | 없음 | 없음 | 만들지 않았어요([0139](../tickets/0139-movie-only-works.md), [0140](../tickets/0140-movies-in-season-00.md)). |
 
 #### 오른쪽 카드 열
 
@@ -619,9 +645,10 @@ Anissia의 `subject`, 선택적인 `originalSubject`와 `startDate`는 해당 �
 
 ### 확인하지 않은 요구
 
-실제 사용에서 본 것도 없고 테스트도 없는 요구는 88행 중 4행이에요.
+실제 사용에서 본 것도 없고 테스트도 없는 요구는 94행 중 10행이에요.
 
 - 명세에만 있고 만들지 않은 요구 셋: 이미지 파일의 수명의 `표: AniList 제목과 로컬 시즌 번호만 같거나 Anissia 제목·시작일이 빠진 상태`, 할 일과 회차 목록의 `표: 방영 전 회차`, 오른쪽 카드 열의 `최근 활동`. [0132](../tickets/0132-library-unbuilt-parts.md)에서 만들어요.
+- 2026-10-11에 더한 요구 여섯: 극장판의 위치, 극장판마다의 Anissia 연결, 극장판의 후보와 받기, 극장판만 있는 작품의 AniList 연결, 작품명, 자막 후보 구역의 극장판. [0138](../tickets/0138-work-title-from-anissia.md)·[0139](../tickets/0139-movie-only-works.md)·[0140](../tickets/0140-movies-in-season-00.md)에서 만들어요.
 - 머리와 시즌: 표지 크게 보기. 가짜 출처로만 봤어요.
 
 나머지 행에도 일부만 확인했거나 만들지 않은 부분이 있어요. 그 부분은 행마다 `확인하지 않은 것`에 적었어요.

@@ -89,5 +89,5 @@ RSS 피드 ──다운로드 규칙──▶ Transmission ──▶ 수집 폴�
 
 ## 진행 순서
 
-결과 목표 1–4로 기능을 만들었고, 그 뒤는 실제 배포 검증(목표 5), [리팩터링](archive/tickets/refactoring-between-5-and-6/refactoring.md)(2026-10-10에 마쳤어요), 앱 YAML 내보내기·가져오기(목표 6) 순서예요.
+결과 목표 1–4로 기능을 만들었고, 그 뒤는 실제 배포 검증(목표 5), [리팩터링](archive/tickets/refactoring-between-5-and-6/refactoring.md)(2026-10-10에 마쳤어요), [0.7.0을 써 보고 고칠 것](tickets/README.md#070을-써-보고-고칠-것), 앱 YAML 내보내기·가져오기(목표 6) 순서예요.
 지금 어디까지 왔는지는 [실행 계획](tickets/README.md)에 있어요.
