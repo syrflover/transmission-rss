@@ -117,7 +117,6 @@ async fn a_new_title_becomes_one_candidate_and_a_second_episode_makes_no_second(
     let candidate = &candidates[0];
     assert_eq!(candidate["work"], "New Work");
     assert_eq!(candidate["channel_id"], channel.id);
-    assert_eq!(candidate["folder"], "New Work/Season 01");
     assert_eq!(candidate["items"], 1);
     assert_eq!(candidate["waiting"][0]["rule_id"], rule["id"]);
     assert_eq!(candidate["waiting"][0]["rule_version"], rule["version"]);
@@ -372,7 +371,6 @@ async fn a_history_row_that_matched_no_rule_offers_naming_only_where_a_subscript
         .find(|i| i["title"] == NEW_1)
         .unwrap();
     assert_eq!(row["name_title"]["work"], "New Work");
-    assert_eq!(row["name_title"]["folder"], "New Work/Season 01");
     assert_eq!(row["name_title"]["waiting"][0]["rule_id"], rule["id"]);
     assert_eq!(row["name_title"]["waiting"][0]["anime"]["subject"], "작품");
 

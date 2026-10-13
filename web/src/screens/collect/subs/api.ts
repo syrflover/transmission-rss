@@ -121,8 +121,6 @@ export interface TitleGroup {
   /** How many recorded items the work has. */
   items: number;
   latest_seen_at: number;
-  /** The save folder suggested for it. */
-  folder: string | null;
 }
 
 export interface Titles {
@@ -231,8 +229,6 @@ export interface TitleCandidate {
   items: number;
   first_seen_at: number;
   latest_seen_at: number;
-  /** The save folder made from the work, to offer in place of the folder the subscription has. */
-  folder: string | null;
   waiting: WaitingSub[];
 }
 

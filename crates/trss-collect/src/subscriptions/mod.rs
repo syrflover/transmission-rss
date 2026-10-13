@@ -1,7 +1,7 @@
 //! The pure parts of subscribing to an Anissia anime (`docs/specs/collection.md`,
 //! 방영작 구독): the titles a channel's history offers (grouped by the work
-//! [`crate::release_name`] reads from them), the folder suggested for a work,
-//! and the quarter a subscription belongs to.
+//! [`crate::release_name`] reads from them) and the quarter a subscription
+//! belongs to. The save folder suggested for a work is [`crate::save_folder`]'s.
 
 pub mod candidates;
 
@@ -75,33 +75,6 @@ pub fn title_groups<'a>(items: impl IntoIterator<Item = &'a HistoryItem>) -> Vec
             .then_with(|| a.work.cmp(&b.work))
     });
     groups
-}
-
-/// The longest folder name taken, in bytes, so a name stays well inside what
-/// file systems allow.
-const MAX_FOLDER_BYTES: usize = 120;
-
-/// `<Work>/Season 01` for a work, the layout `trname` reads seasons from. The
-/// characters a folder name cannot hold are dropped. `None` when nothing is left.
-pub fn folder_suggestion(work: &str) -> Option<String> {
-    let cleaned: String = work
-        .chars()
-        .map(|c| match c {
-            '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => ' ',
-            c if c.is_control() => ' ',
-            c => c,
-        })
-        .collect();
-    let joined = cleaned.split_whitespace().collect::<Vec<_>>().join(" ");
-    let mut name = String::new();
-    for c in joined.chars() {
-        if name.len() + c.len_utf8() > MAX_FOLDER_BYTES {
-            break;
-        }
-        name.push(c);
-    }
-    let name = name.trim_matches(|c: char| c == '.' || c.is_whitespace());
-    (!name.is_empty()).then(|| format!("{name}/Season 01"))
 }
 
 /// A calendar quarter in Asia/Seoul, as Anissia numbers them (1분기 is

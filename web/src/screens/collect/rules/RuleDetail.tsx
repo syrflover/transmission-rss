@@ -33,6 +33,7 @@ import {
   type Rule,
 } from "./api";
 import { ArchiveMoveNotice } from "./ArchiveMoveNotice";
+import { SaveFolderFields } from "../folder/SaveFolderFields";
 import { ArchivedWorkNotice } from "./ArchivedWorkNotice";
 import { EpisodeGrounds } from "./EpisodeGrounds";
 import { BLANK_DRAFT, draftOf, fieldsOf, parseEpisode, sameDraft, type Draft } from "./draft";
@@ -105,6 +106,10 @@ export function RuleDetail({
   const [draft, setDraft] = useState<Draft>(() =>
     rule ? draftOf(rule) : { ...BLANK_DRAFT, match: presetMatch ?? "" },
   );
+  // Why the work and season fields make no folder yet; a folder typed as a path has none.
+  const [folderProblem, setFolderProblem] = useState<string | null>(null);
+  // Mounts the folder fields again when the draft's folder is set from outside.
+  const [folderRound, setFolderRound] = useState(0);
   const [channelId, setChannelId] = useState<string>(
     () => rule?.channel_id ?? channels.find((c) => c.id === presetChannelId)?.id ?? channels[0]?.id ?? "",
   );
@@ -146,6 +151,7 @@ export function RuleDetail({
     if (!rule || !known || rule.version <= known.version || dirty) return;
     setKnown(rule);
     setDraft(draftOf(rule));
+    setFolderRound((n) => n + 1);
     // Only when the list brings a newer version.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [storedVersion]);
@@ -195,7 +201,8 @@ export function RuleDetail({
   const latest =
     preview.state === "ready" ? preview.preview : preview.state === "loading" ? preview.previous : null;
   const regexProblem = latest?.error ?? null;
-  const canSave = dirty && !busy && episodeOk && channel !== undefined && regexProblem === null;
+  const canSave =
+    dirty && !busy && episodeOk && folderProblem === null && channel !== undefined && regexProblem === null;
 
   const set = <K extends keyof Draft>(key: K, value: Draft[K]) => setDraft((d) => ({ ...d, [key]: value }));
 
@@ -313,6 +320,7 @@ export function RuleDetail({
 
   const revert = () => {
     setDraft(baseline);
+    setFolderRound((n) => n + 1);
     setPosition(basePosition);
     setConflict(null);
     setOrderConflict(null);
@@ -535,20 +543,18 @@ export function RuleDetail({
 
         <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_150px] gap-3.5 max-[720px]:grid-cols-1">
           <div className="flex min-w-0 flex-col gap-1.5">
-            <Label htmlFor={`${uid}-dir`} className={labelClass}>
-              저장 폴더
-            </Label>
-            <Input
-              id={`${uid}-dir`}
-              value={draft.directory}
-              onChange={(e) => set("directory", e.target.value)}
-              className={inputClass}
-              placeholder="작품 제목/Season 01"
-              autoComplete="off"
-              spellCheck={false}
-              aria-describedby={`${uid}-dir-hint`}
+            <SaveFolderFields
+              key={`${known?.id ?? "new"}:${folderRound}`}
+              label="저장 폴더"
+              directory={draft.directory}
+              allowPath
+              anime={known?.subscription?.anime ?? null}
+              onChange={(change) => {
+                set("directory", change.directory);
+                setFolderProblem(change.problem);
+              }}
             />
-            <p id={`${uid}-dir-hint`} className={hintClass}>
+            <p className={hintClass}>
               앱의 수집 폴더 아래에 저장해요.{" "}
               {collectFolder ? (
                 <span className="font-mono break-all">→ {joined}</span>

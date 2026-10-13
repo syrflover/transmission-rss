@@ -64,7 +64,7 @@ export function fromCandidate(c: TitleCandidate): Suggestion {
     detail: `${c.channel_name ?? c.channel_host} · 항목 ${c.items}개`,
     at: c.first_seen_at,
     order: c.first_seen_at,
-    to: nameTitleLink(c.channel_id, c.work, c.folder),
+    to: nameTitleLink(c.channel_id, c.work),
     action: "제목 정하기",
   };
 }

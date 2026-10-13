@@ -34,6 +34,8 @@ export const KEYS = {
   candidates: "collect:candidates",
   /** The archive suggestions (`/api/archive-suggestions`). */
   archiveSuggestions: "collect:archive-suggestions",
+  /** The works a save folder's work field offers (`/api/save-folder/works`). */
+  folderWorks: "collect:folder-works",
   /** One week of Anissia's schedule (`/api/anissia/schedule/<week>`). */
   schedule: (week: number) => `collect:schedule:${week}`,
 } as const;

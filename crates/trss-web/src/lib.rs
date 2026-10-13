@@ -38,6 +38,7 @@ pub mod origin_guard;
 pub mod past_search_api;
 pub mod policy_api;
 pub mod rules_api;
+pub mod save_folder_api;
 pub mod schedule_api;
 pub mod screen_api;
 pub mod seasons_anissia_api;

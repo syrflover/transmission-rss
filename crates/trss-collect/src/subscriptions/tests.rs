@@ -44,28 +44,6 @@ fn works_are_grouped_by_case_and_spacing_and_the_newest_comes_first() {
 }
 
 #[test]
-fn the_folder_suggestion_drops_what_a_folder_name_cannot_hold() {
-    assert_eq!(folder_suggestion("Work").as_deref(), Some("Work/Season 01"));
-    assert_eq!(
-        folder_suggestion("Re:Zero / Season: 2?").as_deref(),
-        Some("Re Zero Season 2/Season 01")
-    );
-    assert_eq!(
-        folder_suggestion("..hidden..").as_deref(),
-        Some("hidden/Season 01")
-    );
-    assert_eq!(
-        folder_suggestion("../../etc").as_deref(),
-        Some("etc/Season 01")
-    );
-    assert_eq!(folder_suggestion(" : / ").as_deref(), None);
-    let long = "가".repeat(100);
-    let suggestion = folder_suggestion(&long).unwrap();
-    let name = suggestion.strip_suffix("/Season 01").unwrap();
-    assert!(name.len() <= MAX_FOLDER_BYTES && name.chars().all(|c| c == '가'));
-}
-
-#[test]
 fn a_quarter_is_read_in_seoul_time_and_from_the_dates_anissia_gives() {
     // 2026-09-30 15:00 UTC is 2026-10-01 00:00 in Seoul: 4분기 already.
     let sept_30_utc_15 = 1_790_780_400_000;

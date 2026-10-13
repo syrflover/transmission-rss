@@ -58,7 +58,7 @@ use trss_collect::{
         channels::{Channel, ChannelWithRules, Rule},
         history::{HistoryCursor, HistoryItem, HistoryQuery, HistoryResult, DEFAULT_PAGE_SIZE},
     },
-    subscriptions::{candidates, folder_suggestion},
+    subscriptions::candidates,
 };
 
 #[cfg(test)]
@@ -117,8 +117,6 @@ pub struct HistoryItemView {
 pub struct NameTitleView {
     /// The work part of the item's title: the match phrase it would give.
     pub work: String,
-    /// The save folder made from the work.
-    pub folder: Option<String>,
     /// The channel's subscriptions waiting for a title.
     pub waiting: Vec<WaitingView>,
 }
@@ -212,7 +210,6 @@ fn name_title_of(item: &HistoryItem, directory: &Directory) -> Option<NameTitleV
     let waiting = directory.waiting.get(&item.channel_id)?;
     let work = ReleaseName::read(&item.title).work?;
     Some(NameTitleView {
-        folder: folder_suggestion(&work),
         work,
         waiting: waiting.clone(),
     })

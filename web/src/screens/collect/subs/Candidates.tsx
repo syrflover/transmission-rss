@@ -12,9 +12,8 @@ import { btnAction, btnNeutral } from "../channels/styles";
 import { fetchCandidates, rejectCandidate, type TitleCandidate } from "./api";
 
 /** The page that gives a work to a waiting subscription (`NameTitle`). */
-export function nameTitleLink(channelId: string, work: string, folder: string | null): string {
+export function nameTitleLink(channelId: string, work: string): string {
   const params = new URLSearchParams({ channel: channelId, work });
-  if (folder !== null) params.set("folder", folder);
   return `/collect/subs/title?${params}`;
 }
 
@@ -95,7 +94,7 @@ export function Candidates({ className }: { className?: string }) {
               </p>
               <div className="flex flex-wrap items-center gap-2">
                 <Button asChild type="button" variant="ghost" className={btnAction}>
-                  <Link to={nameTitleLink(candidate.channel_id, candidate.work, candidate.folder)}>정하기</Link>
+                  <Link to={nameTitleLink(candidate.channel_id, candidate.work)}>정하기</Link>
                 </Button>
                 <Button
                   type="button"

@@ -2,26 +2,24 @@ import { useId, useMemo, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { ApiError } from "@/lib/api";
 import { useAfterDelay, useCached } from "@/lib/cached";
 import { cn } from "@/lib/utils";
 
 import { candidatesChanged, KEYS } from "../../cache";
-import { btnNeutral, btnPrimary, hintClass, inputClass, labelClass } from "../../channels/styles";
+import { btnNeutral, btnPrimary, hintClass } from "../../channels/styles";
+import { SaveFolderFields, type FolderChange } from "../../folder/SaveFolderFields";
 import { channelName, listRules, type Rule, type RuleFields, type RuleList } from "../../rules/api";
 import { usePreview } from "../../rules/usePreview";
 import { nameTitle } from "../api";
 import { airing } from "../format";
 import { listed, PastChecklist, ReceiveProgress, receivable, receiveOrder } from "../add/PastItems";
-import { folderProblem, optionClass } from "../add/draft";
+import { optionClass } from "../add/draft";
 import { useReceive } from "../add/useReceive";
 
 /**
  * Where a title candidate (or a `no_match` row of the record tab) is given to
- * a waiting subscription: `/collect/subs/title?channel=<id>&work=<phrase>` and,
- * when the work has one, `&folder=<suggested folder>`.
+ * a waiting subscription: `/collect/subs/title?channel=<id>&work=<phrase>`.
  *
  * The subscription is picked here, never assumed: the link between an anime
  * and a work is only a suggestion. Naming the title makes the work the rule's
@@ -32,7 +30,6 @@ export function NameTitle() {
   const [params] = useSearchParams();
   const channelId = params.get("channel") ?? "";
   const work = params.get("work") ?? "";
-  const folder = params.get("folder");
   const rules = useCached<RuleList>(KEYS.rules, listRules, "구독을 불러오지 못했어요.");
 
   const list = rules.data;
@@ -108,7 +105,6 @@ export function NameTitle() {
           channelId={channelId}
           channelLabel={naming.label}
           work={work}
-          suggested={folder}
           waiting={naming.waiting}
           siblings={naming.siblings}
           onNamed={() => setLocked(true)}
@@ -122,7 +118,6 @@ function Naming({
   channelId,
   channelLabel,
   work,
-  suggested,
   waiting,
   siblings,
   onNamed,
@@ -130,7 +125,6 @@ function Naming({
   channelId: string;
   channelLabel: string;
   work: string;
-  suggested: string | null;
   waiting: Rule[];
   siblings: Rule[];
   /** Called when the title was named, before the lists it changes are read again. */
@@ -139,11 +133,11 @@ function Naming({
   const uid = useId();
   const [pickedId, setPickedId] = useState<string | null>(waiting.length === 1 ? waiting[0].id : null);
   const picked = waiting.find((r) => r.id === pickedId) ?? null;
-  // Keep the folder the subscription has, or replace it with the one made from the title.
-  const [replace, setReplace] = useState(suggested !== null);
-  const [folderText, setFolderText] = useState(suggested ?? "");
-  const folderBad = replace ? folderProblem(folderText) : null;
-  const directory = picked === null ? "" : replace ? folderText.trim() : picked.directory;
+  // Keep the folder the subscription has, or replace it with the one suggested from the title.
+  const [replace, setReplace] = useState(true);
+  const [folder, setFolder] = useState<FolderChange>({ directory: "", problem: null });
+  const folderBad = replace ? (folder.problem ?? (folder.directory === "" ? "저장 폴더를 정해 주세요." : null)) : null;
+  const directory = picked === null ? "" : replace ? folder.directory : picked.directory;
 
   const fields = useMemo<RuleFields>(
     () => ({
@@ -181,7 +175,7 @@ function Naming({
       const rule = await nameTitle(
         { rule_id: picked.id, rule_version: picked.version },
         work,
-        replace ? folderText.trim() : null,
+        replace ? folder.directory : null,
       );
       onNamed();
       candidatesChanged();
@@ -247,6 +241,10 @@ function Naming({
                   type="button"
                   aria-pressed={on}
                   onClick={() => {
+                    if (rule.id !== pickedId) {
+                      // The suggestion depends on the subscription's anime: it is asked again.
+                      setFolder({ directory: "", problem: null });
+                    }
                     setPickedId(rule.id);
                     setTicked(new Set());
                   }}
@@ -270,14 +268,7 @@ function Naming({
             저장 폴더
           </h3>
           <div role="radiogroup" aria-labelledby={`${uid}-folder`} className="flex flex-col gap-2">
-            <label
-              className={cn(
-                optionClass,
-                "cursor-pointer",
-                !replace ? "border-focus" : "border-hairline-soft",
-                suggested === null && "cursor-default",
-              )}
-            >
+            <label className={cn(optionClass, "cursor-pointer", !replace ? "border-focus" : "border-hairline-soft")}>
               <span className="flex items-start gap-2.5">
                 <input
                   type="radio"
@@ -292,40 +283,30 @@ function Naming({
                 </span>
               </span>
             </label>
-            {suggested !== null && (
-              <label className={cn(optionClass, "cursor-pointer", replace ? "border-focus" : "border-hairline-soft")}>
-                <span className="flex items-start gap-2.5">
-                  <input
-                    type="radio"
-                    name={`${uid}-folder`}
-                    checked={replace}
-                    onChange={() => setReplace(true)}
-                    className="mt-0.5 size-[16px] flex-none accent-focus"
-                  />
-                  <span className="flex min-w-0 flex-col gap-0.5">
-                    <span className="text-[13.5px] font-semibold">이 제목으로 만든 폴더로 바꿔요</span>
-                    <span className="text-xs text-text-secondary">제목에서 만든 제안이에요. 고쳐도 돼요.</span>
-                  </span>
+            <label className={cn(optionClass, "cursor-pointer", replace ? "border-focus" : "border-hairline-soft")}>
+              <span className="flex items-start gap-2.5">
+                <input
+                  type="radio"
+                  name={`${uid}-folder`}
+                  checked={replace}
+                  onChange={() => setReplace(true)}
+                  className="mt-0.5 size-[16px] flex-none accent-focus"
+                />
+                <span className="flex min-w-0 flex-col gap-0.5">
+                  <span className="text-[13.5px] font-semibold">이 제목으로 만든 폴더로 바꿔요</span>
+                  <span className="text-xs text-text-secondary">제목과 라이브러리로 만든 제안이에요. 작품과 시즌을 고쳐도 돼요.</span>
                 </span>
-              </label>
-            )}
+              </span>
+            </label>
           </div>
           {replace && (
-            <div className="flex min-w-0 flex-col gap-1.5">
-              <Label htmlFor={`${uid}-dir`} className={labelClass}>
-                새 저장 폴더
-              </Label>
-              <Input
-                id={`${uid}-dir`}
-                value={folderText}
-                onChange={(e) => setFolderText(e.target.value)}
-                spellCheck={false}
-                autoComplete="off"
-                aria-invalid={folderBad !== null}
-                className={`${inputClass} font-mono`}
-              />
-              {folderBad !== null && <p className={`${hintClass} font-semibold text-urgent`}>{folderBad}</p>}
-            </div>
+            <SaveFolderFields
+              key={picked.id}
+              directory={folder.directory}
+              release={work}
+              anime={picked.subscription?.anime ?? null}
+              onChange={setFolder}
+            />
           )}
         </section>
       )}

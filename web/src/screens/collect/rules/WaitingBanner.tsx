@@ -50,7 +50,7 @@ export function WaitingBanner({ rule }: { rule: Rule }) {
         </ul>
         <div className="flex flex-wrap gap-2">
           <Button asChild type="button" variant="ghost" className={btnAction}>
-            <Link to={nameTitleLink(first.channel_id, first.work, first.folder)}>{mine.length > 1 ? "첫 후보 정하기" : "정하기"}</Link>
+            <Link to={nameTitleLink(first.channel_id, first.work)}>{mine.length > 1 ? "첫 후보 정하기" : "정하기"}</Link>
           </Button>
           <Button asChild type="button" variant="ghost" className={btnAction}>
             <Link to="/collect/subs">구독 탭에서 보기</Link>

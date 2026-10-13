@@ -44,6 +44,7 @@ pub mod revision;
 pub mod revisions;
 pub mod rss;
 pub mod rule;
+pub mod save_folder;
 pub mod schedule;
 pub mod season_link;
 pub mod store;

@@ -126,7 +126,7 @@ export function HistoryRow({ item, onItem }: HistoryRowProps) {
         {item.name_title !== null && (
           <p className="mt-1">
             <Link
-              to={nameTitleLink(item.channel_id, item.name_title.work, item.name_title.folder)}
+              to={nameTitleLink(item.channel_id, item.name_title.work)}
               data-testid="name-title-link"
               className="inline-flex min-h-6 items-center rounded-sm text-xs font-semibold text-focus underline-offset-4 outline-offset-2 hover:underline focus-visible:outline-2 focus-visible:outline-focus"
             >

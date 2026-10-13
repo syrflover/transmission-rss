@@ -260,7 +260,7 @@ async fn the_creators_of_an_anime_come_from_its_captions_and_may_be_none() {
 }
 
 #[tokio::test]
-async fn only_the_works_the_channels_history_holds_are_offered_with_a_folder() {
+async fn only_the_works_the_channels_history_holds_are_offered() {
     let app = App::new().await;
     let channel = app.channel("feed.test").await;
     let empty = app.channel("empty.test").await;
@@ -278,7 +278,6 @@ async fn only_the_works_the_channels_history_holds_are_offered_with_a_folder() {
     let titles = body["titles"].as_array().unwrap();
     assert_eq!(titles[0]["work"], "Work");
     assert_eq!(titles[0]["items"], 3);
-    assert_eq!(titles[0]["folder"], "Work/Season 01");
     assert_eq!(titles[0]["latest_title"], WORK_3);
 
     // The filter looks at the work and the whole title, ignoring case.

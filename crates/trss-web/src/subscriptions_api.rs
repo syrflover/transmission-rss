@@ -82,7 +82,7 @@ use trss_collect::{
     },
     subscriptions::{
         candidates::{self, TitleCandidate},
-        folder_suggestion, title_groups, work_key, Quarter,
+        title_groups, work_key, Quarter,
     },
 };
 use trss_core::{calendar::day_of, Millis};
@@ -499,8 +499,6 @@ struct TitleView {
     /// How many recorded items the work has.
     items: usize,
     latest_seen_at: Millis,
-    /// The save folder suggested for it.
-    folder: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -554,7 +552,6 @@ async fn titles(
             .into_iter()
             .take(TITLE_LIMIT)
             .map(|g| TitleView {
-                folder: folder_suggestion(&g.work),
                 work: g.work,
                 latest_title: g.latest_title,
                 items: g.items,
@@ -663,9 +660,6 @@ struct CandidateView {
     items: usize,
     first_seen_at: Millis,
     latest_seen_at: Millis,
-    /// The save folder made from the work, to offer in place of the folder the
-    /// subscription has.
-    folder: Option<String>,
     /// The channel's subscriptions waiting for a title, to pick one from. The
     /// link between an anime and the work is only a suggestion.
     waiting: Vec<WaitingView>,
@@ -727,7 +721,6 @@ async fn candidates(State(state): State<AppState>) -> Result<Json<CandidateList>
             Some(CandidateView {
                 channel_name: cwr.channel.name.clone(),
                 channel_host: host,
-                folder: folder_suggestion(&candidate.work),
                 waiting: waiting_views(cwr, &animes),
                 channel_id: candidate.channel_id,
                 key: candidate.key,

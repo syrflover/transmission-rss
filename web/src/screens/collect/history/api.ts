@@ -60,8 +60,6 @@ export interface HistoryItem {
 export interface NameTitle {
   /** The work part of the item's title: the match phrase it would give. */
   work: string;
-  /** The save folder made from the work. */
-  folder: string | null;
   waiting: WaitingSub[];
 }
 

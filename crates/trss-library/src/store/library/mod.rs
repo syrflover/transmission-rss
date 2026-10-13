@@ -81,6 +81,7 @@ use checks::UNRECOGNIZED_OF_WORK;
 pub use checks::{CheckError, VideoCheck};
 pub use creators::{AttributedSubtitle, CreatorError, CreatorSet};
 pub use detail::{EpisodeDetail, Held, SeasonDetail, SeasonHoldings, WorkDetail};
+pub use folder_work::FolderWork;
 use rusqlite::Transaction;
 
 pub use overview::{EpisodeRange, SubtitleCoverage, WorkOverview};

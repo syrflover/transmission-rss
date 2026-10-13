@@ -144,8 +144,9 @@ export function AddSubscription() {
             selected={draft.work}
             waiting={draft.waiting}
             onPick={(work) => {
+              // The folder step suggests one from the title while the folder is empty.
               if (draft.waiting || work.work !== draft.work?.work) {
-                change({ work, waiting: false, directory: work.folder ?? "" });
+                change({ work, waiting: false, directory: "" });
               }
               go(3);
             }}
@@ -164,9 +165,11 @@ export function AddSubscription() {
             onChange={(subtitles, creator) => change({ subtitles, creator })}
           />
         )}
-        {step === 4 && (
+        {step === 4 && draft.anime && (
           <PickFolder
             directory={draft.directory}
+            release={draft.work?.work ?? null}
+            anime={draft.anime}
             waiting={draft.waiting}
             onChange={(directory) => change({ directory })}
           />
