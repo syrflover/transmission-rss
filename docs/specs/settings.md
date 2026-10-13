@@ -329,7 +329,7 @@ Anissia 후보 갱신일·출처에서 보고한 파일 날짜·앱 수신 시�
 | 표: 파일 용량과 정리 항목(작품·종류·개수·용량, 작품으로 이동만, 여러 파일을 한 번에 지우는 기능 없음) | 2026-10-05 개발: 설정의 `파일 용량·정리`가 작품 63개를 용량 순으로 보이고 줄을 누르면 `#files`로 가서 `파일` 카드가 펼쳐졌어요 ([0073]) | (1) `trss-web` `library_work_api/tests.rs` `the_storage_list_shows_each_works_kinds_cover_and_cleanable_count`<br>(2) `web` `src/screens/library/storage.test.ts` `the settings summary counts the works and their stored size, and has none without a work`, `a work's 파일 card has its own address`<br>(3) 정리 요청이 보관본 하나를 받는 것만: `trss-web` `library_work_api/tests.rs` `a_work_shows_its_stored_files_and_one_is_cleaned_on_request` | 여러 파일을 한 번에 지우는 기능이 없다는 것은 테스트가 겨누지 않아요. 줄의 화면과 '정리는 작품 상세에서 파일 하나씩' 안내 문장은 화면 테스트가 없어요. `#files`로 새로 열면 스크롤이 카드에 못 미칠 수 있고 정리하면서 남긴 파일은 용량에 남아요([0073]). 서버의 설정 화면에서 본 기록이 없어요. 항목 이름은 `파일 용량·정리`예요([0134]에서 맞출 쪽을 물어요). |
 | 표: 데이터 묶음의 내보내기·가져오기 항목 | 2026-10-01 서버(가져오기만): 사용자의 기존 YAML을 웹으로 가져왔어요(채널 2개, 규칙 26개) ([0009]) | 가져오기만: `trss-web` `import_api/tests.rs` `an_empty_app_takes_everything_without_asking_and_keeps_the_file_exactly` | 내보내기는 목표 6에서 만들어요 ([목표 6]). 화면의 `내보내기` 항목은 `아직 내보낼 수 없어요` 문구만 보여요(`items.ts`). 화면은 `내보내기`와 `가져오기` 항목 둘로 나눠요([0134]에서 맞출 쪽을 물어요). |
 | 표: 배포 설정 항목(배포 값 읽기 전용, 비밀 값 가림) | 없음 | 없음 | 만들지 않았어요 ([0135]). 화면의 `배포 설정` 항목은 `배포 설정은 아직 보여줄 수 없어요` 문구만 보여요(`items.ts`). |
-| 표: 화면 모드 항목(시스템·라이트·다크, 이 기기에만 저장된다는 문장, 내보내기에 싣지 않음) | 없음 | 없음 | 만들지 않았어요([0142](../tickets/0142-phone-top-bar-and-theme-setting.md)). 2026-10-11 전의 요구는 화면 모드를 설정에 두지 않는 것이었고, 0.7.0의 설정 목록(`items.ts`)에는 이 항목이 없어요. |
+| 표: 화면 모드 항목(시스템·라이트·다크, 이 기기에만 저장된다는 문장, 내보내기에 싣지 않음) | 2026-10-13 개발(내장 브라우저): `화면` 묶음의 `화면 모드` 항목이 목록에 현재 값(`시스템`)을 보였고, 열면 세 모드와 이 기기의 브라우저에만 저장된다는 문장이 있었어요. `라이트`를 고르자 바로 바뀌었고 새로 열어도 남았어요 ([0142]) | 저장과 읽기만: `web` `src/lib/theme-store.test.ts` | 목록 줄과 모드 고르기는 화면 테스트가 없어요. 내보내기에 싣지 않는 것은 내보내기를 만든 뒤에야 확인할 수 있어요 ([목표 6]). 실제 기기에서 본 기록이 없어요. |
 
 ### 앱 YAML의 구성
 
@@ -503,10 +503,10 @@ Anissia 후보 갱신일·출처에서 보고한 파일 날짜·앱 수신 시�
 
 ### 확인하지 않은 요구
 
-실제 사용에서 본 것도 없고 테스트도 없는 요구는 111행 중 65행이에요.
+실제 사용에서 본 것도 없고 테스트도 없는 요구는 111행 중 64행이에요.
 
 - 63행은 [목표 6](../tickets/README.md#6-앱-yaml-내보내기와-가져오기)에서 만드는 앱 YAML 내보내기·가져오기의 요구예요. 앱 YAML의 구성 9행, 채널과 규칙 필드의 표 7행, 작품·회차 대응 필드 8행, 작품 표지 필드 13행, 보관 관계 필드 10행, 가져오기 검증과 파일 가용성 3행, 내보내기 4행, 앱 YAML 9행이에요.
-- 설정 화면: `표: 배포 설정 항목`은 만들지 않았고 [0135](../tickets/0135-deploy-settings-item.md)에서 만들어요. `표: 화면 모드 항목`은 2026-10-11에 더한 요구라 만들지 않았고 [0142](../tickets/0142-phone-top-bar-and-theme-setting.md)에서 만들어요.
+- 설정 화면: `표: 배포 설정 항목`은 만들지 않았고 [0135](../tickets/0135-deploy-settings-item.md)에서 만들어요.
 
 나머지 행에도 일부만 확인한 요구가 있어요. 그 부분은 행마다 `확인하지 않은 것`에 적었어요.
 
@@ -535,6 +535,7 @@ Anissia 후보 갱신일·출처에서 보고한 파일 날짜·앱 수신 시�
 [0123]: ../archive/tickets/5-deployed-verification/0123-collect-moves-archived-work-folder.md
 [0134]: ../tickets/0134-settings-version-and-first-run-badge.md
 [0135]: ../tickets/0135-deploy-settings-item.md
+[0142]: ../tickets/0142-phone-top-bar-and-theme-setting.md
 [목표 1]: ../tickets/README.md#1-앱-소유-설정과-수집-기반
 [목표 6]: ../tickets/README.md#6-앱-yaml-내보내기와-가져오기
 [수집 명세의 검증 표]: collection.md#검증-표

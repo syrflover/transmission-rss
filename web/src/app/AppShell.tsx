@@ -2,9 +2,7 @@ import type { MouseEvent } from "react";
 import { Outlet } from "react-router-dom";
 
 import { BottomNav, TopNav } from "./MainNav";
-import { APP_NAME } from "./menu";
 import { useScrollOnNavigate } from "./scroll";
-import { ThemeToggle } from "./ThemeToggle";
 
 function SkipLink() {
   // A plain "#main" link would put a fragment into the route, so move focus by hand.
@@ -25,8 +23,9 @@ function SkipLink() {
 }
 
 /**
- * The app frame: top bar (name, PC/tablet menu, screen-mode toggle), the routed
- * screen, and the phone bottom menu.
+ * The app frame: the PC/tablet top bar, which holds only the menu, the routed
+ * screen, and the phone bottom menu. Phones have no top bar, so the screen
+ * keeps clear of the device's top safe area itself (the 화면 모드 is in 설정).
  */
 export function AppShell() {
   useScrollOnNavigate();
@@ -35,18 +34,14 @@ export function AppShell() {
     <>
       <SkipLink />
 
-      <header className="sticky top-0 z-50 flex items-center justify-between gap-4 border-b border-hairline-soft bg-[color-mix(in_srgb,var(--bg-void)_84%,transparent)] py-3.5 pr-[max(var(--gutter),env(safe-area-inset-right))] pl-[max(var(--gutter),env(safe-area-inset-left))] backdrop-blur-[14px] backdrop-saturate-[1.4] max-[720px]:py-3">
-        <div className="flex-none text-[19px] font-bold tracking-[0.01em]">{APP_NAME}</div>
-        <div className="flex items-center gap-2.5">
-          <TopNav />
-          <ThemeToggle />
-        </div>
+      <header className="sticky top-0 z-50 flex h-(--topbar-h) items-center border-b border-hairline-soft bg-[color-mix(in_srgb,var(--bg-void)_84%,transparent)] pr-[max(var(--gutter),env(safe-area-inset-right))] pl-[max(var(--gutter),env(safe-area-inset-left))] backdrop-blur-[14px] backdrop-saturate-[1.4] max-[720px]:hidden">
+        <TopNav />
       </header>
 
       <main
         id="main"
         tabIndex={-1}
-        className="mx-auto w-full max-w-(--page-max) pr-[max(var(--gutter),env(safe-area-inset-right))] pb-16 pl-[max(var(--gutter),env(safe-area-inset-left))] outline-none max-[720px]:pb-[calc(96px+env(safe-area-inset-bottom,0px))]"
+        className="mx-auto w-full max-w-(--page-max) pr-[max(var(--gutter),env(safe-area-inset-right))] pb-16 pl-[max(var(--gutter),env(safe-area-inset-left))] outline-none max-[720px]:pt-(--topbar-h) max-[720px]:pb-[calc(96px+env(safe-area-inset-bottom,0px))]"
       >
         <Outlet />
       </main>

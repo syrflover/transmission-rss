@@ -1,5 +1,7 @@
 import type { ComponentType, ComponentProps } from "react";
 
+import { ThemeSystemIcon } from "@/components/icons";
+
 import {
   ArchiveIcon,
   CaptionIcon,
@@ -16,6 +18,7 @@ export type SettingsItemId =
   | "storage"
   | "export"
   | "import"
+  | "theme"
   | "deploy";
 
 export interface SettingsItem {
@@ -26,7 +29,7 @@ export interface SettingsItem {
   /**
    * Shown in the panel while the item has no content yet (the file sizes show it while no work has a stored file).
    * Each item is filled by the result goal that owns it (see docs/specs/settings.md); only the common policy, the
-   * collect folder, the watch folders, the file sizes and the import are built so far.
+   * collect folder, the watch folders, the file sizes, the import and the screen mode are built so far.
    */
   empty?: string;
 }
@@ -51,6 +54,7 @@ export const SETTINGS_ITEMS: SettingsItem[] = [
     empty: "아직 내보낼 수 없어요. 내보내기가 준비되면 여기에서 앱 설정을 파일로 내보내요.",
   },
   { id: "import", group: "데이터", title: "가져오기", icon: UploadIcon },
+  { id: "theme", group: "화면", title: "화면 모드", icon: ThemeSystemIcon },
   {
     id: "deploy",
     group: "배포",

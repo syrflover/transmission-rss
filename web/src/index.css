@@ -67,7 +67,8 @@
 @media (max-width: 720px) {
   :root {
     --gutter: 16px;
-    --topbar-h: 59px;
+    /* No top bar on phones: only the device's top safe area is kept clear. */
+    --topbar-h: env(safe-area-inset-top, 0px);
   }
 }
 

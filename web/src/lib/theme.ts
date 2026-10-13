@@ -1,20 +1,28 @@
 import { useSyncExternalStore } from "react";
 
+import {
+  readStoredPreference,
+  THEME_STORAGE_KEY,
+  writeStoredPreference,
+  type PreferenceStore,
+  type ThemePreference,
+} from "./theme-store";
+
 /**
- * Screen-mode preference: 시스템 → 라이트 → 다크.
+ * Screen-mode preference: 시스템, 라이트 or 다크, chosen in 설정.
  *
- * The choice is kept in localStorage (per browser) and applied to <html> as
- * `data-theme-pref` (the choice) and `data-theme` (the resolved light/dark).
- * In 시스템 mode the resolved value follows `prefers-color-scheme` live.
+ * The choice is kept in localStorage (per browser, src/lib/theme-store.ts) and
+ * applied to <html> as `data-theme-pref` (the choice) and `data-theme` (the
+ * resolved light/dark). In 시스템 mode the resolved value follows
+ * `prefers-color-scheme` live.
  *
  * `index.html` carries a tiny inline script that applies the same attributes
  * before first paint so a reload does not flash the wrong mode; keep its
  * storage key in sync with THEME_STORAGE_KEY.
  */
-export type ThemePreference = "system" | "light" | "dark";
+export type { ThemePreference };
 export type ResolvedTheme = "light" | "dark";
 
-export const THEME_STORAGE_KEY = "trss-theme-v1";
 export const THEME_ORDER: readonly ThemePreference[] = ["system", "light", "dark"];
 
 export const THEME_LABEL: Record<ThemePreference, string> = {
@@ -23,34 +31,14 @@ export const THEME_LABEL: Record<ThemePreference, string> = {
   dark: "다크",
 };
 
-/** The label with the particle that follows it in "…(으)로 변경". */
-export const THEME_LABEL_WITH_RO: Record<ThemePreference, string> = {
-  system: "시스템으로",
-  light: "라이트로",
-  dark: "다크로",
-};
-
 const DARK_QUERY = "(prefers-color-scheme: dark)";
 
-function isPreference(value: unknown): value is ThemePreference {
-  return value === "system" || value === "light" || value === "dark";
-}
-
-function readStoredPreference(): ThemePreference {
+function browserStore(): PreferenceStore | null {
   try {
-    const stored = window.localStorage.getItem(THEME_STORAGE_KEY);
-    if (isPreference(stored)) return stored;
+    return window.localStorage;
   } catch {
-    // Storage can be blocked (private window, site data off); fall back to 시스템.
-  }
-  return "system";
-}
-
-function writeStoredPreference(preference: ThemePreference) {
-  try {
-    window.localStorage.setItem(THEME_STORAGE_KEY, preference);
-  } catch {
-    // The choice still applies for this page view; it just cannot persist.
+    // Reading localStorage itself throws when site data is off.
+    return null;
   }
 }
 
@@ -83,7 +71,7 @@ export function initTheme() {
   if (started) return;
   started = true;
 
-  setPreference(readStoredPreference());
+  setPreference(readStoredPreference(browserStore()));
 
   const query = window.matchMedia?.(DARK_QUERY);
   query?.addEventListener("change", () => {
@@ -91,18 +79,14 @@ export function initTheme() {
   });
 
   window.addEventListener("storage", (event) => {
-    if (event.key === THEME_STORAGE_KEY) setPreference(readStoredPreference());
+    if (event.key === THEME_STORAGE_KEY) setPreference(readStoredPreference(browserStore()));
   });
 }
 
-export function cycleTheme() {
-  const next = THEME_ORDER[(THEME_ORDER.indexOf(current) + 1) % THEME_ORDER.length];
-  writeStoredPreference(next);
-  setPreference(next);
-}
-
-export function nextTheme(preference: ThemePreference): ThemePreference {
-  return THEME_ORDER[(THEME_ORDER.indexOf(preference) + 1) % THEME_ORDER.length];
+/** Apply a mode at once and keep it for this browser. */
+export function chooseTheme(preference: ThemePreference) {
+  writeStoredPreference(preference, browserStore());
+  setPreference(preference);
 }
 
 function subscribe(notify: () => void) {

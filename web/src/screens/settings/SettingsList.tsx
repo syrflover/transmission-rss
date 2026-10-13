@@ -2,6 +2,7 @@ import { Fragment } from "react";
 import { Link } from "react-router-dom";
 
 import { useCached } from "@/lib/cached";
+import { THEME_LABEL, useThemePreference } from "@/lib/theme";
 import { cn } from "@/lib/utils";
 import { KEYS } from "@/screens/collect/cache";
 import { STORAGE_KEY } from "@/screens/library/api";
@@ -87,12 +88,25 @@ function StorageFacts() {
   );
 }
 
+/**
+ * The screen mode row: the mode this browser keeps. Unlike the other rows it is
+ * not read from the server, so it has no loading state.
+ */
+function ThemeFacts() {
+  return (
+    <Facts>
+      <span className="text-[13px] text-text-secondary">{THEME_LABEL[useThemePreference()]}</span>
+    </Facts>
+  );
+}
+
 /** What the row shows without opening the item: its current value. */
 function RowFacts({ id, importFlow }: { id: SettingsItemId; importFlow: ImportFlow }) {
   if (id === "policy") return <PolicyFacts />;
   if (id === "collection") return <CollectionFacts />;
   if (id === "folders") return <FoldersFacts />;
   if (id === "storage") return <StorageFacts />;
+  if (id === "theme") return <ThemeFacts />;
   if (id === "import") {
     return (
       <Facts>
