@@ -77,7 +77,7 @@ use super::{
     ApiError, AppState,
 };
 use trss_anissia::{
-    slot::{episode_on, run_over, slot_in_week, Over, Slot},
+    slot::{ends_in_week, episode_on, run_over, slot_in_week, Over, Slot},
     Anime,
 };
 use trss_collect::{
@@ -118,6 +118,9 @@ pub struct Card {
     /// The work of the connected season: the card links to its detail.
     pub work_id: Option<String>,
     pub cover_url: Option<String>,
+    /// Anissia's end date is in this week: the card says `이번 주 종영`
+    /// ([`ends_in_week`]).
+    pub ends_this_week: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -436,6 +439,7 @@ pub async fn week_at(state: &AppState, now: Millis) -> Result<WeekView, ApiError
                     .get(&s.work_id)
                     .map(|image_id| image_url(&s.work_id, image_id))
             }),
+            ends_this_week: ends_in_week(anime, start),
         });
     }
 

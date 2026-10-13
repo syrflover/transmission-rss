@@ -11,18 +11,21 @@ import { WEEKDAYS_LONG } from "@/lib/weekday";
 import { KEYS } from "../../cache";
 import { btnNeutral, hintClass, inputClass, labelClass } from "../../channels/styles";
 import { fetchSchedule, type Schedule, type ScheduleEntry } from "../api";
-import { startDate, WEEK_OTHER, WEEK_TABS, WEEK_UPCOMING } from "../format";
+import { endText, RUN_TEXT, startDate, WEEK_OTHER, WEEK_TABS, WEEK_UPCOMING } from "../format";
 import { optionClass } from "./draft";
 
 const WEEK_NAMES = [...WEEKDAYS_LONG, "기타", "신작"];
 
-/** The time of day, or the start date for the weeks that have no weekday. */
+/**
+ * The time of day (the weeks that have no weekday have none), then the start
+ * and end dates: `22:30 · 10월 7일 시작 · 12월 23일 종영 예정`.
+ */
 function when(entry: ScheduleEntry): string {
-  if (entry.week === WEEK_OTHER || entry.week === WEEK_UPCOMING) {
-    const start = startDate(entry.start_date);
-    return start ? `${start} 시작` : "시작일 미정";
-  }
-  return entry.air_time ?? "시각 미정";
+  const start = startDate(entry.start_date);
+  const noWeekday = entry.week === WEEK_OTHER || entry.week === WEEK_UPCOMING;
+  const time = noWeekday ? null : (entry.air_time ?? "시각 미정");
+  const starts = start ? `${start} 시작` : noWeekday ? "시작일 미정" : null;
+  return [time, starts, endText(entry.end_date, entry.run)].filter((part) => part !== null).join(" · ");
 }
 
 /** Step 1: an anime of Anissia's schedule, by weekday. */
@@ -150,6 +153,11 @@ export function PickAnime({
                     {following && (
                       <span className="flex-none rounded-full border border-ok px-2 py-px text-[11.5px] font-semibold text-ok">
                         구독 중
+                      </span>
+                    )}
+                    {(entry.run === "off" || entry.run === "end") && (
+                      <span className="flex-none rounded-full border border-hairline px-2 py-px text-[11.5px] font-semibold text-text-secondary">
+                        {RUN_TEXT[entry.run]}
                       </span>
                     )}
                   </span>

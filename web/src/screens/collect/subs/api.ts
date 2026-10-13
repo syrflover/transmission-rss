@@ -9,6 +9,12 @@ import type { Rule } from "../rules/api";
  * `ApiError` with code `unavailable` and a sentence naming the reason.
  */
 
+/**
+ * Where the anime's run is: not started, `방영 중`, `결방` or `종영`. Without a
+ * snapshot Anissia gave (`null`) nothing is said.
+ */
+export type RunState = "upcoming" | "on" | "off" | "end";
+
 /** How a subscription gets subtitles: follow a creator, creator undecided, or none. */
 export type SubtitleMode = "follow" | "undecided" | "none";
 
@@ -54,6 +60,7 @@ export interface ScheduleEntry {
   start_date: string | null;
   end_date: string | null;
   status: string;
+  run: RunState | null;
   genres: string[];
   caption_count: number;
   /** The rules that already follow this anime, in any channel. */
@@ -99,6 +106,7 @@ export interface SubscriptionItem {
   quarter: Quarter;
   /** The anime's quarter has not begun yet. */
   upcoming: boolean;
+  run: RunState | null;
 }
 
 export interface SubscriptionList {

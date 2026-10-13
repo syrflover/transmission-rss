@@ -410,6 +410,31 @@ async fn an_anime_anissia_marks_off_has_a_card_with_no_episode_in_place_of_its_l
     assert_eq!(off["time"], "10:00");
 }
 
+/// Which week holds the end date is trss-anissia `slot::ends_in_week`'s; this
+/// checks only that the card carries it.
+#[tokio::test]
+async fn the_card_of_the_week_the_anime_ends_says_so() {
+    let app = App::new().await;
+    let mut ending = anime(1, "마지막 주", 4, Some("10:00"), Some("2026-07-02"));
+    ending.end_date = Some("2026-10-01".into());
+    app.subscribe(ending, rule("E"), SubtitleMode::None, None)
+        .await;
+    app.subscribe(
+        anime(2, "계속", 4, Some("11:00"), Some("2026-07-02")),
+        rule("F"),
+        SubtitleMode::None,
+        None,
+    )
+    .await;
+
+    let body = app.week().await;
+    let cards = &body["week"]["days"][3]["cards"];
+    assert_eq!(cards[0]["title"], "마지막 주");
+    assert_eq!(cards[0]["ends_this_week"], true);
+    assert_eq!(cards[1]["title"], "계속");
+    assert_eq!(cards[1]["ends_this_week"], false);
+}
+
 #[tokio::test]
 async fn a_stand_in_with_the_comments_weekday_shows_its_card_on_that_weekday() {
     let app = App::new().await;

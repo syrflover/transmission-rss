@@ -75,6 +75,7 @@ use super::{
 };
 use trss_anissia::{Anime, AnissiaError, Fetched, LAST_WEEK, WEEK_OTHER, WEEK_UPCOMING};
 use trss_collect::{
+    schedule::state::{run_state, RunState},
     store::channels::{
         ChannelError, ChannelWithRules, NewSubscription, RuleInput, RuleState, Subscription,
         SubtitleMode,
@@ -84,7 +85,7 @@ use trss_collect::{
         folder_suggestion, title_groups, work_key, Quarter,
     },
 };
-use trss_core::Millis;
+use trss_core::{calendar::day_of, Millis};
 
 pub fn routes() -> Router<AppState> {
     Router::new()
@@ -202,6 +203,9 @@ struct ScheduleEntryView {
     start_date: Option<String>,
     end_date: Option<String>,
     status: String,
+    /// `결방`, `종영` and the rest as the list shows them ([`run_state`]). The
+    /// schedule lists the anime, so only its end date can end it.
+    run: Option<RunState>,
     genres: Vec<String>,
     /// How many captions Anissia lists for the anime.
     caption_count: u32,
@@ -301,6 +305,7 @@ async fn schedule(
         .await
         .map_err(unavailable)?;
     let mut followed = subscribed(&state).await?;
+    let today = day_of(state.anissia.now());
     let mut entries: Vec<ScheduleEntryView> = fetched
         .value
         .iter()
@@ -313,6 +318,7 @@ async fn schedule(
             start_date: entry.start_date.clone(),
             end_date: entry.end_date.clone(),
             status: entry.status.clone(),
+            run: run_state(&entry.snapshot(fetched.fetched_at), false, today),
             genres: entry.genres.clone(),
             caption_count: entry.caption_count,
             subscribed_rules: followed.remove(&entry.anime_no).unwrap_or_default(),
@@ -393,6 +399,9 @@ struct SubscriptionItem {
     quarter: QuarterView,
     /// The quarter has not begun yet.
     upcoming: bool,
+    /// `방영 중`, `결방` or `종영` as the card shows it ([`run_state`]); `null`
+    /// without a snapshot Anissia gave.
+    run: Option<RunState>,
 }
 
 #[derive(Debug, Serialize)]
@@ -420,9 +429,15 @@ async fn list(State(state): State<AppState>) -> Result<Json<SubscriptionList>, A
         .collect();
     let animes = state
         .anissia_store
-        .animes(nos)
+        .animes(nos.clone())
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
+    let unlisted = state
+        .anissia_store
+        .unlisted(nos)
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    let today = day_of(now);
 
     let mut items = Vec::new();
     for cwr in &all {
@@ -451,6 +466,7 @@ async fn list(State(state): State<AppState>) -> Result<Json<SubscriptionList>, A
                 subscription: subscription_brief(subscription, &animes),
                 quarter: quarter.into(),
                 upcoming: quarter > current,
+                run: anime.and_then(|a| run_state(a, unlisted.contains(&a.anime_no), today)),
             });
         }
     }

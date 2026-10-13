@@ -147,6 +147,9 @@ async fn the_schedule_of_a_weekday_lists_its_anime_by_time_and_marks_the_followe
     assert_eq!(titles, ["빈 작품", "작품"], "by air time");
     assert_eq!(schedule["entries"][1]["air_time"], "22:30");
     assert_eq!(schedule["entries"][1]["subscribed_rules"], json!([]));
+    // The run state is trss-collect `schedule::state::run_state`'s: the fake
+    // anime starts on 2026-10-07, after the test's today.
+    assert_eq!(schedule["entries"][1]["run"], "upcoming");
     assert_eq!(schedule["cached"], false);
 
     // A second look comes from the short cache.
@@ -431,6 +434,7 @@ async fn the_subscription_lists_under_this_quarter_with_its_stored_schedule() {
     assert_eq!(item["subscription"]["anime"]["week"], 3);
     assert!(item["quarter"]["number"].is_u64(), "{item}");
     assert_eq!(item["upcoming"], false);
+    assert_eq!(item["run"], "upcoming");
     assert_eq!(item["channel_host"], "feed.test");
 
     // An archived rule is not listed.
@@ -475,6 +479,7 @@ async fn an_anime_that_starts_next_quarter_is_marked_upcoming() {
     assert_eq!(body["rule"]["subscription"]["subtitles"], "none");
     let (_, list) = app.get("/api/subscriptions").await;
     assert_eq!(list["subscriptions"][0]["upcoming"], true);
+    assert_eq!(list["subscriptions"][0]["run"], "upcoming");
 }
 
 #[tokio::test]

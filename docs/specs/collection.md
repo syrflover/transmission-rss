@@ -53,7 +53,7 @@ RSS 채널(RSS Channel)의 릴리스를 다운로드 규칙(Download Rule)으로
   자막 제작자를 모르면 `제작자 미정`으로 구독하고, 자막 후보가 처음 나타나면 [자막 구독](subtitles.md#구독-제작자-자동-수신) 할 일로 알려요.
   자막이 필요 없으면 자막을 `받지 않음`으로 구독해 영상만 받고, 자막 때문에 할 일을 만들지 않아요(사용자 결정, 2026-10-01). `제작자 미정`은 아직 못 정한 상태이고 `받지 않음`은 필요 없다는 선택이라 둘을 나눠요.
   2026-09-29 조회에서 Anissia 4분기 60편 중 자막 제작자가 등록된 작품은 20편이었어요.
-- 편성표에서 작품을 고르는 목록은 작품마다 Anissia의 `결방`·`종영` 상태와 방영 시작일·종영일을 보여줘요(사용자 결정, 2026-10-11).
+- 편성표에서 작품을 고르는 목록은 작품마다 Anissia의 `결방`·`종영` 상태와 방영 시작일·종영일을 보여줘요(사용자 결정, 2026-10-11). 편성표는 `ON`·`OFF`만 주므로, 목록의 `종영`은 종영일이 지났는데 편성표에 남은 작품이에요.
 - 저장 폴더는 작품 칸과 시즌 칸으로 나눠 받고, 저장 폴더는 늘 `<작품>/Season NN`이에요(사용자 결정, 2026-10-11). 작품 칸에서는 라이브러리의 작품을 고르거나 새 이름을 써요.
   0.7.0까지는 경로 한 칸에 릴리스 제목으로 만든 `<작품>/Season 01`을 제안했어요. 그래서 `Nige Jouzu no Wakagimi S2`를 구독할 때 제목의 `S2`가 작품 이름에 남은 `Nige Jouzu no Wakagimi S2/Season 01`이 제안됐고, 사용자가 `Nige Jouzu no Wakagimi/Season 02`로 고쳤어요(2026-10-11 사용자 보고).
   2026-10-10 서버의 속편 규칙 8개는 모두 사용자가 시즌을 손으로 고쳤어요. 5개는 제목에 `S2`·`S3` 표시가 있고 1화부터 다시 셌고, 3개는 앞 시즌에 이어 센 번호라 회차 변환을 썼어요.
@@ -388,6 +388,9 @@ worker는 받은 단일 파일 영상에 trname으로 `<작품> S01E05.mkv` 꼴 
 
 구독 탭은 제목 후보, 보관 제안, 이번 분기 구독, 다음 분기의 제목 대기 구독과 편성표에서 추가하는 입구를 담아요.
 구독 카드는 Anissia가 주는 상태(`방영 중`·`결방`·`종영`)와 종영일을 보여줘요(사용자 결정, 2026-10-11).
+`종영`은 Anissia가 `END`라고 준 작품과, [이번 주 편성](web-app.md#이번-주-편성)이 카드를 빼는 작품이에요. 종영일이 지났거나, 종영일이 없는데 Anissia 편성표가 더는 싣지 않는 작품이에요.
+시작일이 오지 않은 작품은 상태 대신 시작일을 보여주고, 종영일은 그날이 오기 전에는 `12월 24일 종영 예정`, 지난 뒤에는 `12월 24일 종영`으로 보여줘요.
+카드의 상태는 worker가 하루에 한 번 다시 읽는 Anissia 값이라, Anissia가 상태를 바꾼 뒤 하루까지 늦게 바뀔 수 있어요.
 
 규칙 탭은 모든 채널의 규칙을 통합 목록으로 보여주고, 먼저 채널을 골라야 목록을 볼 수 있는 구조로 만들지 않아요.
 목록 줄에는 상태 배지, 채널 태그, 필요할 때 `겹침`을 두고, 정렬에는 `검사 순서`가 있어요.
@@ -451,7 +454,7 @@ PC에서는 목록 옆에서 선택한 규칙을 편집하고 목록과 상세�
 | --- | --- | --- | --- |
 | 구독의 시작 위치와 편성표 바로가기 | 2026-10-08 서버: 사용자가 `정반대의 너와 나` 2기를 Anissia 편성표로 구독했어요. 들어간 화면은 기록하지 않았어요 ([0123](../archive/tickets/5-deployed-verification/0123-collect-moves-archived-work-folder.md)) | `trss-web` `subscriptions_api/tests.rs` `an_anime_that_starts_next_quarter_is_marked_upcoming` | 구독 탭에서 시작하는 화면과 이번 주 편성의 바로가기 화면은 테스트도 실제 사용 기록도 없어요. 편성표 구독 화면은 브라우저에서 눌러 보지 않았어요([0123](../archive/tickets/5-deployed-verification/0123-collect-moves-archived-work-folder.md)). |
 | 구독할 때 정하는 값과 자막 선택 | 2026-10-02 서버: `FX Senshi Kurumi-chan`을 채널 subsplease.org, 구독 제작자 코코렛으로 구독했어요(0.5.0) ([0083](../archive/tickets/5-deployed-verification/0083-deployed-end-to-end.md))<br>2026-10-08 서버: `정반대의 너와 나` 2기를 저장 폴더 `Seihantai na Kimi to Boku/Season 02`로 구독했어요(0.6.1) ([0123](../archive/tickets/5-deployed-verification/0123-collect-moves-archived-work-folder.md))<br>2026-10-04 개발 환경: `자막 받기`를 켜자 `자막 구독` 제안이 생겼고 제작자를 정하자 사라졌어요 ([0045](../tickets/README.md#3-자막-후보와-수신))<br>근거만: 2026-09-29 Anissia 조회에서 4분기 60편 중 자막 제작자가 있는 작품은 20편이었어요 | `trss-web` `subscriptions_api/tests.rs` `subscribing_creates_the_rule_with_the_chosen_work_and_receives_nothing`, `an_anime_with_no_creator_is_subscribed_undecided_or_without_subtitles` | `받지 않음`으로 구독해 영상만 받는 구독은 실제 사용 기록이 없어요. 채널·제작자·폴더를 고르는 구독 화면은 테스트가 없어요. `제작자 미정` 구독에 자막 후보가 처음 나타나는 순간을 서버에서 본 기록도 없어요. |
-| 편성표 고르기의 Anissia 상태와 날짜 | 없음 | 없음 | 만들지 않았어요([0141](../tickets/0141-anissia-status-shown.md)). |
+| 편성표 고르기의 Anissia 상태와 날짜 | 2026-10-13 개발(DB 사본, 실제 Anissia 편성표): 일요일의 `원피스`가 `결방`, 기타의 극장판 두 편이 `종영`이었고, 줄마다 시작일과 종영일(`… 종영 예정`)이 있었어요 ([0141](../tickets/0141-anissia-status-shown.md)) | (1) `trss-collect` `schedule/state.rs` `the_run_state_is_the_end_then_a_start_to_come_then_off`<br>(2) 응답 모양만: `trss-web` `subscriptions_api/tests.rs` `the_schedule_of_a_weekday_lists_its_anime_by_time_and_marks_the_followed_ones` | 목록의 표시는 화면 테스트가 없어요. 서버에서 본 기록이 없어요. |
 | 저장 폴더의 작품 칸과 시즌 칸, 시즌 제안(시즌 표시, AniList 나눔, 제목 대기), 규칙 화면의 직접 입력 | 없음 | 없음 | 만들지 않았어요([0137](../tickets/0137-work-and-season-folder-input.md)). 0.7.0은 경로 한 칸에 `<작품>/Season 01`을 제안해요(`trss-collect` `subscriptions/mod.rs`의 `folder_suggestion`). |
 | Anissia 연결의 확정 | 2026-10-07 서버: 라이브러리 시즌 140개 가운데 Anissia에 연결된 시즌은 `FX Senshi Kurumi-chan` 구독이 받은 1화 영상이 든 시즌 1 하나였어요 ([0083](../archive/tickets/5-deployed-verification/0083-deployed-end-to-end.md)) | `trss-collect` `season_link/tests.rs` `a_subscription_is_connected_to_the_season_folder_its_received_video_appeared_in` | 시즌을 다른 Anissia 작품이 잡아 잇지 못한 경우와, 연결이 바뀌거나 끊긴 뒤 다시 이어 본 경우는 서버 기록이 없어요. 서버 관찰은 연결이 하나 있었다는 것까지이고 구독 시점에 확정되는지는 구분하지 않았어요. 규칙 상세 화면에 알리는 모습은 브라우저 테스트가 없어요. |
 | 보관 폴더 작품의 구독 안내 | 2026-10-08 서버: 1기 작품 폴더가 보관 폴더 `Shows`에 있는 2기를 구독하자 규칙이 `멈춤`으로 만들어졌고 `start`가 9 ms 만에 `moved`로 끝나 `활성`이 됐어요. 작품은 `Shows (current)`에 있어요. 만들기 전에 구독 화면이 알린 문구는 기록하지 않았어요 ([0123](../archive/tickets/5-deployed-verification/0123-collect-moves-archived-work-folder.md))<br>2026-10-08 서버 DB 사본: 같은 구독의 확인 단계에 "작품 폴더를 옮기는 동안에는 규칙이 받지 못해요" 안내가 나왔고 규칙 상세에 폴더 이동 문장이 있었어요 ([0125](../archive/tickets/5-deployed-verification/0125-receive-ticked-items-after-move.md)) | `trss-web` `subscriptions_api/tests.rs` `subscribing_to_a_work_in_the_archive_folder_makes_the_rule_paused_with_its_start_open`<br>`web` `src/screens/collect/rules/archivedWork.test.ts` `the notice names the folder to move and where it goes` | 구독 화면에서 만들기 전에 `Shows/A`를 옮긴다는 문구가 보인 기록과, 규칙 추가 화면의 같은 안내를 확인한 기록은 없어요. 이동은 서버에서, 안내 문장은 서버 DB 사본에서만 봤어요. |
@@ -613,7 +616,7 @@ PC에서는 목록 옆에서 선택한 규칙을 편집하고 목록과 상세�
 | 줄마다 같은 버튼을 반복하지 않음 | 없음 | 없음 | 카드·기록 줄의 동작 배치는 테스트도 실제 사용 기록도 없어요. |
 | 상태 배지와 개수 칩 | 없음 | 없음 | 배지와 칩 표시는 테스트도 실제 사용 기록도 없어요. |
 | 구독 탭 | 없음 | `trss-web` `subscriptions_api/tests.rs` `the_subscription_lists_under_this_quarter_with_its_stored_schedule` | 위는 탭이 받는 API 데이터까지예요. 탭 안의 구성과 순서, 편성표에서 추가하는 입구의 화면은 웹 테스트가 없어요. 2026-10-08에 서버 DB 사본에서 구독 1개와 Anissia 연결이 보였다는 기록([0080](../archive/tickets/5-deployed-verification/0080-server-db-migration-check.md))은 수집 화면 전반을 본 것이라 이 탭의 요소로 세지 않았어요. |
-| 구독 카드의 Anissia 상태와 종영일 | 없음 | 없음 | 만들지 않았어요([0141](../tickets/0141-anissia-status-shown.md)). |
+| 구독 카드의 Anissia 상태와 종영일 | 2026-10-13 개발(DB 사본에 상태와 종영일을 바꿔 넣음): `FX 전사 쿠루미`의 카드가 `방영 중`과 `10월 15일 종영 예정`을 보였어요. `OFF`로 바꾸자 `결방`, 종영일을 지난주로 바꾸자 `종영`이 API 값으로 나왔어요 ([0141](../tickets/0141-anissia-status-shown.md)) | (1) `trss-collect` `schedule/state.rs` `the_run_state_is_the_end_then_a_start_to_come_then_off`<br>(2) 응답 모양만: `trss-web` `subscriptions_api/tests.rs` `the_subscription_lists_under_this_quarter_with_its_stored_schedule`, `an_anime_that_starts_next_quarter_is_marked_upcoming` | 카드 화면의 `결방`·`종영`은 보지 않았고 화면 테스트가 없어요. 종영일이 없는 작품이 편성표에서 빠져 `종영`이 되는 것은 테스트로만 확인했어요. 서버에서 본 기록이 없어요. |
 | 규칙 탭 | 없음 | `trss-web` `rules_api/tests.rs` `the_list_holds_the_rules_of_every_channel_with_their_check_order` | 목록 줄의 상태 배지·채널 태그 표시, PC의 목록 옆 편집과 각자 스크롤, 규칙을 골라도 화면이 움직이지 않는 것, 휴대폰의 상세 화면 전환은 웹 테스트도 실제 사용 기록도 없어요. 2026-10-04에 사용자가 휴대폰에서 규칙 편집을 했다고 확인했지만 값이 없고 지금과 다른 화면이라 관찰로 세지 않았어요([0009](../archive/tickets/1-app-owned-collection/0009-deploy-web-worker.md)). |
 | 규칙 상세 머리 | 없음 | `trss-web` `rules_api/tests.rs` `last_received_is_the_latest_time_the_rule_got_an_item_into_transmission` | 포스터 옆 네 줄의 배치, 스위치 위치, `미정`·`아직 없음` 채우기, `편성표와 연결`, 휴대폰 배치는 웹 테스트도 실제 사용 기록도 없어요. |
 | 총 회차를 모르는 진행 막대 | 없음 | `trss-web` `subscriptions_api/tests.rs` `the_view_of_a_connected_subscription_has_its_season_and_progress`(총 회차를 모르면 `episodes`가 null이에요) | 점선 막대와 `9 / ?화 받음` 표시는 웹 테스트도 실제 사용 기록도 없어요. |
@@ -624,11 +627,11 @@ PC에서는 목록 옆에서 선택한 규칙을 편집하고 목록과 상세�
 
 ### 확인하지 않은 요구
 
-실제 사용에서 본 것도 없고 테스트도 없는 요구는 124행 중 10행이에요.
+실제 사용에서 본 것도 없고 테스트도 없는 요구는 124행 중 8행이에요.
 
 - 수집 이력: 앱 YAML에 담지 않음. 앱 YAML 내보내기가 [목표 6](../tickets/README.md#6-앱-yaml-내보내기와-가져오기)이라 아직 없어요.
 - 규칙 보관: 보관 제안 여럿의 접기.
-- 방영작 구독: 편성표 고르기의 Anissia 상태와 날짜, 저장 폴더의 작품 칸과 시즌 칸. 2026-10-11에 더한 요구라 아직 만들지 않았어요.
-- 수집 화면: 네 탭, 제목 후보와 보관 제안의 색, 줄마다 같은 버튼을 반복하지 않음, 상태 배지와 개수 칩, 저장 줄과 관리 줄, 구독 카드의 Anissia 상태와 종영일(2026-10-11에 더한 요구).
+- 방영작 구독: 저장 폴더의 작품 칸과 시즌 칸. 2026-10-11에 더한 요구라 아직 만들지 않았어요.
+- 수집 화면: 네 탭, 제목 후보와 보관 제안의 색, 줄마다 같은 버튼을 반복하지 않음, 상태 배지와 개수 칩, 저장 줄과 관리 줄.
 
 나머지 행에도 일부만 확인한 요구가 있어요. 그 부분은 행마다 `확인하지 않은 것`에 적었어요.

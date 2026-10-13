@@ -96,6 +96,16 @@ pub fn run_over(anime: &Anime, unlisted: bool, today: i64) -> Option<Over> {
     }
 }
 
+/// Whether the anime's end date, as Anissia gave it, is a day of the week that
+/// begins on the Monday `week_start`: that week's card says `이번 주 종영`. A
+/// date that knows the month only, or cannot be read, names no week.
+pub fn ends_in_week(anime: &Anime, week_start: i64) -> bool {
+    matches!(
+        anime.end_date.as_deref().and_then(PartialDate::parse),
+        Some(PartialDate::Day(end)) if (week_start..week_start + 7).contains(&end)
+    )
+}
+
 /// The episode of the season that airs in `slot`, if it can be told.
 ///
 /// - If the season's AniList entries know when each episode airs
@@ -325,5 +335,28 @@ mod tests {
         assert_eq!(over(None, false), None);
         assert_eq!(over(None, true), Some(Over::Unlisted));
         assert_eq!(over(Some("soon"), true), None);
+    }
+
+    #[test]
+    fn the_week_of_the_end_date_is_the_last_one_and_says_so() {
+        // The week of Monday 2026-09-28 to Sunday 2026-10-04; the anime airs on Wednesdays.
+        let ends = |end: &str| anime(3, Some("22:00"), Some("2026-07-01"), Some(end));
+
+        // Ending on this Wednesday, or later this week: this week's card is its last.
+        for end in ["2026-09-30", "2026-10-04"] {
+            assert!(slot_in_week(&ends(end), monday()).is_some(), "{end}");
+            assert!(ends_in_week(&ends(end), monday()), "{end}");
+        }
+        // Ended last week: no card this week, so nothing to say.
+        assert!(slot_in_week(&ends("2026-09-23"), monday()).is_none());
+        assert!(!ends_in_week(&ends("2026-09-23"), monday()));
+        // Ending next week: this week is not the last.
+        assert!(!ends_in_week(&ends("2026-10-07"), monday()));
+        // A month alone names no week; neither does no date.
+        assert!(!ends_in_week(&ends("2026-10"), monday()));
+        assert!(!ends_in_week(
+            &anime(3, Some("22:00"), None, None),
+            monday()
+        ));
     }
 }

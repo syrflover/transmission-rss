@@ -116,7 +116,7 @@ export function anissiaStatusText(status: string): string {
     case "ON":
       return "방영 중";
     case "OFF":
-      return "휴방";
+      return "결방";
     case "END":
       return "종영";
     default:

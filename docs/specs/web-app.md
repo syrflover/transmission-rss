@@ -79,7 +79,7 @@ PC에서는 상단 메뉴, 휴대폰에서는 하단 메뉴로 이동하고, 두
 방영 전 작품도 같은 카드로 보여주고, 영상 `방영 전`과 `자막 대기`·제작자를 조용하게 둬요.
 `자막 받기`를 끈 작품은 자막 상태 줄을 두지 않고, `영상 받기`를 끈(멈춤) 작품은 카드를 남긴 채 `받기 멈춤`을 조용한 상태 줄로 둬요.
 Anissia가 작품을 결방·휴방(`OFF`)으로 주면 카드를 남긴 채 영상·자막 상태 줄 대신 조용한 `결방`을 둬요(사용자 결정, 2026-10-01).
-Anissia의 종영일이 든 주에는 그 작품의 카드에 조용한 `이번 주 종영`을 둬요(사용자 결정, 2026-10-11). 0.7.0은 종영일이 지나면 아무 표시 없이 카드를 빼서, 카드만 보고는 마지막 화인지 알 수 없었어요.
+Anissia의 종영일이 든 주에는 그 작품의 카드에 조용한 `이번 주 종영`을 둬요(사용자 결정, 2026-10-11). 0.7.0은 종영일이 지나면 아무 표시 없이 카드를 빼서, 카드만 보고는 마지막 화인지 알 수 없었어요. 종영일을 달까지만 아는 작품은 그 주를 정할 수 없어 `이번 주 종영`을 두지 않아요.
 카드는 Anissia의 종영일이 지나면 빠지고, 종영일이 없으면 Anissia 편성표가 그 작품을 더는 싣지 않는 것을 확인한 때부터 빠져요. Anissia에 닿지 못하는 동안에는 카드가 그대로 남아요(사용자 결정, 2026-10-01). 어느 요일 목록이 비어서 왔는데 그 요일에 싣던 작품이 있으면 그 답은 믿지 않아요. 그 요일의 작품은 이번 갱신에서 편성표에서 빠진 것으로 치지 않고, 다른 요일은 그대로 판단해요.
 보관한 구독은 카드가 없어요(사용자 결정, 2026-10-01).
 방영이 없는 날은 날짜와 요일, `방영 없음`만 담은 얇은 한 줄이에요.
@@ -355,7 +355,7 @@ API의 Rust 응답 구조체와 화면의 TypeScript 타입은 생성 도구 없
 | 요구 | 실제 사용에서 본 것 | 테스트로 확인한 것 | 확인하지 않은 것 |
 | --- | --- | --- | --- |
 | 작품 카드의 내용·상태 줄·강조, `방영 전`·`받기 멈춤`·`결방`, 종영과 보관 구독의 카드, 방영 없는 날, 카드 링크 | (1) 2026-10-07 개발(서버 DB 사본): 이번 주 편성이 복사본의 데이터를 보여줬어요 ([0080])<br>(2) 참고(헤드리스 브라우저): 2026-10-01 스크래치 DB에서 카드, `방영 전`, 결방과 `받기 멈춤`, `방영 없음`의 줄을 봤어요 ([0021]) | (1) `trss-web` `schedule_api/tests.rs` `the_week_has_a_card_on_each_day_something_airs_and_a_bare_day_otherwise`, `a_work_before_its_air_time_is_upcoming_and_a_new_subscription_has_an_empty_cover`<br>(2) `trss-collect` `schedule/state.rs` `the_video_line_follows_the_library_then_the_download_then_the_clock`<br>(3) `trss-web` `schedule_api/tests.rs` `an_anime_anissia_marks_off_has_a_card_with_no_episode_in_place_of_its_lines`, `an_archived_subscription_has_no_card`<br>(4) `trss-anissia` `slot.rs` `the_run_is_over_by_the_end_date_or_only_without_one_by_the_listing`<br>(5) `trss-collect` `anissia/tests.rs` `a_weekday_that_comes_back_empty_does_not_unlist_the_anime_it_held`, `a_refresh_that_fails_or_stops_halfway_never_records_an_anime_as_unlisted` | 실제 Anissia·AniList로 이 화면을 본 기록이 없어요. 결방, 편성표에서 빠지는 카드, 새 설치는 스크래치 DB에서만 봤고 표지 이미지가 있는 카드는 보지 않았어요 ([0021]). 요일 하나가 모두 종영돼 비면 `unlisted_at`이 찍히지 않아 카드 제거를 받지 못하는 한계가 남아 있어요 ([0021]). 강조 색과 올려 둔 카드의 배경 밝힘은 화면 코드라 테스트가 없어요 |
-| 종영일이 든 주의 `이번 주 종영` | 없음 | 없음 | 만들지 않았어요([0141](../tickets/0141-anissia-status-shown.md)) |
+| 종영일이 든 주의 `이번 주 종영` | 2026-10-13 개발(DB 사본의 종영일을 이번 주 목요일로 바꿈): 목요일 카드에 `이번 주 종영`이 나왔어요. `OFF`로 바꾸자 `결방`과 함께 남았고, 종영일을 지난주로 바꾸자 카드가 없었어요. 뒤의 둘은 API 값으로 봤어요 ([0141]) | (1) `trss-anissia` `slot.rs` `the_week_of_the_end_date_is_the_last_one_and_says_so`<br>(2) 응답 모양만: `trss-web` `schedule_api/tests.rs` `the_card_of_the_week_the_anime_ends_says_so` | 카드의 문구는 화면 테스트가 없어요. 달만 아는 종영일은 주를 정할 수 없어 표시하지 않아요. 서버에서 본 기록이 없어요 |
 | 화면 제목·`오늘로 이동`·이번 주 범위와 분기·기준 시각, 휴대폰과 넓은 화면의 배치 | (1) 근거만: 2026-09-29 시안 검토에서 사용자가 휴대폰은 날짜 열 옆에 쌓고 넓은 화면은 줄바꿈하는 배치를 골랐어요 ([웹 재설계](../brainstorm/web-redesign.md), 이 명세의 [검증 근거와 완료 판정](#검증-근거와-완료-판정))<br>(2) 참고(헤드리스 브라우저): 2026-10-01 `오늘로 이동`이 오늘 줄을 머리 아래로 옮기고 초점을 줬고, 1440·1024px는 옆 열, 375px는 한 줄 요약이었어요 ([0021]) | (1) `trss-web` `schedule_api/tests.rs` `the_week_changes_with_the_day` (주의 시작일이 요청 시각을 따라요)<br>(2) 없음 (`오늘로 이동`, 배치, 분기, 기준 시각) | `오늘로 이동`은 자동 테스트가 없어요 ([0021]). 실제 휴대폰·태블릿으로 본 기록이 없고 320px는 가로 넘침만 봤어요. 다크 모드는 편성 화면을 한 번만 봤어요 ([0021]). 이번 주의 끝, 분기, 기준 시각을 겨눈 테스트가 없어요. 화면 제목이 다른 화면과 같은 크기인지는 확인한 기록이 없어요 |
 | 수집 상태·다음 분기 구독의 자리, RSS 확인 시각과 정지 경고, 처음 설정 중의 체크리스트 | (1) 2026-10-07 서버: 사용자가 수집 상태판을 열어 이상이 없다고 했어요. 값은 적지 않았어요 ([0081])<br>(2) 참고(헤드리스 브라우저): 2026-10-01 스크래치 DB에서 3시간 전에 멈춘 worker의 옆 열·요약 줄·상태판에 같은 정지 문구가 떴어요. 주기의 간격은 DB에 직접 넣었어요 ([0021]) | (1) `trss-core` `heartbeat.rs` `a_stale_heartbeat_tells_a_worker_killed_in_a_cycle_from_a_slow_one`, `trss-web` `status_api/tests.rs` `a_worker_killed_in_a_cycle_is_stalled_once_its_heartbeat_is_stale`<br>(2) `trss-web` `status_api/tests.rs` `received_items_are_counted_per_day_of_the_viewers_time_zone`<br>(3) `trss-web` `schedule_api/tests.rs` `the_next_quarter_counts_its_subscriptions_and_those_waiting_for_a_title`<br>(4) `trss-web` `setup_api/tests.rs` `a_new_install_shows_only_the_checklist` | 정지 경고가 실제 worker를 주기 도중에 멈춘 상태에서 뜨는 것은 본 기록이 없어요 ([0021]). 박동이 이어지는 긴 감시 폴더 읽기가 오탐되지 않는 것은 시계를 바꾼 테스트로만 확인했어요. 휴대폰 요약의 `RSS 멈춤`, 옆 열과 한 줄 요약의 자리, 다음 분기 구독의 바로가기, 처음 설정 중 휴대폰 요약 줄이 없는 것은 본 기록과 테스트가 없어요 |
 
@@ -396,7 +396,7 @@ API의 Rust 응답 구조체와 화면의 TypeScript 타입은 생성 도구 없
 | 표: 회차를 정하지 못한 파일은 편성·할 일·작품 상세·기록 모두 `회차 확인 필요` | 2026-10-06 개발(서버 DB 사본): 격자의 Wistoria에 `회차 확인 필요` 배지가 있었고 할 일 카드가 3장 나왔어요 ([0078]) | 전달하는 이름만 확인해요(화면 낱말은 아님): `trss-jobs` `todo/tests.rs` `every_kind_has_its_badge` | 코드가 이 요구와 달라요: 작업 상세 `회차별 결과`의 묶음 제목이 `확인 필요`예요(`JobResults.tsx`) ([0131](../tickets/0131-waiting-state-names.md)) |
 | 표: 할 일 종류 `인증 필요`·`받기 실패`·`교체 승인`·`회차 확인 필요`·`제목 후보`·`자막 구독`·`보관 제안` | (1) 2026-10-07 서버: erulabo 12화의 Turnstile을 풀어 ZIP을 받았어요(`인증 필요`) ([0083])<br>(2) 2026-10-06 개발(서버 DB 사본): `인증 필요` 카드가 13화, `CAPTCHA`, `10월 3일 00:05`를 보였어요 ([0075]) | 전달하는 이름만 확인해요(화면 낱말은 아님): `trss-jobs` `todo/tests.rs` `every_kind_has_its_badge` | 일곱 종류의 이름을 한 화면에서 함께 본 기록은 없어요. 종류별 관찰은 작업과 인증 명세의 [검증 표](jobs.md#검증-표)가 맡아요 |
 | 표: 수집 개념 `일치 문구`·`저장 폴더`·`수집 폴더`·`보관 폴더`·`보관 제안`·`제작자 미정`·`받기`·`자막 후보` | 없음 | 없음 | 확인한 기록이 없어요 |
-| 표: Anissia의 방영 상태 `방영 중`·`결방`·`종영` | 없음 | 없음 | 코드가 이 요구와 달라요: 작품 상세가 `OFF`를 `휴방`이라 불러요(`web/src/screens/library/detail/model.ts`의 `anissiaStatusText`) ([0141](../tickets/0141-anissia-status-shown.md)) |
+| 표: Anissia의 방영 상태 `방영 중`·`결방`·`종영` | 2026-10-13 개발: 편성표 고르기와 구독 카드가 `방영 중`·`결방`·`종영`을 썼어요 ([0141]) | `trss-collect` `schedule/state.rs` `the_run_state_is_the_end_then_a_start_to_come_then_off` | 작품 상세의 Anissia 연결 구역이 `OFF`를 `결방`이라 부르는 것(`web/src/screens/library/detail/model.ts`의 `anissiaStatusText`)은 화면에서 보지 않았고 테스트가 없어요 ([0141]) |
 | 시각·날짜·개수 표기(`오늘 13:40`·`9월 13일`·`9월 28일 (월)`, 상대 표기 금지, 연도, 줄바꿈, `개`·`편`·`건`) | (1) 2026-10-06 개발(서버 DB 사본): 카드에 `10월 3일 00:05`와 `어제 04:46`이 쓰였어요 ([0075])<br>(2) 2026-10-07 서버: 작품 상세의 카드가 `자막 12개`로 개수를 적었어요 ([0083]) | (1) `web` `src/screens/library/received.test.ts` `a received date carries its time only when asked to, and the clock is padded`<br>(2) 없음 (상대 표기 금지, 연도, 날짜 머리, 줄바꿈, `편`·`건`) | 코드가 이 요구와 달라요: `web/src/lib/time.ts`의 `ago()`가 `방금`·`n분 전`·`n시간 전`·`n일 전`을 만들고 구독 추가(`PickTitle.tsx`, `PickAnime.tsx`)·규칙 상세(`parts.tsx`, `ArchiveMoveNotice.tsx`)·작품 상세의 자막 후보(`CandidateSection.tsx`)·설정의 폴더(`FoldersPanel.tsx`)가 써요 ([0133](../tickets/0133-web-notation-rules.md)). 코드가 이 요구와 달라요: `lib/time.ts`의 `when()`과 `dateTime()`은 올해가 아니어도 연도를 붙이지 않아요(수집 이력 `history/format.ts`와 자막 후보 `candidates.ts`는 붙여요) ([0133](../tickets/0133-web-notation-rules.md)) |
 
 ### 웹 명령과 상태 갱신
@@ -420,11 +420,10 @@ API의 Rust 응답 구조체와 화면의 TypeScript 타입은 생성 도구 없
 
 ### 확인하지 않은 요구
 
-실제 사용에서 본 것도 없고 테스트도 없는 요구는 51행 중 18행이에요.
+실제 사용에서 본 것도 없고 테스트도 없는 요구는 51행 중 16행이에요.
 
 - 시각 방향과 테마의 7행: 영화관 톤과 면 구분, 빨간색 한정과 할 일 종류의 색, 상태 배지의 모양과 아이콘, 체크 표시의 초록, 버튼 색, 카드 링크를 올려 둔 표시, 두 모드의 구분과 4.5:1 대비예요. 셋은 시안 검토나 헤드리스 브라우저로만 봤어요. 빨간 할 일 개수 배지와 `교체 승인` 배지의 물음표는 코드가 요구와 달라서 [0133](../tickets/0133-web-notation-rules.md)에서 고쳐요.
 - 문구와 표기의 9행: 자리에 맞춘 문구, 짧은 명사구와 버튼 이름, 해요체와 배너 제목, 설명 줄, 경로의 글꼴, 띄어쓰기 단위 줄바꿈, 같은 뜻은 한 단어, `표: 바꾸기·지우기·고르기·되돌리기·찾기·찾음·만들기`, `표: 수집 개념`이에요. 화면 문구 전체를 이 규칙으로 검토한 기록이 없어요. 같은 뜻의 상태 이름은 [0131](../tickets/0131-waiting-state-names.md)에서 맞춰요.
-- 2026-10-11에 더한 요구 둘: 이번 주 편성의 `이번 주 종영`, `표: Anissia의 방영 상태`예요. [0141](../tickets/0141-anissia-status-shown.md)에서 만들어요.
 
 나머지 행에도 일부만 확인한 요구가 있어요. 그 부분은 행마다 `확인하지 않은 것`에 적었어요.
 
@@ -452,5 +451,6 @@ API의 Rust 응답 구조체와 화면의 TypeScript 타입은 생성 도구 없
 [0119]: ../archive/tickets/5-deployed-verification/0119-refresh-after-stored-apply.md
 [0123]: ../archive/tickets/5-deployed-verification/0123-collect-moves-archived-work-folder.md
 [0127]: ../archive/tickets/5-deployed-verification/0127-row-waits-for-library-after-apply.md
+[0141]: ../tickets/0141-anissia-status-shown.md
 [0142]: ../tickets/0142-phone-top-bar-and-theme-setting.md
 [0114]: ../archive/tickets/refactoring-between-5-and-6/0114-refactor-final-check.md#실제-서버-2026-10-10-070

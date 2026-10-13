@@ -1,11 +1,13 @@
 //! The status lines of a card on the weekly schedule
 //! (`docs/specs/web-app.md`, 이번 주 편성): one for the video and, unless the
-//! subscription takes no subtitles, one for the subtitle.
+//! subscription takes no subtitles, one for the subtitle. Also Anissia's word
+//! on the anime's run ([`run_state`]), which the subscription cards and the
+//! schedule picker show (`docs/specs/collection.md`, 방영작 구독).
 
 use serde::Serialize;
 
 use crate::store::channels::SubtitleMode;
-use trss_anissia::Anime;
+use trss_anissia::{calendar::PartialDate, slot::run_over, Anime};
 use trss_core::Millis;
 
 /// The video line of a card.
@@ -75,6 +77,50 @@ pub struct Facts {
 /// Anissia's word, and an entry with no status was read as `ON`.
 pub fn is_off(anime: &Anime) -> bool {
     anime.fetched_at > 0 && anime.status.eq_ignore_ascii_case("OFF")
+}
+
+/// Where an anime's run is, as the subscription cards and the schedule picker
+/// say it (`표: Anissia의 방영 상태` in `docs/specs/web-app.md`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RunState {
+    /// It has not started: the start date is still to come. The screens show
+    /// the start date instead of a state.
+    Upcoming,
+    /// `방영 중`.
+    On,
+    /// `결방`: Anissia marks it `OFF` ([`is_off`]).
+    Off,
+    /// `종영`: Anissia calls it `END`, or the run is over by the rule the
+    /// weekly schedule drops its card by ([`run_over`]).
+    End,
+}
+
+/// The run state of `anime` on the Seoul day `today`. `unlisted` is whether the
+/// worker's daily refresh found Anissia no longer lists it. An end that has
+/// come wins over everything, then a start still to come, then `OFF`. The
+/// stand-in an import keeps while Anissia could not be asked (`fetched_at` 0)
+/// is not Anissia's word and has no state.
+pub fn run_state(anime: &Anime, unlisted: bool, today: i64) -> Option<RunState> {
+    if anime.fetched_at <= 0 {
+        return None;
+    }
+    let ended =
+        anime.status.eq_ignore_ascii_case("END") || run_over(anime, unlisted, today).is_some();
+    let starts_later = anime
+        .start_date
+        .as_deref()
+        .and_then(PartialDate::parse)
+        .is_some_and(|start| start.is_after(today));
+    Some(if ended {
+        RunState::End
+    } else if starts_later {
+        RunState::Upcoming
+    } else if is_off(anime) {
+        RunState::Off
+    } else {
+        RunState::On
+    })
 }
 
 /// The video line. A paused subscription says so instead of anything else:
@@ -236,6 +282,71 @@ mod tests {
         assert!(!is_off(&snapshot("ON", 5)));
         // The stand-in kept for an anime Anissia could not be asked about.
         assert!(!is_off(&snapshot("OFF", 0)));
+    }
+
+    #[test]
+    fn the_run_state_is_the_end_then_a_start_to_come_then_off() {
+        use trss_core::calendar::days_from_civil;
+        let today = days_from_civil(2026, 10, 13);
+        let anime = |status: &str, start: Option<&str>, end: Option<&str>| Anime {
+            start_date: start.map(str::to_owned),
+            end_date: end.map(str::to_owned),
+            ..snapshot(status, 5)
+        };
+        let state = |a: &Anime| run_state(a, false, today);
+
+        assert_eq!(
+            state(&anime("ON", Some("2026-10-01"), Some("2026-12-24"))),
+            Some(RunState::On)
+        );
+        assert_eq!(
+            state(&anime("OFF", Some("2026-10-01"), Some("2026-12-24"))),
+            Some(RunState::Off)
+        );
+        // On its end date it still airs; the day after, it has ended, `OFF` or not.
+        assert_eq!(
+            state(&anime("ON", None, Some("2026-10-13"))),
+            Some(RunState::On)
+        );
+        assert_eq!(
+            state(&anime("ON", None, Some("2026-10-12"))),
+            Some(RunState::End)
+        );
+        assert_eq!(
+            state(&anime("OFF", None, Some("2026-10-12"))),
+            Some(RunState::End)
+        );
+        // Anissia's own `END`, from its full list, even before the end date.
+        assert_eq!(
+            state(&anime("END", None, Some("2026-12-24"))),
+            Some(RunState::End)
+        );
+        // Without an end date only the daily refresh's listing ends it.
+        assert_eq!(state(&anime("ON", None, None)), Some(RunState::On));
+        assert_eq!(
+            run_state(&anime("ON", None, None), true, today),
+            Some(RunState::End)
+        );
+        // Listed with an end date to come, being unlisted does not end it.
+        assert_eq!(
+            run_state(&anime("ON", None, Some("2026-12-24")), true, today),
+            Some(RunState::On)
+        );
+        // A start to come, by the day or the month, is before any `OFF`.
+        assert_eq!(
+            state(&anime("ON", Some("2026-10-14"), None)),
+            Some(RunState::Upcoming)
+        );
+        assert_eq!(
+            state(&anime("OFF", Some("2026-11"), None)),
+            Some(RunState::Upcoming)
+        );
+        assert_eq!(
+            state(&anime("ON", Some("2026-10"), None)),
+            Some(RunState::On)
+        );
+        // The stand-in kept while Anissia could not be asked has no state.
+        assert_eq!(run_state(&snapshot("OFF", 0), false, today), None);
     }
 
     #[test]

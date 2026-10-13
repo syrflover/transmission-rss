@@ -191,7 +191,7 @@
 | [0138](0138-work-title-from-anissia.md) | Anissia에 이은 작품을 한글 작품명으로 보여줘요 | 대기 | 없음 |
 | [0139](0139-movie-only-works.md) | 극장판만 있는 작품을 알아보고 자막을 받아요 | 대기 | 0138 |
 | [0140](0140-movies-in-season-00.md) | Season 00 회차를 Anissia 극장판에 이어 자막을 받아요 | 대기 | 0139 |
-| [0141](0141-anissia-status-shown.md) | Anissia 방영 상태를 편성표 고르기, 구독 카드, 이번 주 편성에 보여줘요 | 대기 | 없음 |
+| [0141](0141-anissia-status-shown.md) | Anissia 방영 상태를 편성표 고르기, 구독 카드, 이번 주 편성에 보여줘요 | 완료 | 없음 |
 | [0142](0142-phone-top-bar-and-theme-setting.md) | 휴대폰의 상단바를 없애고 화면 모드를 설정으로 옮겨요 | 완료 | 없음 |
 | [0143](0143-deploy-feedback-fixes.md) | 0.7.0 피드백의 수정을 배포하고 서버에서 확인해요 | 대기 | 0137–0142 |
 

@@ -2,7 +2,7 @@ import { useId } from "react";
 import { Link } from "react-router-dom";
 
 import type { SubscriptionItem } from "./api";
-import { airing, startDate, subtitleChoice } from "./format";
+import { airing, endText, RUN_TEXT, startDate, subtitleChoice } from "./format";
 
 const tag =
   "inline-flex max-w-full items-center rounded-full border border-hairline px-[9px] py-[3px] text-[11.5px] leading-tight font-semibold text-text-secondary";
@@ -17,7 +17,10 @@ export function SubscriptionCard({ item }: { item: SubscriptionItem }) {
   const anime = subscription.anime;
   const title = anime?.subject ?? item.title ?? "이름 없는 작품";
   const waitingForTitle = item.title === null;
-  const start = anime?.week === 8 || item.upcoming ? startDate(anime?.start_date ?? null) : null;
+  const run = item.run;
+  const start =
+    anime?.week === 8 || item.upcoming || run === "upcoming" ? startDate(anime?.start_date ?? null) : null;
+  const end = endText(anime?.end_date ?? null, run);
 
   return (
     <li
@@ -40,7 +43,9 @@ export function SubscriptionCard({ item }: { item: SubscriptionItem }) {
 
       <div className="flex min-w-0 flex-wrap items-center gap-1.5">
         {anime && <span className={tag}>{airing(anime)}</span>}
+        {run !== null && run !== "upcoming" && <span className={tag}>{RUN_TEXT[run]}</span>}
         {start && <span className="text-xs text-text-muted">{start} 시작</span>}
+        {end && <span className="text-xs text-text-muted">{end}</span>}
         {waitingForTitle && <span className={`${tag} border-focus text-focus`}>제목 대기</span>}
         {item.state === "paused" && <span className={`${tag} text-text-primary`}>멈춤</span>}
         <span className={`${tag} break-all`}>{item.channel_name ?? item.channel_host}</span>

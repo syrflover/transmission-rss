@@ -112,6 +112,7 @@ export function WeekCard({ card }: { card: Card }) {
           <span className="flex min-w-0 flex-wrap items-baseline gap-x-2.5 text-[12.5px] leading-snug">
             <span className="text-text-muted">{card.time ?? "시각 미정"}</span>
             {card.episode !== null && <strong className="font-bold">{card.episode}화</strong>}
+            {card.ends_this_week && <span className="text-text-muted">이번 주 종영</span>}
           </span>
           <StatusLine line={VIDEO[card.video]} />
           {card.subtitle && (

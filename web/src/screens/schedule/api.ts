@@ -33,6 +33,8 @@ export interface Card {
   /** The work of the connected season; the card opens it. */
   work_id: string | null;
   cover_url: string | null;
+  /** Anissia's end date is in this week: the card says `이번 주 종영`. */
+  ends_this_week: boolean;
 }
 
 export interface Day {

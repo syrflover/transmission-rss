@@ -1,6 +1,6 @@
 import { WEEKDAYS_LONG, WEEKDAYS_SHORT } from "@/lib/weekday";
 
-import type { Anime, SubscriptionBrief } from "./api";
+import type { Anime, RunState, SubscriptionBrief } from "./api";
 
 /** The tabs of the schedule: Sunday to Saturday, `기타` and `신작`, as Anissia groups them. */
 export const WEEK_TABS: readonly string[] = [...WEEKDAYS_SHORT, "기타", "신작"];
@@ -25,6 +25,20 @@ export function startDate(date: string | null, now: Date = new Date()): string |
   const day = match[3] === undefined ? null : Number(match[3]);
   const prefix = year === now.getFullYear() ? "" : `${year}년 `;
   return day === null ? `${prefix}${month}월` : `${prefix}${month}월 ${day}일`;
+}
+
+/** The run state's word; a run that has not started shows its start date instead. */
+export const RUN_TEXT: Record<Exclude<RunState, "upcoming">, string> = {
+  on: "방영 중",
+  off: "결방",
+  end: "종영",
+};
+
+/** The end date as the run stands: `12월 24일 종영` once it has come, `… 종영 예정` before. */
+export function endText(date: string | null, run: RunState | null): string | null {
+  const end = startDate(date);
+  if (end === null) return null;
+  return run === "end" ? `${end} 종영` : `${end} 종영 예정`;
 }
 
 /** Where the anime sits in the week: `수요일 22:30`, `기타`, `신작`. */
