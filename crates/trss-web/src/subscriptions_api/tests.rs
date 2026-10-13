@@ -1069,7 +1069,8 @@ mod rule_detail {
             .unwrap();
         let (_, view) = app.get(&format!("/api/rules/{}", rule.id)).await;
         assert_eq!(view["season"]["work_id"], work.as_str());
-        assert_eq!(view["season"]["work_name"], "Work");
+        // Season 1 is linked to the subscription's anime, whose title names the work.
+        assert_eq!(view["season"]["work_name"], "작품");
         assert_eq!(view["season"]["number"], 1);
         assert_eq!(view["season"]["videos"], 9);
         assert_eq!(view["season"]["episodes"], Value::Null, "unknown count");
@@ -1170,7 +1171,8 @@ mod rule_detail {
 
         let (_, view) = app.get(&format!("/api/rules/{}", blocked.id)).await;
         assert_eq!(view["season"], Value::Null);
-        assert_eq!(view["season_blocked"]["work_name"], "Work");
+        // The holder's anime names the work through season 1.
+        assert_eq!(view["season_blocked"]["work_name"], "작품");
         assert_eq!(view["season_blocked"]["number"], 1);
         assert_eq!(view["season_blocked"]["holder_anime_no"], 3320);
         assert_eq!(view["season_blocked"]["holder_subject"], "작품");

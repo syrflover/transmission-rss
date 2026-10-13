@@ -185,7 +185,7 @@ async fn a_work_without_a_creator_is_one_suggestion_with_no_names_and_no_badge()
     assert_eq!(
         shown,
         json!({ "suggestions": [{
-            "work": { "id": "w1", "name": "Show", "cover_url": null },
+            "work": { "id": "w1", "name": "작품", "cover_url": null },
             "title": "작품", "season": 1, "rule_id": app.rule.id, "anime_no": ANIME,
             "episodes": ["1", "2", "3", "04"],
             "episode_segments": [{ "text": "1–4", "count": 4, "whole": true }],
@@ -522,7 +522,8 @@ async fn a_failed_replacement_is_in_the_receive_failures_with_its_work_and_both_
     assert_eq!(entry["kind"], "revision");
     assert_eq!(entry["history_item_id"], item.id);
     assert_eq!(entry["title"], NEW_NAME);
-    assert_eq!(entry["work"], json!({ "id": "w1", "name": "Show" }));
+    // The work is called by its work title, which its subscribed season gives it.
+    assert_eq!(entry["work"], json!({ "id": "w1", "name": "작품" }));
     assert_eq!(
         (entry["season"].clone(), entry["episode"].clone()),
         (json!(1), json!("14"))

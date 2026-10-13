@@ -20,7 +20,10 @@ use rusqlite::{params, Connection, OptionalExtension};
 
 use crate::{
     discovery::{FileKind, Reason},
-    store::library::{AppliedCopy, FileRecord, UnrecognizedRecord},
+    store::{
+        library::{AppliedCopy, FileRecord, UnrecognizedRecord},
+        seasons::anissia::WORK_TITLE,
+    },
 };
 use trss_core::{
     episode::{EpisodeKey, EpisodeNumber},
@@ -52,6 +55,8 @@ pub struct SeasonDetail {
 pub struct WorkDetail {
     pub id: String,
     pub dir_name: String,
+    /// The work title (작품명, [`WORK_TITLE`]).
+    pub title: String,
     pub missing: bool,
     pub watch_folder_id: String,
     pub watch_folder_path: String,
@@ -72,15 +77,16 @@ struct Gathered {
 /// The work `id` with everything under it, or `None` when there is no such work.
 pub(super) fn detail(conn: &Connection, id: &str) -> rusqlite::Result<Option<WorkDetail>> {
     let head = conn
-        .prepare_cached(
-            "SELECT w.id, w.dir_name, w.missing, w.first_seen_at, f.id, f.path
+        .prepare_cached(&format!(
+            "SELECT w.id, w.dir_name, w.missing, w.first_seen_at, f.id, f.path, {WORK_TITLE}
                FROM works w JOIN watch_folders f ON f.id = w.watch_folder_id
-              WHERE w.id = ?1 AND f.unregistered_at IS NULL",
-        )?
+              WHERE w.id = ?1 AND f.unregistered_at IS NULL"
+        ))?
         .query_row([id], |row| {
             Ok(WorkDetail {
                 id: row.get(0)?,
                 dir_name: row.get(1)?,
+                title: row.get(6)?,
                 missing: row.get::<_, i64>(2)? != 0,
                 first_seen_at: row.get(3)?,
                 watch_folder_id: row.get(4)?,
@@ -180,8 +186,8 @@ pub(super) fn detail(conn: &Connection, id: &str) -> rusqlite::Result<Option<Wor
 /// only how far a season has come.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SeasonHoldings {
-    /// The work's folder name.
-    pub dir_name: String,
+    /// The work title (작품명, [`WORK_TITLE`]).
+    pub title: String,
     /// The work's folder is gone; the counts are the last record.
     pub missing: bool,
     /// How many episodes of the season have a video (`013` and `13` are one).
@@ -196,14 +202,14 @@ pub(super) fn season_holdings(
     season: u32,
 ) -> rusqlite::Result<Option<SeasonHoldings>> {
     let head: Option<(String, bool)> = conn
-        .prepare_cached(
-            "SELECT w.dir_name, w.missing FROM works w
+        .prepare_cached(&format!(
+            "SELECT {WORK_TITLE}, w.missing FROM works w
                JOIN watch_folders f ON f.id = w.watch_folder_id
-              WHERE w.id = ?1 AND f.unregistered_at IS NULL",
-        )?
+              WHERE w.id = ?1 AND f.unregistered_at IS NULL"
+        ))?
         .query_row([id], |row| Ok((row.get(0)?, row.get::<_, i64>(1)? != 0)))
         .optional()?;
-    let Some((dir_name, missing)) = head else {
+    let Some((title, missing)) = head else {
         return Ok(None);
     };
     let mut stmt = conn.prepare_cached(
@@ -216,7 +222,7 @@ pub(super) fn season_holdings(
         })?
         .collect::<rusqlite::Result<_>>()?;
     Ok(Some(SeasonHoldings {
-        dir_name,
+        title,
         missing,
         videos: u32::try_from(episodes.len()).unwrap_or(u32::MAX),
     }))
@@ -529,7 +535,7 @@ mod tests {
         };
         let first = holdings(1).await.unwrap();
         assert_eq!(
-            (first.dir_name.as_str(), first.missing, first.videos),
+            (first.title.as_str(), first.missing, first.videos),
             ("Show", false, 3)
         );
         assert_eq!(holdings(2).await.unwrap().videos, 1);

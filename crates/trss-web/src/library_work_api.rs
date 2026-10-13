@@ -6,12 +6,11 @@
 //!
 //! ```json
 //! {
-//!   "id": "…", "name": "Lycoris Recoil", "missing": false,
+//!   "id": "…", "name": "Lycoris Recoil", "title": "리코리스 리코일", "missing": false,
 //!   "watch_folder": { "id": "…", "path": "/media/anime" },
 //!   "folder_path": "/media/anime/Lycoris Recoil",
 //!   "added_at": null,
 //!   "native_title": "リコリス・リコイル",
-//!   "korean_title": "리코리스 리코일",
 //!   "seasons": [{
 //!     "number": 1,
 //!     "info": { "version": 2, "entries": [ … ], … },
@@ -196,7 +195,7 @@
 //!   파일 용량과 정리:
 //!   `{ "works": [{ "id", "name", "total", "kinds": [{ "kind", "count", "size" }],
 //!   "cleanable" }] }`, the works with a file kept or a cover image, the
-//!   largest `total` first. `kind` is `subtitle`, `font`, `attachment`
+//!   largest `total` first, then by `name`, the work title (작품명). `kind` is `subtitle`, `font`, `attachment`
 //!   (attachments and companion files) or `cover` (the work's current cover
 //!   image, its length read from its file: `0` when the file is not there);
 //!   `cleanable` is how many stored subtitles of the work can be cleaned now
@@ -204,9 +203,10 @@
 //!   nothing is cleaned from there.
 //! - `native_title` is the first (lowest-numbered, not season 0) season's first
 //!   linked AniList entry's native title, `null` without one.
-//! - `korean_title` is the Anissia title (`subject`) of the anime the work's
-//!   first (lowest-numbered) season with a subscription is connected to, `null`
-//!   when no subscription is connected to a season of the work.
+//! - `title` is the work title (작품명), as the library list gives it: the
+//!   Anissia title of the lowest-numbered season from 1 on linked to an anime,
+//!   by a subscription or from here alike, the folder name (`name`) when none
+//!   is ([`trss_library::store::seasons::anissia::WORK_TITLE`]).
 //! - `subscriptions` are the rules whose subscription is connected to a season
 //!   of this work (the connection is made from the videos the rule received, see
 //!   [`trss_collect::season_link`]), by season: the rule's ID, version and
@@ -503,12 +503,12 @@ struct WorkSubscription {
 struct WorkDetailView {
     id: String,
     name: String,
+    title: String,
     missing: bool,
     watch_folder: WatchFolderRef,
     folder_path: String,
     added_at: Option<i64>,
     native_title: Option<String>,
-    korean_title: Option<String>,
     subscriptions: Vec<WorkSubscription>,
     seasons: Vec<SeasonView>,
     unrecognized: Vec<UnrecognizedView>,
@@ -974,7 +974,6 @@ async fn show(
         .collect();
     // Stable: rules of one season keep the channel and rule order.
     subscriptions.sort_by_key(|s| s.season);
-    let korean_title = subscriptions.iter().find_map(|s| s.subject.clone());
 
     let (links, first) = work_infos(&state, &work.id, &numbers).await?;
     let native_title = first
@@ -1086,6 +1085,7 @@ async fn show(
     Ok(Json(WorkDetailView {
         id: work.id,
         name: work.dir_name,
+        title: work.title,
         missing: work.missing,
         watch_folder: WatchFolderRef {
             id: work.watch_folder_id,
@@ -1094,7 +1094,6 @@ async fn show(
         folder_path,
         added_at: work.first_seen_at,
         native_title,
-        korean_title,
         subscriptions,
         seasons,
         unrecognized: work
@@ -1297,6 +1296,7 @@ struct KindView {
 #[derive(Serialize)]
 struct WorkStorageView {
     id: String,
+    /// The work title (작품명).
     name: String,
     total: u64,
     kinds: Vec<KindView>,
@@ -1374,7 +1374,7 @@ async fn storage(State(state): State<AppState>) -> Result<Json<StorageList>, Api
         }
         listed.push(WorkStorageView {
             id: work.id,
-            name: work.dir_name,
+            name: work.title,
             total: kinds.iter().map(|k| k.size).sum(),
             kinds,
             cleanable: files.map_or(0, |f| f.cleanable),

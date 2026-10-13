@@ -249,8 +249,9 @@ Anissia의 `subject`, 선택적인 `originalSubject`와 `startDate`는 해당 �
 [작품명(Work Title)](../glossary.md)은 Anissia에 이은 가장 앞 시즌(시즌 1 이상)의 Anissia 제목이에요. 구독으로 이었든 작품 상세에서 손으로 이었든 같아요(사용자 결정, 2026-10-11).
 가장 앞 시즌을 고르는 규칙은 [자동 표지](#시즌-정보)와 같아서, `Season 00`의 극장판 연결은 작품명에 쓰지 않아요(사용자 결정, 2026-10-11). 그래서 2기를 구독해도 작품명은 `도망을 잘 치는 도련님`처럼 1기 제목으로 남아요.
 극장판만 있는 작품의 작품명은 그 극장판에 이은 Anissia 제목이에요. Anissia에 이은 것이 없으면 작품 폴더 이름이에요.
-0.7.0은 한국어 제목을 작품 상세 머리에만 쓰고, 그것도 구독이 이어진 시즌에서만 가져와요. 그래서 손으로 이은 `All Works Maid`도 폴더 이름으로 보이고, 라이브러리 격자와 목록은 모든 작품이 폴더 이름이에요.
-작품명은 라이브러리 격자와 목록, 작품 상세 머리, 할 일처럼 라이브러리 작품을 부르는 곳에 같게 써요. `제목순` 정렬은 작품명을 따르고, 검색은 작품명과 작품 폴더 이름으로 모두 찾아요.
+0.7.0은 한국어 제목을 작품 상세 머리에만 썼고, 그것도 구독이 이어진 시즌에서만 가져왔어요. 그래서 손으로 이은 `All Works Maid`도 폴더 이름으로 보였고, 라이브러리 격자와 목록은 모든 작품이 폴더 이름이었어요.
+작품명은 라이브러리 격자와 목록, 작품 상세 머리와 표지 창, 할 일, 규칙 상세의 시즌, 설정의 `파일 용량·정리`와 작품별 자막 형식 순서처럼 라이브러리 작품을 부르는 곳에 같게 써요. `제목순` 정렬은 작품명을 따르고, 검색은 작품명과 작품 폴더 이름으로 모두 찾아요. 표지와 시즌 정보의 AniList 검색은 지금처럼 작품 폴더 이름으로 시작해요.
+이번 주 편성 카드, 구독 카드, 자막 작업과 그 할 일, `자막 구독` 제안은 작품 전체가 아니라 한 시즌의 Anissia 작품을 다루므로 그 작품의 Anissia 제목을 그대로 쓰고, Anissia 작품이 없을 때만 폴더 이름 대신 작품명을 써요(리드 결정, 2026-10-13). 그래서 2기를 구독하면 2기의 작업 카드는 2기 제목이고, 라이브러리의 작품명은 1기 제목이에요.
 
 - 격자 보기는 표지와 제목 아래에 영상·자막 상태를 두 줄로 보여주고, 할 일이 있으면 그 배지를 표지 왼쪽 위에 올려요.
   배지는 처리 필요의 종류(`인증 필요`·`받기 실패`·`교체 승인`·`회차 확인 필요`)를 [할 일 화면](jobs.md#할-일-화면)과 같은 이름·색으로, 작품에 있는 종류마다 하나씩 할 일 순서로 쌓아요. 제안은 배지로 올리지 않아요(구현 결정, 2026-10-06).
@@ -552,7 +553,7 @@ Anissia의 `subject`, 선택적인 `originalSubject`와 `startDate`는 해당 �
 | 요구 | 실제 사용에서 본 것 | 테스트로 확인한 것 | 확인하지 않은 것 |
 | --- | --- | --- | --- |
 | 한 목록, 표지 격자와 목록 보기 전환, 페이지로 이어 받기, 520편 규모 | 2026-10-02 서버: 작품 29편(뒤에 30편)이 떴어요 ([0013])<br>2026-10-04 개발(개발 환경, 작품 89편): 새로고침하면 기본 보기로 첫 페이지 60편이 열리고 나머지 29편이 이어졌어요 ([0013]) | (1) 없음<br>(2) `trss-web` `src/library_api/tests.rs` `following_next_reaches_every_work_once_and_the_last_page_has_no_next`<br>(3) 없음 | (1) 보기 전환·유지의 화면 시험이 없어요 ([0013])<br>(3) 520편은 사람이 본 확인이 아니고 실제 기기에서는 89편만 스크롤했어요(520편 확인은 하지 않기로 했어요, 사용자 결정 2026-10-04). Firefox는 보지 않았어요 |
-| 작품명(가장 앞 시즌의 Anissia 제목, 극장판만 있는 작품, 폴더 이름), 작품명을 쓰는 곳, `제목순`과 검색 | 없음 | 없음 | 만들지 않았어요([0138](../tickets/0138-work-title-from-anissia.md)). 0.7.0은 작품 상세 머리에만 구독이 이은 시즌의 제목을 써요(`trss-web` `library_work_api.rs`). |
+| 작품명(가장 앞 시즌의 Anissia 제목, 극장판만 있는 작품, 폴더 이름), 작품명을 쓰는 곳, `제목순`과 검색 | 2026-10-13 개발(서버 DB 사본): 작품 상세에서 `All Works Maid`의 시즌 1을 Anissia에 잇자 머리와 탭 제목이 바로 `히로인? 성녀? 아니요, 올 워크스 메이드 입니다(자랑)!`가 됐어요. 라이브러리 격자, `제목순`, `파일 용량·정리`가 구독으로 이은 `FX 전사 쿠루미`와 함께 한글 작품명을 썼고, `올 워크스`와 `all works` 검색이 모두 그 작품을 찾았어요. 표지 창의 AniList 검색은 `All Works Maid`로 시작했어요 ([0138]) | `trss-library` `store/seasons/anissia_tests.rs` `the_work_title_is_the_anissia_title_of_the_lowest_linked_season_from_one_on`<br>`trss-library` `store/library/page.rs` `the_title_sort_follows_the_work_title_and_a_search_finds_the_title_or_the_folder_name`<br>`trss-web` `library_work_api/tests.rs` `the_head_of_a_work_names_the_subscription_of_its_season_and_the_work_title` | 극장판만 있는 작품의 작품명은 만들지 않았어요([0139](../tickets/0139-movie-only-works.md)). 할 일, 자막 작업, 규칙 상세, 자막 형식 순서 목록의 작품명은 API 테스트만 있고 화면에서 보지 않았어요. 서버에서는 보지 않았어요([0143](../tickets/0143-deploy-feedback-fixes.md)). |
 | 격자 보기와 할 일 배지 | 2026-10-06 개발(개발 DB 사본): 한 작품에 `인증 필요`·`교체 승인`·`회차 확인 필요` 배지가 표지 왼쪽 위에 올랐고, 할 일을 처리하자 사라졌어요 ([0075]) | `trss-web` `src/library_api/tests.rs` `a_page_badges_a_work_with_its_to_dos_and_a_job_of_no_work_badges_nothing`<br>`web` `src/screens/todo/kinds.test.ts` `kept works take the badges of the list read again, and the unchanged ones stay the same objects` | 이름·색이 할 일 화면과 같은지와 쌓는 모양은 시험이 없어요. `받기 실패` 배지를 격자에서 본 적이 없어요 |
 | 목록 보기, 48px 폭의 표지와 한 줄 상태 | 2026-10-04 개발(개발 환경): iPhone Safari로 목록 끝까지 스크롤했고 가로로 밀리지 않았어요 ([0013]) | 없음 | 표지 폭 48px은 임시 DB에서만 측정했어요. 키보드 초점 표시와 글자 대비는 측정하지 않았어요 ([0013]) |
 | 이미지가 없거나 불러오지 못할 때의 목록 | 2026-10-06 개발(개발 DB 사본): 표지 파일이 없는 채로 작품을 열었고 콘솔 오류는 표지 404뿐이었어요 ([0075]) | 없음 | 표지를 못 불러올 때의 모양을 겨냥한 확인은 없고 서버에서는 보지 않았어요 |
@@ -645,10 +646,10 @@ Anissia의 `subject`, 선택적인 `originalSubject`와 `startDate`는 해당 �
 
 ### 확인하지 않은 요구
 
-실제 사용에서 본 것도 없고 테스트도 없는 요구는 94행 중 10행이에요.
+실제 사용에서 본 것도 없고 테스트도 없는 요구는 94행 중 9행이에요.
 
 - 명세에만 있고 만들지 않은 요구 셋: 이미지 파일의 수명의 `표: AniList 제목과 로컬 시즌 번호만 같거나 Anissia 제목·시작일이 빠진 상태`, 할 일과 회차 목록의 `표: 방영 전 회차`, 오른쪽 카드 열의 `최근 활동`. [0132](../tickets/0132-library-unbuilt-parts.md)에서 만들어요.
-- 2026-10-11에 더한 요구 여섯: 극장판의 위치, 극장판마다의 Anissia 연결, 극장판의 후보와 받기, 극장판만 있는 작품의 AniList 연결, 작품명, 자막 후보 구역의 극장판. [0138](../tickets/0138-work-title-from-anissia.md)·[0139](../tickets/0139-movie-only-works.md)·[0140](../tickets/0140-movies-in-season-00.md)에서 만들어요.
+- 2026-10-11에 더한 요구 다섯: 극장판의 위치, 극장판마다의 Anissia 연결, 극장판의 후보와 받기, 극장판만 있는 작품의 AniList 연결, 자막 후보 구역의 극장판. [0139](../tickets/0139-movie-only-works.md)·[0140](../tickets/0140-movies-in-season-00.md)에서 만들어요.
 - 머리와 시즌: 표지 크게 보기. 가짜 출처로만 봤어요.
 
 나머지 행에도 일부만 확인했거나 만들지 않은 부분이 있어요. 그 부분은 행마다 `확인하지 않은 것`에 적었어요.
@@ -686,4 +687,5 @@ Anissia의 `subject`, 선택적인 `originalSubject`와 `startDate`는 해당 �
 [0123]: ../archive/tickets/5-deployed-verification/0123-collect-moves-archived-work-folder.md
 [0124]: ../archive/tickets/5-deployed-verification/0124-kept-copy-off-episode-row.md
 [0127]: ../archive/tickets/5-deployed-verification/0127-row-waits-for-library-after-apply.md
+[0138]: ../tickets/0138-work-title-from-anissia.md
 [0114]: ../archive/tickets/refactoring-between-5-and-6/0114-refactor-final-check.md#실제-서버-2026-10-10-070

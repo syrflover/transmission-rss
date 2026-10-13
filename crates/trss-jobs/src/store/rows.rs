@@ -1,7 +1,10 @@
 //! The row types of the job records and the mappers of more than one feature.
 
+use std::sync::LazyLock;
+
 use rusqlite::{Connection, Row};
 use trss_core::Millis;
+use trss_library::store::seasons::anissia::WORK_TITLE;
 use trss_subtitles::{
     upload::{Archive, Kind},
     verify::Format,
@@ -33,7 +36,7 @@ pub struct JobRow {
     pub created_at: Millis,
     pub finished_at: Option<Millis>,
     pub work_id: Option<String>,
-    /// The work's folder name, while the library has the work.
+    /// The work title (작품명), while the library has the work.
     pub work_name: Option<String>,
     pub season: Option<i64>,
     pub anime_no: Option<i64>,
@@ -58,7 +61,8 @@ pub struct JobRow {
 }
 
 impl JobRow {
-    /// What to call the job: its anime's title, else its work's name.
+    /// What to call the job: the title of its season's anime, else the work
+    /// title.
     pub fn title(&self) -> String {
         self.anime_title
             .clone()
@@ -349,9 +353,12 @@ pub(super) fn dropped_rows(c: &Connection, id: &str) -> Result<Vec<DroppedRow>, 
     Ok(rows)
 }
 
-const JOB_COLUMNS: &str = "
+/// What [`job_row`] reads: a job `j` with its work `w` and its anime `a`.
+static JOB_COLUMNS: LazyLock<String> = LazyLock::new(|| {
+    format!(
+        "
     SELECT j.seq, j.id, j.state, j.wait, j.stage, j.note, j.state_at, j.created_at,
-           j.finished_at, j.work_id, w.dir_name, j.season, j.anime_no, a.subject, j.creator,
+           j.finished_at, j.work_id, {WORK_TITLE}, j.season, j.anime_no, a.subject, j.creator,
            j.origin, j.revision_of,
            (SELECT r.job_id FROM subtitle_job_items r
               JOIN subtitle_jobs rj ON rj.id = r.job_id
@@ -366,7 +373,9 @@ const JOB_COLUMNS: &str = "
                          WHERE i.job_id = j.id AND i.state <> 'done')
     FROM subtitle_jobs j
     LEFT JOIN works w ON w.id = j.work_id
-    LEFT JOIN anissia_anime a ON a.anime_no = j.anime_no";
+    LEFT JOIN anissia_anime a ON a.anime_no = j.anime_no"
+    )
+});
 
 fn job_row(r: &Row<'_>) -> rusqlite::Result<JobRow> {
     Ok(JobRow {
@@ -405,7 +414,7 @@ pub(super) fn rows<P: rusqlite::Params>(
     tail: &str,
     p: P,
 ) -> Result<Vec<JobRow>, JobError> {
-    let mut stmt = c.prepare_cached(&format!("{JOB_COLUMNS} {tail}"))?;
+    let mut stmt = c.prepare_cached(&format!("{} {tail}", *JOB_COLUMNS))?;
     let mut jobs = stmt.query_map(p, job_row)?.collect::<Result<Vec<_>, _>>()?;
     let mut items = c.prepare_cached(
         "SELECT episode, post_url, state, failure FROM subtitle_job_items

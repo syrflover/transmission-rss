@@ -54,6 +54,7 @@ impl TodoError {
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct WorkRef {
     pub id: String,
+    /// The work title (작품명).
     pub name: String,
     pub cover_url: Option<String>,
 }

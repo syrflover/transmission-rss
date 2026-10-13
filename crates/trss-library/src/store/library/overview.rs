@@ -33,7 +33,7 @@ use rusqlite::Connection;
 
 use crate::{
     discovery::{kind_of, FileKind, Reason},
-    store::seasons,
+    store::seasons::{self, anissia::WORK_TITLE},
 };
 use trss_core::{episode::EpisodeSet, Millis};
 
@@ -71,6 +71,8 @@ impl SubtitleCoverage {
 pub struct WorkOverview {
     pub id: String,
     pub dir_name: String,
+    /// The work title (작품명, [`WORK_TITLE`]).
+    pub title: String,
     pub missing: bool,
     pub watch_folder_id: String,
     pub watch_folder_path: String,
@@ -167,15 +169,16 @@ pub(super) fn overview(conn: &Connection) -> rusqlite::Result<Vec<WorkOverview>>
         folder_id: String,
         folder_path: String,
         latest_season: Option<u32>,
+        title: String,
     }
     let rows: Vec<Row> = {
-        let mut stmt = conn.prepare_cached(
+        let mut stmt = conn.prepare_cached(&format!(
             "SELECT w.id, w.dir_name, w.missing, w.first_seen_at, f.id, f.path,
-                    (SELECT max(s.number) FROM seasons s WHERE s.work_id = w.id)
+                    (SELECT max(s.number) FROM seasons s WHERE s.work_id = w.id), {WORK_TITLE}
                FROM works w JOIN watch_folders f ON f.id = w.watch_folder_id
               WHERE f.unregistered_at IS NULL
-              ORDER BY w.dir_name, w.id",
-        )?;
+              ORDER BY w.dir_name, w.id"
+        ))?;
         let rows = stmt.query_map([], |row| {
             Ok(Row {
                 id: row.get(0)?,
@@ -185,6 +188,7 @@ pub(super) fn overview(conn: &Connection) -> rusqlite::Result<Vec<WorkOverview>>
                 folder_id: row.get(4)?,
                 folder_path: row.get(5)?,
                 latest_season: row.get(6)?,
+                title: row.get(7)?,
             })
         })?;
         rows.collect::<rusqlite::Result<_>>()?
@@ -250,6 +254,7 @@ pub(super) fn overview(conn: &Connection) -> rusqlite::Result<Vec<WorkOverview>>
             WorkOverview {
                 subtitle_check_needed: !row.missing && check_needed.contains_key(&row.id),
                 id: row.id,
+                title: row.title,
                 dir_name: row.dir_name,
                 missing: row.missing,
                 watch_folder_id: row.folder_id,

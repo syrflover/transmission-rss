@@ -13,10 +13,11 @@
 //!   which comes first. The sort by title has no time, so it is the title
 //!   order; the sort by airing year has the year the latest season's first
 //!   linked AniList entry started, latest first and unknown after every known one.
-//! - **Title** is compared as NFC text without regard to case: a folder name
-//!   made on macOS may be decomposed, and `a` and `A` are the same letter to a
-//!   reader. Code point order after that, so digits come before Latin letters
-//!   and those before Hangul.
+//! - **Title** is the work title (작품명, [`WorkOverview::title`]), compared
+//!   as NFC text without regard to case: a folder name made on macOS may be
+//!   decomposed, and `a` and `A` are the same letter to a reader. Code point
+//!   order after that, so digits come before Latin letters and those before
+//!   Hangul.
 //! - **Cursor.** It is the key of the last item of a page, so the next page is
 //!   what comes *after that key*, whatever was added or removed meanwhile: a
 //!   work inserted ahead of the cursor is not shown (the client has passed that
@@ -25,7 +26,7 @@
 //!   moved its time) can be seen twice or missed, and the next first page
 //!   shows it where it belongs now.
 //! - **Search** is a case-insensitive match of the NFC text in the work's
-//!   title (the folder name) or in any native, English or romaji title of the
+//!   title, its folder name, or any native, English or romaji title of the
 //!   AniList entries linked to its seasons.
 
 use serde::{Deserialize, Serialize};
@@ -255,9 +256,10 @@ pub fn page(works: Vec<WorkOverview>, query: &ListQuery) -> Page {
         .into_iter()
         .filter(|work| query.filter.admits(work))
         .filter_map(|work| {
-            let title = fold(&work.dir_name);
+            let title = fold(&work.title);
             if !needle.is_empty()
                 && !title.contains(&needle)
+                && !fold(&work.dir_name).contains(&needle)
                 && !work.linked_titles.iter().any(|t| fold(t).contains(&needle))
             {
                 return None;
@@ -302,6 +304,7 @@ mod tests {
         WorkOverview {
             id: id.into(),
             dir_name: name.into(),
+            title: name.into(),
             missing: false,
             watch_folder_id: "f".into(),
             watch_folder_path: "/w".into(),
@@ -466,6 +469,37 @@ mod tests {
         ];
         // The tie of equal titles is settled by ID.
         assert_eq!(ids(&page(works, &query(Sort::Title))), ["c", "a", "b"]);
+    }
+
+    #[test]
+    fn the_title_sort_follows_the_work_title_and_a_search_finds_the_title_or_the_folder_name() {
+        let titled = |id: &str, folder: &str, title: &str| WorkOverview {
+            title: title.into(),
+            ..work(id, folder)
+        };
+        let works = vec![
+            titled("a", "Nige Jouzu no Wakagimi", "도망을 잘 치는 도련님"),
+            work("b", "Zeta"),
+            titled("c", "Alpha", "하나"),
+        ];
+        // By folder name it would be Alpha, Nige…, Zeta.
+        assert_eq!(
+            ids(&page(works.clone(), &query(Sort::Title))),
+            ["b", "a", "c"]
+        );
+        for (text, expected) in [
+            ("도련님", vec!["a"]),
+            ("WAKAGIMI", vec!["a"]),
+            ("하나", vec!["c"]),
+            ("alpha", vec!["c"]),
+            ("zeta", vec!["b"]),
+        ] {
+            let search = ListQuery {
+                search: text.into(),
+                ..query(Sort::Title)
+            };
+            assert_eq!(ids(&page(works.clone(), &search)), expected, "{text}");
+        }
     }
 
     #[test]

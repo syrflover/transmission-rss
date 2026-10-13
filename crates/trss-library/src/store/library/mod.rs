@@ -75,7 +75,7 @@ mod repo;
 #[cfg(test)]
 mod tests;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 use checks::UNRECOGNIZED_OF_WORK;
 pub use checks::{CheckError, VideoCheck};
@@ -507,6 +507,21 @@ impl LibraryStore {
     /// shows (see [`WorkOverview`]), by folder name, in a fixed number of queries.
     pub async fn overview(&self) -> Result<Vec<WorkOverview>, LibraryError> {
         self.db.run(|c| Ok(overview::overview(c)?)).await
+    }
+
+    /// The work title (작품명) of every work, by ID, for a screen that names
+    /// works without listing them ([`crate::store::seasons::anissia::WORK_TITLE`]).
+    pub async fn titles(&self) -> Result<HashMap<String, String>, LibraryError> {
+        self.db
+            .run(|c| {
+                let mut stmt = c.prepare_cached(&format!(
+                    "SELECT w.id, {} FROM works w",
+                    crate::store::seasons::anissia::WORK_TITLE
+                ))?;
+                let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
+                Ok(rows.collect::<rusqlite::Result<_>>()?)
+            })
+            .await
     }
 
     /// One page of the library list: the works that pass the query's filter and

@@ -126,12 +126,15 @@ function WorkPage({ workId }: { workId: string }) {
     work.reload();
   };
 
-  // A season's Anissia link after a change shows at once. Nothing else of the page follows it.
+  // A season's Anissia link after a change shows at once. The work title follows the lowest linked season,
+  // so the page and the list are read again behind it.
   const anissiaChanged = (link: AnissiaLink) => {
     work.update((w) => {
       if (!w) return w;
       return { ...w, seasons: w.seasons.map((s) => (s.number === link.season ? { ...s, anissia: link } : s)) };
     });
+    forgetPrefix(LIST_PREFIX);
+    work.reload();
   };
 
   // A `다시 받기` of a failed replacement ended: the episode rows show what the worker did.
@@ -216,9 +219,8 @@ function Loaded({
   onRetried: () => Promise<void>;
   onOrderChanged: (order: FormatOrder) => void;
 }) {
-  const cover = coverOf(work.name);
-  // The Anissia title takes the place of the folder's name once a subscription is connected.
-  const title = work.korean_title ?? cover.title;
+  const cover = coverOf(work.title);
+  const title = cover.title;
   const [coverOpen, setCoverOpen] = useState(false);
   usePageTitle(title);
   const phone = useMediaQuery(PHONE_QUERY);
@@ -312,6 +314,7 @@ function Loaded({
         <CoverDialog
           workId={work.id}
           work={cover}
+          folderName={work.name}
           coverUrl={work.cover_url}
           maxBytes={work.cover_max_bytes}
           open={coverOpen}

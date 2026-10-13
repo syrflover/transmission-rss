@@ -692,7 +692,8 @@ async fn an_undecided_work_with_candidates_is_one_suggestion_until_a_creator_is_
     assert_eq!(suggestions.len(), 1);
     let s = &suggestions[0];
     assert_eq!(s.work_id, WORK);
-    assert_eq!(s.work_name, "Show");
+    // The subscription links season 1 to its anime, whose title names the work.
+    assert_eq!(s.work_name, "작품");
     assert_eq!(s.anime_title.as_deref(), Some("작품"));
     assert_eq!(s.season, 1);
     assert_eq!(s.rule_id, w.rule.id);

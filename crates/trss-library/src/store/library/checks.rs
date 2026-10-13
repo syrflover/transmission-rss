@@ -22,7 +22,10 @@ use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 
 use super::LibraryStore;
 
-use crate::discovery::{Reason, SeenFile};
+use crate::{
+    discovery::{Reason, SeenFile},
+    store::seasons::anissia::WORK_TITLE,
+};
 use trss_core::{db::DbError, trname_names::season_folder, Millis};
 
 #[derive(Debug, thiserror::Error)]
@@ -47,7 +50,7 @@ impl From<rusqlite::Error> for CheckError {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VideoCheck {
     pub work_id: String,
-    /// The work folder's name.
+    /// The work title (작품명, [`WORK_TITLE`]).
     pub work_name: String,
     /// The season of the folder it is in.
     pub season: u32,
@@ -76,8 +79,8 @@ pub(super) fn identity_of(size: Option<i64>, mtime_ns: Option<i64>) -> Option<Se
 }
 
 pub(super) fn open_checks(conn: &Connection) -> rusqlite::Result<Vec<VideoCheck>> {
-    let mut stmt = conn.prepare_cached(
-        "SELECT u.work_id, w.dir_name, u.path, u.reason, u.size, u.mtime_ns
+    let mut stmt = conn.prepare_cached(&format!(
+        "SELECT u.work_id, {WORK_TITLE}, u.path, u.reason, u.size, u.mtime_ns
            FROM unrecognized_files u
            JOIN works w ON w.id = u.work_id
            JOIN watch_folders f ON f.id = w.watch_folder_id
@@ -87,8 +90,8 @@ pub(super) fn open_checks(conn: &Connection) -> rusqlite::Result<Vec<VideoCheck>
                 SELECT 1 FROM unrecognized_checks c
                  WHERE c.work_id = u.work_id AND c.path = u.path
                    AND c.size = u.size AND c.mtime_ns = u.mtime_ns)
-          ORDER BY w.dir_name, u.work_id, u.path",
-    )?;
+          ORDER BY 2, u.work_id, u.path"
+    ))?;
     let rows = stmt.query_map([], |row| {
         Ok((
             row.get::<_, String>(0)?,

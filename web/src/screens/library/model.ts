@@ -8,7 +8,7 @@ import type { EpisodeRange, FilterKey, LibraryWork, SortKey } from "./api";
 
 /** A work with what its cover placeholder needs, computed once per answer. */
 export interface Work extends LibraryWork {
-  /** The folder name in NFC (a name made on macOS may be decomposed). */
+  /** The work title in NFC (a folder name made on macOS may be decomposed). */
   title: string;
   /** The first letter or digit of the title, for the cover placeholder. */
   initial: string;
@@ -40,7 +40,7 @@ export function coverOf(name: string): Pick<Work, "title" | "hue" | "initial"> {
 
 export function prepare(works: LibraryWork[]): Work[] {
   return works.map((work) => {
-    const title = normalize(work.name);
+    const title = normalize(work.title);
     return {
       ...work,
       title,

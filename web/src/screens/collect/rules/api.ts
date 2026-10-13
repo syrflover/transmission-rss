@@ -65,7 +65,7 @@ export interface ArchiveMove {
 export interface RuleSeason {
   season_id: string;
   work_id: string;
-  /** The work's folder name. */
+  /** The work title (작품명), as the library calls the work. */
   work_name: string;
   number: number;
   /** Where the work's cover is served, if it has one. */
@@ -79,6 +79,7 @@ export interface RuleSeason {
 /** Why a subscription was not connected: the season its videos are in is held by another anime. */
 export interface SeasonBlocked {
   work_id: string;
+  /** The work title (작품명); `null` when the work is gone. */
   work_name: string | null;
   number: number;
   holder_anime_no: number | null;

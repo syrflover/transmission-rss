@@ -127,7 +127,7 @@ async fn a_save_from_a_version_another_screen_saved_over_is_refused_with_the_sto
 }
 
 #[tokio::test]
-async fn the_works_with_their_own_order_are_listed_with_their_names() {
+async fn the_works_with_their_own_order_are_listed_with_their_work_titles() {
     let app = App::new();
     app.db
         .run::<_, trss_core::DbError, _>(|c| {
@@ -145,4 +145,19 @@ async fn the_works_with_their_own_order_are_listed_with_their_names() {
         app.get().await["overrides"],
         json!([{ "work_id": "w1", "name": "Lycoris Recoil", "format_order": ["srt", "ass", "smi"] }])
     );
+    // Linked to Anissia, the work is called by its work title.
+    app.db
+        .run::<_, trss_core::DbError, _>(|c| {
+            c.execute_batch(
+                "INSERT INTO seasons (work_id, number) VALUES ('w1', 1);
+                 INSERT INTO anissia_anime (anime_no, subject, week, status, fetched_at)
+                     VALUES (7, '리코리스 리코일', 6, 'END', 10);
+                 INSERT INTO season_anissia (work_id, season, anime_no, version)
+                     VALUES ('w1', 1, 7, 1);",
+            )?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+    assert_eq!(app.get().await["overrides"][0]["name"], "리코리스 리코일");
 }

@@ -13,6 +13,7 @@ export interface Range {
 /** A work that orders the formats its own way; its subtitles change that, not the settings. */
 export interface PolicyOverride {
   work_id: string;
+  /** The work title (작품명). */
   name: string;
   format_order: SubtitleFormat[];
 }

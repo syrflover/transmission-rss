@@ -54,7 +54,7 @@ export type {
 /** The work a to-do or a job is about, when the library has it. */
 export interface WorkRef {
   id: string;
-  /** The work's folder name. */
+  /** The work title (작품명). */
   name: string;
   /** Where its cover image is served, while it has one. */
   cover_url: string | null;
@@ -80,7 +80,7 @@ export interface AuthTodo extends Badged {
   /** Since when the oldest of its jobs waits (Unix ms). */
   at: number;
   work: WorkRef | null;
-  /** What to call it: the Anissia title of the job's anime, else the work's name. */
+  /** What to call it: the Anissia title of the job's anime, else the work title (작품명). */
   title: string;
   season: number | null;
   /** The episodes that wait, as Anissia writes them (`"11"`, `"13.5"`). */
@@ -108,7 +108,7 @@ export interface ReceiveFailedTodo extends Badged {
   at: number;
   context: "revision" | "add_failed";
   work: WorkRef | null;
-  /** The work's name, or for an `add_failed` with no work the rule's folder. */
+  /** The work title (작품명), or for an `add_failed` with no work the rule's folder. */
   title: string;
   /** `revision`: the season of the episodes; `null` when it cannot be read. */
   season: number | null;
@@ -270,7 +270,7 @@ export function fetchTodos(signal?: AbortSignal): Promise<TodoList> {
  */
 export interface FollowSuggestion {
   work: WorkRef;
-  /** The anime's Anissia title, else the work's name. */
+  /** The anime's Anissia title, else the work title (작품명). */
   title: string;
   season: number;
   rule_id: string;
@@ -384,7 +384,7 @@ export interface JobRow {
   state_at: number;
   created_at: number;
   work: WorkRef | null;
-  /** What to call it: the Anissia title of the job's anime, else the work's name. */
+  /** What to call it: the Anissia title of the job's anime, else the work title (작품명). */
   title: string;
   season: number | null;
   /** The items' episodes in order, as Anissia writes them. */

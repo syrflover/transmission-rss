@@ -384,17 +384,22 @@ async fn subscribed_season(state: &AppState, id: &str) -> trss_collect::store::c
 }
 
 #[tokio::test]
-async fn the_head_of_a_work_names_the_subscription_of_its_season_and_the_anissia_title() {
+async fn the_head_of_a_work_names_the_subscription_of_its_season_and_the_work_title() {
     let (state, id) = state_with_work().await;
-    // A work no subscription is connected to has no Korean title.
+    // Nothing links the work to Anissia: it is called by its folder name.
     let (_, body) = get(&state, &format!("/library/works/{id}")).await;
-    assert_eq!(body["korean_title"], Value::Null);
+    assert_eq!(body["title"], "Lycoris Recoil");
     assert_eq!(body["subscriptions"], serde_json::json!([]));
 
+    // The subscription's connection links season 1, which gives the head and
+    // the library list the anime's title.
     let rule = subscribed_season(&state, &id).await;
     let (status, body) = get(&state, &format!("/library/works/{id}")).await;
     assert_eq!(status, StatusCode::OK, "{body}");
-    assert_eq!(body["korean_title"], "작품");
+    assert_eq!(body["name"], "Lycoris Recoil");
+    assert_eq!(body["title"], "작품");
+    let (_, list) = get(&state, "/library/works").await;
+    assert_eq!(list["items"][0]["title"], "작품");
     let held = &body["subscriptions"][0];
     assert_eq!(held["season"], 1);
     assert_eq!(held["rule_id"], rule.id.as_str());

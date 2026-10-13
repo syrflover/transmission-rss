@@ -71,7 +71,7 @@
 //! not).
 //!
 //! A subscription's view also tells where it stands in the library:
-//! `season` (the season its received videos appeared in, with the work's name,
+//! `season` (the season its received videos appeared in, with the work title,
 //! cover, how many episodes have a video and the AniList episode count) and
 //! `season_blocked` (the season they appeared in is held by another Anissia
 //! anime, so the rule was not connected; `held_by` says whether another
@@ -282,7 +282,7 @@ pub struct RuleView {
 pub struct RuleSeasonView {
     pub season_id: String,
     pub work_id: String,
-    /// The work's folder name.
+    /// The work title (작품명), as the library calls the work.
     pub work_name: String,
     pub number: u32,
     /// Where the work's cover is served, if it has one.
@@ -297,6 +297,7 @@ pub struct RuleSeasonView {
 #[derive(Debug, Clone, Serialize)]
 pub struct SeasonBlockedView {
     pub work_id: String,
+    /// The work title (작품명); `null` when the work is gone.
     pub work_name: Option<String>,
     pub number: u32,
     /// Anissia's `animeNo` of the holder, and its title when the app has one.
@@ -667,7 +668,7 @@ async fn season_of(state: &AppState, season_id: &str) -> Result<Option<RuleSeaso
     Ok(Some(RuleSeasonView {
         season_id: season_id.to_owned(),
         work_id: parsed.work_id,
-        work_name: holdings.dir_name,
+        work_name: holdings.title,
         number: parsed.number,
         cover_url,
         videos: holdings.videos,
@@ -687,7 +688,7 @@ async fn blocked_by(state: &AppState, season_id: &str) -> Result<SeasonBlockedVi
         .season_holdings(&work_id, number)
         .await
         .map_err(|e| internal(&e))?
-        .map(|h| h.dir_name);
+        .map(|h| h.title);
     let holder_anime_no = state
         .channels
         .season_holder(season_id)

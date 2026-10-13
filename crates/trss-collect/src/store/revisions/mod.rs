@@ -89,6 +89,7 @@ use trss_core::{
     db::{Db, DbError},
     Millis,
 };
+use trss_library::store::seasons::anissia::WORK_TITLE;
 
 #[derive(Debug, thiserror::Error)]
 pub enum RevisionError {
@@ -517,6 +518,7 @@ pub struct OldVideo {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkRef {
     pub id: String,
+    /// The work title (작품명).
     pub name: String,
 }
 
@@ -1428,12 +1430,12 @@ impl RevisionStore {
                     return Ok(None);
                 };
                 let parent = parent.trim_end_matches('/').to_owned();
-                Ok(c.prepare_cached(
-                    "SELECT w.id, w.dir_name FROM works w
+                Ok(c.prepare_cached(&format!(
+                    "SELECT w.id, {WORK_TITLE} FROM works w
                        JOIN watch_folders f ON f.id = w.watch_folder_id
                       WHERE f.unregistered_at IS NULL
-                        AND rtrim(f.path, '/') || '/' || w.dir_name = ?1",
-                )?
+                        AND rtrim(f.path, '/') || '/' || w.dir_name = ?1"
+                ))?
                 .query_row([parent], |row| {
                     Ok(WorkRef {
                         id: row.get(0)?,

@@ -181,7 +181,7 @@
 //! ([`trss_core::episode::segments`]); an item has `episode_shown` and a file
 //! `shared_with_shown` likewise.
 //!
-//! A job's `title` is its anime's Anissia title, else its work's name. No
+//! A job's `title` is its anime's Anissia title, else its work title (작품명). No
 //! answer carries a cookie, a token or a signed address: posts are public
 //! pages, and the files are named by their place in the receive area.
 
@@ -247,6 +247,7 @@ fn internal(e: &dyn std::fmt::Display) -> ApiError {
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct WorkRefView {
     pub id: String,
+    /// The work title (작품명).
     pub name: String,
     pub cover_url: Option<String>,
 }

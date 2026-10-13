@@ -69,6 +69,7 @@ function recovery(state: ArtworkState): string | null {
 export function CoverDialog({
   workId,
   work,
+  folderName,
   coverUrl,
   maxBytes,
   open,
@@ -77,6 +78,8 @@ export function CoverDialog({
 }: {
   workId: string;
   work: Pick<Work, "title" | "hue" | "initial">;
+  /** The work's folder name, which AniList's search starts with: the work title may be Anissia's Korean one. */
+  folderName: string;
   coverUrl: string | null;
   /** The most bytes of an image the server takes. */
   maxBytes: number;
@@ -302,7 +305,7 @@ export function CoverDialog({
             {searching && state && (
               <AnilistSearch
                 workId={workId}
-                initial={work.title}
+                initial={folderName}
                 busy={busy}
                 onPick={(candidate) => void run("pick", (v) => pickArtwork(workId, v, candidate.id))}
               />

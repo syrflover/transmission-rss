@@ -79,7 +79,7 @@ use trss_library::{
     seasons::combine::{combine, schedule_times},
     store::{
         library::{AttributedSubtitle, Held, LibraryError, LibraryStore},
-        seasons::{SeasonError, SeasonStore},
+        seasons::{anissia::WORK_TITLE, SeasonError, SeasonStore},
     },
 };
 
@@ -129,7 +129,7 @@ pub struct Subscribed {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Suggestion {
     pub work_id: String,
-    /// The work's folder name.
+    /// The work title (작품명).
     pub work_name: String,
     /// The anime's title in the stored schedule, if it is there.
     pub anime_title: Option<String>,
@@ -848,18 +848,18 @@ impl Follow {
         Ok(out)
     }
 
-    /// The work's folder name and the anime's title in the stored schedule, if
-    /// it is there.
+    /// The work title (작품명) and the anime's title in the stored schedule,
+    /// if it is there.
     async fn titles(&self, work_id: &str, anime_no: i64) -> Result<(String, Option<String>)> {
         let work_id = work_id.to_owned();
         self.db
             .run(move |c| {
                 Ok::<_, FollowError>(
-                    c.prepare_cached(
-                        "SELECT w.dir_name,
+                    c.prepare_cached(&format!(
+                        "SELECT {WORK_TITLE},
                             (SELECT a.subject FROM anissia_anime a WHERE a.anime_no = ?2)
-                     FROM works w WHERE w.id = ?1",
-                    )?
+                     FROM works w WHERE w.id = ?1"
+                    ))?
                     .query_row(rusqlite::params![work_id, anime_no], |r| {
                         Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?))
                     })?,
@@ -886,7 +886,7 @@ pub struct SeasonFacts {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EpisodeCheck {
     pub work_id: String,
-    /// The work's folder name.
+    /// The work title (작품명).
     pub work_name: String,
     /// The anime's title in the stored schedule, if it is there.
     pub anime_title: Option<String>,

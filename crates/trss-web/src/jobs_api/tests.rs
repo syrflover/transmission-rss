@@ -119,7 +119,7 @@ async fn a_pick_makes_one_job_per_browser_id_of_one_creators_candidates() {
     assert_eq!(detail["title"], "작품");
     assert_eq!(detail["creator"], "에루샤");
     assert_eq!(detail["episodes"], json!(["1", "2"]));
-    assert_eq!(detail["work"]["name"], "Show");
+    assert_eq!(detail["work"]["name"], "작품");
     assert_eq!(detail["source"], "fake.trss.invalid");
     let steps: Vec<(&str, &str)> = detail["steps"]
         .as_array()

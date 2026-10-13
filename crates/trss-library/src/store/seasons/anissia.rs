@@ -24,6 +24,24 @@ pub struct AnissiaLink {
     pub anime_no: Option<i64>,
 }
 
+/// The work title (작품명, `docs/specs/library.md` 라이브러리 화면) of the work
+/// a query names `w`, as an SQL expression to put in its columns: the Anissia
+/// title of the lowest-numbered recorded season, from 1 on, linked to an anime,
+/// else the work's folder name (`NULL` only where `w` is no work, as in a
+/// `LEFT JOIN` that found none).
+///
+/// A link counts the same whoever made it: a subscription connected to the
+/// season writes it as the work detail does ([`set_in`]). Season 0, where the
+/// movies of a work with seasons are, never names the work, the rule the cover
+/// follows too ([`super::cover_target`]).
+pub const WORK_TITLE: &str = "
+    coalesce((SELECT x.subject FROM season_anissia l
+                JOIN seasons s ON s.work_id = l.work_id AND s.number = l.season
+                JOIN anissia_anime x ON x.anime_no = l.anime_no
+               WHERE l.work_id = w.id AND l.season >= 1
+               ORDER BY l.season LIMIT 1),
+             w.dir_name)";
+
 /// The link of a season as stored, or the untouched one (version 0).
 pub fn link_in(conn: &Connection, work_id: &str, season: u32) -> rusqlite::Result<AnissiaLink> {
     let stored: Option<(i64, Option<i64>)> = conn

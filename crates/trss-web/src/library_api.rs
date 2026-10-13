@@ -10,13 +10,13 @@
 //! | --------- | -------------------------------------------------------------------- |
 //! | `sort`    | `title`, `year`, `added`, `video`, `subtitle` (default `subtitle`)  |
 //! | `filter`  | `all`, `airing`, `complete`, `partial`, `none`, `check` (default `all`) |
-//! | `q`       | text the work's title (its folder name) or a linked AniList entry's native, English or romaji title contains, without regard to case; NFC-normalized |
+//! | `q`       | text the work title, the folder name or a linked AniList entry's native, English or romaji title contains, without regard to case; NFC-normalized |
 //! | `after`   | the `next` of the previous page; leave out for the first page        |
 //! | `limit`   | 1 to 200 works, default 60                                           |
 //!
 //! ```json
 //! { "items": [{
-//!     "id": "…", "name": "Lycoris Recoil", "missing": false,
+//!     "id": "…", "name": "Lycoris Recoil", "title": "리코리스 리코일", "missing": false,
 //!     "watch_folder": { "id": "…", "path": "/media/anime" },
 //!     "latest_season": 2,
 //!     "video":    [{ "first": "01", "last": "03", "text": "1–3" },
@@ -41,14 +41,17 @@
 //!   search match, `library_count` how many the library has.
 //! - Order: the sort's time latest first (`added`: the work's, `video` /
 //!   `subtitle`: the latest known video / subtitle over every season), an
-//!   unknown time after every known one, then the title (NFC, case ignored),
-//!   then the ID. `title` is the title order; `year` is the start year of the
+//!   unknown time after every known one, then the work title (NFC, case
+//!   ignored), then the ID. `title` is the order of the work title; `year` is the start year of the
 //!   latest local season's first AniList entry, latest first, unknown last.
 //! - Filters: `complete`, `partial` and `none` are the subtitle coverage of the
 //!   latest season; `check` is a subtitle file that could not be placed or a
 //!   work whose folder is gone; `airing` matches the works whose latest local season links an
 //!   entry that is releasing.
-//! - `name` is the work's folder name. `latest_season` is the highest season
+//! - `name` is the work's folder name and `title` its work title (작품명): the
+//!   Anissia title of its lowest-numbered season from 1 on linked to an anime,
+//!   the folder name when none is ([`trss_library::store::seasons::anissia::WORK_TITLE`]).
+//!   `latest_season` is the highest season
 //!   number recorded for the work (`null` without a season folder); `video` and
 //!   `subtitle` are the episodes of that season that have a file, as ranges of
 //!   consecutive episodes written as in the file names. `01` and `1` are one
@@ -124,6 +127,7 @@ impl From<EpisodeRange> for RangeView {
 struct WorkView {
     id: String,
     name: String,
+    title: String,
     missing: bool,
     watch_folder: WatchFolderRef,
     latest_season: Option<u32>,
@@ -151,6 +155,7 @@ impl WorkView {
             todos: badges.remove(&work.id).unwrap_or_default(),
             id: work.id,
             name: work.dir_name,
+            title: work.title,
             missing: work.missing,
             watch_folder: WatchFolderRef {
                 id: work.watch_folder_id,

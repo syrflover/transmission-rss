@@ -14,7 +14,7 @@
 //!   "version": 2, "saved_at": 1790780400000,
 //!   "limits": { "idle_timeout_seconds": { "min": 60, "max": 3600 },
 //!               "max_concurrent_jobs": { "min": 1, "max": 3 } },
-//!   "overrides": [{ "work_id": "…", "name": "Lycoris Recoil",
+//!   "overrides": [{ "work_id": "…", "name": "리코리스 리코일",
 //!                   "format_order": ["srt", "ass", "smi"] }] }
 //! ```
 //!
@@ -27,8 +27,9 @@
 //! - A `version` that is not the stored one answers `409` with the stored
 //!   policy as `current`, and nothing is saved. Nothing retries it.
 //! - `overrides` are the works that order the formats their own way, most
-//!   recently changed first; the work's `subtitle-order`
-//!   ([`super::library_work_api`]) changes that, not this call.
+//!   recently changed first, each with its work title (작품명) as `name`; the
+//!   work's `subtitle-order` ([`super::library_work_api`]) changes that, not
+//!   this call.
 
 use axum::{
     extract::{rejection::JsonRejection, State},
@@ -65,6 +66,7 @@ struct Limits {
 #[derive(Debug, Clone, Serialize)]
 struct OverrideView {
     work_id: String,
+    /// The work title (작품명).
     name: String,
     format_order: Vec<&'static str>,
 }
@@ -118,6 +120,12 @@ async fn view(state: &AppState, policy: Policy) -> Result<PolicyView, ApiError> 
         version,
         saved_at,
     } = policy;
+    // The settings know the works by folder; the screen calls them by their title.
+    let titles = state
+        .library
+        .titles()
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
     let overrides = state
         .settings
         .work_format_orders()
@@ -125,8 +133,8 @@ async fn view(state: &AppState, policy: Policy) -> Result<PolicyView, ApiError> 
         .map_err(internal)?
         .into_iter()
         .map(|w| OverrideView {
+            name: titles.get(&w.work_id).cloned().unwrap_or(w.name),
             work_id: w.work_id,
-            name: w.name,
             format_order: codes(&w.format_order),
         })
         .collect();

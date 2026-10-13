@@ -102,6 +102,55 @@ async fn a_season_never_linked_has_version_zero_and_each_change_moves_the_versio
     );
 }
 
+/// The title the library list and the work detail give `work`, which are one.
+async fn title(library: &LibraryStore, work: &str) -> String {
+    let listed = library
+        .overview()
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|w| w.id == work)
+        .unwrap()
+        .title;
+    let detail = library.work_detail(work).await.unwrap().unwrap().title;
+    assert_eq!(listed, detail);
+    listed
+}
+
+/// The links are written as the work detail writes them; a subscription
+/// connected to a season writes the same row ([`set_in`] from `trss-collect`'s
+/// `link_season`), so the title does not ask who made a link.
+#[tokio::test]
+async fn the_work_title_is_the_anissia_title_of_the_lowest_linked_season_from_one_on() {
+    let (db, library, _store, folder, work) = env().await;
+    library
+        .record_scan(&folder, Ok(scan(&[("A", &[0, 1, 2])])), 200)
+        .await
+        .unwrap()
+        .unwrap();
+    // Nothing linked: the folder name.
+    assert_eq!(title(&library, &work).await, "A");
+    // Season 0, where the movies are, never names the work.
+    set(&db, &work, 0, Some(8)).await;
+    assert_eq!(title(&library, &work).await, "A");
+    set(&db, &work, 2, Some(8)).await;
+    assert_eq!(title(&library, &work).await, "둘");
+    // Season 1 linked to another anime comes first, so following season 2
+    // never renames the work.
+    set(&db, &work, 1, Some(7)).await;
+    assert_eq!(title(&library, &work).await, "하나");
+    set(&db, &work, 1, None).await;
+    assert_eq!(title(&library, &work).await, "둘");
+    // A season folder gone for a moment keeps its link but names nothing, as
+    // with the cover the work follows.
+    library
+        .record_scan(&folder, Ok(scan(&[("A", &[0, 1])])), 300)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(title(&library, &work).await, "A");
+}
+
 #[tokio::test]
 async fn only_a_season_of_the_work_has_a_link_to_read() {
     let (_db, _library, store, _folder, work) = env().await;

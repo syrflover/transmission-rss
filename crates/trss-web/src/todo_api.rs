@@ -171,7 +171,7 @@
 //!     "since": 1760000000000 } ] }
 //! ```
 //!
-//! `title` is the anime's Anissia title, else the work's name; `episodes` are
+//! `title` is the anime's Anissia title, else the work title; `episodes` are
 //! the candidates' episodes as Anissia writes them, once each in the order
 //! first seen, and `episode_segments` the same as runs; `since` is when the
 //! first candidate was seen.

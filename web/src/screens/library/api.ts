@@ -44,6 +44,8 @@ export interface LibraryWork {
   id: string;
   /** The work's folder name. */
   name: string;
+  /** The work title (작품명): the Anissia title of the lowest season from 1 on linked to an anime, else the folder name. */
+  title: string;
   /** The work's folder is not there any more (`폴더 없음`). */
   missing: boolean;
   watch_folder: { id: string; path: string };
@@ -328,15 +330,16 @@ export interface WorkRule {
 
 export interface WorkDetail {
   id: string;
+  /** The work's folder name. */
   name: string;
+  /** The work title (작품명), as the library list gives it. */
+  title: string;
   missing: boolean;
   watch_folder: { id: string; path: string };
   folder_path: string;
   added_at: number | null;
   /** The first season's first linked AniList entry's native title. */
   native_title: string | null;
-  /** Anissia's title of the anime the work's first connected season follows; `null` without one. */
-  korean_title: string | null;
   /** The subscription rules connected to a season of this work, by season. */
   subscriptions: WorkSubscription[];
   /** Ascending by season number. */

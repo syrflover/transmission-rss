@@ -406,13 +406,14 @@ async fn the_creator_is_one_of_the_seasons_or_unknown() {
         let (status, refused) = upload(&s.router, &form).await;
         assert_eq!(status, expected, "{refused}");
     }
-    // A season with no link takes an upload by an unknown creator.
+    // A season with no link takes an upload by an unknown creator; with no anime
+    // of its own, the job is called by the work title season 1 gives.
     let (status, made) = upload(&s.router, &Form::to("c7", 2, None).file("a.ass", ASS)).await;
     assert_eq!(status, StatusCode::ACCEPTED, "{made}");
     let job = detail(&s.router, made["id"].as_str().unwrap()).await;
     assert_eq!(
         (job["season"].as_i64(), job["title"].as_str()),
-        (Some(2), Some("Show"))
+        (Some(2), Some("작품"))
     );
     assert_eq!(job_count(&s).await, 3);
 }

@@ -70,6 +70,7 @@ export type StorageKind = "subtitle" | "font" | "attachment" | "cover";
 
 export interface StorageWork {
   id: string;
+  /** The work title (작품명). */
   name: string;
   total: number;
   kinds: { kind: StorageKind; count: number; size: number }[];

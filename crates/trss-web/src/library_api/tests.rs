@@ -84,6 +84,8 @@ async fn the_first_page_has_sixty_works_a_cursor_and_the_counts() {
     assert!(body["next"].is_string());
     let first = &body["items"][0];
     assert_eq!(first["name"], "Work 000");
+    // Nothing links it to Anissia, so the work title is the folder name.
+    assert_eq!(first["title"], "Work 000");
     assert_eq!(first["watch_folder"]["path"], "/a");
     assert_eq!(first["video"][0]["first"], "01");
     assert_eq!(first["subtitle_coverage"], "none");
