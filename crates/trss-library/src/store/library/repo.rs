@@ -764,6 +764,7 @@ pub(super) fn follow_move(
             crate::store::artwork::merge_selection(&tx, &moved, &kept)?;
             crate::store::seasons::merge_links(&tx, &moved, &kept)?;
             crate::store::seasons::merge_anissia_links(&tx, &moved, &kept)?;
+            crate::store::seasons::merge_movie_links(&tx, &moved, &kept)?;
             // Subscriptions connected to the moved work's seasons follow them.
             crate::store::seasons::follow_subscriptions(&tx, &moved, &kept)?;
             merge_subtitle_mappings(&tx, &moved, &kept)?;

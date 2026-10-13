@@ -39,6 +39,8 @@ pub struct JobRow {
     /// The work title (작품명), while the library has the work.
     pub work_name: Option<String>,
     pub season: Option<i64>,
+    /// The movie (an episode of season 0) the job is for, when it is a movie's.
+    pub movie: Option<i64>,
     pub anime_no: Option<i64>,
     /// The Anissia title of the anime, while its snapshot is kept.
     pub anime_title: Option<String>,
@@ -370,7 +372,8 @@ static JOB_COLUMNS: LazyLock<String> = LazyLock::new(|| {
                          WHERE i.job_id = j.id AND i.state <> 'done'),
            j.origin = 'find' AND j.state NOT IN ('done', 'failed', 'partial')
              AND EXISTS (SELECT 1 FROM subtitle_job_items i
-                         WHERE i.job_id = j.id AND i.state <> 'done')
+                         WHERE i.job_id = j.id AND i.state <> 'done'),
+           j.movie
     FROM subtitle_jobs j
     LEFT JOIN works w ON w.id = j.work_id
     LEFT JOIN anissia_anime a ON a.anime_no = j.anime_no"
@@ -405,6 +408,7 @@ fn job_row(r: &Row<'_>) -> rusqlite::Result<JobRow> {
         upload: None,
         finishing: r.get(19)?,
         receiving: r.get(20)?,
+        movie: r.get(21)?,
     })
 }
 
@@ -726,6 +730,7 @@ mod tests {
             work_id: None,
             work_name: None,
             season: None,
+            movie: None,
             anime_no: None,
             anime_title: None,
             creator: None,

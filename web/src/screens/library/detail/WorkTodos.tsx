@@ -51,8 +51,8 @@ export function WorkTodos({
   const todos = usePolled<TodoList>(KEYS.todos, fetchTodos, TODOS_MS, "할 일을 불러오지 못했어요.");
   const mine = todosOfWork(todos.data?.needs ?? [], workId);
   if (mine.length === 0) return null;
-  // The season is said only where the work has several.
-  const season = (n: number | null) => seasonCount > 1 && n !== null && <Tag>시즌 {n}</Tag>;
+  // The season is said only where the work has several, and not for a movie (it is named `본편`).
+  const season = (n: number | null, movie = false) => seasonCount > 1 && n !== null && !movie && <Tag>시즌 {n}</Tag>;
   return (
     <section aria-labelledby="work-todos-title">
       <h2 id="work-todos-title" className="mb-3 text-[17px] font-bold">
@@ -69,7 +69,7 @@ export function WorkTodos({
   );
 }
 
-type SeasonTag = (n: number | null) => ReactNode;
+type SeasonTag = (n: number | null, movie?: boolean) => ReactNode;
 
 function WorkTodoCard({ todo, season, onRefresh }: { todo: Todo; season: SeasonTag; onRefresh?: () => Promise<void> }) {
   switch (todo.kind) {
@@ -134,8 +134,8 @@ function AuthCard({ todo, season }: { todo: AuthTodo; season: SeasonTag }) {
         </Action>
       }
     >
-      <TargetLine segments={todo.episode_segments} creator={todo.creator}>
-        {season(todo.season)}
+      <TargetLine segments={todo.episode_segments} creator={todo.creator} movie={todo.movie}>
+        {season(todo.season, todo.movie)}
         {todo.jobs > 1 && <Tag>작업 {todo.jobs}개</Tag>}
       </TargetLine>
       {todo.reason !== "" && <Reason>{todo.reason}</Reason>}
@@ -164,8 +164,8 @@ function ReplacementCard({ todo, season }: { todo: ReplacementTodo; season: Seas
   const received = receivedLine(todo);
   return (
     <Card todo={todo} action={<Action to={jobPath(todo.job_id)}>비교</Action>}>
-      <TargetLine segments={todo.episode_segments} creator={todo.creator}>
-        {season(todo.season)}
+      <TargetLine segments={todo.episode_segments} creator={todo.creator} movie={todo.movie}>
+        {season(todo.season, todo.movie)}
         {todo.jobs > 1 && <Tag>작업 {todo.jobs}개</Tag>}
       </TargetLine>
       {received.length > 0 && (
@@ -206,8 +206,8 @@ function PlacementCheckCard({ todo, season }: { todo: PlacementCheckTodo; season
   const job = { origin: todo.origin, creator: todo.creator, revision_of: null, revises_attributed: false };
   return (
     <Card todo={todo} action={<Action to={jobPath(todo.job_id)}>확인</Action>}>
-      <TargetLine segments={[]} creator={todo.creator}>
-        {season(todo.season)}
+      <TargetLine segments={[]} creator={todo.creator} movie={todo.movie}>
+        {season(todo.season, todo.movie)}
         <OriginTags job={job} />
         {todo.source !== null && (
           <span className="min-w-0 text-xs text-text-muted [overflow-wrap:anywhere]">{todo.source}</span>

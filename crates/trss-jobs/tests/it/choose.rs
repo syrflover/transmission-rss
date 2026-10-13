@@ -177,6 +177,7 @@ async fn make_at(
         origin: "pick".to_owned(),
         work_id: Some(WORK.to_owned()),
         season: Some(1),
+        movie: None,
         anime_no: Some(7),
         source_id: source.then(|| "src".to_owned()),
         creator: Some(creator.to_owned()),

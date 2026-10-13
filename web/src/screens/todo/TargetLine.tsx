@@ -13,15 +13,18 @@ import { SubtitleIcon } from "./icons";
 export function TargetLine({
   segments,
   creator,
+  movie = false,
   children,
   className,
 }: {
   segments: readonly EpisodeSegment[];
   creator: string | null;
+  /** The to-do or job is for a movie: it is named `본편`, not by episodes. */
+  movie?: boolean;
   children?: ReactNode;
   className?: string;
 }) {
-  const label = episodeLabel(segments);
+  const label = episodeLabel(segments, movie);
   if (label === null && creator === null && !children) return null;
   return (
     <p className={cn("flex min-w-0 flex-wrap items-center gap-x-2.5 gap-y-1 text-[12.5px] leading-snug", className)}>

@@ -9,6 +9,7 @@ import { cn } from "@/lib/utils";
 import { btnPrimary } from "../collect/channels/styles";
 import { confirmPlacement, fetchJob, type ConfirmView, type JobDetail, type Placement } from "./api";
 import { KEYS } from "./poll";
+import { MOVIE_LABEL } from "../library/detail/movie";
 import {
   REPLACES,
   initialChoice,
@@ -121,6 +122,7 @@ export function PlacementConfirm({ job, confirm }: { job: JobDetail; confirm: Co
               p={p}
               choice={choices.get(p.position) ?? UNSET}
               episodes={confirm.episodes}
+              movie={job.movie}
               disabled={sending}
               onChoose={(choice) => choose(p.position, choice)}
             />
@@ -160,12 +162,15 @@ function Row({
   p,
   choice,
   episodes,
+  movie,
   disabled,
   onChoose,
 }: {
   p: Placement;
   choice: Choice;
   episodes: ConfirmView["episodes"];
+  /** The job is a movie's: its one episode is `본편`. */
+  movie: boolean;
   disabled: boolean;
   onChoose: (choice: Choice) => void;
 }) {
@@ -204,7 +209,7 @@ function Row({
           )}
           {episodes.map((e) => (
             <option key={e.episode} value={e.episode}>
-              {e.episode}화
+              {movie ? MOVIE_LABEL : `${e.episode}화`}
             </option>
           ))}
           <option value={SKIP}>적용하지 않음</option>

@@ -102,6 +102,7 @@ impl App {
                     origin: "pick".to_owned(),
                     work_id: Some("w1".to_owned()),
                     season: Some(1),
+                    movie: None,
                     anime_no: None,
                     source_id: None,
                     creator: Some(creator.to_owned()),

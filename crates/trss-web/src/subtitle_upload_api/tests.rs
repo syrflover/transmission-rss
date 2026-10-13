@@ -1013,3 +1013,115 @@ fn the_body_itself_stops_past_the_total_and_the_framing_allowance() {
         "{sent}"
     );
 }
+
+/// The movie-only work `m1` (season 0, episode 1, `Movie.mkv` in its folder),
+/// its movie linked to anime 3424 like season 1 of `w1`.
+async fn with_movie(s: &Setup) {
+    sql(
+        &s.state,
+        "INSERT INTO works (id, watch_folder_id, dir_name) VALUES ('m1', 'f1', 'Movie');
+         INSERT INTO seasons (work_id, number) VALUES ('m1', 0);
+         INSERT INTO episodes (work_id, season, episode) VALUES ('m1', 0, '1');
+         INSERT INTO media_files (work_id, path, season, episode, kind)
+             VALUES ('m1', 'Movie.mkv', 0, '1', 'video');
+         INSERT INTO movie_anissia (work_id, episode, anime_no, version) VALUES ('m1', 1, 3424, 1);
+         INSERT INTO works (id, watch_folder_id, dir_name) VALUES ('m2', 'f1', 'Unlinked');
+         INSERT INTO seasons (work_id, number) VALUES ('m2', 0);
+         INSERT INTO episodes (work_id, season, episode) VALUES ('m2', 0, '1');
+         INSERT INTO media_files (work_id, path, season, episode, kind)
+             VALUES ('m2', 'Unlinked.mkv', 0, '1', 'video');",
+    )
+    .await;
+}
+
+/// The parts of an upload for a movie of `work`.
+fn movie_form(id: &str, work: &str, season: u32, movie: &str, creator: Option<&str>) -> Form {
+    let form = Form::default()
+        .text("id", id)
+        .text("work_id", work)
+        .text("season", &season.to_string())
+        .text("movie", movie);
+    match creator {
+        Some(creator) => form.text("creator", creator),
+        None => form,
+    }
+}
+
+#[tokio::test]
+async fn an_upload_for_a_movie_makes_a_job_that_says_it_is_the_movies_and_its_creator_is_the_movies(
+) {
+    let s = setup().await;
+    with_movie(&s).await;
+    let (status, made) = upload(
+        &s.router,
+        &movie_form("mu1", "m1", 0, "1", Some("s1")).file("a.ass", ASS),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{made}");
+    let job = detail(&s.router, made["id"].as_str().unwrap()).await;
+    assert_eq!(job["creator"], "에루샤");
+    assert_eq!(
+        (job["season"].as_i64(), job["movie"].as_bool()),
+        (Some(0), Some(true))
+    );
+    assert_eq!(job["title"], "작품");
+
+    // A repeat of the same upload answers the same job.
+    let form = movie_form("mu1", "m1", 0, "1", Some("s1")).file("a.ass", ASS);
+    let (status, again) = upload(&s.router, &form).await;
+    assert_eq!(status, StatusCode::OK, "{again}");
+    assert_eq!(again["id"], made["id"]);
+
+    // No creator: the upload is the movie's all the same.
+    let (status, made) = upload(
+        &s.router,
+        &movie_form("mu2", "m1", 0, "1", None).file("a.ass", ASS),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{made}");
+    assert_eq!(
+        detail(&s.router, made["id"].as_str().unwrap()).await["movie"],
+        true
+    );
+    // A season's upload says it is not.
+    let (_, made) = upload(&s.router, &Form::to("mu3", 1, None).file("a.ass", ASS)).await;
+    assert_eq!(
+        detail(&s.router, made["id"].as_str().unwrap()).await["movie"],
+        false
+    );
+}
+
+#[tokio::test]
+async fn a_movie_upload_that_names_no_movie_of_the_work_is_refused_before_a_file_is_stored() {
+    let s = setup().await;
+    with_movie(&s).await;
+    for (form, expected) in [
+        // A movie is of season 0.
+        (
+            movie_form("x1", "m1", 1, "1", None).file("a.ass", ASS),
+            StatusCode::BAD_REQUEST,
+        ),
+        // Not a number, and an episode the work does not have.
+        (
+            movie_form("x2", "m1", 0, "one", None).file("a.ass", ASS),
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            movie_form("x3", "m1", 0, "2", None).file("a.ass", ASS),
+            StatusCode::NOT_FOUND,
+        ),
+        // A creator needs the movie to be linked, and to be the anime's.
+        (
+            movie_form("x4", "m2", 0, "1", Some("s1")).file("a.ass", ASS),
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            movie_form("x5", "m1", 0, "1", Some("s9")).file("a.ass", ASS),
+            StatusCode::BAD_REQUEST,
+        ),
+    ] {
+        let (status, refused) = upload(&s.router, &form).await;
+        assert_eq!(status, expected, "{refused}");
+    }
+    assert_eq!(job_count(&s).await, 0);
+}

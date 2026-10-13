@@ -30,6 +30,9 @@ pub struct NewJob {
     pub origin: String,
     pub work_id: Option<String>,
     pub season: Option<i64>,
+    /// The movie (an episode of season 0) the candidates are for: the job puts
+    /// every subtitle on it.
+    pub movie: Option<i64>,
     pub anime_no: Option<i64>,
     pub source_id: Option<String>,
     pub creator: Option<String>,
@@ -49,27 +52,33 @@ impl NewJob {
     /// anime `anime_no` ([`trss_collect::store::anissia::AnissiaStore::pick`]),
     /// asked for by the browser's `command_id`. Its request is the work, the
     /// season and the candidates' observation IDs in the order picked, in
-    /// canonical JSON.
+    /// canonical JSON. With `movie`, the candidates are for that movie, an
+    /// episode of season 0, and the request names it.
     pub fn pick(
         command_id: String,
         work_id: String,
         season: u32,
+        movie: Option<u32>,
         anime_no: i64,
         picked: &Picked,
     ) -> NewJob {
         let observations: Vec<i64> = picked.candidates.iter().map(|c| c.id).collect();
-        let request = json!({
+        let mut request = json!({
             "work_id": work_id,
             "season": season,
             "candidates": observations,
-        })
-        .to_string();
+        });
+        if let Some(movie) = movie {
+            request["movie"] = json!(movie);
+        }
+        let request = request.to_string();
         NewJob {
             command_id,
             request,
             origin: "pick".to_owned(),
             work_id: Some(work_id),
             season: Some(i64::from(season)),
+            movie: movie.map(i64::from),
             anime_no: Some(anime_no),
             source_id: Some(picked.source_id.clone()),
             creator: Some(picked.creator.clone()),
@@ -116,6 +125,8 @@ pub struct NewUpload {
     pub request: String,
     pub work_id: String,
     pub season: i64,
+    /// The movie (an episode of season 0) the upload is for.
+    pub movie: Option<i64>,
     pub anime_no: Option<i64>,
     pub source_id: Option<String>,
     pub creator: Option<String>,
@@ -283,8 +294,8 @@ fn create(
     tx.prepare_cached(
         "INSERT INTO subtitle_jobs
              (id, command_id, request, origin, work_id, season, anime_no, source_id, creator,
-              revision_of, revises_attributed, state, created_at, updated_at, state_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 'pending', ?12, ?12, ?12)",
+              revision_of, revises_attributed, movie, state, created_at, updated_at, state_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?13, 'pending', ?12, ?12, ?12)",
     )?
     .execute(params![
         id,
@@ -298,7 +309,8 @@ fn create(
         job.creator,
         job.revision_of,
         job.revises_attributed,
-        now
+        now,
+        job.movie
     ])?;
     for (position, item) in job.items.iter().enumerate() {
         tx.prepare_cached(
@@ -365,8 +377,8 @@ fn create_upload(c: &mut Connection, up: &NewUpload, now: Millis) -> Result<Crea
     tx.prepare_cached(
         "INSERT INTO subtitle_jobs
              (id, command_id, request, origin, work_id, season, anime_no, source_id, creator,
-              state, note, created_at, updated_at, state_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?12, ?12)",
+              state, note, created_at, updated_at, state_at, movie)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?12, ?12, ?13)",
     )?
     .execute(params![
         up.id,
@@ -380,7 +392,8 @@ fn create_upload(c: &mut Connection, up: &NewUpload, now: Millis) -> Result<Crea
         up.creator,
         JobState::Pending,
         upload_note(&counts),
-        now
+        now,
+        up.movie
     ])?;
     tx.prepare_cached(
         "INSERT INTO subtitle_job_items
@@ -461,7 +474,7 @@ mod tests {
             candidates: vec![candidate(7, "s1", "2"), candidate(3, "s1", "1.5")],
         };
 
-        let job = NewJob::pick("b1".into(), "w1".into(), 2, 3424, &picked);
+        let job = NewJob::pick("b1".into(), "w1".into(), 2, None, 3424, &picked);
 
         assert_eq!(
             job,
@@ -471,6 +484,7 @@ mod tests {
                 origin: "pick".into(),
                 work_id: Some("w1".into()),
                 season: Some(2),
+                movie: None,
                 anime_no: Some(3424),
                 source_id: Some("s1".into()),
                 creator: Some("에루샤".into()),

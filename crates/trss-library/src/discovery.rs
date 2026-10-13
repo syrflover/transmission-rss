@@ -19,9 +19,16 @@
 //! - a **subtitle** is a file of the same episode with a subtitle extension; a
 //!   language fragment before the extension (`… S01E01.ko.smi`) is allowed.
 //!
+//! A work with a single video directly in its folder and no season folder is a
+//! **movie-only work** ([`MOVIE_SEASON`], [`MOVIE_EPISODE`]): that video is the
+//! work's season 0, episode `1`, and the subtitles directly in the folder named
+//! as the video, with a language fragment or not (`Name.ass`, `Name.ko.smi`),
+//! are its subtitles. Season 0 has no folder then.
+//!
 //! What does not fit is counted on the work as a file whose episode could not
 //! be told ([`Unrecognized`]): a name whose `SxxEyy` is not its season folder's
-//! season, a video or subtitle outside a season folder, anything in a folder
+//! season, a video or subtitle outside a season folder (other than a movie's),
+//! anything in a folder
 //! inside a season folder (a multi-file torrent's folder), a name with no
 //! `SxxEyy`, and `.part` files (still downloading), wherever they are. Files of
 //! other kinds (images, `.nfo`, text) are not media and are left out of
@@ -690,6 +697,7 @@ impl Walker {
                 }
             }
         }
+        take_movie(&mut work);
         Ok(work)
     }
 
@@ -837,6 +845,68 @@ impl Walker {
         }
         Ok(())
     }
+}
+
+/// The season and the episode a work's only video is recorded as when the work
+/// is a movie-only work (see [`take_movie`]).
+pub const MOVIE_SEASON: u32 = 0;
+/// See [`MOVIE_SEASON`].
+pub const MOVIE_EPISODE: &str = "1";
+
+/// Makes the work's one video directly in its folder the work's movie
+/// (`docs/adr/0018-movies-in-season-zero-with-their-own-link.md`): when the
+/// work has no season folder and exactly one video that is whole (not a `.part`
+/// file) and has a valid name directly in its folder, that video is season 0,
+/// episode 1, and so are the subtitles directly in the folder whose names start
+/// with the video's name (without its extension) and a dot. Everything else
+/// directly in the folder stays unrecognized, as a work with a season folder or
+/// with two videos has all of it.
+///
+/// A video whose name is not valid UTF-8 counts as a video that makes the work
+/// not a movie-only work, though it cannot be one itself: which of two videos
+/// is the movie is not for the scan to guess.
+fn take_movie(work: &mut ScannedWork) {
+    if !work.seasons.is_empty() {
+        return;
+    }
+    let is_root_video = |u: &Unrecognized| {
+        !u.path.contains('/')
+            && matches!(u.reason, Reason::OutsideSeason | Reason::InvalidName)
+            && kind_of(&u.path) == Some(FileKind::Video)
+    };
+    let mut videos = work.unrecognized.iter().filter(|u| is_root_video(u));
+    let (Some(video), None) = (videos.next(), videos.next()) else {
+        return;
+    };
+    if video.reason != Reason::OutsideSeason {
+        return;
+    }
+    let Some((stem, _)) = video.path.rsplit_once('.') else {
+        return;
+    };
+    let prefix = format!("{stem}.");
+    let video = video.path.clone();
+    let belongs = |u: &Unrecognized| {
+        !u.path.contains('/')
+            && u.reason == Reason::OutsideSeason
+            && match kind_of(&u.path) {
+                Some(FileKind::Video) => u.path == video,
+                Some(FileKind::Subtitle) => u.path.starts_with(&prefix),
+                None => false,
+            }
+    };
+    let (taken, rest): (Vec<Unrecognized>, Vec<Unrecognized>) =
+        std::mem::take(&mut work.unrecognized)
+            .into_iter()
+            .partition(belongs);
+    work.unrecognized = rest;
+    work.seasons.insert(MOVIE_SEASON);
+    work.files.extend(taken.into_iter().map(|u| EpisodeFile {
+        kind: kind_of(&u.path).expect("a media file was taken"),
+        path: u.path,
+        season: MOVIE_SEASON,
+        episode: MOVIE_EPISODE.to_owned(),
+    }));
 }
 
 /// Whether discovery leaves an entry of this name out of everything: hidden
@@ -1111,6 +1181,181 @@ mod tests {
                 ("loose.part", Reason::Partial),
             ]
         );
+    }
+
+    /// A file as (season, episode, kind, path).
+    type Filed = (u32, String, FileKind, String);
+
+    /// The files of `name` as [`Filed`], and its unrecognized files as (path,
+    /// reason), each sorted.
+    fn filed(scan: &Scan, name: &str) -> (Vec<Filed>, Vec<(String, Reason)>) {
+        let w = work(scan, name);
+        let mut files: Vec<_> = w
+            .files
+            .iter()
+            .map(|f| (f.season, f.episode.clone(), f.kind, f.path.clone()))
+            .collect();
+        files.sort_by(|a, b| a.3.cmp(&b.3));
+        let mut unrecognized: Vec<_> = w
+            .unrecognized
+            .iter()
+            .map(|u| (u.path.clone(), u.reason))
+            .collect();
+        unrecognized.sort();
+        (files, unrecognized)
+    }
+
+    #[test]
+    fn a_work_with_no_season_folder_and_one_video_directly_in_it_is_a_movie_with_its_subtitles() {
+        let dir = tempfile::tempdir().unwrap();
+        for file in [
+            "Chou Kaguya-hime!/Chou Kaguya-hime!.mkv",
+            "Chou Kaguya-hime!/Chou Kaguya-hime!.ass",
+            "Chou Kaguya-hime!/Chou Kaguya-hime!.ko.smi",
+            // Another name, a folder, a download still going and a file that is
+            // no media are not the movie's.
+            "Chou Kaguya-hime!/Other.ass",
+            "Chou Kaguya-hime!/Chou Kaguya-hime!2.ass",
+            "Chou Kaguya-hime!/Extras/PV.mkv",
+            "Chou Kaguya-hime!/Next.mkv.part",
+            "Chou Kaguya-hime!/Chou Kaguya-hime!.nfo",
+        ] {
+            touch(dir.path(), file);
+        }
+        let scan = scan(dir.path()).unwrap();
+        let work = work(&scan, "Chou Kaguya-hime!");
+        // The movie is season 0, which has no folder.
+        assert_eq!(work.seasons, BTreeSet::from([0]));
+        let (files, unrecognized) = filed(&scan, "Chou Kaguya-hime!");
+        let movie = |kind, path: &str| (0, "1".to_owned(), kind, path.to_owned());
+        assert_eq!(
+            files,
+            [
+                movie(FileKind::Subtitle, "Chou Kaguya-hime!.ass"),
+                movie(FileKind::Subtitle, "Chou Kaguya-hime!.ko.smi"),
+                movie(FileKind::Video, "Chou Kaguya-hime!.mkv"),
+            ]
+        );
+        assert_eq!(
+            unrecognized,
+            [
+                ("Chou Kaguya-hime!2.ass".to_owned(), Reason::OutsideSeason),
+                ("Extras/PV.mkv".to_owned(), Reason::OutsideSeason),
+                ("Next.mkv.part".to_owned(), Reason::Partial),
+                ("Other.ass".to_owned(), Reason::OutsideSeason),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_video_still_downloading_is_no_video_and_a_folder_of_only_parts_is_no_movie() {
+        let dir = tempfile::tempdir().unwrap();
+        touch(dir.path(), "Whole/Whole.mkv");
+        touch(dir.path(), "Whole/Whole.mkv.part");
+        touch(dir.path(), "Partial/Partial.mkv.part");
+        touch(dir.path(), "Partial/Partial.ass");
+        let scan = scan(dir.path()).unwrap();
+
+        let (files, _) = filed(&scan, "Whole");
+        assert_eq!(files.len(), 1);
+        let (files, unrecognized) = filed(&scan, "Partial");
+        assert!(files.is_empty());
+        assert_eq!(
+            unrecognized,
+            [
+                ("Partial.ass".to_owned(), Reason::OutsideSeason),
+                ("Partial.mkv.part".to_owned(), Reason::Partial),
+            ]
+        );
+        assert!(work(&scan, "Partial").seasons.is_empty());
+    }
+
+    #[test]
+    fn two_videos_directly_in_a_work_folder_are_no_movie() {
+        let dir = tempfile::tempdir().unwrap();
+        for file in ["W/One.mkv", "W/One.ass", "W/Two.mp4"] {
+            touch(dir.path(), file);
+        }
+        let scan = scan(dir.path()).unwrap();
+        let (files, unrecognized) = filed(&scan, "W");
+        assert!(files.is_empty());
+        assert!(work(&scan, "W").seasons.is_empty());
+        assert_eq!(
+            unrecognized,
+            [
+                ("One.ass".to_owned(), Reason::OutsideSeason),
+                ("One.mkv".to_owned(), Reason::OutsideSeason),
+                ("Two.mp4".to_owned(), Reason::OutsideSeason),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_video_directly_in_a_work_folder_with_a_season_folder_is_no_movie() {
+        let dir = tempfile::tempdir().unwrap();
+        for file in [
+            "A/A.mkv",
+            "A/A.ass",
+            "A/Season 01/A S01E01.mkv",
+            // A season folder with nothing in it still is a season folder.
+            "B/B.mkv",
+        ] {
+            touch(dir.path(), file);
+        }
+        fs::create_dir(dir.path().join("B/Season 00")).unwrap();
+        let scan = scan(dir.path()).unwrap();
+
+        let (files, unrecognized) = filed(&scan, "A");
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].3, "Season 01/A S01E01.mkv");
+        assert_eq!(
+            unrecognized,
+            [
+                ("A.ass".to_owned(), Reason::OutsideSeason),
+                ("A.mkv".to_owned(), Reason::OutsideSeason),
+            ]
+        );
+        let (files, unrecognized) = filed(&scan, "B");
+        assert!(files.is_empty());
+        assert_eq!(unrecognized, [("B.mkv".to_owned(), Reason::OutsideSeason)]);
+        assert_eq!(work(&scan, "B").seasons, BTreeSet::from([0]));
+    }
+
+    #[test]
+    fn a_video_whose_name_cannot_be_stored_keeps_the_other_from_being_the_movie() {
+        use std::{ffi::OsStr, os::unix::ffi::OsStrExt};
+        let dir = tempfile::tempdir().unwrap();
+        touch(dir.path(), "W/Movie.mkv");
+        fs::write(
+            dir.path()
+                .join("W")
+                .join(OsStr::from_bytes(b"Bad \xff.mkv")),
+            "x",
+        )
+        .unwrap();
+        let scan = scan(dir.path()).unwrap();
+        let (files, unrecognized) = filed(&scan, "W");
+        assert!(files.is_empty());
+        assert_eq!(
+            unrecognized,
+            [
+                ("Bad \u{fffd}.mkv".to_owned(), Reason::InvalidName),
+                ("Movie.mkv".to_owned(), Reason::OutsideSeason),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_movie_is_read_again_from_a_listing_kept_from_before() {
+        let dir = tempfile::tempdir().unwrap();
+        touch(dir.path(), "M/M.mkv");
+        age_dirs(dir.path());
+        let first = scan_incremental(dir.path(), None);
+        let again = scan_incremental(dir.path(), Some(first.cache));
+        assert_eq!(again.stats.dirs_read, 0);
+        let (files, unrecognized) = filed(&again.result.unwrap(), "M");
+        assert_eq!(files.len(), 1);
+        assert!(unrecognized.is_empty());
     }
 
     #[test]

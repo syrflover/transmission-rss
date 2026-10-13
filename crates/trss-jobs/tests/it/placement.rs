@@ -199,6 +199,7 @@ async fn upload_files(
         command_id: command.to_owned(),
         work_id: WORK.to_owned(),
         season: 2,
+        movie: None,
         anime_no: Some(7),
         source_id: creator.then(|| "src".to_owned()),
         creator: creator.then(|| CREATOR.to_owned()),
@@ -218,6 +219,7 @@ async fn pick(s: &Setup, command: &str, episode: &str, path: &str) -> String {
         origin: "pick".to_owned(),
         work_id: Some(WORK.to_owned()),
         season: Some(2),
+        movie: None,
         anime_no: Some(7),
         source_id: Some("src".to_owned()),
         creator: Some(CREATOR.to_owned()),
@@ -1210,4 +1212,141 @@ async fn rows_of_one_stored_subtitle_placed_together_move_it_as_one() {
         .await
         .unwrap();
     assert_eq!(records, 1);
+}
+
+/// A library with the movie-only work `Show`: season 0, episode 1, its video
+/// `Show.mkv` directly in the work's folder, and the creator's source `src`.
+async fn movie_setup() -> Setup {
+    let base = Base::new().await;
+    base.library(&Shows {
+        source: true,
+        ..Shows::default()
+    })
+    .await;
+    std::fs::write(base.dir.path().join("shows/Show/Show.mkv"), b"video").unwrap();
+    base.db
+        .run(|c| {
+            c.execute_batch(&format!(
+                "DELETE FROM seasons WHERE work_id = '{WORK}';
+                 INSERT INTO seasons (work_id, number) VALUES ('{WORK}', 0);
+                 INSERT INTO episodes (work_id, season, episode) VALUES ('{WORK}', 0, '1');
+                 INSERT INTO media_files (work_id, path, season, episode, kind)
+                     VALUES ('{WORK}', 'Show.mkv', 0, '1', 'video');"
+            ))
+            .map_err(trss_core::DbError::from)
+        })
+        .await
+        .unwrap();
+    Setup {
+        dir: base.dir,
+        db: base.db,
+        store: base.store,
+        area: base.area,
+    }
+}
+
+#[tokio::test]
+async fn an_upload_for_a_movie_puts_every_subtitle_on_it_by_a_name_that_says_no_episode() {
+    let s = movie_setup().await;
+    let uploads = Uploads::new(s.store.requests.clone(), s.area.clone());
+    let mut staging = uploads.begin().await.unwrap();
+    let srt = b"1\n00:00:01,000 --> 00:00:02,000\nhello\n\n".to_vec();
+    for (name, bytes) in [("극장판 한글.ass", ass(1)), ("Show S02E05.srt", srt)] {
+        staging.start(name).await.unwrap();
+        staging.write(&bytes).await.unwrap();
+        staging.end().await.unwrap();
+    }
+    let request = UploadRequest {
+        command_id: "u1".to_owned(),
+        work_id: WORK.to_owned(),
+        season: 0,
+        movie: Some(1),
+        anime_no: Some(7),
+        source_id: None,
+        creator: None,
+    };
+    let Finished::Created { job_id: id, .. } = uploads.finish(staging, request, 900).await.unwrap()
+    else {
+        panic!("not created")
+    };
+    s.run().await;
+
+    // The job records the movie, and no name asks which episode it is.
+    let d = s.detail(&id).await;
+    assert_eq!(
+        (d.row.state, d.row.wait),
+        (JobState::Waiting, Some(Wait::Placement))
+    );
+    assert_eq!((d.row.season, d.row.movie), (Some(0), Some(1)));
+    let plan = s.plan(&id).await;
+    assert_eq!(plan.len(), 2);
+    for row in &plan {
+        assert_eq!(placed(row), Some((1, Assignment::Explicit)), "{row:?}");
+        assert_eq!(row.question, None, "{row:?}");
+    }
+    assert_eq!(tree(&s.work()), ["Show.mkv"]);
+    // The to-do that asks for the table says it is a movie's.
+    let list = TodoStores::new(&s.db).list().await.unwrap();
+    let Todo::PlacementCheck { movie, season, .. } = &list.needs[0] else {
+        panic!("{:?}", list.needs)
+    };
+    assert_eq!((*movie, *season), (true, Some(0)));
+
+    // Confirmed, the first is applied beside the root video under its stem.
+    assert_eq!(
+        s.confirm(
+            &id,
+            &[
+                ("극장판 한글.ass", Some(1), true),
+                ("Show S02E05.srt", Some(1), true)
+            ]
+        )
+        .await,
+        Confirmed::Queued {
+            applied: 1,
+            stored: 1
+        }
+    );
+    s.run().await;
+    assert_eq!(s.detail(&id).await.row.state, JobState::Done);
+    let files = tree(&s.work());
+    assert!(files.contains(&"Show.ass".to_owned()), "{files:?}");
+    assert!(files.contains(&"Show.mkv".to_owned()), "{files:?}");
+}
+
+#[tokio::test]
+async fn a_pick_for_a_movie_applies_the_creators_subtitle_whatever_the_candidates_episode_text_is()
+{
+    let s = movie_setup().await;
+    let job = NewJob {
+        command_id: "m1".to_owned(),
+        request: "{\"c\":\"m1\"}".to_owned(),
+        origin: "pick".to_owned(),
+        work_id: Some(WORK.to_owned()),
+        season: Some(0),
+        movie: Some(1),
+        anime_no: Some(7),
+        source_id: Some("src".to_owned()),
+        creator: Some(CREATOR.to_owned()),
+        revision_of: None,
+        revises_attributed: false,
+        items: vec![NewItem {
+            observation_id: None,
+            episode: "극장판".to_owned(),
+            post_url: format!("https://{}/ok/Show-02", fake::HOST),
+            found_at: 500,
+        }],
+    };
+    let Created::Created(id) = s.store.requests.create(job, 900).await.unwrap() else {
+        panic!("not created")
+    };
+    s.run().await;
+
+    let d = s.detail(&id).await;
+    assert_eq!(d.row.state, JobState::Done, "{:?}", d.row.note);
+    let plan = s.plan(&id).await;
+    assert_eq!(plan.len(), 1);
+    assert_eq!(placed(&plan[0]), Some((1, Assignment::Explicit)));
+    assert_eq!(plan[0].outcome, Some(Outcome::Applied));
+    assert!(tree(&s.work()).contains(&"Show.ass".to_owned()));
 }

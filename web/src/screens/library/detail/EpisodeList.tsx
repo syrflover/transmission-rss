@@ -9,7 +9,8 @@ import { ApiError } from "@/lib/api";
 import { applyStored, type EpisodeFailure, type EpisodeRevision, type FailureFile, type StoredSubtitle, type WorkEpisode, type WorkFile, type WorkSeason } from "../api";
 import { jobPath } from "../../todo/api";
 import { CheckIcon, ChevronIcon, MinusIcon } from "../icons";
-import { airDay, baseName, episodeLabel, inOrder, ORDERS, rowId, type EpisodeOrder } from "./model";
+import { airDay, baseName, inOrder, ORDERS, rowId, type EpisodeOrder } from "./model";
+import { rowLabel } from "./movie.ts";
 import { EmptyState } from "../../ScreenFrame";
 import { inputClass } from "../../collect/channels/styles";
 import { RetryActions } from "../../collect/history/RetryActions";
@@ -337,6 +338,7 @@ function Row({
   season,
   animeNo,
   episode,
+  movieOnly,
   missing,
   picks,
   source,
@@ -349,6 +351,8 @@ function Row({
   season: number;
   animeNo: number | null;
   episode: WorkEpisode;
+  /** The episode is the one of a movie-only work: its row is `본편`. */
+  movieOnly: boolean;
   missing: boolean;
   picks: readonly Candidate[];
   source: EpisodeCandidateSource | undefined;
@@ -373,7 +377,7 @@ function Row({
           open && "bg-[color-mix(in_srgb,var(--focus-ring)_5%,var(--surface-1))]",
         )}
       >
-        <span className="text-sm font-bold">{episodeLabel(episode.episode_shown)}</span>
+        <span className="text-sm font-bold">{rowLabel(episode.episode_shown, movieOnly)}</span>
         <span className="flex min-w-0 flex-col gap-1">
           <span className="flex flex-wrap items-center gap-x-4 gap-y-1">
             <Hold label="영상" on={episode.video.length > 0} missing={missing} />
@@ -434,6 +438,8 @@ interface EpisodeListProps {
   season: WorkSeason;
   /** How many seasons the work has: a single season's list needs no season in its title. */
   seasonCount: number;
+  /** The work is a movie and nothing else: its one row is `본편`. */
+  movieOnly: boolean;
   missing: boolean;
   order: EpisodeOrder;
   onOrder: (order: EpisodeOrder) => void;
@@ -463,6 +469,7 @@ export function EpisodeList({
   onCreatorChanged,
   season,
   seasonCount,
+  movieOnly,
   missing,
   order,
   onOrder,
@@ -512,6 +519,7 @@ export function EpisodeList({
               onCreatorChanged={onCreatorChanged}
               season={season.number}
               episode={episode}
+              movieOnly={movieOnly}
               missing={missing}
               picks={candidates ? candidatesOf(candidates.list, episode, candidates.subscribed) : NO_PICKS}
               source={candidates}

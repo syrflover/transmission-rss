@@ -53,6 +53,7 @@ async fn make(store: &Handles, command: &str, posts: &[(&str, String)]) -> Strin
         origin: "pick".to_owned(),
         work_id: None,
         season: Some(1),
+        movie: None,
         anime_no: None,
         source_id: None,
         creator: Some("수퍼소닉EX".to_owned()),

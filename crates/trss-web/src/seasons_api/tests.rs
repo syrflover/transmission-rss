@@ -702,3 +702,53 @@ async fn saving_the_links_of_a_subscribed_creators_season_makes_the_creators_job
     assert!(!open.is_empty());
     assert!(open.iter().all(|job| job.origin == trss_jobs::AUTO));
 }
+
+#[tokio::test]
+async fn a_movie_only_works_season_0_is_its_first_season_for_the_search_the_mark_and_the_original_title(
+) {
+    let env = env(vec![
+        work(
+            "Movie",
+            &[0],
+            vec![EpisodeFile {
+                path: "Movie.mkv".into(),
+                kind: FileKind::Video,
+                season: 0,
+                episode: "1".into(),
+            }],
+        ),
+        // Season 0 of a work with seasons is not its first.
+        work("Show", &[0, 1], vec![]),
+    ])
+    .await;
+    env.answer(media(1, "Movie", "映画", "FINISHED", 2021));
+    let movie = env.id("Movie").await;
+    let show = env.id("Show").await;
+
+    let (_, body) = get(&env.state, &format!("/library/works/{movie}")).await;
+    assert_eq!(body["movie_only"], true);
+    let info = &body["seasons"][0]["info"];
+    assert_eq!(
+        (info["season"].as_i64(), &info["can_auto"]),
+        (Some(0), &json!(true))
+    );
+    assert_eq!(info["pending"], "search");
+    let (_, body) = get(&env.state, &format!("/library/works/{show}")).await;
+    assert_eq!(body["movie_only"], false);
+    assert_eq!(body["seasons"][0]["info"]["can_auto"], false);
+    assert_eq!(body["seasons"][1]["info"]["can_auto"], true);
+
+    env.link("Movie", 0, &[1]).await;
+    let (_, body) = get(&env.state, &format!("/library/works/{movie}")).await;
+    assert_eq!(body["native_title"], "映画");
+    // The user can ask for the automatic search again from the info route.
+    let (status, again) = post(
+        &env.state,
+        &format!("/library/works/{movie}/seasons/0/auto"),
+        json!({ "version": 2 }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{again}");
+    assert_eq!(again["pending"], "search");
+    assert_eq!(again["entries"], json!([]));
+}

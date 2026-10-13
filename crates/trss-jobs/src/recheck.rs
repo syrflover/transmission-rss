@@ -1007,6 +1007,7 @@ impl Recheck {
             origin: AUTO.to_owned(),
             work_id: Some(sub.work_id.clone()),
             season: Some(i64::from(sub.season)),
+            movie: None,
             anime_no: Some(sub.anime_no),
             source_id: Some(source_id.to_owned()),
             creator: Some(creator.to_owned()),

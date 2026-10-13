@@ -310,6 +310,7 @@ mod tests {
             watch_folder_path: "/w".into(),
             first_seen_at: None,
             latest_season: Some(1),
+            movie_only: false,
             video: Vec::new(),
             subtitle: Vec::new(),
             subtitle_coverage: Some(SubtitleCoverage::None),

@@ -38,7 +38,7 @@ function Cell({
 const facts = (s: SeasonSuggestion) => [s.format, fuzzyDate(s.start)].filter(Boolean).join(" · ");
 
 /**
- * The season's AniList info: the `방영`, `분량`, `제작사` and `장르` of the linked
+ * The season's (a movie-only work's movie, as its season 0) AniList info: the `방영`, `분량`, `제작사` and `장르` of the linked
  * entries taken together, the link to the first entry's AniList page, and the
  * ways to change the link. A season with no link says `미상`, never what another
  * season or the files would suggest. The sequels of the previous season's last
@@ -49,12 +49,15 @@ export function SeasonInfoSection({
   workName,
   info,
   seasonCount,
+  movie = false,
   onChanged,
 }: {
   workId: string;
   workName: string;
   info: SeasonInfo;
   seasonCount: number;
+  /** The season is a movie-only work's season 0 (`극장판`): it is said by that word, never as `시즌 0`. */
+  movie?: boolean;
   /** Called with the info after any change (and when the app's search finished), to show it and update the caches. */
   onChanged: (info: SeasonInfo) => void;
 }) {
@@ -127,7 +130,7 @@ export function SeasonInfoSection({
             >
               AniList
               <ExternalIcon className="size-3.5" />
-              <span className="sr-only">에서 시즌 {season} 보기 (새 창)</span>
+              <span className="sr-only">에서 {movie ? "극장판" : `시즌 ${season}`} 보기 (새 창)</span>
             </a>
           )}
           <Button type="button" variant="ghost" className={btnNeutral} aria-haspopup="dialog" onClick={() => setEditing(true)}>
@@ -208,7 +211,7 @@ export function SeasonInfoSection({
         </p>
       )}
 
-      <SeasonLinksDialog workId={workId} workName={workName} info={info} open={editing} onOpenChange={setEditing} onChanged={onChanged} />
+      <SeasonLinksDialog workId={workId} workName={workName} info={info} movie={movie} open={editing} onOpenChange={setEditing} onChanged={onChanged} />
     </section>
   );
 }

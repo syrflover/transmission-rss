@@ -55,7 +55,7 @@ function creatorsOf(list: CandidateList | null): { sourceId: string; name: strin
 }
 
 /**
- * The `자막 올리기` section of the chosen season, below the candidates: files,
+ * The `자막 올리기` section of the chosen season (or of a movie-only work's movie), below the candidates: files,
  * ZIPs or a folder of subtitles and fonts become one job. The list shows what
  * will be kept and what will be left out before anything is sent; the server
  * judges again by the content of each file, so the answer may leave out more.
@@ -64,12 +64,15 @@ function creatorsOf(list: CandidateList | null): { sourceId: string; name: strin
 export function UploadSection({
   workId,
   season,
+  movie = null,
   seasonCount,
   candidates,
   limits,
 }: {
   workId: string;
   season: number;
+  /** The movie's episode number when the upload is for a movie (`season` is then 0). */
+  movie?: number | null;
   seasonCount: number;
   candidates: CandidateList | null;
   /** What the server holds an upload to. */
@@ -133,6 +136,7 @@ export function UploadSection({
           id: request.id,
           work_id: workId,
           season,
+          ...(movie === null ? {} : { movie }),
           creator: chosen === UNKNOWN ? null : chosen,
           files: plan.send.map((e) => ({ name: e.name, file: e.file })),
           skipped: plan.skip.map((e) => e.name),
@@ -160,7 +164,7 @@ export function UploadSection({
         busy.current = false;
       }
     },
-    [workId, season, chosen, plan],
+    [workId, season, movie, chosen, plan],
   );
 
   const upload = () => {

@@ -192,6 +192,19 @@ pub struct Context<'a> {
     /// The bytes' SHA-256 of each file, by index, to tell the same file from
     /// an alternative.
     pub sha256: &'a [&'a str],
+    /// The job is a movie's (an episode of season 0): every subtitle of the
+    /// package is on that episode, whatever its name or the candidate's
+    /// episode text says, and no mapping or season mark is looked at.
+    pub movie: Option<i64>,
+}
+
+/// Where every subtitle of a movie's job goes: the movie.
+fn on_movie(episode: i64) -> Placed {
+    Placed {
+        episode,
+        assignment: Assignment::Explicit,
+        basis: None,
+    }
 }
 
 /// The plan of one file, by its index in the package.
@@ -256,6 +269,9 @@ pub fn plan(candidates: &[Candidate<'_>], files: &[File<'_>], ctx: &Context<'_>)
     let Some(first) = candidates.first() else {
         return Planned::default();
     };
+    if let Some(movie) = ctx.movie {
+        return plan_movie(first, files, ctx, movie);
+    }
     let members = members_of(files);
     let base = |i: usize| base_name(files[i].name);
     let subtitles: Vec<usize> = (0..files.len())
@@ -601,7 +617,11 @@ pub fn plan_named(item_id: i64, files: &[File<'_>], ctx: &Context<'_>) -> Planne
         match members[i] {
             Member::Subtitle(format) => {
                 row.format = Some(format);
-                match named_target(base, ctx) {
+                let target = match ctx.movie {
+                    Some(movie) => Ok(on_movie(movie)),
+                    None => named_target(base, ctx),
+                };
+                match target {
                     Ok(placed) => {
                         on_episode
                             .entry(placed.episode)
@@ -617,6 +637,50 @@ pub fn plan_named(item_id: i64, files: &[File<'_>], ctx: &Context<'_>) -> Planne
                         row.note = Some(format!("회차에 붙이지 않고 보관만 해요: {reason}"));
                     }
                 }
+                note_lone_idx(&mut row, file, files, &members);
+            }
+            other => not_subtitle(&mut row, other),
+        }
+        rows.push(row);
+    }
+    choose(&mut rows, on_episode, ctx, |_| true);
+    Planned {
+        rows,
+        missing: Vec::new(),
+    }
+}
+
+/// The plan of a package received for a movie (a job with `Context::movie`):
+/// the movie's candidates all belong to the movie whatever their episode text
+/// says, so every subtitle is on it and is the candidate's own. The post's
+/// first candidate stands for the post.
+fn plan_movie(first: &Candidate<'_>, files: &[File<'_>], ctx: &Context<'_>, movie: i64) -> Planned {
+    let members = members_of(files);
+    let mut rows: Vec<Row> = Vec::with_capacity(files.len());
+    let mut on_episode: BTreeMap<i64, Vec<(usize, bool)>> = BTreeMap::new();
+    for (i, file) in files.iter().enumerate() {
+        let mut row = Row {
+            file: i,
+            kind: AssetKind::Subtitle,
+            format: None,
+            item_id: first.item_id,
+            anissia_episode: None,
+            attachment_episode: match named(base_name(file.name)) {
+                Named::One(key) => Some(key),
+                _ => None,
+            },
+            placed: None,
+            question: None,
+            action: PlanAction::Store,
+            outcome: None,
+            note: None,
+        };
+        match members[i] {
+            Member::Subtitle(format) => {
+                row.format = Some(format);
+                row.anissia_episode = Some(first.episode.to_owned());
+                row.placed = Some(on_movie(movie));
+                on_episode.entry(movie).or_default().push((i, true));
                 note_lone_idx(&mut row, file, files, &members);
             }
             other => not_subtitle(&mut row, other),

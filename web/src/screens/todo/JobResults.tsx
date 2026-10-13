@@ -1,3 +1,4 @@
+import { createContext, useContext } from "react";
 import { Link } from "react-router-dom";
 
 import { cn } from "@/lib/utils";
@@ -9,6 +10,9 @@ import { archiveReceiptText, fontReceiptText } from "./fontReceipt";
 import { FORMAT_LABEL, episodeName, shownItem, sizeText } from "./format";
 import { waitingPositions } from "./replacementView";
 import { unpackText } from "./unpack";
+
+/** Whether the job is for a movie: its episodes are then called `본편` wherever the results name one. */
+const MovieJob = createContext(false);
 
 /** `받음 2 · 실패 1`: how many items ended in each way, for a job with more than one. */
 function summary(items: readonly JobItem[]): string {
@@ -45,10 +49,13 @@ export function JobResults({
   items,
   placements = [],
   replacements = [],
+  movie = false,
 }: {
   items: readonly JobItem[];
   placements?: readonly Placement[];
   replacements?: readonly Replacement[];
+  /** The job is for a movie. */
+  movie?: boolean;
 }) {
   if (items.length === 0) {
     return (
@@ -59,18 +66,20 @@ export function JobResults({
   }
   const waiting = waitingPositions(replacements);
   return (
-    <div className="flex flex-col gap-2.5">
-      {items.length > 1 && (
-        <p className="text-[13px] font-semibold text-text-secondary">
-          {summary(items)}
-        </p>
-      )}
-      <ul className="m-0 flex list-none flex-col gap-2.5 p-0">
-        {items.map((item) => (
-          <ItemBlock key={item.id} item={item} placements={placements} waiting={waiting} />
-        ))}
-      </ul>
-    </div>
+    <MovieJob.Provider value={movie}>
+      <div className="flex flex-col gap-2.5">
+        {items.length > 1 && (
+          <p className="text-[13px] font-semibold text-text-secondary">
+            {summary(items)}
+          </p>
+        )}
+        <ul className="m-0 flex list-none flex-col gap-2.5 p-0">
+          {items.map((item) => (
+            <ItemBlock key={item.id} item={item} placements={placements} waiting={waiting} />
+          ))}
+        </ul>
+      </div>
+    </MovieJob.Provider>
   );
 }
 
@@ -81,14 +90,19 @@ export function JobResults({
 export function PackageResults({
   placements,
   replacements = [],
+  movie = false,
 }: {
   placements: readonly Placement[];
   replacements?: readonly Replacement[];
+  /** The job is for a movie. */
+  movie?: boolean;
 }) {
   return (
-    <div className="flex min-w-0 flex-col rounded-card border border-hairline bg-surface-1 px-3.5 py-3 shadow-(--card-shadow)">
-      <PackageGroups placements={placements} waiting={waitingPositions(replacements)} divided={false} />
-    </div>
+    <MovieJob.Provider value={movie}>
+      <div className="flex min-w-0 flex-col rounded-card border border-hairline bg-surface-1 px-3.5 py-3 shadow-(--card-shadow)">
+        <PackageGroups placements={placements} waiting={waitingPositions(replacements)} divided={false} />
+      </div>
+    </MovieJob.Provider>
   );
 }
 
@@ -101,6 +115,7 @@ function ItemBlock({
   placements: readonly Placement[];
   waiting: ReadonlySet<number>;
 }) {
+  const movie = useContext(MovieJob);
   // A package of several files says what came of them in groups, not under
   // each file.
   const own = new Set(item.files.map((f) => f.id));
@@ -114,7 +129,7 @@ function ItemBlock({
       )}
     >
       <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1.5">
-        <b className="text-[14.5px] font-bold">{episodeName(item.episode_shown)}</b>
+        <b className="text-[14.5px] font-bold">{episodeName(item.episode_shown, movie)}</b>
         <ItemBadge shown={shownItem(item.state, item.wait)} />
         {((item.reason !== null && item.reason !== "") ||
           item.failure !== null) && (
@@ -170,8 +185,9 @@ const FONT_NAME = /폰트|글꼴|font/i;
 function placementText(
   p: Placement,
   waiting: ReadonlySet<number>,
+  movie: boolean,
 ): { word: string; detail: string | null; urgent: boolean } {
-  const episode = p.episode !== null ? episodeName(String(p.episode)) : null;
+  const episode = p.episode !== null ? episodeName(String(p.episode), movie) : null;
   if (p.outcome === null) {
     if (waiting.has(p.position)) return { word: "교체 승인 대기", detail: null, urgent: false };
     return p.question !== null
@@ -267,8 +283,9 @@ function GroupLine({
   /** Left out where the group says it once for the rows that share it. */
   showNote?: boolean;
 }) {
+  const movie = useContext(MovieJob);
   const detail = [
-    p.episode !== null ? episodeName(String(p.episode)) : null,
+    p.episode !== null ? episodeName(String(p.episode), movie) : null,
     group === "assets" ? ASSET_KIND[p.kind] : null,
     group === "assets" ? fontReceiptText(p.font_receipt) : null,
     group === "ask" ? p.question : showNote ? p.note : null,
@@ -360,7 +377,8 @@ function AppliedRows({ rows }: { rows: readonly Placement[] }) {
 }
 
 function PlacementLine({ placement, waiting }: { placement: Placement; waiting: ReadonlySet<number> }) {
-  const { word, detail, urgent } = placementText(placement, waiting);
+  const movie = useContext(MovieJob);
+  const { word, detail, urgent } = placementText(placement, waiting, movie);
   const font = fontReceiptText(placement.font_receipt);
   return (
     <p className="text-xs leading-snug text-text-secondary">
@@ -380,6 +398,7 @@ function FileLine({
   placements: readonly Placement[];
   waiting: ReadonlySet<number>;
 }) {
+  const movie = useContext(MovieJob);
   // The size and format of what was received; a failed file's bytes are gone.
   // A ZIP is received whole as a bundle: which of its files serve which
   // episode is the analysis's, after the receipt. A ZIP named for fonts holds
@@ -413,7 +432,7 @@ function FileLine({
         {file.state !== "done" && <ItemBadge shown={FILE_STATE[file.state]} />}
         {file.shared_with_shown !== null && (
           <span className="text-xs text-text-muted">
-            같은 파일 · {episodeName(file.shared_with_shown)}에서 받음
+            같은 파일 · {episodeName(file.shared_with_shown, movie)}에서 받음
           </span>
         )}
       </div>

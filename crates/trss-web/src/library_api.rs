@@ -18,7 +18,7 @@
 //! { "items": [{
 //!     "id": "…", "name": "Lycoris Recoil", "title": "리코리스 리코일", "missing": false,
 //!     "watch_folder": { "id": "…", "path": "/media/anime" },
-//!     "latest_season": 2,
+//!     "latest_season": 2, "movie_only": false,
 //!     "video":    [{ "first": "01", "last": "03", "text": "1–3" },
 //!                  { "first": "05", "last": "12", "text": "5–12" }],
 //!     "subtitle": [{ "first": "01", "last": "03", "text": "1–3" }],
@@ -52,7 +52,9 @@
 //!   Anissia title of its lowest-numbered season from 1 on linked to an anime,
 //!   the folder name when none is ([`trss_library::store::seasons::anissia::WORK_TITLE`]).
 //!   `latest_season` is the highest season
-//!   number recorded for the work (`null` without a season folder); `video` and
+//!   number recorded for the work (`null` without a season folder), and
+//!   `movie_only` says the work is a movie and nothing else: its latest season
+//!   is 0 and its one episode `1` is the movie (the screen's `본편`). `video` and
 //!   `subtitle` are the episodes of that season that have a file, as ranges of
 //!   consecutive episodes written as in the file names. `01` and `1` are one
 //!   episode, and an episode that is not a whole number (`17.5`) is a range of
@@ -131,6 +133,7 @@ struct WorkView {
     missing: bool,
     watch_folder: WatchFolderRef,
     latest_season: Option<u32>,
+    movie_only: bool,
     video: Vec<RangeView>,
     subtitle: Vec<RangeView>,
     subtitle_coverage: Option<&'static str>,
@@ -162,6 +165,7 @@ impl WorkView {
                 path: work.watch_folder_path,
             },
             latest_season: work.latest_season,
+            movie_only: work.movie_only,
             video: work.video.into_iter().map(RangeView::from).collect(),
             subtitle: work.subtitle.into_iter().map(RangeView::from).collect(),
             subtitle_coverage: work.subtitle_coverage.map(|c| c.code()),

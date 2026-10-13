@@ -195,6 +195,7 @@ async fn make(s: &Setup, command: &str, episode: &str, path: &str, source: bool)
         origin: "pick".to_owned(),
         work_id: Some(WORK.to_owned()),
         season: Some(1),
+        movie: None,
         anime_no: Some(7),
         source_id: source.then(|| SOURCE.to_owned()),
         creator: Some(CREATOR.to_owned()),

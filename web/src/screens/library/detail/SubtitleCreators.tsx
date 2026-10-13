@@ -152,17 +152,23 @@ function SubtitleCreatorPicker({
 /**
  * The head's `자막 제작자` line for the chosen season: the subscription's choice (changed with `제작자 변경`), every
  * creator named for a subtitle file, and `제작자 알 수 없음` while some file has none. While files have none it offers
- * `제작자 지정`, which names one creator for all of them; a season with no Anissia link says to link it first.
+ * `제작자 지정`, which names one creator for all of them; a season with no Anissia link says to link it first. The
+ * creators are those of `animeNo`, the anime the season is linked to, or for a movie-only work (`movie`) the anime its
+ * movie is linked to.
  */
 export function HeadCreators({
   workId,
   season,
+  movie = false,
+  animeNo,
   subscription,
   onSubscriptionChanged,
   onNamed,
 }: {
   workId: string;
   season: WorkSeason;
+  movie?: boolean;
+  animeNo: number | null;
   subscription: WorkSubscription | undefined;
   onSubscriptionChanged: () => void;
   /** The files got a creator: the work (and the candidates, which may be revisions now) are read again. */
@@ -173,7 +179,6 @@ export function HeadCreators({
   const [named, setNamed] = useState<string | null>(null);
   const files = subtitlesOf(season);
   const unknown = unknownFiles(files).length;
-  const animeNo = season.anissia.anime?.anime_no ?? null;
   const names = headNames(
     files,
     subscription && {
@@ -220,7 +225,7 @@ export function HeadCreators({
       )}
       {unknown > 0 && animeNo === null && (
         <p className="m-0 text-xs leading-[1.45] text-text-muted" data-testid="link-first">
-          제작자를 모르는 자막이 {unknown}개 있어요. 아래에서 이 시즌에 Anissia 작품을 먼저 연결하면 그 작품의 제작자를 지정할 수 있어요.
+          제작자를 모르는 자막이 {unknown}개 있어요. 아래에서 이 {movie ? "극장판" : "시즌"}에 Anissia 작품을 먼저 연결하면 그 작품의 제작자를 지정할 수 있어요.
         </p>
       )}
       {creatorOpen && subscription && (

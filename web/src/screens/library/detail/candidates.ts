@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { ApiError } from "@/lib/api";
 import { patch, store } from "@/lib/cached";
@@ -17,6 +17,7 @@ import {
 } from "../api";
 import { segmentsText } from "./episodeKey.ts";
 import { episodeLabel, type EpisodeOrder } from "./model";
+import { candidateKey, MOVIE_LABEL, type AnissiaTarget } from "./movie.ts";
 
 /**
  * What the `자막 후보` section and the episode rows derive from the candidates
@@ -25,7 +26,8 @@ import { episodeLabel, type EpisodeOrder } from "./model";
  * candidate's episode is Anissia's text, so the screen reads none of it as a
  * number: the server sends the key two texts of one episode share
  * (`episode_key`), the episode's place in the order (`episode_rank`) and what
- * kind of text it is (`episode_form`).
+ * kind of text it is (`episode_form`). A movie's candidates are about the
+ * movie whatever their text says (`movie_episode`, see `candidateKey`).
  */
 
 // --- episodes ---------------------------------------------------------------------------
@@ -36,12 +38,19 @@ import { episodeLabel, type EpisodeOrder } from "./model";
  * anime differently (season-relative `12` or cumulative `24`), and the per-source
  * episode mapping (자막의 회차 대응) that tells them apart does not exist yet.
  */
-export function matchesEpisode(c: Pick<Candidate, "episode_key">, episode: Pick<WorkEpisode, "episode_key">): boolean {
-  return c.episode_key === episode.episode_key;
+export function matchesEpisode(
+  c: Pick<Candidate, "episode_key" | "movie_episode">,
+  episode: Pick<WorkEpisode, "episode_key">,
+): boolean {
+  return candidateKey(c) === episode.episode_key;
 }
 
-/** A candidate's episode as shown, always with its own label: `24화`; text that is no episode number (`0`, `SP`) as written. */
-export function candidateLabel(c: Pick<Candidate, "episode" | "episode_shown" | "episode_form">): string {
+/**
+ * A candidate's episode as shown, always with its own label: `24화`; text that is no episode number (`0`, `SP`) as
+ * written. A movie's candidate is about the movie, whatever its text says: `본편`.
+ */
+export function candidateLabel(c: Pick<Candidate, "episode" | "episode_shown" | "episode_form" | "movie_episode">): string {
+  if (c.movie_episode != null) return MOVIE_LABEL;
   return c.episode_form === "number" ? episodeLabel(c.episode_shown) : c.episode;
 }
 
@@ -80,14 +89,14 @@ export type Holdings = ReadonlySet<string>;
 export function holdingsOf(list: CandidateList, episodes: readonly WorkEpisode[]): Holdings {
   const has = new Set<string>();
   for (const episode of episodes) if (episode.subtitle.length > 0) has.add(episode.episode_key);
-  for (const c of list.candidates) if (c.job?.state === "done") has.add(c.episode_key);
+  for (const c of list.candidates) if (c.job?.state === "done") has.add(candidateKey(c));
   return has;
 }
 
 export function kindOf(c: Candidate, holdings: Holdings): Kind {
   if (c.job?.state === "done") return "received";
   if (c.revision !== null) return "revision";
-  return holdings.has(c.episode_key) ? "has" : "missing";
+  return holdings.has(candidateKey(c)) ? "has" : "missing";
 }
 
 /** A job holds the candidate (running, waiting or done), so it cannot be taken again; `failed` and `held` can. */
@@ -195,7 +204,7 @@ export function groupsOf(
   for (const [sourceId, observed] of bySource) {
     const byEpisode = new Map<string, Candidate[]>();
     for (const c of observed) {
-      const key = c.episode_key;
+      const key = candidateKey(c);
       const same = byEpisode.get(key);
       if (same) same.push(c);
       else byEpisode.set(key, [c]);
@@ -224,7 +233,9 @@ export function groupsOf(
       rows,
       missing: rows.filter((r) => r.kind === "missing").length,
       revision: rows.filter((r) => r.kind === "revision").length,
-      range: segmentsText(list.creator_episodes.find((c) => c.source_id === sourceId)?.episode_segments ?? []),
+      range: observed.every((c) => c.movie_episode != null)
+        ? MOVIE_LABEL
+        : segmentsText(list.creator_episodes.find((c) => c.source_id === sourceId)?.episode_segments ?? []),
       latest: Math.max(...observed.map((c) => c.sort_at)),
     });
   }
@@ -291,25 +302,29 @@ const SLOW_MS = 60_000;
 /**
  * The season's candidates, read while the page is shown: often while a job of
  * a candidate or a refresh goes on, otherwise now and then (the worker reads
- * Anissia on its own every 30 minutes). A season with no Anissia link is not
- * read. `reload` reads at once, after an action of this page.
+ * Anissia on its own every 30 minutes). A season or a movie with no Anissia link
+ * is not read. `reload` reads at once, after an action of this page.
  */
-export function useCandidates(workId: string, season: number, animeNo: number | null) {
-  const key = candidatesKey(workId, season, animeNo);
+export function useCandidates(workId: string, season: number, animeNo: number | null, movie: number | null = null) {
+  const target = useMemo<AnissiaTarget>(
+    () => (movie === null ? { kind: "season", season } : { kind: "movie", episode: movie }),
+    [season, movie],
+  );
+  const key = candidatesKey(workId, target, animeNo);
   const polled = usePolled<CandidateList | null>(
     key,
-    (signal) => (animeNo === null ? Promise.resolve(null) : loadCandidates(workId, season, signal)),
+    (signal) => (animeNo === null ? Promise.resolve(null) : loadCandidates(workId, target, signal)),
     (data) => (animeNo === null ? null : data && active(data) ? FAST_MS : SLOW_MS),
     "자막 후보를 불러오지 못했어요.",
   );
   const reload = useCallback(async () => {
     if (animeNo === null) return;
     try {
-      store(key, await loadCandidates(workId, season));
+      store(key, await loadCandidates(workId, target));
     } catch {
       // The polling reads it again.
     }
-  }, [key, animeNo, workId, season]);
+  }, [key, animeNo, workId, target]);
   /** Shows the candidates as taken by a job at once, before the next reading says so. */
   const taken = useCallback(
     (ids: readonly number[], jobId: string) => {
@@ -374,12 +389,14 @@ const sameList = (a: readonly number[], b: readonly number[]) => a.length === b.
  *   same order, so the server sees the same content.
  * - `onMade` runs once the job exists, with the candidates it took.
  * - More than `maxCandidates` (what the server takes for one job) are not sent.
+ * - `movie` is the movie's episode number when the candidates are a movie's (`season` is then 0).
  */
 export function useCreateJob(
   workId: string,
   season: number,
   onMade: (candidates: readonly number[], jobId: string) => void,
   maxCandidates: number,
+  movie: number | null = null,
 ) {
   const [phase, setPhase] = useState<CreatePhase>({ kind: "idle" });
   const request = useRef<Request | null>(null);
@@ -400,7 +417,13 @@ export function useCreateJob(
       busy.current = true;
       setPhase({ kind: "sending" });
       try {
-        const made = await createSubtitleJob({ id: req.id, work_id: workId, season, candidates: req.candidates });
+        const made = await createSubtitleJob({
+          id: req.id,
+          work_id: workId,
+          season,
+          ...(movie === null ? {} : { movie }),
+          candidates: req.candidates,
+        });
         request.current = null;
         if (alive.current) setPhase({ kind: "made", jobId: made.id });
         onMadeRef.current(req.candidates, made.id);
@@ -415,7 +438,7 @@ export function useCreateJob(
         busy.current = false;
       }
     },
-    [workId, season],
+    [workId, season, movie],
   );
 
   /** Creates the job for `candidates` (a new request, or the unanswered one when it is the same content). */

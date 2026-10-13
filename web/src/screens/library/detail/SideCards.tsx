@@ -8,7 +8,8 @@ import type { SeasonInfo, WorkDetail, WorkRule } from "../api";
 import { canClean, FILES_HASH } from "../storage.ts";
 import { ChevronIcon } from "../icons";
 import { creatorOf, UNKNOWN } from "./fileCreators";
-import { baseName, episodeLabel } from "./model";
+import { baseName } from "./model";
+import { rowLabel } from "./movie.ts";
 import { StoredCleanup } from "./StoredCleanup";
 
 /**
@@ -224,11 +225,11 @@ export function FilesCard({
                   .filter((s) => s.episodes.length > 0)
                   .map((season) => (
                     <div key={season.number} className="flex flex-col gap-1">
-                      <h4 className="text-[12.5px] font-bold text-text-secondary">시즌 {season.number}</h4>
+                      {!work.movie_only && <h4 className="text-[12.5px] font-bold text-text-secondary">시즌 {season.number}</h4>}
                       <ul className="m-0 flex list-none flex-col gap-2 p-0">
                         {season.episodes.map((episode) => (
                           <li key={episode.episode} className="grid grid-cols-[3.6em_minmax(0,1fr)] gap-x-2 text-[12px] leading-snug">
-                            <span className="font-bold">{episodeLabel(episode.episode_shown)}</span>
+                            <span className="font-bold">{rowLabel(episode.episode_shown, work.movie_only)}</span>
                             <span className="flex min-w-0 flex-col gap-0.5 font-mono break-all text-text-secondary">
                               {episode.video.map((f) => (
                                 <span key={f.path}>영상 {baseName(f.path)}</span>
@@ -273,7 +274,13 @@ export function FilesCard({
         )}
       </div>
 
-      <StoredCleanup workId={work.id} storage={work.storage} seasons={work.seasons.length} onRefresh={onRefresh} />
+      <StoredCleanup
+        workId={work.id}
+        storage={work.storage}
+        seasons={work.seasons.length}
+        movieOnly={work.movie_only}
+        onRefresh={onRefresh}
+      />
     </Card>
   );
 }

@@ -120,6 +120,7 @@ async fn make(s: &Setup, command: &str, episodes: &[u32], suffix: &str) -> Strin
         origin: "pick".to_owned(),
         work_id: Some(WORK.to_owned()),
         season: Some(1),
+        movie: None,
         anime_no: Some(7),
         source_id: Some("src".to_owned()),
         creator: Some(CREATOR.to_owned()),

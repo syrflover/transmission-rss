@@ -90,6 +90,13 @@ test("the folded card counts the creators and copies of the season, or says ther
   assert.equal(cardSummary([]), "보관한 자막 없음");
 });
 
+test("a copy names its episode, and a movie-only work's one episode is 본편", () => {
+  const one = copy("a");
+  assert.equal(copyView(one, [one]).episode, "2화");
+  const movie = copy("m", { season: 0, episode: "01", episode_shown: "1" });
+  assert.equal(copyView(movie, [movie], true).episode, "본편");
+});
+
 test("a copy is received on a day, with the time only when another of its episode and format came that day", () => {
   const one = copy("a", { stored_at: at(9, 7, 13, 5) });
   assert.equal(copyView(one, [one]).received, "9월 7일 받음");

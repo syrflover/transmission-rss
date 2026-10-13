@@ -1156,6 +1156,7 @@ async fn a_find_job_command_is_made_once_and_other_jobs_cannot_be_finished() {
         origin: "pick".to_owned(),
         work_id: Some("w1".to_owned()),
         season: Some(1),
+        movie: None,
         anime_no: Some(3441),
         source_id: Some("src-maker".to_owned()),
         creator: Some("메이커".to_owned()),

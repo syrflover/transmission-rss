@@ -158,8 +158,8 @@ function Page({ job, prepare }: { job: JobDetail; prepare: ScreenPrepare }) {
               job.title
             )}
           </h1>
-          <TargetLine segments={job.episode_segments} creator={job.creator} className="text-[14px] max-[720px]:text-[13px]">
-            {job.season !== null && <Tag>시즌 {job.season}</Tag>}
+          <TargetLine segments={job.episode_segments} creator={job.creator} movie={job.movie} className="text-[14px] max-[720px]:text-[13px]">
+            {job.season !== null && !job.movie && <Tag>시즌 {job.season}</Tag>}
             <OriginTags job={job} />
             {job.source !== null && <span className="min-w-0 text-xs text-text-muted [overflow-wrap:anywhere]">{job.source}</span>}
           </TargetLine>
@@ -235,7 +235,7 @@ function Page({ job, prepare }: { job: JobDetail; prepare: ScreenPrepare }) {
           </Part>
           {job.confirm === null && job.placements.length > 0 && (
             <Part title="회차별 결과">
-              <PackageResults placements={job.placements} replacements={job.replacements} />
+              <PackageResults placements={job.placements} replacements={job.replacements} movie={job.movie} />
             </Part>
           )}
         </>
@@ -247,7 +247,7 @@ function Page({ job, prepare }: { job: JobDetail; prepare: ScreenPrepare }) {
         )
       ) : (
         <Part title="회차별 결과">
-          <JobResults items={job.items} placements={job.placements} replacements={job.replacements} />
+          <JobResults items={job.items} placements={job.placements} replacements={job.replacements} movie={job.movie} />
         </Part>
       )}
 
@@ -308,7 +308,7 @@ function JobPaths({ job }: { job: JobDetail }) {
       {placed.map((p) => (
         <div key={p.position} className="flex min-w-0 flex-col gap-1">
           <p className="text-[13px] leading-snug font-semibold [overflow-wrap:anywhere]">
-            {p.episode !== null && <span className="mr-2">{episodeName(String(p.episode))}</span>}
+            {p.episode !== null && <span className="mr-2">{episodeName(String(p.episode), job.movie)}</span>}
             <span className="font-normal text-text-secondary">{p.name}</span>
           </p>
           <PathList
@@ -320,7 +320,7 @@ function JobPaths({ job }: { job: JobDetail }) {
           />
         </div>
       ))}
-      <ReplacementPaths replacements={job.replacements} />
+      <ReplacementPaths replacements={job.replacements} movie={job.movie} />
       {(received || placed.length === 0) && <PathList rows={[["수신 영역", job.receive_dir]]} />}
     </div>
   );

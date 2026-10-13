@@ -22,7 +22,7 @@ use crate::{
     discovery::{FileKind, Reason},
     store::{
         library::{AppliedCopy, FileRecord, UnrecognizedRecord},
-        seasons::anissia::WORK_TITLE,
+        seasons::{anissia::WORK_TITLE, movie::MOVIE_ONLY},
     },
 };
 use trss_core::{
@@ -58,6 +58,10 @@ pub struct WorkDetail {
     /// The work title (작품명, [`WORK_TITLE`]).
     pub title: String,
     pub missing: bool,
+    /// The work is a movie and nothing else: its one video is directly in its
+    /// folder, recorded as episode 1 of season 0
+    /// ([`crate::store::seasons::movie`]).
+    pub movie_only: bool,
     pub watch_folder_id: String,
     pub watch_folder_path: String,
     /// When the work first appeared; `None`: unknown.
@@ -78,7 +82,8 @@ struct Gathered {
 pub(super) fn detail(conn: &Connection, id: &str) -> rusqlite::Result<Option<WorkDetail>> {
     let head = conn
         .prepare_cached(&format!(
-            "SELECT w.id, w.dir_name, w.missing, w.first_seen_at, f.id, f.path, {WORK_TITLE}
+            "SELECT w.id, w.dir_name, w.missing, w.first_seen_at, f.id, f.path, {WORK_TITLE},
+                    {MOVIE_ONLY}
                FROM works w JOIN watch_folders f ON f.id = w.watch_folder_id
               WHERE w.id = ?1 AND f.unregistered_at IS NULL"
         ))?
@@ -88,6 +93,7 @@ pub(super) fn detail(conn: &Connection, id: &str) -> rusqlite::Result<Option<Wor
                 dir_name: row.get(1)?,
                 title: row.get(6)?,
                 missing: row.get::<_, i64>(2)? != 0,
+                movie_only: row.get(7)?,
                 first_seen_at: row.get(3)?,
                 watch_folder_id: row.get(4)?,
                 watch_folder_path: row.get(5)?,

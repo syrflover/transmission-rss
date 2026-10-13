@@ -83,6 +83,8 @@ export interface AuthTodo extends Badged {
   /** What to call it: the Anissia title of the job's anime, else the work title (작품명). */
   title: string;
   season: number | null;
+  /** The jobs are for a movie (an episode of season 0): the card names it `본편`, not an episode. */
+  movie: boolean;
   /** The episodes that wait, as Anissia writes them (`"11"`, `"13.5"`). */
   episodes: string[];
   /** `episodes` as runs. */
@@ -164,6 +166,8 @@ export interface PlacementCheckTodo extends Badged {
   work: WorkRef | null;
   title: string;
   season: number | null;
+  /** The job is for a movie (an episode of season 0): the card names it `본편`. */
+  movie: boolean;
   creator: string | null;
   /** How the job came to be (`JobRow.origin`): with `source`, its source as the work detail's card says it. */
   origin: JobRow["origin"];
@@ -222,6 +226,8 @@ export interface ReplacementTodo extends Badged {
   work: WorkRef | null;
   title: string;
   season: number | null;
+  /** The jobs are for a movie (an episode of season 0): the card names it `본편`, not an episode. */
+  movie: boolean;
   /** The episodes that wait for a decision, as numbers. */
   episodes: number[];
   /** `episodes` as runs. */
@@ -387,6 +393,8 @@ export interface JobRow {
   /** What to call it: the Anissia title of the job's anime, else the work title (작품명). */
   title: string;
   season: number | null;
+  /** The job is for a movie, an episode of season 0 (`season` is 0): the screen names it `본편`, not an episode. */
+  movie: boolean;
   /** The items' episodes in order, as Anissia writes them. */
   episodes: string[];
   /** `episodes` without the leading zeros of a whole number. */
@@ -707,6 +715,8 @@ export interface NewSubtitleJob {
   id: string;
   work_id: string;
   season: number;
+  /** For a movie's candidates: the movie's episode number, an episode of season 0 (`season` is then `0`). */
+  movie?: number;
   candidates: number[];
 }
 
@@ -762,11 +772,13 @@ export interface UploadResult {
   dropped?: DroppedFile[];
 }
 
-/** What an upload is made of: the browser's ID for it, the season, the creator and the files. */
+/** What an upload is made of: the browser's ID for it, the season (and movie), the creator and the files. */
 export interface NewUpload {
   id: string;
   work_id: string;
   season: number;
+  /** For an upload to a movie: its episode number, an episode of season 0 (`season` is then `0`). */
+  movie?: number;
   /** A candidate source's ID, or `null` for `제작자 알 수 없음`. */
   creator: string | null;
   /** The files to store, each with the name or folder path it is sent under. */
@@ -789,6 +801,7 @@ export function uploadSubtitles(
   form.append("id", upload.id);
   form.append("work_id", upload.work_id);
   form.append("season", String(upload.season));
+  if (upload.movie !== undefined) form.append("movie", String(upload.movie));
   form.append("creator", upload.creator ?? "");
   for (const name of upload.skipped) form.append("skipped", name);
   for (const { name, file } of upload.files) form.append("file", file, name);

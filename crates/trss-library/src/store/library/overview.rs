@@ -33,7 +33,7 @@ use rusqlite::Connection;
 
 use crate::{
     discovery::{kind_of, FileKind, Reason},
-    store::seasons::{self, anissia::WORK_TITLE},
+    store::seasons::{self, anissia::WORK_TITLE, movie::MOVIE_ONLY},
 };
 use trss_core::{episode::EpisodeSet, Millis};
 
@@ -80,6 +80,9 @@ pub struct WorkOverview {
     pub first_seen_at: Option<Millis>,
     /// `None` when no season folder is recorded.
     pub latest_season: Option<u32>,
+    /// The work is a movie-only work ([`MOVIE_ONLY`]): its latest season is
+    /// season 0 and its one episode is the movie.
+    pub movie_only: bool,
     /// Episodes of the latest season that have a video.
     pub video: Vec<EpisodeRange>,
     /// Episodes of the latest season that have a subtitle.
@@ -170,11 +173,13 @@ pub(super) fn overview(conn: &Connection) -> rusqlite::Result<Vec<WorkOverview>>
         folder_path: String,
         latest_season: Option<u32>,
         title: String,
+        movie_only: bool,
     }
     let rows: Vec<Row> = {
         let mut stmt = conn.prepare_cached(&format!(
             "SELECT w.id, w.dir_name, w.missing, w.first_seen_at, f.id, f.path,
-                    (SELECT max(s.number) FROM seasons s WHERE s.work_id = w.id), {WORK_TITLE}
+                    (SELECT max(s.number) FROM seasons s WHERE s.work_id = w.id), {WORK_TITLE},
+                    {MOVIE_ONLY}
                FROM works w JOIN watch_folders f ON f.id = w.watch_folder_id
               WHERE f.unregistered_at IS NULL
               ORDER BY w.dir_name, w.id"
@@ -189,6 +194,7 @@ pub(super) fn overview(conn: &Connection) -> rusqlite::Result<Vec<WorkOverview>>
                 folder_path: row.get(5)?,
                 latest_season: row.get(6)?,
                 title: row.get(7)?,
+                movie_only: row.get(8)?,
             })
         })?;
         rows.collect::<rusqlite::Result<_>>()?
@@ -261,6 +267,7 @@ pub(super) fn overview(conn: &Connection) -> rusqlite::Result<Vec<WorkOverview>>
                 watch_folder_path: row.folder_path,
                 first_seen_at: row.first_seen_at,
                 latest_season: row.latest_season,
+                movie_only: row.movie_only,
                 video,
                 subtitle,
                 subtitle_coverage: coverage,

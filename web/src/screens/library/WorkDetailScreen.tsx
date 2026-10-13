@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type MouseEvent } from "react";
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 
 import { Button } from "@/components/ui/button";
-import { forget, forgetPrefix, useCached } from "@/lib/cached";
+import { forget, forgetPrefix, store, useCached } from "@/lib/cached";
 import { useMediaQuery, PHONE_QUERY } from "@/lib/media";
 
 import { EmptyState, ScreenFrame, usePageTitle } from "../ScreenFrame";
@@ -11,6 +11,7 @@ import { KEYS } from "../collect/cache";
 import {
   LIST_PREFIX,
   loadWork,
+  movieLinkKey,
   workKey,
   type AnissiaLink,
   type FormatOrder,
@@ -23,13 +24,15 @@ import { useCandidates } from "./detail/candidates";
 import { CoverDialog } from "./detail/CoverDialog";
 import { EpisodeList } from "./detail/EpisodeList";
 import { defaultSeason, rowId } from "./detail/model";
+import { MOVIE_EPISODE } from "./detail/movie.ts";
 import { useEpisodeOrder } from "./detail/prefs";
-import { SeasonAnissiaSection } from "./detail/SeasonAnissiaSection";
+import { MovieLinkPending, SeasonAnissiaSection } from "./detail/SeasonAnissiaSection";
 import { SeasonInfoSection } from "./detail/SeasonInfoSection";
 import { UploadSection } from "./detail/UploadSection";
 import { WorkTodos } from "./detail/WorkTodos";
 import { SeasonTiles } from "./detail/SeasonTiles";
 import { HeadCreators } from "./detail/SubtitleCreators";
+import { useMovieLink } from "./detail/useMovieLink";
 import { CollectCard, FilesCard, InfoCard } from "./detail/SideCards";
 import { SubtitlesCard } from "./detail/SubtitlesCard";
 import { coverOf } from "./model";
@@ -126,13 +129,29 @@ function WorkPage({ workId }: { workId: string }) {
     work.reload();
   };
 
-  // A season's Anissia link after a change shows at once. The work title follows the lowest linked season,
-  // so the page and the list are read again behind it.
+  // A season's Anissia link after a change shows at once. The work title follows the lowest linked season (a
+  // movie-only work's movie), so the page and the list are read again behind it. A movie's link is kept apart from
+  // the seasons': the page's episode names its anime, and the link itself (version, titles) is in its own cache.
   const anissiaChanged = (link: AnissiaLink) => {
-    work.update((w) => {
-      if (!w) return w;
-      return { ...w, seasons: w.seasons.map((s) => (s.number === link.season ? { ...s, anissia: link } : s)) };
-    });
+    const movie = link.movie;
+    if (movie !== undefined) {
+      store(movieLinkKey(workId, movie), link);
+      const named = link.anime ? { anime_no: link.anime.anime_no, title: link.anime.subject } : null;
+      work.update((w) => {
+        if (!w) return w;
+        const seasons = w.seasons.map((s) =>
+          s.number === 0
+            ? { ...s, episodes: s.episodes.map((e) => (e.episode_shown === String(movie) ? { ...e, movie: named } : e)) }
+            : s,
+        );
+        return { ...w, seasons };
+      });
+    } else {
+      work.update((w) => {
+        if (!w) return w;
+        return { ...w, seasons: w.seasons.map((s) => (s.number === link.season ? { ...s, anissia: link } : s)) };
+      });
+    }
     forgetPrefix(LIST_PREFIX);
     work.reload();
   };
@@ -264,9 +283,17 @@ function Loaded({
     forSeason.find((s) => s.rule_state === "paused") ??
     forSeason[0];
 
-  // The chosen season's subtitle candidates: read only for a season linked to an Anissia anime, and shared by the
-  // `자막 후보` section and the episode rows, so both name the same candidates.
-  const candidates = useCandidates(work.id, season?.number ?? 0, season?.anissia.anime?.anime_no ?? null);
+  // A movie-only work's one episode is its movie, which has an Anissia link of its own: the page reads that link (its
+  // version and reference titles) and the candidates of the movie's anime, not the season's.
+  const movie = work.movie_only ? MOVIE_EPISODE : null;
+  const movieLink = useMovieLink(work.id, movie);
+  const movieOf = season?.episodes.find((e) => e.episode_shown === String(MOVIE_EPISODE))?.movie ?? null;
+  const link = movie === null ? (season?.anissia ?? null) : (movieLink.data ?? null);
+  const animeNo = movie === null ? (season?.anissia.anime?.anime_no ?? null) : (movieOf?.anime_no ?? null);
+
+  // The chosen season's subtitle candidates: read only for a season (or a movie) linked to an Anissia anime, and
+  // shared by the `자막 후보` section and the episode rows, so both name the same candidates.
+  const candidates = useCandidates(work.id, season?.number ?? 0, animeNo, movie);
   const subscribedCreator = subscription?.creator ?? null;
   // A creator named for a subtitle file changes the revision candidates too, so both are read again.
   const reloadCandidates = candidates.reload;
@@ -333,6 +360,8 @@ function Loaded({
               key={`creators-${season.number}`}
               workId={work.id}
               season={season}
+              movie={movie !== null}
+              animeNo={animeNo}
               subscription={subscription}
               onSubscriptionChanged={onSubscriptionChanged}
               onNamed={creatorNamed}
@@ -371,24 +400,31 @@ function Loaded({
               workName={work.name}
               info={season.info}
               seasonCount={work.seasons.length}
+              movie={movie !== null}
               onChanged={onInfoChanged}
             />
           )}
-          {season && (
-            <SeasonAnissiaSection
-              key={`anissia-${season.number}`}
-              workId={work.id}
-              link={season.anissia}
-              seasonCount={work.seasons.length}
-              onChanged={onAnissiaChanged}
-            />
-          )}
+          {season &&
+            (link ? (
+              <SeasonAnissiaSection
+                key={`anissia-${season.number}`}
+                workId={work.id}
+                link={link}
+                seasonCount={work.seasons.length}
+                onChanged={onAnissiaChanged}
+              />
+            ) : (
+              <MovieLinkPending error={movieLink.error} slow={movieLink.slow} onRetry={movieLink.reload} />
+            ))}
           <WorkTodos workId={work.id} seasonCount={work.seasons.length} onRefresh={onRetried} />
           {season && (
             <CandidateSection
               key={`candidates-${season.number}`}
               workId={work.id}
-              link={season.anissia}
+              season={season.number}
+              movie={movie}
+              animeNo={animeNo}
+              link={link}
               seasonCount={work.seasons.length}
               onAnissiaChanged={onAnissiaChanged}
               episodes={season.episodes}
@@ -405,6 +441,7 @@ function Loaded({
               key={`upload-${season.number}`}
               workId={work.id}
               season={season.number}
+              movie={movie}
               seasonCount={work.seasons.length}
               candidates={candidates.data ?? null}
               limits={work.upload_limits}
@@ -414,17 +451,18 @@ function Loaded({
             <EpisodeList
               key={`episodes-${season.number}`}
               workId={work.id}
-              animeNo={season.anissia.anime?.anime_no ?? null}
+              animeNo={animeNo}
               onCreatorChanged={creatorNamed}
               season={season}
               seasonCount={work.seasons.length}
+              movieOnly={work.movie_only}
               missing={work.missing}
               order={order}
               onOrder={setOrder}
               onRetried={onRetried}
               candidates={
                 candidates.data
-                  ? { list: candidates.data, workId: work.id, subscribed: subscribedCreator, onMade: candidates.taken }
+                  ? { list: candidates.data, workId: work.id, subscribed: subscribedCreator, onMade: candidates.taken, movie }
                   : undefined
               }
             />
@@ -441,6 +479,7 @@ function Loaded({
               workId={work.id}
               subtitles={work.subtitles}
               season={season.number}
+              movieOnly={work.movie_only}
               collapsible={!wide}
               onChanged={onRetried}
               onOrder={onOrderChanged}

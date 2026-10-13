@@ -26,21 +26,30 @@ pub struct AnissiaLink {
 
 /// The work title (작품명, `docs/specs/library.md` 라이브러리 화면) of the work
 /// a query names `w`, as an SQL expression to put in its columns: the Anissia
-/// title of the lowest-numbered recorded season, from 1 on, linked to an anime,
-/// else the work's folder name (`NULL` only where `w` is no work, as in a
-/// `LEFT JOIN` that found none).
+/// title of the lowest-numbered recorded season, from 1 on, linked to an anime;
+/// else, for a movie-only work ([`super::movie`]), the Anissia title of its
+/// movie's link; else the work's folder name (`NULL` only where `w` is no work,
+/// as in a `LEFT JOIN` that found none).
 ///
 /// A link counts the same whoever made it: a subscription connected to the
 /// season writes it as the work detail does ([`set_in`]). Season 0, where the
-/// movies of a work with seasons are, never names the work, the rule the cover
-/// follows too ([`super::cover_target`]).
-pub const WORK_TITLE: &str = "
+/// movies of a work with seasons are, never names such a work, the rule the
+/// cover follows too ([`super::cover_target`]); only a work that is a movie and
+/// nothing else is named by it.
+pub const WORK_TITLE: &str = concat!(
+    "
     coalesce((SELECT x.subject FROM season_anissia l
                 JOIN seasons s ON s.work_id = l.work_id AND s.number = l.season
                 JOIN anissia_anime x ON x.anime_no = l.anime_no
                WHERE l.work_id = w.id AND l.season >= 1
                ORDER BY l.season LIMIT 1),
-             w.dir_name)";
+             (SELECT x.subject FROM movie_anissia l
+                JOIN anissia_anime x ON x.anime_no = l.anime_no
+               WHERE l.work_id = w.id AND l.episode = 1 AND ",
+    movie_only!(),
+    "),
+             w.dir_name)"
+);
 
 /// The link of a season as stored, or the untouched one (version 0).
 pub fn link_in(conn: &Connection, work_id: &str, season: u32) -> rusqlite::Result<AnissiaLink> {
@@ -223,12 +232,14 @@ impl SeasonStore {
             .await
     }
 
-    /// Whether some season is linked to Anissia anime `anime_no`.
+    /// Whether some season, or some movie, is linked to Anissia anime
+    /// `anime_no`.
     pub async fn anime_is_linked(&self, anime_no: i64) -> Result<bool, SeasonError> {
         self.db
             .run(move |c| {
                 Ok(c.prepare_cached(
-                    "SELECT EXISTS (SELECT 1 FROM season_anissia WHERE anime_no = ?1)",
+                    "SELECT EXISTS (SELECT 1 FROM season_anissia WHERE anime_no = ?1)
+                         OR EXISTS (SELECT 1 FROM movie_anissia WHERE anime_no = ?1)",
                 )?
                 .query_row([anime_no], |r| r.get(0))?)
             })

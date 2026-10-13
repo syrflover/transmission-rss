@@ -1,6 +1,7 @@
 import { when } from "../../lib/time.ts";
 import { sizeText } from "../../lib/size.ts";
 import { todoTags } from "./changes.ts";
+import { MOVIE_LABEL } from "../library/detail/movie.ts";
 import type { Replacement, ReplacementDecision, ReplacementPath, ReplacementVersion } from "./replacementTypes.ts";
 
 /**
@@ -275,9 +276,9 @@ export function pathRows(r: Replacement): PathRow[] {
   return rows;
 }
 
-/** `3화`: the episode a plan is for. */
-export function planEpisode(r: Replacement): string {
-  return `${r.episode}화`;
+/** `3화`: the episode a plan is for; a movie's job (`movie`) has its movie, `본편`. */
+export function planEpisode(r: Replacement, movie: boolean): string {
+  return movie ? MOVIE_LABEL : `${r.episode}화`;
 }
 
 /** A post's address as a short link text: its host and path, without the scheme or a trailing slash. */

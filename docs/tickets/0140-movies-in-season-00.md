@@ -10,6 +10,8 @@
 
 [극장판 ADR](../adr/0017-movies-by-place-and-anissia-link.md)과 라이브러리 명세의 극장판 요구대로 만들어요. 사용자가 정한 것은 다음과 같아요(2026-10-11).
 
+[0139](0139-movie-only-works.md)가 극장판을 시즌 0의 회차로 담고, 회차마다 Anissia에 잇는 극장판 연결(`movie_anissia`)과 그 경로(`/api/library/works/{id}/movies/{episode}/anissia`)를 만들었어요([극장판을 담는 꼴의 ADR](../adr/0018-movies-in-season-zero-with-their-own-link.md)). 이 티켓은 그 연결을 `Season 00`의 회차에 써요. 0139의 극장판 연결은 스캔이 잠깐 회차를 놓쳐도 남고 작품과 함께 사라져요.
+
 - 시즌이 있는 작품의 극장판은 `Season 00`에 그대로 둬요. 지금 서버의 파일은 옮기지 않아요.
 - `Season 00`의 회차는 Anissia 작품을 이으면 극장판이 되고, 끊으면 보통 회차로 돌아가요. 이은 회차 줄에는 `극장판`과 이은 Anissia 제목이 보이고, 그 작품의 자막 후보가 들어와요.
 

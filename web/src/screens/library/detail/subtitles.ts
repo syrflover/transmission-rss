@@ -1,6 +1,6 @@
 import { carriesTime, receivedAt } from "../received.ts";
 import { creatorText } from "../storage.ts";
-import { episodeLabel } from "./episodeKey.ts";
+import { rowLabel } from "./movie.ts";
 
 /**
  * The pure parts of the `자막` card (`library.md`, 오른쪽 카드 열): what each stored copy says of itself and which
@@ -121,7 +121,7 @@ export interface Places {
 
 export interface CopyView {
   id: string;
-  /** `2화`. */
+  /** `2화`, or `본편` for a movie-only work's. */
   episode: string;
   format: string;
   /** `9월 7일 받음`, with the time when another copy of the episode and format came the same day. */
@@ -149,9 +149,9 @@ export function actionsOf(copy: SubtitleCopy): CopyAction[] {
 
 /**
  * `copy` as its card row shows it. `group` is every copy of its creator: another of the same season, episode and format
- * received the same day makes the date carry the time.
+ * received the same day makes the date carry the time. The one episode of a movie-only work (`movieOnly`) is `본편`.
  */
-export function copyView(copy: SubtitleCopy, group: readonly SubtitleCopy[]): CopyView {
+export function copyView(copy: SubtitleCopy, group: readonly SubtitleCopy[], movieOnly = false): CopyView {
   const withTime = carriesTime(
     copy,
     group,
@@ -160,7 +160,7 @@ export function copyView(copy: SubtitleCopy, group: readonly SubtitleCopy[]): Co
   const isApplied = copy.applied.length > 0;
   return {
     id: copy.id,
-    episode: episodeLabel(copy.episode_shown),
+    episode: rowLabel(copy.episode_shown, movieOnly),
     format: formatText(copy.format),
     received: receivedAt(copy.stored_at, withTime),
     name: copy.name,

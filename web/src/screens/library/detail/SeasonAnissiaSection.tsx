@@ -6,16 +6,18 @@ import { ApiError } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
 import { btnDanger, btnNeutral, hintClass } from "../../collect/channels/styles";
-import { setAnissiaLink, type AnissiaLink } from "../api";
+import { currentLink, setAnissiaLink, type AnissiaLink } from "../api";
 import { ExternalIcon } from "../icons";
 import { anissiaStatusText as statusText } from "./model";
+import { targetOf, unitOf } from "./movie.ts";
 import { SeasonAnissiaDialog } from "./SeasonAnissiaDialog";
 
 /**
  * The Anissia anime the season is linked to: its name and a link to its page,
  * and the ways to connect, change or cut the link. While a subscription is
  * connected to the season the anime is the subscription's, and it is changed
- * there, not here.
+ * there, not here. A movie-only work's link is its movie's (`link.movie`), which
+ * no subscription holds and which the screen calls the 극장판.
  */
 export function SeasonAnissiaSection({
   workId,
@@ -51,10 +53,10 @@ export function SeasonAnissiaSection({
     setBusy(true);
     setError(null);
     try {
-      changed(await setAnissiaLink(workId, season, link.version, null));
+      changed(await setAnissiaLink(workId, targetOf(link), link.version, null));
     } catch (e) {
       if (e instanceof ApiError && e.code === "conflict" && e.current) {
-        const current = e.current as AnissiaLink;
+        const current = currentLink(e.current);
         changed(current);
         if (!current.subscription) setError("다른 곳에서 먼저 바꿨어요. 지금 연결을 보여드려요.");
       } else {
@@ -66,7 +68,8 @@ export function SeasonAnissiaSection({
   };
 
   const { anime, subscription } = link;
-  const title = seasonCount > 1 ? `시즌 ${season} Anissia 연결` : "Anissia 연결";
+  const unit = unitOf(link);
+  const title = unit === "극장판" ? "극장판 Anissia 연결" : seasonCount > 1 ? `시즌 ${season} Anissia 연결` : "Anissia 연결";
 
   return (
     <section
@@ -116,7 +119,7 @@ export function SeasonAnissiaSection({
           {anime.original_subject && <span className="mt-0.5 block text-xs font-normal text-text-muted">{anime.original_subject}</span>}
         </p>
       ) : (
-        <p className={cn(hintClass, "mt-2.5")}>이 시즌에 이은 Anissia 작품이 없어요.</p>
+        <p className={cn(hintClass, "mt-2.5")}>이 {unit}에 이은 Anissia 작품이 없어요.</p>
       )}
 
       {subscription && (
@@ -135,6 +138,37 @@ export function SeasonAnissiaSection({
       )}
 
       {!subscription && <SeasonAnissiaDialog workId={workId} link={link} open={editing} onOpenChange={setEditing} onChanged={changed} />}
+    </section>
+  );
+}
+
+/**
+ * The place of a movie's `극장판 Anissia 연결` while its link is not read yet: the reading's failure with `재시도`, or
+ * nothing until the reading is slow.
+ */
+export function MovieLinkPending({ error, slow, onRetry }: { error: string | null; slow: boolean; onRetry: () => void }) {
+  if (error === null && !slow) return null;
+  return (
+    <section
+      aria-labelledby="movie-anissia"
+      className="rounded-card border border-hairline-soft bg-surface-1 px-4 py-3.5 shadow-(--card-shadow) max-[720px]:px-3"
+      data-testid="season-anissia"
+    >
+      <h2 id="movie-anissia" className="m-0 text-[15px] font-bold">
+        극장판 Anissia 연결
+      </h2>
+      {error !== null ? (
+        <div className="mt-2.5 flex flex-wrap items-center gap-2.5">
+          <p role="alert" className="text-[13px] leading-relaxed font-semibold text-urgent">
+            {error}
+          </p>
+          <Button type="button" variant="ghost" className={btnNeutral} onClick={onRetry}>
+            재시도
+          </Button>
+        </div>
+      ) : (
+        <p className={cn(hintClass, "mt-2.5")}>극장판의 Anissia 연결을 불러오는 중이에요.</p>
+      )}
     </section>
   );
 }

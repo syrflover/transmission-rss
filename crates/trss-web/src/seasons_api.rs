@@ -277,7 +277,13 @@ pub async fn work_infos(
         .links_of(work_id)
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
-    let first = seasons.iter().copied().filter(|s| *s >= 1).min();
+    // The lowest season from 1 on, or season 0 for a movie-only work.
+    let first = state
+        .seasons
+        .store
+        .first_season(work_id)
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
     for season in seasons {
         links
             .entry(*season)

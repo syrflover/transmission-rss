@@ -160,11 +160,13 @@ use trss_collect::store::{
 use trss_core::episode::{ranks, segments, shown, stored_key, EpisodeNumber, EpisodeSegment};
 use trss_library::store::seasons::SeasonError;
 
+mod movie;
 #[cfg(test)]
 mod tests;
 
 pub fn routes() -> Router<AppState> {
     Router::new()
+        .merge(movie::routes())
         .route("/library/works/{id}/seasons/{season}/anissia", get(show))
         .route(
             "/library/works/{id}/seasons/{season}/anissia/search",
@@ -643,6 +645,10 @@ struct CandidateObservation {
     episode_rank: usize,
     /// `number`, `zero` (the number 0, in any spelling) or `text`.
     episode_form: &'static str,
+    /// For a movie's candidates only: the movie (an episode of season 0) the
+    /// candidate belongs to, whatever its `episode` text says.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    movie_episode: Option<u32>,
     updated: String,
     updated_at: Option<i64>,
     updated_parse_failed: bool,
@@ -708,6 +714,7 @@ impl From<&trss_collect::store::anissia::Candidate> for CandidateObservation {
                 Some(number) if number.is_zero() => "zero",
                 Some(_) => "number",
             },
+            movie_episode: None,
             updated: c.updated.clone(),
             updated_at: c.updated_at,
             updated_parse_failed: c.updated_at.is_none(),

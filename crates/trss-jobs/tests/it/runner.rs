@@ -44,6 +44,7 @@ fn job(command: &str, posts: &[(&str, &str)]) -> NewJob {
         origin: "pick".to_owned(),
         work_id: None,
         season: Some(1),
+        movie: None,
         anime_no: None,
         source_id: None,
         creator: Some("제작자".to_owned()),

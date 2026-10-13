@@ -10,8 +10,17 @@ import { PickAnime } from "../../collect/subs/add/PickAnime";
 import { todayWeek } from "../../collect/subs/format";
 import type { ScheduleEntry } from "../../collect/subs/api";
 import { btnNeutral, btnPrimary, hintClass, inputClass } from "../../collect/channels/styles";
-import { searchAnissia, setAnissiaLink, type AnissiaCandidate, type AnissiaLink, type AnissiaSource, type ReferenceTitle } from "../api";
+import {
+  currentLink,
+  searchAnissia,
+  setAnissiaLink,
+  type AnissiaCandidate,
+  type AnissiaLink,
+  type AnissiaSource,
+  type ReferenceTitle,
+} from "../api";
 import { anissiaStatusText as statusText } from "./model";
+import { targetOf, unitOf, type AnissiaTarget } from "./movie.ts";
 
 type Tab = "list" | "schedule";
 
@@ -37,9 +46,9 @@ const dates = (c: AnissiaCandidate) => {
 };
 
 /**
- * Picks the Anissia anime a season is linked to: from Anissia's full list,
- * finished anime included (the user writes the query, reading the season's
- * reference titles; nothing is searched on open), or from this quarter's schedule. Nothing is saved until `연결`;
+ * Picks the Anissia anime a season (or a movie, an episode of season 0) is linked to: from Anissia's full list,
+ * finished anime included (the user writes the query, reading the reference titles; nothing is searched on open), or
+ * from this quarter's schedule. Nothing is saved until `연결`;
  * when someone changed the link first, the dialog shows the current link and
  * keeps the search and the pick.
  */
@@ -68,7 +77,7 @@ export function SeasonAnissiaDialog({
           )}
         >
           <div className="flex items-center gap-2 border-b border-hairline-soft py-2 pr-2 pl-4">
-            <Dialog.Title className="min-w-0 flex-1 truncate text-[17px] font-bold">시즌 {link.season} Anissia 연결</Dialog.Title>
+            <Dialog.Title className="min-w-0 flex-1 truncate text-[17px] font-bold">{unitOf(link) === "극장판" ? "극장판" : `시즌 ${link.season}`} Anissia 연결</Dialog.Title>
             <Dialog.Close
               aria-label="닫기"
               className="inline-flex size-11 flex-none items-center justify-center rounded-full text-text-secondary hover:bg-surface-2 hover:text-text-primary"
@@ -109,12 +118,12 @@ function Body({
     setBusy(true);
     setError(null);
     try {
-      onChanged(await setAnissiaLink(workId, link.season, linkRef.current.version, picked.anime_no, picked.source));
+      onChanged(await setAnissiaLink(workId, targetOf(link), linkRef.current.version, picked.anime_no, picked.source));
       onClose();
     } catch (e) {
       if (e instanceof ApiError && e.code === "conflict" && e.current) {
         // The screen shows the current link; the search and the pick stay.
-        onChanged(e.current as AnissiaLink);
+        onChanged(currentLink(e.current));
         setError("다른 곳에서 먼저 바꿨어요. 지금 연결을 위에 보여드려요. 그대로 연결하려면 다시 눌러 주세요.");
       } else {
         setError(e instanceof ApiError ? e.message : "연결하지 못했어요. 잠시 뒤 다시 시도해 주세요.");
@@ -160,7 +169,7 @@ function Body({
 
       {/* Both tabs stay mounted, so a search and its place survive switching. */}
       <div hidden={tab !== "list"}>
-        <FullList workId={workId} season={link.season} titles={link.reference_titles} picked={picked} onPick={setPicked} />
+        <FullList workId={workId} target={targetOf(link)} titles={link.reference_titles} picked={picked} onPick={setPicked} />
       </div>
       <div hidden={tab !== "schedule"}>
         <PickAnime
@@ -197,13 +206,13 @@ function Body({
 /** Anissia's full list, a page at a time. Its failure is its own: the schedule tab is not affected. */
 function FullList({
   workId,
-  season,
+  target,
   titles,
   picked,
   onPick,
 }: {
   workId: string;
-  season: number;
+  target: AnissiaTarget;
   titles: readonly ReferenceTitle[];
   picked: Picked | null;
   onPick: (picked: Picked) => void;
@@ -218,7 +227,7 @@ function FullList({
     setLoading(true);
     setError(null);
     try {
-      const answer = await searchAnissia(workId, season, q, page);
+      const answer = await searchAnissia(workId, target, q, page);
       const rows = answer.items.map((candidate) => ({ candidate, page: answer.page }));
       setResults((prev) => ({
         q: answer.q,
@@ -311,7 +320,7 @@ const KIND_LABELS: Record<ReferenceTitle["kind"], string> = {
   folder: "폴더 이름",
 };
 
-/** The season's titles as plain text to read (and copy) when writing a search; nothing here searches. */
+/** The season's (or movie's) titles as plain text to read (and copy) when writing a search; nothing here searches. */
 function ReferenceTitles({ titles }: { titles: readonly ReferenceTitle[] }) {
   if (titles.length === 0) return null;
   return (

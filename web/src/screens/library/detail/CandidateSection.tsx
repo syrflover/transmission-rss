@@ -139,6 +139,7 @@ function GroupItem({
   group,
   workId,
   season,
+  movie,
   open,
   onToggleOpen,
   picked,
@@ -155,6 +156,8 @@ function GroupItem({
   group: CandidateGroup;
   workId: string;
   season: number;
+  /** The movie's episode number when the group is a movie's: it has no episode mapping to decide. */
+  movie: number | null;
   open: boolean;
   onToggleOpen: () => void;
   picked: ReadonlySet<number>;
@@ -174,7 +177,7 @@ function GroupItem({
   maxCandidates: number;
 }) {
   const bodyId = useId();
-  const { phase, create, resend } = useCreateJob(workId, season, onMade, maxCandidates);
+  const { phase, create, resend } = useCreateJob(workId, season, onMade, maxCandidates, movie);
   const all = missingOf(group);
   const chosen = pickedOf(group, picked);
   const sending = phase.kind === "sending";
@@ -264,17 +267,19 @@ function GroupItem({
               </span>
             </div>
           )}
-          <MappingControls
-            target={{
-              workId,
-              season,
-              sourceId: group.sourceId,
-              creator: group.creator,
-              mapping,
-              previous: facts.previous,
-            }}
-            onChanged={onMapping}
-          />
+          {movie === null && (
+            <MappingControls
+              target={{
+                workId,
+                season,
+                sourceId: group.sourceId,
+                creator: group.creator,
+                mapping,
+                previous: facts.previous,
+              }}
+              onChanged={onMapping}
+            />
+          )}
           <div className="mt-2 empty:hidden">
             <CreateStatus phase={phase} onResend={resend} />
           </div>
@@ -310,7 +315,9 @@ function CandidateRows({
  * The `자막 후보` section of the chosen season, between the Anissia link and
  * the episode list: the creators Anissia lists for the season's anime, each
  * folded to a line, and the way to receive their subtitles one job at a time.
- * A season without an Anissia link offers the link instead.
+ * A season without an Anissia link offers the link instead. A movie-only work's
+ * section is its movie's (`movie`): every candidate is on the movie's one row,
+ * and it has no `직접 찾기` and no `회차 대응 정하기`.
  *
  * What the user has picked is a set of candidate IDs, never row positions, so
  * a reading that brings new candidates (or changes who is the newest of an
@@ -318,6 +325,9 @@ function CandidateRows({
  */
 export function CandidateSection({
   workId,
+  season,
+  movie = null,
+  animeNo,
   link,
   seasonCount,
   onAnissiaChanged,
@@ -330,7 +340,13 @@ export function CandidateSection({
   openSource,
 }: {
   workId: string;
-  link: AnissiaLink;
+  season: number;
+  /** The movie's episode number when the section is a movie's (`season` is then 0). */
+  movie?: number | null;
+  /** The Anissia anime the season or the movie is linked to, `null` without a link. */
+  animeNo: number | null;
+  /** The link `Anissia 연결` changes; `null` while a movie's link is not read yet. */
+  link: AnissiaLink | null;
   seasonCount: number;
   onAnissiaChanged: (link: AnissiaLink) => void;
   episodes: readonly WorkEpisode[];
@@ -345,8 +361,6 @@ export function CandidateSection({
   /** The creator whose group the address names (`회차 확인 필요`'s link): it is opened once. */
   openSource?: string | null;
 }) {
-  const { season } = link;
-  const animeNo = link.anime?.anime_no ?? null;
   const { data, error, slow, reload, taken, setMapping } = candidates;
   const list = data ?? undefined;
   const [opened, setOpened] = useState<ReadonlySet<string>>(new Set());
@@ -451,10 +465,10 @@ export function CandidateSection({
       {animeNo === null ? (
         <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-2">
           <p className={cn(hintClass, "m-0 text-[13px]")}>Anissia 작품을 연결하면 자막 후보가 보여요.</p>
-          <Button type="button" variant="ghost" className={btnNeutral} aria-haspopup="dialog" onClick={() => setLinking(true)}>
+          <Button type="button" variant="ghost" className={btnNeutral} aria-haspopup="dialog" disabled={link === null} onClick={() => setLinking(true)}>
             Anissia 연결
           </Button>
-          <SeasonAnissiaDialog workId={workId} link={link} open={linking} onOpenChange={setLinking} onChanged={onAnissiaChanged} />
+          {link && <SeasonAnissiaDialog workId={workId} link={link} open={linking} onOpenChange={setLinking} onChanged={onAnissiaChanged} />}
         </div>
       ) : (
         <>
@@ -496,6 +510,7 @@ export function CandidateSection({
                   group={group}
                   workId={workId}
                   season={season}
+                  movie={movie}
                   open={opened.has(group.sourceId)}
                   onToggleOpen={() => toggleOpen(group.sourceId)}
                   picked={picked}
@@ -512,7 +527,7 @@ export function CandidateSection({
               ))}
             </ul>
           )}
-          {groups.length > 0 && <FindSection workId={workId} season={season} groups={groups} />}
+          {groups.length > 0 && movie === null && <FindSection workId={workId} season={season} groups={groups} />}
         </>
       )}
     </section>

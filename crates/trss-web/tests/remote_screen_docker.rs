@@ -218,6 +218,7 @@ async fn a_tap_relayed_through_the_remote_screen_passes_the_check_and_the_file_i
                 origin: "pick".to_owned(),
                 work_id: None,
                 season: Some(1),
+                movie: None,
                 anime_no: None,
                 source_id: None,
                 creator: Some("제작자".to_owned()),

@@ -11,11 +11,12 @@
 //! | `id`        | the ID the browser made for the action (up to 128 characters) |
 //! | `work_id`   | the work                                                    |
 //! | `season`    | the season's number                                         |
+//! | `movie`     | (optional) a movie's episode number, an episode of season 0: `season` must be `0`, the upload is for that movie and every subtitle goes on it |
 //! | `creator`   | one of the season's Anissia creators' source IDs; left out or empty: `제작자 알 수 없음` |
 //! | `skipped`   | (any number) the name of a file the browser left out because its name says it is no subtitle or font; only the name is sent |
 //! | `file`      | (any number) one file; its `filename` is its name, or a folder's relative path (`Show/01.ass`) |
 //!
-//! `id`, `work_id`, `season` and `creator` come before the first `file`, so a
+//! `id`, `work_id`, `season`, `movie` and `creator` come before the first `file`, so a
 //! request that names no such season is refused before any file is stored.
 //!
 //! - The server judges every file by its content, never its name or type
@@ -93,7 +94,7 @@ use trss_jobs::{
 
 use super::{
     commands_api::now_millis,
-    jobs_api::{linked_anime, season_link},
+    jobs_api::{linked_anime, linked_movie_anime, movie_of, season_link},
     ApiError, AppState,
 };
 
@@ -312,6 +313,7 @@ struct Head {
     id: Option<String>,
     work_id: Option<String>,
     season: Option<String>,
+    movie: Option<String>,
     creator: Option<String>,
 }
 
@@ -341,15 +343,43 @@ async fn target_of(state: &AppState, head: Head) -> Result<Target, ApiError> {
     if work_id.is_empty() {
         return Err(ApiError::invalid("작품이 빠졌어요."));
     }
-    let link = season_link(state, &work_id, season).await?;
+    let movie: Option<u32> = match head
+        .movie
+        .as_deref()
+        .map(str::trim)
+        .filter(|m| !m.is_empty())
+    {
+        None => None,
+        Some(text) => Some(
+            text.parse()
+                .map_err(|_| ApiError::invalid("극장판 회차 번호가 올바르지 않아요."))?,
+        ),
+    };
+    let movie_link = movie_of(state, &work_id, season, movie).await?;
+    let link = match &movie_link {
+        Some(_) => None,
+        None => Some(season_link(state, &work_id, season).await?),
+    };
+    let linked_no = match (&movie_link, &link) {
+        (Some(movie), _) => movie.anime_no,
+        (None, Some(link)) => link.anime_no,
+        (None, None) => None,
+    };
     let wanted = head.creator.filter(|c| !c.is_empty());
     let (source_id, creator) = match wanted {
         None => (None, None),
         Some(source_id) => {
-            let anime_no = linked_anime(
-                &link,
-                "이 시즌은 Anissia 작품에 연결돼 있지 않아서 제작자를 고를 수 없어요.",
-            )?;
+            let anime_no = match (&movie_link, &link) {
+                (Some(movie), _) => linked_movie_anime(
+                    movie,
+                    "이 극장판은 Anissia 작품에 연결돼 있지 않아서 제작자를 고를 수 없어요.",
+                )?,
+                (None, Some(link)) => linked_anime(
+                    link,
+                    "이 시즌은 Anissia 작품에 연결돼 있지 않아서 제작자를 고를 수 없어요.",
+                )?,
+                (None, None) => unreachable!("a season or a movie was read"),
+            };
             match state
                 .anissia_store
                 .newest_of_creator(anime_no, source_id.clone())
@@ -370,7 +400,8 @@ async fn target_of(state: &AppState, head: Head) -> Result<Target, ApiError> {
             command_id: id,
             work_id,
             season: i64::from(season),
-            anime_no: link.anime_no,
+            movie: movie.map(i64::from),
+            anime_no: linked_no,
             source_id,
             creator,
         },
@@ -578,7 +609,7 @@ async fn receive(
             }
             let name = name.to_owned();
             match name.as_str() {
-                "id" | "work_id" | "season" | "creator" => {
+                "id" | "work_id" | "season" | "movie" | "creator" => {
                     if target.is_some() {
                         return Err(ApiError::invalid("올리는 내용의 순서가 맞지 않아요."));
                     }
@@ -587,6 +618,7 @@ async fn receive(
                         "id" => head.id = Some(text),
                         "work_id" => head.work_id = Some(text),
                         "season" => head.season = Some(text),
+                        "movie" => head.movie = Some(text),
                         _ => head.creator = Some(text),
                     }
                 }

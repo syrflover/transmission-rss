@@ -246,6 +246,7 @@ async fn waiting(state: &AppState, n: usize, work: Option<&str>, wait: &'static 
                 origin: "pick".into(),
                 work_id: work.map(str::to_owned),
                 season: Some(1),
+                movie: None,
                 anime_no: None,
                 source_id: None,
                 creator: None,

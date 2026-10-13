@@ -28,6 +28,10 @@
 //!   `receive_failed` also has `episodes_shown`: its `episodes` without the
 //!   leading zeros of a whole number (`1` for `01`), which a link to the
 //!   episode's row carries.
+//! - `auth`, `placement_check` and `replacement`, which come from subtitle jobs,
+//!   also carry `movie`: true when the job is for a movie (an episode of season
+//!   0, `season` being `0`), whose `episodes` name the movie and not a season's
+//!   episodes.
 //! - `receive_failed` (`받기 실패`): the failures listed below, one to-do per
 //!   work for revisions (`context: "revision"`, the work's folder when the
 //!   library has no work there) and one per rule for add failures

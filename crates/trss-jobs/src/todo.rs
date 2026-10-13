@@ -68,6 +68,9 @@ pub enum Todo {
         work: Option<WorkRef>,
         title: String,
         season: Option<i64>,
+        /// The job is for a movie (an episode of season 0): `season` and
+        /// `episodes` name the movie, not a season's episodes.
+        movie: bool,
         episodes: Vec<String>,
         /// `episodes` as the lines name them: runs, shown without leading zeros.
         episode_segments: Vec<EpisodeSegment>,
@@ -112,6 +115,8 @@ pub enum Todo {
         work: Option<WorkRef>,
         title: String,
         season: Option<i64>,
+        /// The job is for a movie (an episode of season 0).
+        movie: bool,
         creator: Option<String>,
         origin: String,
         source: Option<String>,
@@ -135,6 +140,8 @@ pub enum Todo {
         work: Option<WorkRef>,
         title: String,
         season: Option<i64>,
+        /// The job is for a movie (an episode of season 0).
+        movie: bool,
         episodes: Vec<i64>,
         /// `episodes` as the lines name them: runs.
         episode_segments: Vec<EpisodeSegment>,

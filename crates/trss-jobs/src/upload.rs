@@ -383,7 +383,7 @@ impl Uploads {
             staging.end().await?;
         }
         let digest = request_digest(&staging);
-        let canonical = serde_json::json!({
+        let mut canonical = serde_json::json!({
             "upload": {
                 "work_id": request.work_id,
                 "season": request.season,
@@ -392,8 +392,11 @@ impl Uploads {
                 "skipped": staging.skipped.len(),
                 "digest": digest,
             }
-        })
-        .to_string();
+        });
+        if let Some(movie) = request.movie {
+            canonical["upload"]["movie"] = serde_json::json!(movie);
+        }
+        let canonical = canonical.to_string();
 
         let job_id = uuid::Uuid::new_v4().to_string();
         let area = self.area.clone();
@@ -433,6 +436,7 @@ impl Uploads {
                     request: canonical,
                     work_id: request.work_id,
                     season: request.season,
+                    movie: request.movie,
                     anime_no: request.anime_no,
                     source_id: request.source_id,
                     creator: request.creator,
@@ -471,6 +475,8 @@ pub struct UploadRequest {
     pub command_id: String,
     pub work_id: String,
     pub season: i64,
+    /// The movie (an episode of season 0) the files are for.
+    pub movie: Option<i64>,
     /// The season's Anissia anime, when it is linked.
     pub anime_no: Option<i64>,
     /// The creator the person chose among the season's, or `None` for

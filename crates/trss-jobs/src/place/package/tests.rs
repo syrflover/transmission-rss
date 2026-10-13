@@ -38,6 +38,7 @@ struct Case<'a> {
     total: Option<u32>,
     season: u32,
     follow: bool,
+    movie: Option<i64>,
 }
 
 impl<'a> Case<'a> {
@@ -55,6 +56,7 @@ impl<'a> Case<'a> {
             total: None,
             season: 1,
             follow: false,
+            movie: None,
         }
     }
 
@@ -79,6 +81,7 @@ impl<'a> Case<'a> {
                 order: &ORDER,
                 follow: self.follow,
                 sha256: &sha,
+                movie: self.movie,
             },
         )
     }
@@ -455,6 +458,7 @@ impl Case<'_> {
                 order: &ORDER,
                 follow: false,
                 sha256: &sha,
+                movie: self.movie,
             },
         )
     }
@@ -727,4 +731,101 @@ fn two_different_files_of_one_format_on_an_episode_are_refused() {
                 .to_owned()
         )
     );
+}
+
+// A movie's job: whatever the names say, every subtitle is on the movie's one
+// episode (the movie's candidates all belong to it), numbered
+// as the job says, with no mapping, season mark or season total looked at.
+#[test]
+fn every_subtitle_of_a_movies_package_is_on_the_movie_whatever_its_name_says() {
+    let mut case = Case::new(
+        "극장판",
+        vec![
+            "Movie.ass",
+            "Movie S02E05.srt",
+            "Movie - 07.smi",
+            "Movie.TTF",
+            "읽어주세요.txt",
+        ],
+    );
+    case.season = 0;
+    case.movie = Some(1);
+    // A mapping and a total that would move or refuse the numbers of a
+    // season are not applied to a movie.
+    case.mapping = Some(offset(-12));
+    case.total = Some(1);
+    let planned = case.plan();
+
+    assert!(planned.missing.is_empty());
+    let placed: Vec<_> = planned
+        .rows
+        .iter()
+        .map(|r| (r.kind, episode(r), r.placed.as_ref().map(|p| p.assignment)))
+        .collect();
+    assert_eq!(
+        placed,
+        vec![
+            (AssetKind::Subtitle, Some(1), Some(Assignment::Explicit)),
+            (AssetKind::Subtitle, Some(1), Some(Assignment::Explicit)),
+            (AssetKind::Subtitle, Some(1), Some(Assignment::Explicit)),
+            (AssetKind::Font, None, None),
+            (AssetKind::Attachment, None, None),
+        ]
+    );
+    // The movie is the candidate's, and one format of it is applied.
+    assert!(planned.rows[..3]
+        .iter()
+        .all(|r| r.anissia_episode.as_deref() == Some("극장판") && r.question.is_none()));
+    let applied: Vec<usize> = planned
+        .rows
+        .iter()
+        .filter(|r| r.action == PlanAction::Apply)
+        .map(|r| r.file)
+        .collect();
+    assert_eq!(applied, [0]);
+}
+
+#[test]
+fn a_movies_upload_puts_every_subtitle_on_the_movie_and_asks_about_none() {
+    let mut case = Case::new("1", vec!["no number.ass", "Show S03E04.srt", "a - 12.smi"]);
+    case.season = 0;
+    case.movie = Some(1);
+    let planned = case.named();
+
+    assert_eq!(
+        named_rows(&planned),
+        vec![
+            (
+                Some(1),
+                Some(Assignment::Explicit),
+                PlanAction::Apply,
+                false
+            ),
+            (
+                Some(1),
+                Some(Assignment::Explicit),
+                PlanAction::Store,
+                false
+            ),
+            (
+                Some(1),
+                Some(Assignment::Explicit),
+                PlanAction::Store,
+                false
+            ),
+        ]
+    );
+}
+
+#[test]
+fn a_movies_alternatives_of_one_format_are_asked_about_as_an_episodes_are() {
+    let mut case = Case::new("1", vec!["a.ass", "b.ass"]);
+    case.season = 0;
+    case.movie = Some(1);
+    case.sha = vec!["1".repeat(64), "2".repeat(64)];
+    let planned = case.plan();
+    assert!(planned
+        .rows
+        .iter()
+        .all(|r| r.action == PlanAction::Apply && r.question.is_some()));
 }

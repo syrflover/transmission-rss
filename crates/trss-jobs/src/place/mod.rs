@@ -429,13 +429,15 @@ impl Placer {
         let id = job.to_owned();
         let rows = self.read(move |c| records::plan(c, &id)).await?;
         let id = job.to_owned();
-        let origin = self
-            .read(move |c| records::job_facts(c, &id))
-            .await?
-            .map(|f| f.origin);
-        // A received candidate no file of whose package is its own.
+        let facts = self.read(move |c| records::job_facts(c, &id)).await?;
+        let movie = facts.as_ref().and_then(|f| f.movie);
+        let origin = facts.map(|f| f.origin);
+        // A received candidate no file of whose package is its own. A
+        // movie's candidates all belong to the movie, which the post's first
+        // stands for.
         let missing = match origin.as_deref() {
             Some(UPLOAD | FIND) | None => None,
+            Some(_) if movie.is_some() => None,
             Some(_) if rows.is_empty() => None,
             Some(_) => self
                 .views
@@ -776,18 +778,26 @@ impl Placer {
                 continue;
             }
             if mappings.is_none() {
-                mappings = Some(
-                    self.follow
+                // A movie has no episode mapping or season total: its one
+                // episode is the movie.
+                mappings = Some(match facts.movie {
+                    Some(_) => HashMap::new(),
+                    None => self
+                        .follow
                         .mappings(work_id, season)
                         .await
                         .map_err(follow_error)?,
-                );
-                total = self
-                    .follow
-                    .season_facts(work_id, season)
-                    .await
-                    .map_err(follow_error)?
-                    .total;
+                });
+                total = match facts.movie {
+                    Some(_) => None,
+                    None => {
+                        self.follow
+                            .season_facts(work_id, season)
+                            .await
+                            .map_err(follow_error)?
+                            .total
+                    }
+                };
                 let wid = work_id.to_owned();
                 order = self.read(move |c| records::format_order(c, &wid)).await?;
             }
@@ -822,6 +832,7 @@ impl Placer {
                 order: &order,
                 follow: facts.origin == AUTO,
                 sha256: &sha256,
+                movie: facts.movie,
             };
             // A person's upload or find names no episode: its files go by
             // their names, for the person to confirm.

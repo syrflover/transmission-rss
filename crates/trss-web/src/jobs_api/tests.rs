@@ -189,6 +189,7 @@ async fn job_in(
                 origin: "pick".into(),
                 work_id: Some("w1".into()),
                 season: Some(1),
+                movie: None,
                 anime_no: Some(ANIME),
                 source_id: Some("s1".into()),
                 creator: Some("에루샤".into()),
@@ -383,6 +384,7 @@ async fn a_job_tells_its_episodes_as_runs_and_shown_without_leading_zeros() {
                 origin: "pick".into(),
                 work_id: Some("w1".into()),
                 season: Some(1),
+                movie: None,
                 anime_no: Some(ANIME),
                 source_id: Some("s1".into()),
                 creator: Some("에루샤".into()),
@@ -589,6 +591,7 @@ async fn a_tistory_receipt_shows_its_format_and_failures_by_class_and_no_signed_
                 origin: "pick".into(),
                 work_id: Some("w1".into()),
                 season: Some(1),
+                movie: None,
                 anime_no: Some(ANIME),
                 source_id: Some("s1".into()),
                 creator: Some("에루샤".into()),
@@ -671,6 +674,7 @@ async fn an_automatic_revision_of_a_named_subtitle_says_so_with_no_earlier_job()
                 origin: "auto".into(),
                 work_id: Some("w1".into()),
                 season: Some(1),
+                movie: None,
                 anime_no: Some(ANIME),
                 source_id: Some("s1".into()),
                 creator: Some("에루샤".into()),
@@ -983,4 +987,134 @@ async fn each_received_archive_says_what_came_of_unpacking_it() {
     // Not tried yet: nothing (what each state is, and the tries, is tested in
     // trss-jobs).
     assert_eq!(unpack("later.7z"), Value::Null);
+}
+
+/// A movie-only work `m1` (season 0, episode 1, `Movie.mkv` directly in its
+/// folder) linked to anime [`ANIME`] through its movie link.
+async fn linked_movie(state: &AppState) {
+    linked_season(state).await;
+    sql(
+        state,
+        "INSERT INTO works (id, watch_folder_id, dir_name) VALUES ('m1', 'f1', 'Movie');
+         INSERT INTO seasons (work_id, number) VALUES ('m1', 0);
+         INSERT INTO episodes (work_id, season, episode) VALUES ('m1', 0, '1');
+         INSERT INTO media_files (work_id, path, season, episode, kind)
+             VALUES ('m1', 'Movie.mkv', 0, '1', 'video');
+         INSERT INTO movie_anissia (work_id, episode, anime_no, version) VALUES ('m1', 1, 3424, 1);",
+    )
+    .await;
+}
+
+fn pick_movie(id: &str, season: u32, movie: u32, candidates: &[i64]) -> Value {
+    json!({ "id": id, "work_id": "m1", "season": season, "movie": movie, "candidates": candidates })
+}
+
+#[tokio::test]
+async fn a_pick_for_a_movie_makes_a_job_that_says_it_is_the_movies() {
+    let (state, router) = app();
+    linked_movie(&state).await;
+
+    // Whatever the candidates' episode text, they belong to the movie.
+    let (status, made) = call(
+        &router,
+        Method::POST,
+        "/api/subtitle-jobs",
+        Some(pick_movie("mv1", 0, 1, &[1, 3])),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{made}");
+    let id = made["id"].as_str().unwrap().to_owned();
+    let (status, detail) = get(&router, &format!("/api/subtitle-jobs/{id}")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        (detail["season"].as_i64(), detail["movie"].as_bool()),
+        (Some(0), Some(true))
+    );
+    assert_eq!(detail["episodes"], json!(["1", "3"]));
+    // The title is the movie-only work's: its movie's Anissia title.
+    assert_eq!(detail["title"], "작품");
+    // A season's job says it is not a movie's.
+    let (_, season_job) = call(
+        &router,
+        Method::POST,
+        "/api/subtitle-jobs",
+        Some(pick("sj1", &[2])),
+    )
+    .await;
+    let (_, season_detail) = get(
+        &router,
+        &format!("/api/subtitle-jobs/{}", season_job["id"].as_str().unwrap()),
+    )
+    .await;
+    assert_eq!(season_detail["movie"], false);
+
+    // The same request again answers the same job.
+    let (status, again) = call(
+        &router,
+        Method::POST,
+        "/api/subtitle-jobs",
+        Some(pick_movie("mv1", 0, 1, &[1, 3])),
+    )
+    .await;
+    assert_eq!(
+        (status, again["id"].as_str()),
+        (StatusCode::OK, Some(id.as_str()))
+    );
+}
+
+#[tokio::test]
+async fn a_pick_for_a_movie_is_refused_when_the_movie_is_not_the_works_or_not_linked() {
+    let (state, router) = app();
+    linked_movie(&state).await;
+    sql(
+        &state,
+        "INSERT INTO works (id, watch_folder_id, dir_name) VALUES ('m2', 'f1', 'Other');
+         INSERT INTO seasons (work_id, number) VALUES ('m2', 0);
+         INSERT INTO episodes (work_id, season, episode) VALUES ('m2', 0, '1');
+         INSERT INTO media_files (work_id, path, season, episode, kind)
+             VALUES ('m2', 'Other.mkv', 0, '1', 'video');",
+    )
+    .await;
+    let post = |body: Value| {
+        let router = router.clone();
+        async move { call(&router, Method::POST, "/api/subtitle-jobs", Some(body)).await }
+    };
+
+    // A movie is of season 0 only.
+    let (status, _) = post(pick_movie("e1", 1, 1, &[1])).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    // An episode the work's season 0 does not have, and a work with no season 0.
+    let (status, _) = post(pick_movie("e2", 0, 2, &[1])).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, _) = post(json!({
+        "id": "e3", "work_id": "w1", "season": 0, "movie": 1, "candidates": [1]
+    }))
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    // A movie linked to no anime has no candidates to pick.
+    let (status, refused) = post(json!({
+        "id": "e4", "work_id": "m2", "season": 0, "movie": 1, "candidates": [1]
+    }))
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+    // Candidates of another anime are not the movie's.
+    let (status, _) = post(pick_movie("e5", 0, 1, &[5])).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn a_find_job_is_refused_for_a_movie() {
+    let (state, router) = app();
+    linked_movie(&state).await;
+    let (status, refused) = call(
+        &router,
+        Method::POST,
+        "/api/subtitle-jobs/find",
+        Some(json!({ "id": "f1", "work_id": "m1", "season": 0, "movie": 1, "creator": "s1" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+    assert_eq!(refused["message"], "극장판은 직접 찾기를 쓸 수 없어요.");
+    let (_, list) = get(&router, "/api/subtitle-jobs").await;
+    assert_eq!(list["waiting"].as_array().map_or(0, Vec::len), 0);
 }

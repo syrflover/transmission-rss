@@ -64,6 +64,7 @@ impl Setup {
             origin: "pick".to_owned(),
             work_id: Some("w1".to_owned()),
             season: Some(1),
+            movie: None,
             anime_no: Some(3424),
             source_id: None,
             creator: Some("제작자".to_owned()),

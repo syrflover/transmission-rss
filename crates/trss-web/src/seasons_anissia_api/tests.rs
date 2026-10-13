@@ -1122,3 +1122,244 @@ async fn the_refresh_command_is_accepted_for_a_linked_anime_only() {
         .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
 }
+
+// --- a movie's link ------------------------------------------------------------
+
+impl App {
+    /// A movie-only work `Lara Movie` (season 0, episode 1, `Lara Movie.mkv` in
+    /// its folder), in its own watch folder.
+    async fn movie_work(&self) -> String {
+        let scan = Scan {
+            works: vec![WorkRead::Read(ScannedWork {
+                dir_name: "Lara Movie".into(),
+                seasons: BTreeSet::from([0]),
+                files: vec![trss_library::discovery::EpisodeFile {
+                    path: "Lara Movie.mkv".into(),
+                    kind: trss_library::discovery::FileKind::Video,
+                    season: 0,
+                    episode: "1".into(),
+                }],
+                unrecognized: Vec::new(),
+            })],
+        };
+        let folders = self.state.library.folders().await.unwrap();
+        let (folder, _) = self
+            .state
+            .library
+            .add_folder("/m".into(), scan, 1, &folders)
+            .await
+            .unwrap();
+        self.state
+            .library
+            .works(&folder.id)
+            .await
+            .unwrap()
+            .remove(0)
+            .id
+    }
+
+    fn movie_path(work: &str, episode: u32, tail: &str) -> String {
+        format!("/api/library/works/{work}/movies/{episode}/anissia{tail}")
+    }
+}
+
+#[tokio::test]
+async fn a_movie_is_linked_by_its_own_version_and_the_work_detail_shows_it() {
+    let app = App::new().await;
+    app.schedule_3320();
+    let movie = app.movie_work().await;
+
+    let (status, shown) = app
+        .call(Method::GET, &App::movie_path(&movie, 1, ""), None)
+        .await;
+    assert_eq!(status, StatusCode::OK, "{shown}");
+    assert_eq!(
+        (shown["episode"].as_i64(), shown["version"].as_i64()),
+        (Some(1), Some(0))
+    );
+    assert_eq!(shown["anime"], Value::Null);
+    // The folder name is the title to read when writing a search.
+    assert_eq!(
+        shown["reference_titles"],
+        json!([{ "kind": "folder", "title": "Lara Movie" }])
+    );
+    let detail = |work: String| {
+        let app = &app;
+        async move {
+            let (status, body) = app
+                .call(Method::GET, &format!("/api/library/works/{work}"), None)
+                .await;
+            assert_eq!(status, StatusCode::OK, "{body}");
+            body
+        }
+    };
+    let before = detail(movie.clone()).await;
+    assert_eq!(before["movie_only"], true);
+    assert_eq!(before["seasons"][0]["number"], 0);
+    assert_eq!(before["seasons"][0]["episodes"][0]["movie"], Value::Null);
+
+    let (status, linked) = app
+        .call(
+            Method::POST,
+            &App::movie_path(&movie, 1, "/link"),
+            Some(json!({ "version": 0, "anime_no": 3320, "week": 3 })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{linked}");
+    assert_eq!(linked["version"], 1);
+    assert_eq!(linked["anime"]["anime_no"], 3320);
+    assert_eq!(linked["anime"]["subject"], "이번 분기 작품");
+    // The worker is asked to read the anime's lines, as a season's link does.
+    assert!(app
+        .state
+        .commands
+        .latest_for_subjects("anissia_captions", vec!["3320".into()])
+        .await
+        .unwrap()
+        .contains_key("3320"));
+
+    // The detail: the movie-only mark, the work's title from the movie, and the
+    // link on the season 0 episode, which no other episode carries.
+    let after = detail(movie.clone()).await;
+    assert_eq!(after["title"], "이번 분기 작품");
+    assert_eq!(
+        after["seasons"][0]["episodes"][0]["movie"],
+        json!({ "anime_no": 3320, "title": "이번 분기 작품" })
+    );
+    let series = detail(app.work.clone()).await;
+    assert_eq!(series["movie_only"], false);
+
+    // A late save from the old version is a conflict with the current link.
+    let (status, late) = app
+        .call(
+            Method::POST,
+            &App::movie_path(&movie, 1, "/link"),
+            Some(json!({ "version": 0, "anime_no": null })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{late}");
+    assert_eq!(late["current"]["version"], 1);
+    assert_eq!(late["current"]["anime"]["anime_no"], 3320);
+    // Cutting from the current version works.
+    let (status, cut) = app
+        .call(
+            Method::POST,
+            &App::movie_path(&movie, 1, "/link"),
+            Some(json!({ "version": 1, "anime_no": null })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{cut}");
+    assert_eq!(
+        (cut["version"].as_i64(), &cut["anime"]),
+        (Some(2), &Value::Null)
+    );
+}
+
+#[tokio::test]
+async fn a_movie_the_work_does_not_have_is_not_found_in_every_route() {
+    let app = App::new().await;
+    app.catalogue();
+    let movie = app.movie_work().await;
+    for (method, path, body) in [
+        (Method::GET, App::movie_path(&movie, 2, ""), None),
+        (Method::GET, App::movie_path(&app.work, 1, ""), None),
+        (
+            Method::POST,
+            App::movie_path(&movie, 2, "/search"),
+            Some(json!({ "q": "라라" })),
+        ),
+        (
+            Method::POST,
+            App::movie_path(&app.work, 1, "/link"),
+            Some(json!({ "version": 0, "anime_no": null })),
+        ),
+        (Method::GET, App::movie_path(&movie, 2, "/candidates"), None),
+    ] {
+        let (status, body) = app.call(method, &path, body).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{path}: {body}");
+    }
+    assert_eq!(app.requests_for("/anime/"), 0);
+}
+
+#[tokio::test]
+async fn a_movie_is_searched_for_like_a_season_and_a_search_without_a_query_is_refused() {
+    let app = App::new().await;
+    app.catalogue();
+    let movie = app.movie_work().await;
+    let (status, found) = app
+        .call(
+            Method::POST,
+            &App::movie_path(&movie, 1, "/search"),
+            Some(json!({ "q": "Sayonara Lara" })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{found}");
+    assert_eq!(numbers(&found), [2969]);
+    let (status, _) = app
+        .call(
+            Method::POST,
+            &App::movie_path(&movie, 1, "/search"),
+            Some(json!({ "q": " " })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn every_candidate_of_a_movie_belongs_to_the_movie_whatever_its_episode_text_says() {
+    let app = App::new().await;
+    app.schedule_3320();
+    let movie = app.movie_work().await;
+    let (status, none) = app
+        .call(
+            Method::GET,
+            &App::movie_path(&movie, 1, "/candidates"),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{none}");
+    assert_eq!(
+        (none["episode"].as_i64(), &none["anime_no"]),
+        (Some(1), &Value::Null)
+    );
+    assert_eq!(none["candidates"], json!([]));
+
+    app.fake.set_recent(vec![app.fake.recent_line(
+        3320,
+        "극장판",
+        "2026-10-02T11:00:00",
+        "https://blog.test/a",
+        "에루샤",
+    )]);
+    app.observer().run_due().await.unwrap();
+    app.call(
+        Method::POST,
+        &App::movie_path(&movie, 1, "/link"),
+        Some(json!({ "version": 0, "anime_no": 3320, "week": 3 })),
+    )
+    .await;
+
+    let (status, shown) = app
+        .call(
+            Method::GET,
+            &App::movie_path(&movie, 1, "/candidates"),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{shown}");
+    assert_eq!(shown["anime_no"], 3320);
+    let rows = shown["candidates"].as_array().unwrap();
+    assert_eq!(rows.len(), 1);
+    // The episode text stays as Anissia wrote it; the movie is a field of its own.
+    assert_eq!(rows[0]["episode"], "극장판");
+    assert_eq!(rows[0]["movie_episode"], 1);
+    assert_eq!(shown["max_job_candidates"], crate::jobs_api::MAX_CANDIDATES);
+    // A movie has no episode mapping to show.
+    assert!(shown.get("mappings").is_none());
+    // A season's candidates carry no `movie_episode`.
+    assert!(app.candidates(1).await["candidates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|c| c.get("movie_episode").is_none()));
+}

@@ -210,6 +210,7 @@ impl Setup {
             origin: "pick".to_owned(),
             work_id: Some(WORK.to_owned()),
             season: Some(1),
+            movie: None,
             anime_no: Some(7),
             source_id: None,
             creator: Some(CREATOR.to_owned()),

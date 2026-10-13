@@ -34,9 +34,24 @@
 //! while a season links it ([`SeasonStore::next_refresh`]); a finished one only
 //! when the user asks.
 
+/// The SQL condition for a work `w` that is movie-only (a video of season 0
+/// directly in its folder, and no season from 1 on), as a literal so a
+/// `concat!` can build with it; see [`movie::MOVIE_ONLY`].
+macro_rules! movie_only {
+    () => {
+        "(EXISTS (SELECT 1 FROM media_files mo
+                   WHERE mo.work_id = w.id AND mo.season = 0 AND mo.kind = 'video'
+                     AND instr(mo.path, '/') = 0)
+          AND NOT EXISTS (SELECT 1 FROM seasons so WHERE so.work_id = w.id AND so.number >= 1))"
+    };
+}
+
 pub mod anissia;
 #[cfg(test)]
 mod anissia_tests;
+pub mod movie;
+#[cfg(test)]
+mod movie_tests;
 mod repo;
 #[cfg(test)]
 mod tests;
@@ -238,7 +253,8 @@ impl SeasonStore {
     }
 
     /// The lowest-numbered recorded season that is not season 0 (specials) of
-    /// the work: the season the automatic search is for.
+    /// the work, or season 0 for a movie-only work ([`movie`]): the season the
+    /// automatic search is for.
     pub async fn first_season(&self, work_id: &str) -> Result<Option<u32>, SeasonError> {
         let id = work_id.to_owned();
         self.db.run(move |c| Ok(repo::first_season(c, &id)?)).await
@@ -350,4 +366,5 @@ impl SeasonStore {
 }
 
 pub(crate) use anissia::{follow_subscriptions, merge_links as merge_anissia_links};
+pub(crate) use movie::merge_links as merge_movie_links;
 pub(crate) use repo::{cover_target, facts as library_facts, merge_links};

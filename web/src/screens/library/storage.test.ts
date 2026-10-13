@@ -59,6 +59,9 @@ test("an episode is `2화`, with its season only when there are several, and `�
   assert.equal(episodeText(entry("a", { season: 2, episode: 3 }), 2), "시즌 2 3화");
   assert.equal(episodeText(entry("a", { episode: null }), 1), NO_EPISODE);
   assert.equal(episodeText(entry("a", { episode: null }), 3), NO_EPISODE);
+  // The one episode of a movie-only work is `본편`, not `1화` or `시즌 0 1화`.
+  assert.equal(episodeText(entry("a", { season: 0, episode: 1 }), 1, true), "본편");
+  assert.equal(episodeText(entry("a", { season: 0, episode: null }), 1, true), NO_EPISODE);
 });
 
 test("a creator that is not known reads `제작자 알 수 없음`", () => {

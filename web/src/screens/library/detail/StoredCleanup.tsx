@@ -53,11 +53,14 @@ export function StoredCleanup({
   workId,
   storage,
   seasons,
+  movieOnly,
   onRefresh,
 }: {
   workId: string;
   storage: WorkStorage;
   seasons: number;
+  /** The work is a movie and nothing else: its one episode is `본편`. */
+  movieOnly: boolean;
   /** Reads the work again and shows it. */
   onRefresh: () => Promise<void>;
 }) {
@@ -136,6 +139,7 @@ export function StoredCleanup({
                   entry={entry}
                   all={storage.cleanable}
                   seasons={seasons}
+                  movieOnly={movieOnly}
                   confirming={open?.entry.id === entry.id ? open : null}
                   onAsk={() => {
                     setNotice(null);
@@ -196,6 +200,7 @@ function EntryRow({
   entry,
   all,
   seasons,
+  movieOnly,
   confirming,
   onAsk,
   onConfirming,
@@ -208,6 +213,7 @@ function EntryRow({
   entry: CleanableEntry;
   all: readonly CleanableEntry[];
   seasons: number;
+  movieOnly: boolean;
   confirming: Confirming | null;
   onAsk: () => void;
   onConfirming: (next: Confirming) => void;
@@ -217,7 +223,7 @@ function EntryRow({
   onSent: (sent: SentClean) => void;
   onRefresh: () => Promise<void>;
 }) {
-  const facts = [episodeText(entry, seasons), creatorText(entry.creator), sizeText(entry.size), receivedText(entry, all)];
+  const facts = [episodeText(entry, seasons, movieOnly), creatorText(entry.creator), sizeText(entry.size), receivedText(entry, all)];
   return (
     <div className={rowBox}>
       <span title={entry.name} className="font-mono text-[12px] leading-snug [overflow-wrap:anywhere]">

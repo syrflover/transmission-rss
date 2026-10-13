@@ -191,6 +191,8 @@ const MIGRATIONS: &[Migration] = &[
     Migration::Sql(include_str!("../migrations/jobs/unpack_retry.sql")),
     // 62: a video a person is asked about, its size and time as the scan saw it, and the person's `확인함` on it
     Migration::Sql(include_str!("../migrations/library/video_check.sql")),
+    // 63: a movie's Anissia link, a movie-only work's automatic AniList search, the episode a movie job places on
+    Migration::Sql(include_str!("../migrations/library/movies.sql")),
 ];
 
 #[derive(Debug, thiserror::Error)]
@@ -3301,6 +3303,124 @@ mod tests {
                 row("r2", "explicit", None),
             ]
         );
+    }
+
+    const BEFORE_MOVIES: usize = 62;
+
+    #[tokio::test]
+    async fn a_database_from_before_movies_keeps_its_rows_and_gets_movie_links_and_the_job_column()
+    {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("app.db");
+        {
+            // A database as the build with 62 migrations left it: a work with a
+            // season, its link to an Anissia anime, and a finished job.
+            let conn = database_at(&path, BEFORE_MOVIES);
+            conn.execute_batch(
+                "INSERT INTO watch_folders (id, path, created_at) VALUES ('f1', '/media', 1);
+                 INSERT INTO works (id, watch_folder_id, dir_name) VALUES ('w1', 'f1', 'Show');
+                 INSERT INTO seasons (work_id, number) VALUES ('w1', 1);
+                 INSERT INTO episodes (work_id, season, episode) VALUES ('w1', 1, '01');
+                 INSERT INTO media_files (work_id, path, season, episode, kind, added_at)
+                     VALUES ('w1', 'Season 01/e01.mkv', 1, '01', 'video', 5);
+                 INSERT INTO anissia_anime (anime_no, subject, week, status, fetched_at)
+                     VALUES (7, '하나', 1, 'END', 10);
+                 INSERT INTO season_anissia (work_id, season, anime_no, version)
+                     VALUES ('w1', 1, 7, 2);
+                 INSERT INTO subtitle_jobs
+                     (id, command_id, request, origin, work_id, season, anime_no, state,
+                      created_at, updated_at, state_at)
+                     VALUES ('j1', 'c1', '{}', 'pick', 'w1', 1, 7, 'done', 1, 1, 1);",
+            )
+            .unwrap();
+        }
+
+        let db = Db::open(&path).await.unwrap();
+
+        assert_eq!(version_of(&db).await, MIGRATIONS.len());
+        db.run::<_, DbError, _>(|c| {
+            let count = |c: &Connection, sql: &str| c.query_row(sql, [], |r| r.get::<_, i64>(0));
+            // What was there is there, and no job asks about the season-0 info.
+            assert_eq!(count(c, "SELECT count(*) FROM media_files")?, 1);
+            assert_eq!(
+                count(c, "SELECT anime_no FROM season_anissia WHERE work_id = 'w1'")?,
+                7
+            );
+            assert_eq!(
+                count(c, "SELECT count(*) FROM season_info WHERE season = 0")?,
+                0
+            );
+            assert_eq!(count(c, "SELECT count(*) FROM movie_anissia")?, 0);
+            // A job of an earlier build is no movie's.
+            assert_eq!(
+                count(c, "SELECT count(*) FROM subtitle_jobs WHERE movie IS NULL")?,
+                1
+            );
+
+            // A movie link is whole episodes from 1 with versions from 1, and
+            // refers to an anime the app knows.
+            let write = |sql: &str| c.execute(sql, []).is_err();
+            assert!(write(
+                "INSERT INTO movie_anissia (work_id, episode, anime_no, version) VALUES ('w1', 0, 7, 1)"
+            ));
+            assert!(write(
+                "INSERT INTO movie_anissia (work_id, episode, anime_no, version) VALUES ('w1', 1, 7, 0)"
+            ));
+            assert!(write(
+                "INSERT INTO movie_anissia (work_id, episode, anime_no, version) VALUES ('w1', 1, 99, 1)"
+            ));
+            assert!(write("UPDATE subtitle_jobs SET movie = 0"));
+            c.execute_batch(
+                "INSERT INTO movie_anissia (work_id, episode, anime_no, version) VALUES ('w1', 1, 7, 1);
+                 UPDATE subtitle_jobs SET movie = 1;",
+            )?;
+            // The link goes with the work.
+            c.execute_batch("DELETE FROM works WHERE id = 'w1'")?;
+            assert_eq!(count(c, "SELECT count(*) FROM movie_anissia")?, 0);
+            Ok(())
+        })
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_video_directly_in_a_work_folder_in_season_0_asks_for_the_automatic_search() {
+        let db = Db::open_blocking(":memory:").unwrap();
+        db.run::<_, DbError, _>(|c| {
+            c.execute_batch(
+                "INSERT INTO watch_folders (id, path, created_at) VALUES ('f1', '/media', 1);
+                 INSERT INTO works (id, watch_folder_id, dir_name)
+                     VALUES ('w1', 'f1', 'Movie'), ('w2', 'f1', 'Show'), ('w3', 'f1', 'Again');
+                 INSERT INTO seasons (work_id, number)
+                     VALUES ('w1', 0), ('w2', 0), ('w3', 0);
+                 INSERT INTO episodes (work_id, season, episode)
+                     VALUES ('w1', 0, '1'), ('w2', 0, '1'), ('w3', 0, '1');
+                 INSERT INTO season_info (work_id, season, version, origin)
+                     VALUES ('w3', 0, 4, 'user');
+                 INSERT INTO media_files (work_id, path, season, episode, kind)
+                     VALUES ('w1', 'Movie.ass', 0, '1', 'subtitle'),
+                            ('w2', 'Season 00/Show S00E01.mkv', 0, '1', 'video'),
+                            ('w3', 'Again.mkv', 0, '1', 'video');
+                 INSERT INTO media_files (work_id, path, season, episode, kind)
+                     VALUES ('w1', 'Movie.mkv', 0, '1', 'video');",
+            )?;
+            let infos: Vec<(String, i64, i64, Option<String>)> = c
+                .prepare("SELECT work_id, season, version, job FROM season_info ORDER BY work_id")?
+                .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
+                .collect::<rusqlite::Result<_>>()?;
+            // The movie only gets the search; a Season 00 folder's video, a
+            // subtitle and a work that has its info already get none.
+            assert_eq!(
+                infos,
+                [
+                    ("w1".to_owned(), 0, 1, Some("search".to_owned())),
+                    ("w3".to_owned(), 0, 4, None),
+                ]
+            );
+            Ok(())
+        })
+        .await
+        .unwrap();
     }
 
     #[tokio::test]

@@ -18,7 +18,10 @@
 use std::collections::HashMap;
 
 use rusqlite::{params, OptionalExtension, TransactionBehavior};
-use trss_library::store::seasons::anissia::{self as season_anissia, AnissiaLink};
+use trss_library::store::seasons::{
+    anissia::{self as season_anissia, AnissiaLink},
+    movie::{self, MovieLink},
+};
 
 use crate::store::{
     anissia,
@@ -48,6 +51,26 @@ pub enum SeasonAnimeError {
     /// current link.
     #[error("the season's Anissia link was changed by someone else")]
     Conflict(Box<AnissiaLink>),
+}
+
+/// Why a movie's Anissia anime was not changed. Nothing was changed.
+#[derive(Debug, thiserror::Error)]
+pub enum MovieAnimeError {
+    #[error(transparent)]
+    Db(#[from] DbError),
+    /// The library has no such work.
+    #[error("no such work")]
+    NoWork,
+    /// The link is not at the version the change was made from. Carries the
+    /// current link.
+    #[error("the movie's Anissia link was changed by someone else")]
+    Conflict(Box<MovieLink>),
+}
+
+impl From<rusqlite::Error> for MovieAnimeError {
+    fn from(e: rusqlite::Error) -> Self {
+        MovieAnimeError::Db(DbError::Sqlite(e))
+    }
 }
 
 /// The subscription that holds a season, as the work detail shows it.
@@ -137,6 +160,43 @@ impl ChannelStore {
                 }
                 let link =
                     season_anissia::set_in(&tx, &work_id, season, anime.map(|a| a.anime_no))?;
+                tx.commit()?;
+                Ok(link)
+            })
+            .await
+    }
+
+    /// Makes `anime` (or, with `None`, nothing) the Anissia anime of movie
+    /// `episode` (a season 0 episode) of work `work_id`, as a change made from
+    /// the link's `expected` version. `anime` is stored as the anime's
+    /// snapshot. No subscription holds a movie, so only the version can refuse
+    /// the change: [`MovieAnimeError::Conflict`]. The caller checks that the
+    /// movie is one the work has.
+    pub async fn set_movie_anime(
+        &self,
+        work_id: &str,
+        episode: u32,
+        expected: i64,
+        anime: Option<Anime>,
+    ) -> Result<MovieLink, MovieAnimeError> {
+        let work_id = work_id.to_owned();
+        self.db
+            .run(move |conn| {
+                let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+                let work_exists: bool = tx
+                    .prepare_cached("SELECT EXISTS (SELECT 1 FROM works WHERE id = ?1)")?
+                    .query_row([&work_id], |r| r.get(0))?;
+                if !work_exists {
+                    return Err(MovieAnimeError::NoWork);
+                }
+                let current = movie::link_in(&tx, &work_id, episode)?;
+                if current.version != expected {
+                    return Err(MovieAnimeError::Conflict(Box::new(current)));
+                }
+                if let Some(anime) = &anime {
+                    keep_snapshot(&tx, anime)?;
+                }
+                let link = movie::set_in(&tx, &work_id, episode, anime.map(|a| a.anime_no))?;
                 tx.commit()?;
                 Ok(link)
             })

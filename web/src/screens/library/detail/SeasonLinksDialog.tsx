@@ -49,6 +49,7 @@ export function SeasonLinksDialog({
   workId,
   workName,
   info,
+  movie = false,
   open,
   onOpenChange,
   onChanged,
@@ -56,6 +57,8 @@ export function SeasonLinksDialog({
   workId: string;
   workName: string;
   info: SeasonInfo;
+  /** The season is a movie-only work's season 0: the dialog speaks of the 극장판. */
+  movie?: boolean;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onChanged: (info: SeasonInfo) => void;
@@ -124,7 +127,7 @@ export function SeasonLinksDialog({
           )}
         >
           <div className="flex items-center gap-2 border-b border-hairline-soft py-2 pr-2 pl-4">
-            <Dialog.Title className="min-w-0 flex-1 truncate text-[17px] font-bold">시즌 {info.season} AniList 연결</Dialog.Title>
+            <Dialog.Title className="min-w-0 flex-1 truncate text-[17px] font-bold">{movie ? "극장판" : `시즌 ${info.season}`} AniList 연결</Dialog.Title>
             <Dialog.Close
               aria-label="닫기"
               className="inline-flex size-11 flex-none items-center justify-center rounded-full text-text-secondary hover:bg-surface-2 hover:text-text-primary"

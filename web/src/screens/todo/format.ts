@@ -1,5 +1,6 @@
 import type { FailureClass, FileFormat, JobRow, JobState, ItemState, UploadSummary, Wait } from "./api";
 import { sizeText } from "../../lib/size.ts";
+import { MOVIE_LABEL } from "../library/detail/movie.ts";
 import { findShown } from "./findState.ts";
 
 export { sizeText };
@@ -34,14 +35,17 @@ export function uploadKept(upload: Pick<UploadSummary, "subtitles" | "fonts" | "
   return parts.length > 0 ? parts.join(" · ") : null;
 }
 
-/** The episodes of a job or an item as the server shows them (`episodes_shown`), whole, for the expanded row (`11, 12, 14화`). */
-export function episodeList(shown: readonly string[]): string {
-  return `${shown.join(", ")}화`;
+/**
+ * The episodes of a job or an item as the server shows them (`episodes_shown`), whole, for the expanded row
+ * (`11, 12, 14화`). A movie's job is named `본편`, not by the episode text its candidates carry.
+ */
+export function episodeList(shown: readonly string[], movie = false): string {
+  return movie ? MOVIE_LABEL : `${shown.join(", ")}화`;
 }
 
-/** The label of a done, failed or waiting item, from its episode as the server shows it: `11` is `11화`. */
-export function episodeName(shown: string): string {
-  return `${shown}화`;
+/** The label of a done, failed or waiting item, from its episode as the server shows it: `11` is `11화`; a movie's is `본편`. */
+export function episodeName(shown: string, movie = false): string {
+  return movie ? MOVIE_LABEL : `${shown}화`;
 }
 
 /**

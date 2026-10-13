@@ -57,16 +57,24 @@ export function formatRanges(ranges: EpisodeRange[]): string {
   return ranges.map(({ text }) => text).join("·");
 }
 
-/** The video line: `영상 1–12화`, `영상 없음`, or `폴더 없음` when the work's folder is gone. */
-export function videoLine(work: LibraryWork): string {
-  if (work.missing) return "폴더 없음";
-  return work.video.length === 0 ? "영상 없음" : `영상 ${formatRanges(work.video)}화`;
+/** What the line says of the episodes held: a movie-only work's one episode is its movie, `본편`. */
+function heldText(work: LibraryWork, ranges: EpisodeRange[]): string {
+  return work.movie_only ? "본편" : `${formatRanges(ranges)}화`;
 }
 
-/** The subtitle line: `자막 1–3·5–12화` or `자막 없음`; a work whose folder is gone cannot be checked. */
+/** The video line: `영상 1–12화` (`영상 본편` for a movie), `영상 없음`, or `폴더 없음` when the work's folder is gone. */
+export function videoLine(work: LibraryWork): string {
+  if (work.missing) return "폴더 없음";
+  return work.video.length === 0 ? "영상 없음" : `영상 ${heldText(work, work.video)}`;
+}
+
+/**
+ * The subtitle line: `자막 1–3·5–12화` (`자막 본편` for a movie) or `자막 없음`; a work whose folder is gone cannot be
+ * checked.
+ */
 export function subtitleLine(work: LibraryWork): string {
   if (work.missing) return "자막 확인 불가";
-  return work.subtitle.length === 0 ? "자막 없음" : `자막 ${formatRanges(work.subtitle)}화`;
+  return work.subtitle.length === 0 ? "자막 없음" : `자막 ${heldText(work, work.subtitle)}`;
 }
 
 // --- sorts and filters ----------------------------------------------------------------

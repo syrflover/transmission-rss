@@ -44,6 +44,7 @@ export function SubtitlesCard({
   workId,
   subtitles,
   season,
+  movieOnly,
   collapsible,
   onChanged,
   onOrder,
@@ -51,6 +52,8 @@ export function SubtitlesCard({
   workId: string;
   subtitles: WorkSubtitles;
   season: number;
+  /** The work is a movie and nothing else: its one episode is `본편`. */
+  movieOnly: boolean;
   collapsible: boolean;
   onChanged: () => Promise<void>;
   onOrder: (order: FormatOrder) => void;
@@ -61,7 +64,7 @@ export function SubtitlesCard({
       <OrderLine workId={workId} order={subtitles.format_order} onSaved={onOrder} />
       <div className="flex flex-col gap-3 border-t border-hairline-soft pt-3">
         {groups.length === 0 ? (
-          <p className="text-[13px] leading-relaxed text-text-muted">이 시즌에 보관한 자막이 없어요.</p>
+          <p className="text-[13px] leading-relaxed text-text-muted">이 {movieOnly ? "극장판" : "시즌"}에 보관한 자막이 없어요.</p>
         ) : (
           groups.map((group) => (
             <section key={group.creator ?? ""} className="flex flex-col gap-1.5" aria-label={groupTitle(group)}>
@@ -69,7 +72,7 @@ export function SubtitlesCard({
               <ul className="m-0 flex list-none flex-col gap-2 p-0">
                 {group.copies.map((copy) => (
                   <li key={copy.id} className="min-w-0">
-                    <CopyRow workId={workId} view={copyView(copy, group.copies)} onChanged={onChanged} />
+                    <CopyRow workId={workId} view={copyView(copy, group.copies, movieOnly)} onChanged={onChanged} />
                   </li>
                 ))}
               </ul>

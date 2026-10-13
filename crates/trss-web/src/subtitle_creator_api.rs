@@ -26,7 +26,8 @@
 //!   the app observed, or one Anissia lists now. A season with no Anissia link
 //!   answers `400` (link it first); a creator the anime does not have answers
 //!   `400`. The creator's subtitle source is made if no line of it was
-//!   observed yet.
+//!   observed yet. A movie-only work's season 0 takes the anime its movie is
+//!   linked to, and answers `400` while the movie has none.
 //! - No file is moved, renamed or received, and no job is made: a work with no
 //!   subscription gets no automatic receipt out of this.
 
@@ -40,7 +41,13 @@ use serde::{Deserialize, Serialize};
 use super::{
     seasons_anissia_api::refused_store, subscriptions_api::named_creator, ApiError, AppState,
 };
-use trss_library::store::library::{CreatorError, CreatorSet, FileCreator};
+use trss_library::{
+    discovery::MOVIE_SEASON,
+    store::library::{CreatorError, CreatorSet, FileCreator},
+};
+
+/// The episode of season 0 that a movie-only work's movie is.
+const MOVIE: u32 = 1;
 
 #[cfg(test)]
 mod tests;
@@ -100,13 +107,25 @@ fn internal(e: impl std::fmt::Display) -> ApiError {
 }
 
 /// The Anissia anime the season is linked to: the creators to name are its.
+/// A movie-only work's season 0 is its movie, which has a link of its own
+/// (`docs/adr/0018-movies-in-season-zero-with-their-own-link.md`).
 async fn season_anime(state: &AppState, work_id: &str, season: u32) -> Result<i64, ApiError> {
-    let link = state
-        .seasons
-        .store
+    let store = &state.seasons.store;
+    let link = store
         .anissia_link(work_id, season)
         .await
         .map_err(refused_store)?;
+    if season == MOVIE_SEASON
+        && store.first_season(work_id).await.map_err(refused_store)? == Some(MOVIE_SEASON)
+    {
+        let movie = store
+            .movie_link(work_id, MOVIE)
+            .await
+            .map_err(refused_store)?;
+        return movie.anime_no.ok_or_else(|| {
+            ApiError::invalid("이 극장판에 Anissia 작품을 먼저 연결해 주세요. 연결한 작품의 제작자 중에서 고를 수 있어요.")
+        });
+    }
     link.anime_no.ok_or_else(|| {
         ApiError::invalid("이 시즌에 Anissia 작품을 먼저 연결해 주세요. 연결한 작품의 제작자 중에서 고를 수 있어요.")
     })

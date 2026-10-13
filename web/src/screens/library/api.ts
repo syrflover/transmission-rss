@@ -6,6 +6,7 @@ import { forgetWeek } from "../schedule/api";
 import type { EpisodeSegment } from "../todo/episodeLine.ts";
 import type { TodoKind } from "../todo/kinds";
 import type { FormatOrder, SubtitleFormat, WorkSubtitles } from "./detail/subtitles.ts";
+import type { AnissiaTarget } from "./detail/movie.ts";
 import type { UploadLimits } from "./detail/upload.ts";
 import type { WorkStorage } from "./storage.ts";
 
@@ -51,6 +52,8 @@ export interface LibraryWork {
   watch_folder: { id: string; path: string };
   /** The highest season number recorded for the work. */
   latest_season: number | null;
+  /** The work is a movie and nothing else: its latest season is 0 and its one episode is the movie (`본편`). */
+  movie_only: boolean;
   /** Episodes of the latest season that have a video / a subtitle. */
   video: EpisodeRange[];
   subtitle: EpisodeRange[];
@@ -215,6 +218,11 @@ export interface WorkEpisode {
    * last comparison a person ended with `현재 유지` is left out while the episode has a subtitle.
    */
   stored: StoredSubtitle[];
+  /**
+   * Only on an episode of season 0: the Anissia anime its movie is linked to (`title` is `null` while the app has no
+   * snapshot of the anime), `null` while it is linked to none. Left out on the other seasons' episodes.
+   */
+  movie?: { anime_no: number; title: string | null } | null;
 }
 
 /** A stored subtitle of an episode that is not applied beside its video. */
@@ -334,11 +342,16 @@ export interface WorkDetail {
   name: string;
   /** The work title (작품명), as the library list gives it. */
   title: string;
+  /**
+   * The work is a movie and nothing else: no season folder and one video directly in the work folder. Its only
+   * season is 0 and its only episode `1` is the movie (`본편`).
+   */
+  movie_only: boolean;
   missing: boolean;
   watch_folder: { id: string; path: string };
   folder_path: string;
   added_at: number | null;
-  /** The first season's first linked AniList entry's native title. */
+  /** The first season's first linked AniList entry's native title (a movie-only work's: season 0's). */
   native_title: string | null;
   /** The subscription rules connected to a season of this work, by season. */
   subscriptions: WorkSubscription[];
@@ -561,7 +574,12 @@ export interface AnissiaHolder {
 
 export interface AnissiaLink {
   season: number;
-  /** Sent back with a change; a change from an older version is a `conflict`. A season never linked has 0. */
+  /**
+   * Set for a movie's link (`movie_link`): the movie's episode number, an episode of season 0 (`season` is 0). A
+   * movie is linked apart from the seasons, and no subscription holds it.
+   */
+  movie?: number;
+  /** Sent back with a change; a change from an older version is a `conflict`. A season or a movie never linked has 0. */
   version: number;
   anime: AnissiaAnime | null;
   /** Set while a subscription is connected to the season: the season's anime is the subscription's. */
@@ -603,16 +621,64 @@ export interface AnissiaPage {
 /** Where a picked anime came from: the server checks it against that very list. */
 export type AnissiaSource = { week: number } | { q: string; page: number };
 
-const anissiaPath = (id: string, season: number) => `${seasonPath(id, season)}/anissia`;
-
-/** Searches Anissia's full list (finished anime included) for the user's `q`, which is required. */
-export function searchAnissia(id: string, season: number, q: string, page: number, signal?: AbortSignal): Promise<AnissiaPage> {
-  return api<AnissiaPage>(`${anissiaPath(id, season)}/search`, { method: "POST", body: { q, page }, signal });
+/** A movie's link as the server answers it (`GET`, `link` and a `409`'s `current`): the movie's episode, not a season. */
+export interface MovieLinkAnswer {
+  episode: number;
+  version: number;
+  anime: AnissiaAnime | null;
+  reference_titles: ReferenceTitle[];
 }
 
-/** Links the season to `animeNo` (`null` cuts the link). */
-export function setAnissiaLink(id: string, season: number, version: number, animeNo: number | null, source?: AnissiaSource): Promise<AnissiaLink> {
-  return api<AnissiaLink>(`${anissiaPath(id, season)}/link`, { method: "POST", body: { version, anime_no: animeNo, ...source } });
+/** A link answer as the screen holds it: a season's as it is, a movie's as a link of season 0 that names its `movie`. */
+export function anissiaLinkOf(answer: AnissiaLink | MovieLinkAnswer): AnissiaLink {
+  if (!("episode" in answer)) return answer;
+  return {
+    season: 0,
+    movie: answer.episode,
+    version: answer.version,
+    anime: answer.anime,
+    subscription: null,
+    reference_titles: answer.reference_titles,
+  };
+}
+
+/** `…/seasons/{season}/anissia`, or `…/movies/{episode}/anissia` for a movie. */
+const anissiaPath = (id: string, target: AnissiaTarget) =>
+  target.kind === "season"
+    ? `${seasonPath(id, target.season)}/anissia`
+    : `/library/works/${encodeURIComponent(id)}/movies/${target.episode}/anissia`;
+
+/** A target as a cache key part: `3` for a season, `m1` for a movie. */
+const targetKey = (target: AnissiaTarget) => (target.kind === "season" ? String(target.season) : `m${target.episode}`);
+
+/** The movie's link, read now. */
+export async function loadMovieLink(id: string, episode: number, signal?: AbortSignal): Promise<AnissiaLink> {
+  return anissiaLinkOf(await api<MovieLinkAnswer>(anissiaPath(id, { kind: "movie", episode }), { signal }));
+}
+
+/** The cache key of a movie's link. */
+export const movieLinkKey = (id: string, episode: number) => `library:movie-link:${id}:${episode}`;
+
+/** Searches Anissia's full list (finished anime included) for the user's `q`, which is required. */
+export function searchAnissia(id: string, target: AnissiaTarget, q: string, page: number, signal?: AbortSignal): Promise<AnissiaPage> {
+  return api<AnissiaPage>(`${anissiaPath(id, target)}/search`, { method: "POST", body: { q, page }, signal });
+}
+
+/** Links the season or the movie to `animeNo` (`null` cuts the link). */
+export async function setAnissiaLink(
+  id: string,
+  target: AnissiaTarget,
+  version: number,
+  animeNo: number | null,
+  source?: AnissiaSource,
+): Promise<AnissiaLink> {
+  const body = { version, anime_no: animeNo, ...source };
+  return anissiaLinkOf(await api<AnissiaLink | MovieLinkAnswer>(`${anissiaPath(id, target)}/link`, { method: "POST", body }));
+}
+
+/** The link a `409` of a link change carries (`current`), whichever target it was for. */
+export function currentLink(current: unknown): AnissiaLink {
+  return anissiaLinkOf(current as AnissiaLink | MovieLinkAnswer);
 }
 
 // --- a season's subtitle candidates (`src/web/seasons_anissia_api.rs`) -----------------
@@ -659,6 +725,11 @@ export interface Candidate {
   episode_rank: number;
   /** `number`, `zero` (the number 0, the line a creator registers before the first episode) or `text` (`SP`). */
   episode_form: "number" | "zero" | "text";
+  /**
+   * Only on a movie's candidates: the movie (an episode of season 0) the candidate is about, whatever its `episode`
+   * text says (`극장판`, `0`, `1`, `SP`); the candidate belongs to that episode's row, not to the one `episode_key` names.
+   */
+  movie_episode?: number;
   /** Anissia's `updDt` as received. */
   updated: string;
   updated_at: number | null;
@@ -671,6 +742,8 @@ export interface Candidate {
 
 export interface CandidateList {
   season: number;
+  /** Set for a movie's candidates: the movie's episode, an episode of season 0 (`season` is 0, and `mappings` is empty). */
+  movie?: number;
   /** `null` for a season with no Anissia link (no candidates). */
   anime_no: number | null;
   /** When the 30-minute reading last read Anissia's whole recent list. */
@@ -728,7 +801,7 @@ export interface SourceMapping {
 }
 
 const mappingPath = (id: string, season: number, sourceId: string) =>
-  `${anissiaPath(id, season)}/sources/${encodeURIComponent(sourceId)}/mapping`;
+  `${anissiaPath(id, { kind: "season", season })}/sources/${encodeURIComponent(sourceId)}/mapping`;
 
 /** Saves the user's mapping of a source: the default offset and the exceptions as one unit, from `version`. */
 export function saveMapping(
@@ -790,12 +863,17 @@ export function revertMapping(id: string, season: number, sourceId: string, vers
   return api<SourceMapping>(`${mappingPath(id, season, sourceId)}/revert`, { method: "POST", body: { version } });
 }
 
-/** The cache key of one season's candidates (the anime is in it, so a new link never shows the old one's list). */
-export const candidatesKey = (id: string, season: number, animeNo: number | null) =>
-  `library:candidates:${id}:${season}:${animeNo ?? "none"}`;
+/** The cache key of one season's (or movie's) candidates (the anime is in it, so a new link never shows the old one's list). */
+export const candidatesKey = (id: string, target: AnissiaTarget, animeNo: number | null) =>
+  `library:candidates:${id}:${targetKey(target)}:${animeNo ?? "none"}`;
 
-export function loadCandidates(id: string, season: number, signal?: AbortSignal): Promise<CandidateList> {
-  return api<CandidateList>(`${anissiaPath(id, season)}/candidates`, { signal });
+/** What a movie's `candidates` answers: a season's without `mappings`, with `episode` in place of `season`. */
+type MovieCandidates = Omit<CandidateList, "season" | "movie" | "mappings"> & { episode: number };
+
+export async function loadCandidates(id: string, target: AnissiaTarget, signal?: AbortSignal): Promise<CandidateList> {
+  if (target.kind === "season") return api<CandidateList>(`${anissiaPath(id, target)}/candidates`, { signal });
+  const { episode, ...list } = await api<MovieCandidates>(`${anissiaPath(id, target)}/candidates`, { signal });
+  return { ...list, season: 0, movie: episode, mappings: [] };
 }
 
 /** The command `새로고침` sends: reads the anime's subtitle lines now. */

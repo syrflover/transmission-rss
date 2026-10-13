@@ -480,3 +480,83 @@ async fn the_later_of_two_screens_changing_the_same_file_is_refused_with_the_fil
         assert_eq!(status, StatusCode::NOT_FOUND, "{missing}");
     }
 }
+
+#[tokio::test]
+async fn a_movie_only_works_files_are_named_from_the_anime_its_movie_is_linked_to() {
+    let app = App::new().await;
+    let folders = app.state.library.folders().await.unwrap();
+    let movie_file = |path: &str, kind| EpisodeFile {
+        path: path.to_owned(),
+        kind,
+        season: 0,
+        episode: "1".into(),
+    };
+    let scan = Scan {
+        works: vec![WorkRead::Read(ScannedWork {
+            dir_name: "Movie".into(),
+            seasons: BTreeSet::from([0]),
+            files: vec![
+                movie_file("Movie.mkv", FileKind::Video),
+                movie_file("Movie.ass", FileKind::Subtitle),
+            ],
+            unrecognized: Vec::new(),
+        })],
+    };
+    let (folder, _) = app
+        .state
+        .library
+        .add_folder("/m".into(), scan, 1, &folders)
+        .await
+        .unwrap();
+    let work = app
+        .state
+        .library
+        .works(&folder.id)
+        .await
+        .unwrap()
+        .remove(0)
+        .id;
+    let names = format!("/api/library/works/{work}/seasons/0/subtitle-creators");
+    let name_all = || app.call(Method::POST, &names, Some(json!({ "creator": "하느" })));
+
+    // Season 0 has no link of its own: the movie's is the one asked for.
+    let (status, refused) = name_all().await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+    assert!(
+        refused["message"].as_str().unwrap().contains("극장판"),
+        "{refused}"
+    );
+    let (status, body) = app
+        .call(
+            Method::POST,
+            &format!("/api/library/works/{work}/movies/1/anissia/link"),
+            Some(json!({ "version": 0, "anime_no": ANIME, "week": 3 })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    let (status, named) = name_all().await;
+    assert_eq!(status, StatusCode::OK, "{named}");
+    assert_eq!(named["attached"], 1);
+    assert_eq!(named["creator"]["anime_no"], ANIME);
+    let (status, set) = app
+        .call(
+            Method::PUT,
+            &format!("/api/library/works/{work}/seasons/0/subtitle-creators/file"),
+            Some(json!({ "path": "Movie.ass", "version": named_version(&app, &work).await, "creator": "카이란" })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{set}");
+    assert_eq!(set["creator"]["name"], "카이란");
+}
+
+/// The `creator_version` of a movie-only work's subtitle file `Movie.ass`.
+async fn named_version(app: &App, work: &str) -> i64 {
+    let (status, detail) = app
+        .call(Method::GET, &format!("/api/library/works/{work}"), None)
+        .await;
+    assert_eq!(status, StatusCode::OK, "{detail}");
+    detail["seasons"][0]["episodes"][0]["subtitle"][0]["creator_version"]
+        .as_i64()
+        .unwrap()
+}

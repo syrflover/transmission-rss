@@ -1,5 +1,6 @@
 import { sizeText } from "../../lib/size.ts";
 import { carriesTime, receivedAt } from "./received.ts";
+import { MOVIE_LABEL } from "./detail/movie.ts";
 
 /**
  * The stored files of a work and what can be cleaned (`GET /api/library/works/{id}` `storage`, `GET
@@ -121,9 +122,10 @@ export function totalText(total: number): string {
   return `보관한 자막·폰트·첨부 ${sizeText(total)}`;
 }
 
-/** `2화`, or `시즌 2 3화` when the work has several seasons; `회차 없음` without an episode. */
-export function episodeText(entry: Pick<CleanableEntry, "season" | "episode">, seasons: number): string {
+/** `2화`, or `시즌 2 3화` when the work has several seasons; `본편` for a movie-only work's; `회차 없음` without an episode. */
+export function episodeText(entry: Pick<CleanableEntry, "season" | "episode">, seasons: number, movieOnly = false): string {
   if (entry.episode === null) return NO_EPISODE;
+  if (movieOnly) return MOVIE_LABEL;
   return seasons > 1 ? `시즌 ${entry.season} ${entry.episode}화` : `${entry.episode}화`;
 }
 

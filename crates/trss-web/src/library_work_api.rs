@@ -202,17 +202,24 @@
 //!   (`blocked` is `null`). The screen goes to the work's page from a line;
 //!   nothing is cleaned from there.
 //! - `native_title` is the first (lowest-numbered, not season 0) season's first
-//!   linked AniList entry's native title, `null` without one.
+//!   linked AniList entry's native title, `null` without one; for a movie-only
+//!   work (`movie_only`), its season 0's.
 //! - `title` is the work title (작품명), as the library list gives it: the
 //!   Anissia title of the lowest-numbered season from 1 on linked to an anime,
-//!   by a subscription or from here alike, the folder name (`name`) when none
-//!   is ([`trss_library::store::seasons::anissia::WORK_TITLE`]).
+//!   by a subscription or from here alike, else for a movie-only work its
+//!   movie's Anissia title, the folder name (`name`) when none is ([`trss_library::store::seasons::anissia::WORK_TITLE`]).
 //! - `subscriptions` are the rules whose subscription is connected to a season
 //!   of this work (the connection is made from the videos the rule received, see
 //!   [`trss_collect::season_link`]), by season: the rule's ID, version and
 //!   state, the anime (`anime_no`, `subject`), the subtitle mode and the creator
 //!   followed. The head shows the selected season's creator and changes it
 //!   through `PUT /api/rules/{id}/creator`.
+//! - `movie_only` is true for a work that is one movie and nothing else (no
+//!   season folder and exactly one video directly in its folder); its only
+//!   season is `0` with the movie as episode `1`. Each episode of season `0`
+//!   (and of no other season) has `movie`: `{ "anime_no", "title" }` while its
+//!   movie is linked to an Anissia anime, else `null` (see
+//!   [`super::seasons_anissia_api`]'s movie routes).
 //! - `anissia` is the season's link to an Anissia anime: its version, the anime
 //!   (name, status and Anissia's page) and the subscription that holds the
 //!   season, if one does (see [`super::seasons_anissia_api`]).
@@ -376,6 +383,18 @@ struct EpisodeView {
     failure: Option<RevisionFailure>,
     /// Stored subtitles on the episode with no applied copy (`보관본 있음`).
     stored: Vec<StoredView>,
+    /// For an episode of season 0 only (left out of the others): the Anissia
+    /// anime its movie is linked to, `null` while it is linked to none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    movie: Option<Option<MovieRef>>,
+}
+
+/// The Anissia anime a movie is linked to.
+#[derive(Serialize)]
+struct MovieRef {
+    anime_no: i64,
+    /// Anissia's title; `null` while the app has no snapshot of the anime.
+    title: Option<String>,
 }
 
 /// A stored subtitle on an episode with no applied copy of it.
@@ -440,6 +459,7 @@ impl From<EpisodeDetail> for EpisodeView {
             revision: None,
             failure: None,
             stored: Vec::new(),
+            movie: None,
         }
     }
 }
@@ -504,6 +524,9 @@ struct WorkDetailView {
     id: String,
     name: String,
     title: String,
+    /// The work is a movie and nothing else: no season folder, one video
+    /// directly in its folder, which is the episode 1 of season 0.
+    movie_only: bool,
     missing: bool,
     watch_folder: WatchFolderRef,
     folder_path: String,
@@ -820,6 +843,7 @@ fn attach_stored(seasons: &mut [SeasonView], stored: Vec<trss_jobs::place::recor
                         revision: None,
                         failure: None,
                         stored: Vec::new(),
+                        movie: None,
                     },
                 );
                 index
@@ -877,6 +901,7 @@ fn attach_revisions(
                         revision: None,
                         failure: None,
                         stored: Vec::new(),
+                        movie: None,
                     },
                 );
                 index
@@ -902,6 +927,43 @@ fn attach_revisions(
             }
         }
     }
+}
+
+/// Marks each episode of season 0 with the Anissia anime its movie is linked
+/// to (`null` while it is linked to none).
+async fn attach_movies(
+    state: &AppState,
+    work_id: &str,
+    seasons: &mut [SeasonView],
+) -> Result<(), ApiError> {
+    let Some(zero) = seasons.iter_mut().find(|s| s.number == 0) else {
+        return Ok(());
+    };
+    let internal = |e: &dyn std::fmt::Display| ApiError::Internal(e.to_string());
+    let links = state
+        .seasons
+        .store
+        .movie_links_of(work_id)
+        .await
+        .map_err(|e| internal(&e))?;
+    let animes = state
+        .anissia_store
+        .animes(links.values().filter_map(|l| l.anime_no).collect())
+        .await
+        .map_err(|e| internal(&e))?;
+    for episode in &mut zero.episodes {
+        let linked = EpisodeNumber::parse(&episode.episode)
+            .and_then(|n| n.whole())
+            .and_then(|n| u32::try_from(n).ok())
+            .and_then(|n| links.get(&n))
+            .and_then(|link| link.anime_no)
+            .map(|anime_no| MovieRef {
+                anime_no,
+                title: animes.get(&anime_no).map(|a| a.subject.clone()),
+            });
+        episode.movie = Some(linked);
+    }
+    Ok(())
 }
 
 async fn show(
@@ -1054,6 +1116,7 @@ async fn show(
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
     attach_stored(&mut seasons, stored);
+    attach_movies(&state, &work.id, &mut seasons).await?;
     let files = state
         .place
         .work_files(&work.id)
@@ -1086,6 +1149,7 @@ async fn show(
         id: work.id,
         name: work.dir_name,
         title: work.title,
+        movie_only: work.movie_only,
         missing: work.missing,
         watch_folder: WatchFolderRef {
             id: work.watch_folder_id,

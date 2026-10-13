@@ -130,7 +130,7 @@ function JobRowItem({ job }: { job: JobRow }) {
         />
         <span className="flex min-w-0 flex-col gap-1">
           <span className="line-clamp-2 min-w-0 text-[14.5px] leading-snug font-semibold">{job.title}</span>
-          <TargetLine segments={job.episode_segments} creator={job.creator}>
+          <TargetLine segments={job.episode_segments} creator={job.creator} movie={job.movie}>
             <OriginTags job={job} />
           </TargetLine>
         </span>
@@ -169,7 +169,7 @@ function JobRowItem({ job }: { job: JobRow }) {
             )}
             {job.revises_attributed && <Field name="수정본">제작자를 붙인 자막의 수정본</Field>}
             {job.source !== null && <Field name="출처">{job.source}</Field>}
-            {episodes.length > 0 && <Field name="회차">{episodeList(job.episodes_shown)}</Field>}
+            {episodes.length > 0 && <Field name="회차">{episodeList(job.episodes_shown, job.movie)}</Field>}
             {job.origin === "upload" || job.origin === "find" ? (
               <>
                 {job.upload !== null && uploadKept(job.upload) !== null && (

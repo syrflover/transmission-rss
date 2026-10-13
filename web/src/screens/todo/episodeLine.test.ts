@@ -21,3 +21,11 @@ test("a list of more than three runs names three and counts the episodes left ou
   assert.deepEqual(episodeLabel(runs.slice(0, 4)), { label: "1–4·7·9–10화", more: 3 });
   assert.deepEqual(episodeLabel(runs.slice(0, 3)), { label: "1–4·7·9–10화", more: 0 });
 });
+
+test("a movie's job is 본편, whatever runs the server names", () => {
+  assert.deepEqual(episodeLabel([seg("0")], true), { label: "본편", more: 0 });
+  assert.deepEqual(episodeLabel([seg("1–4", 4), seg("7"), seg("SP", 1, false)], true), { label: "본편", more: 0 });
+  // A to-do that asks about a file names no episode but is the movie's all the same.
+  assert.deepEqual(episodeLabel([], true), { label: "본편", more: 0 });
+  assert.equal(episodeLabel([], false), null);
+});

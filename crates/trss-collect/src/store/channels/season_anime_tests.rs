@@ -13,8 +13,8 @@ use trss_library::{
 use crate::store::{
     anissia::AnissiaStore,
     channels::{
-        season_holders, ChannelInput, ChannelStore, NewSubscription, Rule, RuleInput,
-        SeasonAnimeError, SeasonLinked, SubtitleMode,
+        season_holders, ChannelInput, ChannelStore, MovieAnimeError, NewSubscription, Rule,
+        RuleInput, SeasonAnimeError, SeasonLinked, SubtitleMode,
     },
 };
 
@@ -487,4 +487,46 @@ async fn the_holder_of_a_season_is_the_first_subscription_by_rule_id_whatever_th
         );
         connected.reverse();
     }
+}
+
+#[tokio::test]
+async fn a_movie_is_linked_changed_and_cut_by_its_own_version_and_keeps_the_anime_snapshot() {
+    let env = Env::new().await;
+    let linked = env
+        .channels
+        .set_movie_anime(&env.work, 1, 0, Some(anime(29, "END")))
+        .await
+        .unwrap();
+    assert_eq!((linked.version, linked.anime_no), (1, Some(29)));
+    let snapshot = env.anissia.anime(29).await.unwrap().unwrap();
+    assert_eq!(snapshot.subject, "작품 29");
+
+    // A change from an older version is refused with the current link, and
+    // does not store the anime it named.
+    match env
+        .channels
+        .set_movie_anime(&env.work, 1, 0, Some(anime(31, "END")))
+        .await
+    {
+        Err(MovieAnimeError::Conflict(current)) => {
+            assert_eq!((current.version, current.anime_no), (1, Some(29)))
+        }
+        other => panic!("expected a conflict, got {other:?}"),
+    }
+    assert_eq!(env.anissia.anime(31).await.unwrap(), None);
+
+    let cut = env
+        .channels
+        .set_movie_anime(&env.work, 1, 1, None)
+        .await
+        .unwrap();
+    assert_eq!((cut.version, cut.anime_no), (2, None));
+    // The seasons' links are another table.
+    assert_eq!(env.link(1).await, (0, None));
+    assert!(matches!(
+        env.channels
+            .set_movie_anime("nobody", 1, 0, Some(anime(29, "END")))
+            .await,
+        Err(MovieAnimeError::NoWork)
+    ));
 }

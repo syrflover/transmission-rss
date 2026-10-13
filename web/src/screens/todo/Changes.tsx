@@ -75,7 +75,18 @@ function useLines(jobId: string, planId: string, enabled: boolean): { state: Lin
  * against the current one, as the decision's body. Four items, collapsed at first, each with its number tags; an item
  * expands to what changed. The dialogue and timing lines are read when one of them is first opened.
  */
-export function ChangesSection({ jobId, r, many }: { jobId: string; r: Replacement; many: boolean }) {
+export function ChangesSection({
+  jobId,
+  r,
+  movie,
+  many,
+}: {
+  jobId: string;
+  r: Replacement;
+  /** The job is a movie's: its plan is for `본편`. */
+  movie: boolean;
+  many: boolean;
+}) {
   const headingId = useId();
   const view = changesView(r.comparison);
   const [open, setOpen] = useState<ReadonlySet<string>>(new Set());
@@ -94,7 +105,7 @@ export function ChangesSection({ jobId, r, many }: { jobId: string; r: Replaceme
   return (
     <section aria-labelledby={headingId} className="mt-5 max-[720px]:mt-4">
       <h2 id={headingId} className="mb-2.5 text-[17px] font-bold max-[720px]:mb-2">
-        {many ? `${planEpisode(r)} 변경 사항` : "변경 사항"}
+        {many ? `${planEpisode(r, movie)} 변경 사항` : "변경 사항"}
       </h2>
       {view.kind === "none" ? (
         <div className="flex flex-col items-start gap-1.5 rounded-card border border-hairline-soft bg-surface-1 px-3.5 py-3 shadow-(--card-shadow)">

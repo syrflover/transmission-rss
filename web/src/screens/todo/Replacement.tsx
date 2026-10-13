@@ -144,6 +144,7 @@ export function ReplacementDecisions({ job }: { job: JobDetail }) {
       {asEpisodeList(open) ? (
         <EpisodeList
           jobId={job.id}
+          movie={job.movie}
           open={open}
           sending={sending}
           problems={problems}
@@ -156,6 +157,7 @@ export function ReplacementDecisions({ job }: { job: JobDetail }) {
           <Fragment key={r.plan_id}>
             <DecisionCard
               r={r}
+              movie={job.movie}
               many={many}
               layout={cardLayout(open.length, i)}
               sending={sending}
@@ -163,7 +165,7 @@ export function ReplacementDecisions({ job }: { job: JobDetail }) {
               onDecide={(decision) => void decide(r, decision)}
               notices={noticesOf(r)}
             />
-            <ChangesSection jobId={job.id} r={r} many={many} />
+            <ChangesSection jobId={job.id} r={r} movie={job.movie} many={many} />
           </Fragment>
         ))
       )}
@@ -177,7 +179,7 @@ export function ReplacementDecisions({ job }: { job: JobDetail }) {
                 line.urgent ? "border-urgent" : "border-hairline",
               )}
             >
-              {many && <b className="mr-2">{planEpisode(r)}</b>}
+              {many && <b className="mr-2">{planEpisode(r, job.movie)}</b>}
               <span className={cn("font-semibold", line.urgent && "text-urgent")}>{line.label}</span>
               {line.detail !== null && line.detail !== "" && (
                 <span className="mt-0.5 block text-text-secondary [overflow-wrap:anywhere]">{line.detail}</span>
@@ -192,6 +194,7 @@ export function ReplacementDecisions({ job }: { job: JobDetail }) {
 
 function DecisionCard({
   r,
+  movie,
   many,
   layout,
   sending,
@@ -200,6 +203,7 @@ function DecisionCard({
   notices,
 }: {
   r: Replacement;
+  movie: boolean;
   many: boolean;
   layout: { sticky: boolean; fixed: boolean };
   sending: boolean;
@@ -210,7 +214,7 @@ function DecisionCard({
   return (
     <>
       <section
-        aria-label={many ? `${planEpisode(r)} 교체 결정` : "교체 결정"}
+        aria-label={many ? `${planEpisode(r, movie)} 교체 결정` : "교체 결정"}
         className={cn(
           "mt-5 rounded-card border border-hairline bg-surface-1 p-3.5 shadow-(--card-shadow) max-[720px]:mt-3",
           layout.sticky && "min-[721px]:sticky min-[721px]:top-[calc(var(--topbar-h)+8px)] min-[721px]:z-20",
@@ -218,7 +222,7 @@ function DecisionCard({
       >
         <div className="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-x-5 gap-y-3 max-[720px]:grid-cols-1">
           <div className="flex min-w-0 flex-col gap-2.5">
-            {many && <b className="text-[14.5px]">{planEpisode(r)}</b>}
+            {many && <b className="text-[14.5px]">{planEpisode(r, movie)}</b>}
             <PlanFacts r={r} />
           </div>
           <div
@@ -271,6 +275,7 @@ function DecisionCard({
  */
 function EpisodeList({
   jobId,
+  movie,
   open,
   sending,
   problems,
@@ -279,6 +284,7 @@ function EpisodeList({
   onDecideAll,
 }: {
   jobId: string;
+  movie: boolean;
   open: readonly Replacement[];
   sending: boolean;
   problems: ReadonlyMap<number, Problem>;
@@ -324,6 +330,7 @@ function EpisodeList({
           <EpisodeRow
             key={r.plan_id}
             jobId={jobId}
+            movie={movie}
             r={r}
             sending={sending}
             problem={problems.get(r.position) ?? null}
@@ -341,12 +348,14 @@ function EpisodeList({
  */
 function EpisodeRow({
   jobId,
+  movie,
   r,
   sending,
   problem,
   onDecide,
 }: {
   jobId: string;
+  movie: boolean;
   r: Replacement;
   sending: boolean;
   problem: Problem | null;
@@ -368,7 +377,7 @@ function EpisodeRow({
           <ChevronIcon
             className={cn("size-[15px] flex-none text-text-muted transition-transform", opened && "rotate-90")}
           />
-          <b className="w-[3rem] flex-none text-[14px]">{planEpisode(r)}</b>
+          <b className="w-[3rem] flex-none text-[14px]">{planEpisode(r, movie)}</b>
           <span className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5">
             {again?.tags.map((tag) => (
               <Badge key={tag} tone="check" icon={WarningIcon}>
@@ -380,7 +389,7 @@ function EpisodeRow({
             ))}
           </span>
         </button>
-        <div role="group" aria-label={`${planEpisode(r)} 결정`} className="flex flex-none gap-2 max-[720px]:w-full">
+        <div role="group" aria-label={`${planEpisode(r, movie)} 결정`} className="flex flex-none gap-2 max-[720px]:w-full">
           <Button
             type="button"
             variant="ghost"
@@ -410,7 +419,7 @@ function EpisodeRow({
         <div id={panelId} className="flex min-w-0 flex-col gap-2.5 border-t border-hairline-soft px-3.5 pt-3 pb-3.5">
           <PlanFacts r={r} againTags={false} />
           <Notices notices={noticesOf(r)} />
-          <ChangesSection jobId={jobId} r={r} many />
+          <ChangesSection jobId={jobId} r={r} movie={movie} many />
         </div>
       )}
     </li>
@@ -552,7 +561,7 @@ function NoticeItem({ notice }: { notice: Notice }) {
  * The replacements' part of `경로`: for each plan, every path beside the video with what happens (or, once done,
  * happened) to it, and the stored file of the subtitle it replaces, which stays whatever is decided.
  */
-export function ReplacementPaths({ replacements }: { replacements: readonly Replacement[] }) {
+export function ReplacementPaths({ replacements, movie }: { replacements: readonly Replacement[]; movie: boolean }) {
   const plans = inEpisodeOrder(replacements)
     .map((r) => ({ r, rows: pathRows(r) }))
     .filter((x) => x.rows.length > 0);
@@ -561,7 +570,7 @@ export function ReplacementPaths({ replacements }: { replacements: readonly Repl
       {plans.map(({ r, rows }) => (
         <div key={r.plan_id} className="flex min-w-0 flex-col gap-1">
           <p className="text-[13px] leading-snug font-semibold">
-            {planEpisode(r)} <Tag>교체 계획</Tag>
+            {planEpisode(r, movie)} <Tag>교체 계획</Tag>
           </p>
           <dl className="m-0 grid grid-cols-[max-content_minmax(0,1fr)] gap-x-3.5 gap-y-1 text-[13px] max-[720px]:grid-cols-1 max-[720px]:gap-y-0">
             {rows.map((row) => (

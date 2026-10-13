@@ -12,6 +12,7 @@ import {
   openOnes,
   pathRows,
   pathWarnings,
+  planEpisode,
   postLabel,
   rowTags,
   stateLine,
@@ -279,4 +280,9 @@ test("an episode row's tags are what the to-do card would say for that plan alon
   const changes = { added: 303, changed: 24, removed: 0, timing: 0, styles: 0, fonts: 0, uncompared: 0, partial: 1, plans: 1 };
   // One plan: no number beside 일부 비교 불가.
   assert.deepEqual(rowTags(plan({ changes })), ["대사 추가 303", "대사 변경 24", "일부 비교 불가"]);
+});
+
+test("a plan is named by its episode, and a movie's by `본편`", () => {
+  assert.equal(planEpisode(plan({ episode: 3 }), false), "3화");
+  assert.equal(planEpisode(plan({ episode: 1 }), true), "본편");
 });

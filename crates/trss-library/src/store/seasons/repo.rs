@@ -142,20 +142,31 @@ pub(super) fn season_exists(
         .is_some())
 }
 
+/// The work's first season: the lowest-numbered recorded season from 1 on, or
+/// season 0 for a movie-only work ([`super::movie`]), whose movie is all it
+/// has. The automatic AniList search, its `자동` mark and the cover follow it.
 pub(super) fn first_season(conn: &Connection, work_id: &str) -> rusqlite::Result<Option<u32>> {
-    conn.prepare_cached("SELECT min(number) FROM seasons WHERE work_id = ?1 AND number >= 1")?
-        .query_row([work_id], |r| r.get(0))
+    let lowest: Option<u32> = conn
+        .prepare_cached("SELECT min(number) FROM seasons WHERE work_id = ?1 AND number >= 1")?
+        .query_row([work_id], |r| r.get(0))?;
+    if lowest.is_some() {
+        return Ok(lowest);
+    }
+    Ok(super::movie::is_movie_only(conn, work_id)?.then_some(0))
 }
 
-/// The AniList entry the work's cover follows: the first entry of the lowest
-/// numbered recorded season that links one (not season 0, the specials).
+/// The AniList entry the work's cover follows: the first entry of the
+/// lowest-numbered recorded season that links one (not season 0, the
+/// specials), and for a movie-only work, whose movie is season 0, the movie's.
 pub(crate) fn cover_target(conn: &Connection, work_id: &str) -> rusqlite::Result<Option<i64>> {
-    conn.prepare_cached(
+    conn.prepare_cached(&format!(
         "SELECT l.anilist_id FROM season_entries l
            JOIN seasons s ON s.work_id = l.work_id AND s.number = l.season
-          WHERE l.work_id = ?1 AND l.season >= 1
-          ORDER BY l.season, l.position LIMIT 1",
-    )?
+           JOIN works w ON w.id = l.work_id
+          WHERE l.work_id = ?1 AND (l.season >= 1 OR {})
+          ORDER BY l.season = 0, l.season, l.position LIMIT 1",
+        super::movie::MOVIE_ONLY
+    ))?
     .query_row([work_id], |r| r.get(0))
     .optional()
 }

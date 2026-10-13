@@ -2,8 +2,14 @@
 //! and 작업 상세). The web makes them; the worker carries them out
 //! ([`trss_jobs`]).
 //!
-//! - `POST /api/subtitle-jobs` `{ "id", "work_id", "season", "candidates": [<observation id>] }`
-//!   makes a job of the candidates a person picked for a season. `id` is made
+//! - `POST /api/subtitle-jobs` `{ "id", "work_id", "season", "movie", "candidates": [<observation id>] }`
+//!   makes a job of the candidates a person picked for a season, or, with
+//!   `movie` (an episode number of season 0, `season` being `0`; left out for a
+//!   season), for that movie: the candidates must be its Anissia anime's
+//!   ([`trss_library::store::seasons::movie`]), every subtitle of the job is on
+//!   the movie whatever the candidates' episode text or the file names say, and
+//!   the job's rows (`movie`) say so. A `movie` on another season is refused
+//!   with `400`, one the work does not have with `404`. `id` is made
 //!   by the browser for the action: a repeat with the same content answers
 //!   `200` with the job it made, other content under the same ID `409`. An ID
 //!   that starts with `auto:` or `recheck:` is the app's own (the subscribed
@@ -123,7 +129,8 @@
 //!   candidates) for a person to browse on the job's remote screen, and keeps
 //!   what they download there. `id` works as above (`202`, `200`, `409`,
 //!   `400` for the app's own). A season with no Anissia anime is refused with
-//!   `400`, a creator with no candidate of the season too.
+//!   `400`, a creator with no candidate of the season too, and a request with
+//!   `movie` is refused with `400` (a movie is not found by browsing).
 //! - `POST /api/subtitle-jobs/{id}/finish` a person finishes a find job
 //!   (`받기 끝내기`): the request is written and the worker woken, which ends
 //!   the job once no download of its run is on its way, and at once when no
@@ -207,7 +214,7 @@ use trss_jobs::{
     AskedFinish, Created, FileState, ItemState, NewFind, NewJob, StepKind, Wait, FIND, RELOCATE,
     UPLOAD,
 };
-use trss_library::store::seasons::{anissia::AnissiaLink, SeasonError};
+use trss_library::store::seasons::{anissia::AnissiaLink, movie::MovieLink, SeasonError};
 
 use super::{artwork_api::image_url, commands_api::now_millis, ApiError, AppState};
 
@@ -281,6 +288,10 @@ pub struct JobRowView {
     pub work: Option<WorkRefView>,
     pub title: String,
     pub season: Option<i64>,
+    /// The job is for a movie, an episode of season 0 (`season` is `0`, and
+    /// every subtitle of the job is on that one episode), not for a season's
+    /// episodes.
+    pub movie: bool,
     pub episodes: Vec<String>,
     /// `episodes` without the leading zeros of a whole number (`01` is `1`).
     pub episodes_shown: Vec<String>,
@@ -335,6 +346,7 @@ fn view(row: &JobRow, covers: &HashMap<String, String>) -> JobRowView {
         work: work_ref(row, covers),
         title: row.title(),
         season: row.season,
+        movie: row.movie.is_some(),
         episodes: row.episodes.clone(),
         episodes_shown: row
             .episodes
@@ -960,10 +972,54 @@ pub(super) async fn season_link(
         })
 }
 
+/// The Anissia link of a movie, an episode of season 0, for a request to make a
+/// job of the movie's anime: `404` for a movie the work does not have.
+pub(super) async fn movie_link(
+    state: &AppState,
+    work_id: &str,
+    episode: u32,
+) -> Result<MovieLink, ApiError> {
+    state
+        .seasons
+        .store
+        .movie_link(work_id, episode)
+        .await
+        .map_err(|e| match e {
+            SeasonError::NotFound => {
+                ApiError::not_found("극장판을 찾지 못했어요. 화면을 새로고침해 주세요.")
+            }
+            e => internal(&e),
+        })
+}
+
 /// The Anissia anime a season is linked to; `400` with `not_linked` for a
 /// season that is linked to none.
 pub(super) fn linked_anime(link: &AnissiaLink, not_linked: &str) -> Result<i64, ApiError> {
     link.anime_no.ok_or_else(|| ApiError::invalid(not_linked))
+}
+
+/// [`linked_anime`] for a movie.
+pub(super) fn linked_movie_anime(link: &MovieLink, not_linked: &str) -> Result<i64, ApiError> {
+    link.anime_no.ok_or_else(|| ApiError::invalid(not_linked))
+}
+
+/// The movie a request names, if it names one: the movie must be of season 0
+/// (`400` otherwise). Its link is `404` for a movie the work does not have.
+pub(super) async fn movie_of(
+    state: &AppState,
+    work_id: &str,
+    season: u32,
+    movie: Option<u32>,
+) -> Result<Option<MovieLink>, ApiError> {
+    let Some(episode) = movie else {
+        return Ok(None);
+    };
+    if season != 0 {
+        return Err(ApiError::invalid(
+            "극장판은 시즌 0의 회차로만 고를 수 있어요.",
+        ));
+    }
+    movie_link(state, work_id, episode).await.map(Some)
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -971,6 +1027,10 @@ struct CreateRequest {
     id: String,
     work_id: String,
     season: u32,
+    /// The movie (an episode of `season` 0) the candidates are for; the job
+    /// puts every subtitle on it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    movie: Option<u32>,
     candidates: Vec<i64>,
 }
 
@@ -1001,8 +1061,13 @@ async fn create(
         return Err(ApiError::invalid("같은 후보를 두 번 골랐어요."));
     }
 
-    let link = season_link(&state, &request.work_id, request.season).await?;
-    let anime_no = linked_anime(&link, "이 시즌은 Anissia 작품에 연결돼 있지 않아요.")?;
+    let anime_no = match movie_of(&state, &request.work_id, request.season, request.movie).await? {
+        Some(link) => linked_movie_anime(&link, "이 극장판은 Anissia 작품에 연결돼 있지 않아요.")?,
+        None => {
+            let link = season_link(&state, &request.work_id, request.season).await?;
+            linked_anime(&link, "이 시즌은 Anissia 작품에 연결돼 있지 않아요.")?
+        }
+    };
     let picked = match state
         .anissia_store
         .pick(anime_no, request.candidates.clone())
@@ -1029,6 +1094,7 @@ async fn create(
         request.id.clone(),
         request.work_id.clone(),
         request.season,
+        request.movie,
         anime_no,
         &picked,
     );
@@ -1056,6 +1122,10 @@ struct FindRequest {
     id: String,
     work_id: String,
     season: u32,
+    /// Refused: a movie's subtitles are not found by browsing a creator's
+    /// post.
+    #[serde(default)]
+    movie: Option<u32>,
     /// The source ID of the creator.
     creator: String,
 }
@@ -1076,6 +1146,9 @@ async fn create_find(
     }
     if request.work_id.is_empty() {
         return Err(ApiError::invalid("작품이 빠졌어요."));
+    }
+    if request.movie.is_some() {
+        return Err(ApiError::invalid("극장판은 직접 찾기를 쓸 수 없어요."));
     }
     let link = season_link(&state, &request.work_id, request.season).await?;
     let anime_no = linked_anime(

@@ -35,6 +35,9 @@ pub struct JobFacts {
     pub origin: String,
     pub work_id: Option<String>,
     pub season: Option<u32>,
+    /// The movie (an episode of season 0) the job is for: every subtitle of
+    /// it goes on that episode.
+    pub movie: Option<i64>,
     pub source_id: Option<String>,
     pub creator: Option<String>,
     /// When a person confirmed the job's placement (배치 확인), for an
@@ -44,7 +47,7 @@ pub struct JobFacts {
 
 pub fn job_facts(c: &Connection, job_id: &str) -> rusqlite::Result<Option<JobFacts>> {
     c.prepare_cached(
-        "SELECT origin, work_id, season, source_id, creator, placement_confirmed_at
+        "SELECT origin, work_id, season, source_id, creator, placement_confirmed_at, movie
            FROM subtitle_jobs WHERE id = ?1",
     )?
     .query_row([job_id], |r| {
@@ -55,6 +58,7 @@ pub fn job_facts(c: &Connection, job_id: &str) -> rusqlite::Result<Option<JobFac
             source_id: r.get(3)?,
             creator: r.get(4)?,
             placement_confirmed_at: r.get(5)?,
+            movie: r.get(6)?,
         })
     })
     .optional()

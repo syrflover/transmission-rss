@@ -148,7 +148,7 @@ function AuthCard({ todo }: { todo: AuthTodo }) {
       title={todo.title}
       work={todo.work}
       target={
-        <TargetLine segments={todo.episode_segments} creator={todo.creator}>
+        <TargetLine segments={todo.episode_segments} creator={todo.creator} movie={todo.movie}>
           {todo.jobs > 1 && <Tag>작업 {todo.jobs}개</Tag>}
         </TargetLine>
       }
@@ -226,7 +226,7 @@ function ReplacementCard({ todo }: { todo: ReplacementTodo }) {
       title={todo.title}
       work={todo.work}
       target={
-        <TargetLine segments={todo.episode_segments} creator={todo.creator}>
+        <TargetLine segments={todo.episode_segments} creator={todo.creator} movie={todo.movie}>
           {todo.season !== null && todo.season > 1 && <Tag>시즌 {todo.season}</Tag>}
           {todo.jobs > 1 && <Tag>작업 {todo.jobs}개</Tag>}
         </TargetLine>
@@ -257,7 +257,7 @@ function PlacementCheckCard({ todo }: { todo: PlacementCheckTodo }) {
       title={todo.title}
       work={todo.work}
       target={
-        <TargetLine segments={[]} creator={todo.creator}>
+        <TargetLine segments={[]} creator={todo.creator} movie={todo.movie}>
           {todo.files.length > 0 && <Tag>받은 파일 {todo.files.length}개</Tag>}
           {todo.season !== null && todo.season > 1 && <Tag>시즌 {todo.season}</Tag>}
         </TargetLine>
