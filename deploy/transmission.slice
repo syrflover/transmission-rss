@@ -6,9 +6,10 @@
 #
 # MemoryHigh keeps the container's page cache below its `memory: 512M` limit:
 # over it, the kernel reclaims and throttles without ever calling the OOM
-# killer. At the hard limit, RHEL 9 kernels from 5.14.0-687.41.1 give up after
-# 16 reclaim attempts even when each one frees pages (RHEL-211058, reverted in
-# RHEL-255363), and kill transmission-daemon while it writes downloads.
+# killer. At the hard limit, RHEL 9 kernels from 5.14.0-687.36.1 to 687.53.1
+# give up after 16 reclaim attempts even when each one frees pages
+# (RHEL-211058, fixed in 687.54.1 by RHEL-269060), and kill
+# transmission-daemon while it writes downloads.
 
 [Unit]
 Description=Transmission container (docker-compose.yml)
