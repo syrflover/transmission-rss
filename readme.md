@@ -2,12 +2,13 @@
 
 Subscribes to RSS feeds and adds matching torrents to Transmission. Renames downloaded files and removes old torrents automatically.
 
-It runs as two long-running containers from one image:
+It runs as three long-running containers: `trss-web` and `trss-worker` from one image, and `trss-browser` from its own:
 
 - `trss-web` serves the screens and the API (channels, rules, collection history, retrying a failed item).
 - `trss-worker` reads the feeds every 5 minutes, adds matching torrents, and carries out the commands the web accepts.
+- `trss-browser` is the server browser that subtitle jobs open when a source needs a person to pass a check (see `trss-browser` below).
 
-Both keep their state in one SQLite database (channels, rules, collection history, the library), with the work covers in a folder next to it.
+The web and the worker keep their state in one SQLite database (channels, rules, collection history, the library), with the work covers in a folder next to it.
 
 ## Docker Compose
 
