@@ -282,6 +282,8 @@ Anissia 후보 갱신일·출처에서 보고한 파일 날짜·앱 수신 시�
 
 - `secret_query`·`past_search`·`episode_auto`·`subscription`·`base`·`episode_mappings[].auto`처럼 이번에 더한 필드의 정확한 이름과 모양은 교환 형식을 구현하기 전에 이 문서에서 확정해요.
   이 필드들은 `version: 1`이 아직 구현되지 않았으므로 새 버전을 만들지 않고 `version: 1`에 넣어요.
+- 극장판의 Anissia 연결은 시즌 0의 회차마다 하나씩 두는 극장판 연결이라서 `seasons[]`의 `anissia_anime_no` 하나로는 담을 수 없어요([극장판을 담는 꼴의 ADR](../adr/0018-movies-in-season-zero-with-their-own-link.md)).
+  이 연결을 담을 필드의 이름과 모양도 교환 형식을 구현하기 전에 이 문서에서 정해요.
 - 기존 YAML 주석에서 Anissia 주소·요일·시간·제작자를 읽는 형식은 2026-09-29에 읽은 사용자의 채널 설정 한 벌의 관례예요.
   다른 사람의 주석 형식은 읽지 못한 주석으로 다뤄요.
 
