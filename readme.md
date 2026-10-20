@@ -14,7 +14,7 @@ The web and the worker keep their state in one SQLite database (channels, rules,
 
 ### Requirements
 
-Docker Engine 28 or later with Docker Compose 2.33 or later. The compose file gives the web its default gateway with `gw_priority` (see `trss-browser` below), which older versions do not have. A web whose default route still goes through the server browser's network does not start, and its log names `gw_priority` and these versions. Only Compose 5.5.1 with Docker Engine 29.8.1 and 29.8.2 was tried.
+Docker Engine 28 or later with Docker Compose 2.33.1 or later. The compose file gives the web its default gateway with `gw_priority` (see `trss-browser` below), which older versions do not have. A web whose default route still goes through the server browser's network does not start, and its log names `gw_priority` and these versions. Only Compose 5.5.1 with Docker Engine 29.8.1 and 29.8.2 was tried.
 
 ### Setup
 
