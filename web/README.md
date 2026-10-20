@@ -35,7 +35,7 @@ In the Docker image these are `0.0.0.0`, `8080` and `/usr/local/share/trss/web`.
 
 ## Layout
 
-- `src/app/` app shell: top bar, main menu (top / icon-only tablet / bottom phone), theme toggle
+- `src/app/` app shell: main menu (top bar on PC, icon-only top bar on tablet, bottom bar on phone); the screen mode is set in `src/screens/settings/theme/`
 - `src/screens/` one file per main menu; each screen owns its content
 - `src/lib/theme.ts` screen mode (시스템 / 라이트 / 다크) store
 - `src/components/ui/` shadcn/ui components (project-owned source)
