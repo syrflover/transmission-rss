@@ -337,8 +337,8 @@ fn touches_egress(arg: &str) -> bool {
 /// see: the token, and the flags Debian's `/usr/bin/chromium` wrapper would
 /// put before the launcher's (it clears `CHROMIUM_FLAGS` itself and reads
 /// no `CHROMIUM_USER_FLAGS` today; both are taken out in case that changes).
-/// The wrapper's own additions come from `/etc/chromium.d`, which only root
-/// writes in the image.
+/// The wrapper's own additions are those written in the wrapper and those of
+/// `/etc/chromium.d`, both of which only root writes in the image.
 const HIDDEN_FROM_CHROMIUM: [&str; 3] = [TOKEN_VAR, "CHROMIUM_FLAGS", "CHROMIUM_USER_FLAGS"];
 
 /// A start under way.
