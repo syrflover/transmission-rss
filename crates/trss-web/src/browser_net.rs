@@ -110,7 +110,7 @@ pub fn check_default_route(routes: &str, refused: Subnet) -> Result<(), String> 
              (gateway {gateway}), so the port published on the LAN would come in from an \
              address the web refuses. Give the web's other network the default gateway: \
              `gw_priority: 1` on trss_net in docker-compose.trss.yml, which needs Docker \
-             Engine 28 or later and Compose 2.33 or later"
+             Engine 28 or later and Compose 2.33.1 or later"
         )),
         _ => Ok(()),
     }
@@ -299,7 +299,7 @@ eth1\t000017AC\t00000000\t0001\t0\t0\t0\t0000FFFF\t0\t0\t0
         let err = check_default_route(through_browser, browser_net).unwrap_err();
         assert!(err.contains("gw_priority"), "{err}");
         assert!(
-            err.contains("Engine 28") && err.contains("Compose 2.33"),
+            err.contains("Engine 28") && err.contains("Compose 2.33.1"),
             "{err}"
         );
         // Of several default routes, the one of the lowest metric counts.

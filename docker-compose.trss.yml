@@ -163,7 +163,7 @@ services:
     # must come in through `trss_net`: Docker takes the published ports of a
     # container through the network of its default gateway, which without
     # `gw_priority` can be `browser_net`, whose gateway address the web
-    # refuses (Docker Engine 28 or later, Compose 2.33 or later).
+    # refuses (Docker Engine 28 or later, Compose 2.33.1 or later).
     networks:
       trss_net:
         gw_priority: 1
