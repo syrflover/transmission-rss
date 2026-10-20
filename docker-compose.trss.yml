@@ -62,7 +62,7 @@ name: trss-app
 # wakes the worker through the socket `trss.db.wake` next to the database.
 
 x-trss: &trss
-  image: ghcr.io/syrflover/transmission-rss:${TRSS_VERSION:?Set TRSS_VERSION in .env to a release tag, e.g. 0.4.0}
+  image: ghcr.io/syrflover/transmission-rss:${TRSS_VERSION:?Set TRSS_VERSION in .env to a release tag, e.g. 0.7.0}
   restart: unless-stopped
   # The user Transmission writes the media as (`PUID`/`PGID` in
   # docker-compose.yml), so that what trss writes there has the same owner:
@@ -180,7 +180,7 @@ services:
           memory: 128M
 
   trss-browser:
-    image: ghcr.io/syrflover/trss-browser:${TRSS_VERSION:?Set TRSS_VERSION in .env to a release tag, e.g. 0.4.0}
+    image: ghcr.io/syrflover/trss-browser:${TRSS_VERSION:?Set TRSS_VERSION in .env to a release tag, e.g. 0.7.0}
     container_name: trss-browser
     restart: unless-stopped
     environment:
