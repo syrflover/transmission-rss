@@ -251,10 +251,11 @@ TheTVDB는 [현재 요금표](https://thetvdb.com/api-information)에 연 매출
 - 주 실행 경로(`src/main.rs`, 지금은 없음)의 파일명 변경은 파일이 하나인 토렌트(Torrent)를 대상으로 해요.
   피드에서 사라진 관리 대상 토렌트를 Transmission에서 제거할 때 로컬 데이터는 삭제하지 않아요.
   따라서 이 기능을 자막 정리나 미디어 파일 자동 삭제 기능으로 간주하지 않아요.
-- [Anissia 연동 코드](../../src/anissia.rs)에는 자막 메타데이터와 다운로드 관련 코드가 있지만 미완성 부분이 있고, [Cargo 설정](../../Cargo.toml)의 선택 기능으로 분리돼 있어요.
+- Anissia 연동 코드(`src/anissia.rs`, 지금은 없음)에는 자막 메타데이터와 다운로드 관련 코드가 있지만 미완성 부분이 있고, [Cargo 설정](../../Cargo.toml)의 선택 기능으로 분리돼 있어요.
   현재 사용 가능한 종단 간 자막 자동화로 간주하지 않아요.
-- [기존 채널 설정](../../src/config.rs)은 채널·규칙 ID가 없는 목록이며, 주 실행 경로는 규칙 목록에서 첫 일치 항목을 선택해요.
-  [규칙 코드](../../src/rule.rs)의 `regex: true` 경로는 현재 `unimplemented!()`이므로, 선택한 정규식 지원은 구현할 요구이지 현재 가능한 동작이 아니에요.
+- [기존 채널 설정](../../crates/trss-collect/src/config.rs)은 채널·규칙 ID가 없는 목록이며, 주 실행 경로는 규칙 목록에서 첫 일치 항목을 선택해요.
+  규칙 코드(`src/rule.rs`, 지금은 [`crates/trss-collect/src/rule.rs`](../../crates/trss-collect/src/rule.rs))의 `regex: true` 경로는 현재 `unimplemented!()`이므로, 선택한 정규식 지원은 구현할 요구이지 현재 가능한 동작이 아니에요.
+  정규식 규칙은 그 뒤에 구현돼서 지금은 동작해요([규칙 평가 코드](../../crates/trss-collect/src/rss/evaluate.rs)).
 
 저장소 코드와 공개 출처 조사에 더해, 2026-09-26에 출처별 실제 경로 확인을 시작했어요.
 trss 제품 코드는 아직 실행·변경하지 않았으며, 파일 수신과 형식 확인 결과는 아래의 각 출처 근거에 한정돼요.
