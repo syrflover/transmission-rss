@@ -1070,7 +1070,7 @@ worker를 다시 시작하면 기다리는 작업을 한 번 다시 살펴보고
 | 회차 줄의 `교체 승인` 배지 | 없음 | `trss-web` `library_work_api/tests.rs` `a_stored_subtitle_waiting_for_a_replacement_names_its_job` | 배지 글자 `교체 승인`을 서버에서 본 기록이 없어요. 보관본에 `적용`을 두지 않는 쪽은 칸을 나누는 것으로만 겨눠요. |
 | 한계: 줄 수는 형식의 표지만 셈 | 없음 | `trss-jobs` `place/replace/lines.rs` `each_format_counts_its_dialogue_lines`, `what_is_not_its_format_is_not_counted` | 없음 |
 | 한계: 끝내지 못한 효과 때문에 보관만 한 줄은 다시 비교하지 않음 | 없음 | `trss-jobs` `tests/it/place.rs` `an_episode_another_jobs_apply_is_about_to_take_keeps_it` | 멈춘 worker가 남긴 효과 때문에 보관만 한 줄은 서버에서 본 적이 없어요. |
-| 한계: 옮긴 뒤 공개 실패는 되돌리지 않고 보류 | 없음 | `trss-jobs` `tests/it/replace.rs` `a_new_copy_published_but_not_recorded_holds_the_plan_and_removes_nothing_more` | 옮겨 둔 뒤 새 적용본을 공개하지 못하는 실패는 시험으로 일으키지 못했어요(이 명세 667행). |
+| 한계: 옮긴 뒤 공개 실패는 되돌리지 않고 보류 | 없음 | `trss-jobs` `tests/it/replace.rs` `a_new_copy_published_but_not_recorded_holds_the_plan_and_removes_nothing_more` | 옮겨 둔 뒤 새 적용본을 공개하지 못하는 실패는 시험으로 일으키지 못했어요([교체 계획과 반영](#교체-계획과-반영)). |
 | 한계: 같은 출처의 새 수정본이 앞 계획이 기다리는 동안 들어옴 | 없음 | `trss-jobs` `tests/it/choose.rs` `a_newer_revision_still_keeps_a_row_nobody_chose_stored_only` | 없음 |
 
 #### 내용 비교
