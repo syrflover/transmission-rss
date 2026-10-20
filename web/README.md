@@ -10,6 +10,8 @@ no Node server at runtime.
 bun install            # install (bun.lock is the lockfile)
 bun run dev            # Vite dev server; proxies /api to http://127.0.0.1:8080
 bun run build          # type-check, then build into dist/
+bun run typecheck      # type-check the app and its tests without building
+bun run test           # run the unit tests (node --test)
 ```
 
 `npm` works as well for a one-off (`npm install`, `npm run build`), but the lockfile
