@@ -28,6 +28,7 @@ cargo run --bin trss-web      # http://127.0.0.1:8080, serves ./web/dist
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
+| `TRSS_DB_PATH` | (none, required) | Path of the SQLite database file the worker shares; the server does not start without it |
 | `TRSS_WEB_BIND` | `127.0.0.1` | IP address to listen on (there is no app login; bind wider only behind LAN/VPN/front-door auth) |
 | `TRSS_WEB_PORT` | `8080` | Port to listen on |
 | `TRSS_WEB_STATIC_DIR` | `web/dist` | Directory holding the frontend build (`index.html`, `assets/`) |
