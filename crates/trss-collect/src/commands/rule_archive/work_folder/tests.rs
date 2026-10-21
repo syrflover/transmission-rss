@@ -679,7 +679,7 @@ async fn the_blocking_work_keeps_its_hold_after_the_waiting_task_is_aborted() {
     let _ = waiting.await;
     assert!(
         watch.upgrade().is_some(),
-        "the work still runs, so it still holds the lock"
+        "the work still runs, so it still keeps the hold"
     );
     go_tx.send(()).unwrap();
     tokio::task::spawn_blocking(move || done_rx.recv().unwrap())

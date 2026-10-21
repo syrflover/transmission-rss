@@ -96,14 +96,13 @@ impl TransmissionCounts {
     /// Whether the look this was taken from is fresh enough to believe as of
     /// `now`: not older than [`DOWNLOADING_FRESH_CYCLES`] cycle intervals.
     ///
-    /// While the worker is busy (`trss_core::heartbeat::worker_busy`) it is
-    /// alive, and the look it left is the one before the cycle it is in; a
-    /// cycle longer than the allowance would otherwise age the look out before
-    /// the cycle can leave a newer one. So the caller passes the start of that
-    /// cycle as `busy_cycle_started_at` and the look's age is counted up to it.
-    /// `None` (the worker is not busy, or has no cycle) counts the age up to
-    /// `now`: a worker that died in a cycle, or holds the lock past the bound,
-    /// does not hold the look.
+    /// While a cycle runs ([`CycleState::is_running`](crate::store::history::CycleState::is_running)),
+    /// the look it left is the one before that cycle; a cycle longer than the
+    /// allowance would otherwise age the look out before the cycle can leave a
+    /// newer one. So the caller passes the start of that cycle as
+    /// `busy_cycle_started_at` and the look's age is counted up to it. `None`
+    /// (no cycle runs) counts the age up to `now`: a cycle that has gone on
+    /// past its bound, or that the process stopped in, does not hold the look.
     pub fn look_is_fresh(
         &self,
         interval_ms: i64,

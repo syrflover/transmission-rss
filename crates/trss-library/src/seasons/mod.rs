@@ -15,10 +15,10 @@
 //! ([`Seasons::follow_cover`]), whoever saves it: the user, or the worker's
 //! automatic link of a first season.
 //!
-//! [`Seasons`] puts them together for both processes. The web carries out the
+//! [`Seasons`] puts them together for the web and the worker. The web carries out the
 //! user's choices itself (search, link, unlink, order, ask again) because the
 //! user waits for the answer and needs the reason when AniList refuses; the
-//! worker runs the queue, outside the worker lock. Both write the database
+//! worker runs the queue, beside the collection cycle. Both write the database
 //! side by side safely: every change of a season's links is checked against the
 //! link's version in its transaction, so a search that finishes late never
 //! undoes a user's choice.
@@ -39,7 +39,10 @@ mod tests;
 
 use std::{sync::Arc, time::Duration};
 
-use trss_core::{Clock, Db, Millis};
+use trss_core::{
+    queue::{Queue, POLL},
+    Clock, Db, Millis,
+};
 
 use crate::{
     artwork::{Artwork, USER_MAX_WAIT},
@@ -79,6 +82,8 @@ pub struct Seasons {
     clock: Clock,
     /// Rung when the queue stored a season's entry.
     stored: Arc<tokio::sync::Notify>,
+    /// The queue's loop, which one task at a time runs ([`Seasons::run_queue`]).
+    queue: Queue,
 }
 
 impl Seasons {
@@ -89,6 +94,7 @@ impl Seasons {
             anilist,
             clock,
             stored: Arc::default(),
+            queue: Queue::new(queue::QUEUE, POLL),
         }
     }
 
@@ -112,6 +118,7 @@ impl Seasons {
             anilist: artwork.anilist.clone(),
             clock: clock_of(artwork),
             stored: Arc::clone(&self.stored),
+            queue: self.queue.clone(),
         }
     }
 

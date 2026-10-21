@@ -22,7 +22,6 @@ pub mod files;
 pub mod folder_check;
 pub mod folder_locks;
 pub mod folders;
-pub mod heartbeat;
 pub mod lock;
 #[cfg(any(test, feature = "test-support"))]
 pub mod loopback;
@@ -35,7 +34,7 @@ pub mod trname_names;
 
 pub use clock::{system_clock, Clock, Millis};
 pub use db::{Db, DbError};
-pub use lock::{lock_path_for, CycleLock, LockFile, WorkerHold, WorkerLock};
+pub use lock::{instance_lock_path, InstanceLock};
 
 /// The `User-Agent` of the requests trss makes to feeds and outside services.
 pub const USER_AGENT: &str = "trss/0.3";

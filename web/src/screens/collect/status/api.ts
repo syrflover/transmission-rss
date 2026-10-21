@@ -31,7 +31,8 @@ export interface Board {
   transmission: { downloading: number; seeding: number; taken_at: number } | null;
   /**
    * `next_at` is when the next cycle is due; `null` until a worker has recorded its interval.
-   * `stalled` is true once it is more than one interval overdue: the worker is not checking.
+   * `stalled` is true when an unfinished cycle has run past its bound, or a finished one's next
+   * check is more than one interval overdue with no cycle started since: the checks have stopped.
    */
   cycle: { started_at: number; finished_at: number | null; next_at: number | null; stalled: boolean } | null;
   /** False until the collect folder is chosen; the worker adds no torrent before that. */
@@ -44,7 +45,7 @@ export function loadBoard(signal?: AbortSignal): Promise<Board> {
   return api<Board>(`/collect/status?tz_offset=${offset}`, { signal });
 }
 
-/** What the status says in place of a past next-check time when the worker has stopped checking. */
-export const STALLED = "RSS 확인이 멈췄어요. worker가 돌고 있는지 확인해 주세요.";
+/** What the status says in place of a past next-check time when the checks have stopped. */
+export const STALLED = "RSS 확인이 멈췄어요. 컨테이너 로그를 확인해 주세요.";
 /** The same on a phone's one-line summary. */
 export const STALLED_SHORT = "RSS 멈춤";

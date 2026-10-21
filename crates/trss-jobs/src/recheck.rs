@@ -33,16 +33,16 @@
 //! fall outside the window, so 14 readings are made in the 14 days.
 //!
 //! A reading is claimed in the database (`subtitle_item_rechecks.checked_at`)
-//! before its first request, so a restart or another worker does not read the
-//! item again the same day, and one cut short by a shutdown gives its claim
+//! before its first request, so a restart does not read the item again the
+//! same day, and one cut short by a shutdown gives its claim
 //! back with the reading it replaced. The claim clears that reading's result
 //! (`result`, `observed`, `job_id`, `result_at`), so an item claimed and
 //! killed shows no result rather than the last one. The pass reads the clock
 //! to pick the items and again at the claim; the claim's time stamps the
 //! reading, the job and its log. A reading dated after the clock by no more
-//! than [`CLOCK_BACK`] is another worker's claim from a little later and
-//! stands; one dated further ahead is from a clock that went back and does
-//! not hold.
+//! than [`CLOCK_BACK`] is taken for a claim from a little later (an earlier
+//! process's clock may have run slightly ahead) and stands; one dated further
+//! ahead is from a clock that went back and does not hold.
 //!
 //! Items that share a post are read together: the post is read once and each
 //! key asked for once. Requests keep the per-host spacing of the sources
@@ -62,7 +62,7 @@
 //! nothing; a Drive file shows by its modified time as well.
 //!
 //! A difference makes the job `recheck:<item>:<digest of the new values>`, so
-//! a second look at the same change (a restart, another worker, the next day)
+//! a second look at the same change (a restart, the next day)
 //! finds that job and makes none; a file that changes again is another job. A
 //! revision job that fails is not made again by itself.
 //!
@@ -169,8 +169,8 @@ pub const INTERVAL: Millis = DAY_MS;
 pub const SLACK: Millis = 90 * 60 * 1000;
 
 /// How far ahead of the clock a reading may be dated before the clock is taken
-/// to have gone back (a reading another worker's later pass made is a little
-/// ahead of this one's clock, and still counts).
+/// to have gone back (a reading an earlier process made by a clock that ran a
+/// little ahead of this one still counts).
 pub const CLOCK_BACK: Millis = 60 * 60 * 1000;
 
 /// What the request ID of the job a recheck makes starts with.

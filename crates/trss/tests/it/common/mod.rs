@@ -25,7 +25,7 @@ use trss_collect::store::{
     channels::{ChannelInput, ChannelStore, ChannelWithRules, RuleInput},
     history::{HistoryItem, HistoryQuery, HistoryStore, MAX_PAGE_SIZE},
 };
-use trss_core::{lock_path_for, settings::SettingsStore, CycleLock, Db};
+use trss_core::{settings::SettingsStore, Db};
 use trss_transmission::RenamePolicy;
 
 /// The collect folder every harness starts with. Test channels are given by
@@ -92,23 +92,6 @@ impl Harness {
         self.dir.path().join("app.db")
     }
 
-    /// Waits until a worker stopped midway (its task aborted) has let go of
-    /// the lock between processes. It lets go only after its last heartbeat,
-    /// in a task of its own, and every worker [`Harness::worker`] builds is
-    /// another process to it, which finds the lock taken until then and
-    /// answers `Busy`. A restarted process finds it free at once: the
-    /// operating system let go of the stopped one's.
-    pub async fn wait_lock_free(&self) {
-        let lock = lock_path_for(&self.db_path());
-        for _ in 0..1000 {
-            if CycleLock::try_acquire(&lock).unwrap().is_some() {
-                return;
-            }
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-        panic!("the stopped worker never let go of its lock");
-    }
-
     pub fn worker_env(&self) -> WorkerEnv {
         self.worker_env_with(&[])
     }
@@ -128,7 +111,7 @@ impl Harness {
     }
 
     /// A worker on this harness's database and fakes, with a fast rename
-    /// policy, a manual clock and no minimum gap between cycles.
+    /// policy and a manual clock.
     pub fn worker(&self) -> Worker {
         self.worker_with_db(self.db.clone())
     }
@@ -139,14 +122,13 @@ impl Harness {
 
     pub fn worker_with(&self, db: Db, env: &WorkerEnv) -> Worker {
         let clock = self.clock.clone();
-        Worker::new(db, env, lock_path_for(&self.db_path()))
+        Worker::new(db, env)
             .unwrap()
             .with_clock(Arc::new(move || clock.load(Ordering::SeqCst)))
             .with_rename_policy(RenamePolicy {
                 delay: Duration::from_millis(5),
                 attempts: 3,
             })
-            .with_min_gap(Duration::ZERO)
     }
 
     /// Moves the manual clock forward.

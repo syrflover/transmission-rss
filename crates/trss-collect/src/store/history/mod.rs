@@ -44,8 +44,9 @@ mod tests;
 
 pub use identity::{identity_key, stored_link};
 pub use model::{
-    CycleState, HistoryChange, HistoryCursor, HistoryItem, HistoryPage, HistoryQuery,
-    HistoryResult, KnownItem, Observation, Recorded, Transition, DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE,
+    running_bound, CycleState, HistoryChange, HistoryCursor, HistoryItem, HistoryPage,
+    HistoryQuery, HistoryResult, KnownItem, Observation, Recorded, Transition, DEFAULT_PAGE_SIZE,
+    MAX_PAGE_SIZE,
 };
 pub use rule_items::ReceivedItem;
 
@@ -368,16 +369,9 @@ impl HistoryStore {
             .await
     }
 
-    /// Marks a collection cycle as started at `now`, unless the previous cycle
-    /// started less than `min_gap` milliseconds ago; returns whether it did.
-    pub async fn try_begin_cycle(
-        &self,
-        now: Millis,
-        min_gap: Millis,
-    ) -> Result<bool, HistoryError> {
-        self.db
-            .run(move |c| repo::try_begin_cycle(c, now, min_gap))
-            .await
+    /// Marks a collection cycle as started at `now`.
+    pub async fn begin_cycle(&self, now: Millis) -> Result<(), HistoryError> {
+        self.db.run(move |c| repo::begin_cycle(c, now)).await
     }
 
     pub async fn finish_cycle(&self, now: Millis) -> Result<(), HistoryError> {

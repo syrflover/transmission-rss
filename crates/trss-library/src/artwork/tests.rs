@@ -720,11 +720,10 @@ async fn the_queue_stops_on_shutdown_and_a_restart_resumes_it() {
     env.fake.add_search("A", vec![], &[]);
     env.fake.add_search("B", vec![], &[]);
     let cancel = tokio_util::sync::CancellationToken::new();
-    let lock = trss_core::LockFile::Artwork.path_for(&env.dir.path().join("trss.db"));
     let art = env.art.clone().with_spacing(Duration::from_secs(3600));
     let run = tokio::spawn({
-        let (art, lock, cancel) = (art.clone(), lock.clone(), cancel.clone());
-        async move { art.run_queue(lock, cancel).await }
+        let (art, cancel) = (art.clone(), cancel.clone());
+        async move { art.run_queue(cancel).await }
     });
     // The first search goes out at once; the second waits its turn, an hour.
     for _ in 0..100 {

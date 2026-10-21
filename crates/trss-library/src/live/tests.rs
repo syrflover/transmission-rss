@@ -1,6 +1,6 @@
 //! What the inotify alerts make of the watch folders: real temporary folders
-//! and the kernel's own alerts, a context of the library alone (the worker's
-//! lock and heartbeat are the real ones, on a temporary database), and no mock
+//! and the kernel's own alerts, a context of the library alone on a temporary
+//! database, and no mock
 //! of the watching itself. `tree` tests the watches of one folder; these tests
 //! start the whole [`LiveWatch`].
 //!

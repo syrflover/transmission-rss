@@ -13,16 +13,17 @@
 //!   is releasing is received again once a day. A finished entry never is, until
 //!   the user asks.
 //!
-//! One process runs the queue at a time (`<db path>.seasons.lock`). Searches
+//! The queue never runs twice at once in the process
+//! ([`trss_core::queue::Queue`]). Searches
 //! come before refreshes. A failure to reach AniList is tried again later
 //! ([`crate::artwork::queue::RETRY_DELAYS`]); a refresh that fails waits an hour,
 //! and AniList's `429` waits as long as it says.
 
-use std::{path::PathBuf, time::Duration};
+use std::time::Duration;
 
 use tokio_util::sync::CancellationToken;
 
-use trss_core::queue::{after, retry, run_item, Queue, Retry, LOCK_RETRY, POLL};
+use trss_core::queue::{after, retry, run_item, Retry, POLL};
 
 use crate::{
     artwork::queue::RETRY_DELAYS,
@@ -248,9 +249,7 @@ impl Seasons {
 
     /// Runs the queue until `cancel` fires. A job cut short by the shutdown
     /// stays in the database and runs at the next start.
-    pub async fn run_queue(&self, lock_path: PathBuf, cancel: CancellationToken) {
-        Queue::new(QUEUE, lock_path, POLL, LOCK_RETRY)
-            .run(&cancel, || self.run_next())
-            .await;
+    pub async fn run_queue(&self, cancel: CancellationToken) {
+        self.queue.run(&cancel, || self.run_next()).await;
     }
 }

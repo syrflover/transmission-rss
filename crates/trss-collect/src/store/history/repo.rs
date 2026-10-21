@@ -416,25 +416,14 @@ pub fn received_titles_of_rules(
     Ok(by_rule)
 }
 
-/// Marks a cycle as started unless the previous one started less than
-/// `min_gap` ago. The check and the mark are one write transaction.
-pub fn try_begin_cycle(conn: &mut Connection, now: Millis, min_gap: Millis) -> Result<bool> {
-    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    let last: Option<Millis> = tx
-        .prepare_cached("SELECT started_at FROM collection_cycle WHERE id = 1")?
-        .query_row([], |row| row.get(0))
-        .optional()?;
-    // `now < last` means the clock went backwards; do not wait for it to catch up.
-    if last.is_some_and(|last| now >= last && now - last < min_gap) {
-        return Ok(false);
-    }
-    tx.prepare_cached(
+/// Marks a cycle as started at `now`, replacing the previous one's marks.
+pub fn begin_cycle(conn: &Connection, now: Millis) -> Result<()> {
+    conn.prepare_cached(
         "INSERT INTO collection_cycle (id, started_at, finished_at) VALUES (1, ?1, NULL)
          ON CONFLICT (id) DO UPDATE SET started_at = ?1, finished_at = NULL",
     )?
     .execute([now])?;
-    tx.commit()?;
-    Ok(true)
+    Ok(())
 }
 
 pub fn finish_cycle(conn: &Connection, now: Millis) -> Result<()> {

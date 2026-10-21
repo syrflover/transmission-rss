@@ -28,8 +28,8 @@ pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// How long one request to Transmission may take in total, from sending it to
 /// reading the whole answer. `transmission-rpc` builds its client without any
-/// timeout, so one hung request would otherwise wait forever, holding the
-/// worker's lock. A `torrent-add` of a `.torrent` URL is the slow kind (Transmission
+/// timeout, so one hung request would otherwise wait forever, holding up the
+/// cycle or command that sent it. A `torrent-add` of a `.torrent` URL is the slow kind (Transmission
 /// fetches the file before it answers); 30 seconds is far above what it takes
 /// when the tracker responds. A request that times out fails the item, which the
 /// next cycle retries.

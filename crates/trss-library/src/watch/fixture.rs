@@ -16,10 +16,7 @@ use std::{
 use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
 
-use trss_core::{
-    folder_locks::FolderLocks, heartbeat::HeartbeatStore, lock_path_for, settings::SettingsStore,
-    Clock, Db, Millis, WorkerLock,
-};
+use trss_core::{folder_locks::FolderLocks, settings::SettingsStore, Clock, Db, Millis};
 
 use crate::{
     discovery,
@@ -30,9 +27,9 @@ use crate::{
 
 pub(crate) struct Fixture {
     pub ctx: WatchContext,
-    pub db: Db,
-    pub dir: TempDir,
-    /// A folder under `dir` that watch folders go in.
+    /// Holds the database and the media folder.
+    _dir: TempDir,
+    /// A folder under the fixture's folder that watch folders go in.
     pub media: PathBuf,
     clock: Arc<AtomicI64>,
 }
@@ -58,8 +55,7 @@ impl Fixture {
                 scan_cache: ScanCaches::default(),
                 live: LiveWatch::new(config),
             },
-            db,
-            dir,
+            _dir: dir,
             media,
             clock: Arc::new(AtomicI64::new(1_000_000)),
         }
@@ -155,13 +151,7 @@ impl Fixture {
 
     /// Starts watching the registered folders, as a running worker does.
     pub async fn start_watching(&self) {
-        let lock = WorkerLock::new(
-            lock_path_for(&self.dir.path().join("app.db")),
-            HeartbeatStore::new(self.db.clone()),
-            self.clock(),
-            Duration::from_secs(15),
-        );
-        self.ctx.live.start(self.ctx.clone(), lock, self.clock());
+        self.ctx.live.start(self.ctx.clone(), self.clock());
         self.ctx.live.sync_folders().await;
     }
 }

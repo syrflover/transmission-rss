@@ -432,7 +432,6 @@ async fn a_start_cut_short_carries_on_and_checks_each_file_again() {
     s.revision_row(&rule, "Show - 50", "Show S03E02.mkv", true)
         .await;
     gate.release_all();
-    s.h.wait_lock_free().await;
     assert_eq!(
         s.h.worker()
             .run_commands(&CancellationToken::new())
@@ -478,7 +477,6 @@ impl Scene {
         task.abort();
         let _ = task.await;
         gate.release_all();
-        self.h.wait_lock_free().await;
         assert_eq!(self.rule(rule).await.episode, -24);
     }
 

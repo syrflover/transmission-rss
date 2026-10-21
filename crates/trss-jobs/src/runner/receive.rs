@@ -35,9 +35,10 @@
 //!
 //! # Restart
 //!
-//! A worker that dies leaves its job `running`; the next one to hold the
-//! worker lock claims it again ([`JobRun::claim_next`]). The lock is the
-//! kernel's and goes with the process, so no earlier worker still writes.
+//! A `trss` that dies leaves its job `running`; the next one to start claims
+//! it again ([`JobRun::claim_next`]). It starts only once the earlier one's
+//! instance lock is gone ([`trss_core::InstanceLock`]), which is the kernel's
+//! and goes with the process, so no earlier process still writes.
 //! Before receiving a file again the runner compares its unfinished receipt
 //! with the disk ([`Receiver::recover`]):
 //!

@@ -494,17 +494,15 @@ async fn a_list_that_never_ends_is_cut_at_the_page_limit() {
 
 #[tokio::test]
 async fn the_queue_reads_the_recent_list_once_and_then_waits_for_the_period() {
-    // That a queue waits while its lock is taken elsewhere is trss-core's rule
-    // (`queue` tests); this is the caption list's read interval.
-    let dir = tempfile::tempdir().unwrap();
-    let lock = dir.path().join("x.lock");
+    // That a queue runs once at a time is trss-core's rule (`queue` tests);
+    // this is the caption list's read interval.
     let env = Env::new().await;
     env.fake.set_recent(env.many(3));
 
     let cancel = tokio_util::sync::CancellationToken::new();
     let queue = tokio::spawn({
-        let (observer, lock, cancel) = (env.observer.clone(), lock.clone(), cancel.clone());
-        async move { observer.run_queue(lock, cancel).await }
+        let (observer, cancel) = (env.observer.clone(), cancel.clone());
+        async move { observer.run_queue(cancel).await }
     });
     for _ in 0..100 {
         if !env.candidates(1).await.is_empty() {

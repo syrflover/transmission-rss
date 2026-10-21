@@ -21,9 +21,9 @@
 //! again a day later), while the other weeks decide theirs as usual.
 //!
 //! A failure to reach Anissia puts every anime that was still to be found off
-//! for an hour, and `429` for as long as Anissia says. One process runs the
-//! queue at a time (`<db path>.anissia.lock`), outside the collection cycle's
-//! lock: it touches neither the media nor Transmission.
+//! for an hour, and `429` for as long as Anissia says. The queue never
+//! runs twice at once in the process ([`trss_core::queue::Queue`]) and runs
+//! beside the collection cycle: it touches neither the media nor Transmission.
 //!
 //! The observation of the subtitle lines of every anime is [`captions`].
 
@@ -31,12 +31,12 @@ pub mod captions;
 #[cfg(test)]
 mod captions_tests;
 
-use std::{path::PathBuf, time::Duration};
+use std::time::Duration;
 
 use tokio_util::sync::CancellationToken;
 
 use trss_core::{
-    queue::{after, run_item, Queue, LOCK_RETRY, POLL},
+    queue::{after, run_item, Queue, POLL},
     Millis,
 };
 
@@ -70,11 +70,18 @@ pub struct Ran {
 pub struct AnissiaQueue {
     anissia: Anissia,
     store: AnissiaStore,
+    /// The queue's loop, which one task at a time runs
+    /// ([`AnissiaQueue::run_queue`]).
+    queue: Queue,
 }
 
 impl AnissiaQueue {
     pub fn new(anissia: Anissia, store: AnissiaStore) -> Self {
-        AnissiaQueue { anissia, store }
+        AnissiaQueue {
+            anissia,
+            store,
+            queue: Queue::new(QUEUE, POLL),
+        }
     }
 
     fn now(&self) -> Millis {
@@ -251,9 +258,7 @@ impl AnissiaQueue {
 
     /// Runs the queue until `cancel` fires. A refresh cut short by the shutdown
     /// is due again at the next start.
-    pub async fn run_queue(&self, lock_path: PathBuf, cancel: CancellationToken) {
-        Queue::new(QUEUE, lock_path, POLL, LOCK_RETRY)
-            .run(&cancel, || self.run_next())
-            .await;
+    pub async fn run_queue(&self, cancel: CancellationToken) {
+        self.queue.run(&cancel, || self.run_next()).await;
     }
 }

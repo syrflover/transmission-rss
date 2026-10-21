@@ -1155,12 +1155,11 @@ fn cursor_round_trips_through_text() {
 // --- cycle marker -----------------------------------------------------------
 
 #[tokio::test]
-async fn cycle_marker_admits_one_start_per_gap() {
+async fn the_cycle_marker_keeps_the_last_start_and_its_end() {
     let (_dir, _db, history) = store().await;
     assert_eq!(history.last_cycle().await.unwrap(), None);
 
-    assert!(history.try_begin_cycle(10_000, 5_000).await.unwrap());
-    assert!(!history.try_begin_cycle(12_000, 5_000).await.unwrap());
+    history.begin_cycle(10_000).await.unwrap();
     assert_eq!(
         history.last_cycle().await.unwrap(),
         Some(CycleState {
@@ -1175,24 +1174,173 @@ async fn cycle_marker_admits_one_start_per_gap() {
         Some(11_000)
     );
 
-    assert!(history.try_begin_cycle(15_000, 5_000).await.unwrap());
-    // A clock that went backwards does not block the worker.
-    assert!(history.try_begin_cycle(1_000, 5_000).await.unwrap());
+    // A new start, however soon, replaces both marks.
+    history.begin_cycle(12_000).await.unwrap();
+    assert_eq!(
+        history.last_cycle().await.unwrap(),
+        Some(CycleState {
+            started_at: 12_000,
+            finished_at: None
+        })
+    );
 }
 
-#[tokio::test]
-async fn two_handles_race_for_one_cycle_start() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("app.db");
-    let a = HistoryStore::new(Db::open(&path).await.unwrap());
-    let b = HistoryStore::new(Db::open(&path).await.unwrap());
+// --- whether the cycles run or stopped ------------------------------------------------
 
-    let (ra, rb) = tokio::join!(
-        a.try_begin_cycle(50_000, 10_000),
-        b.try_begin_cycle(50_000, 10_000)
+const MINUTE: i64 = 60_000;
+/// 2026-09-30 12:00:00 UTC.
+const NOON: i64 = 1_790_769_600_000;
+
+fn cycle(started_at: Millis, finished_at: Option<Millis>) -> CycleState {
+    CycleState {
+        started_at,
+        finished_at,
+    }
+}
+
+/// One judgement: the cycle and the interval the worker recorded, as of `now`.
+struct Case {
+    what: &'static str,
+    cycle: CycleState,
+    interval: i64,
+    now: Millis,
+    expected: bool,
+}
+
+fn run(cases: &[Case], judge: fn(&CycleState, i64, Millis) -> bool) {
+    for case in cases {
+        assert_eq!(
+            judge(&case.cycle, case.interval, case.now),
+            case.expected,
+            "{}",
+            case.what
+        );
+    }
+}
+
+#[test]
+fn a_cycle_runs_for_half_an_hour_at_least_and_ten_intervals_with_a_long_one() {
+    assert_eq!(running_bound(MINUTE), 30 * MINUTE);
+    assert_eq!(running_bound(3 * MINUTE), 30 * MINUTE);
+    assert_eq!(running_bound(10 * MINUTE), 100 * MINUTE);
+    assert_eq!(running_bound(i64::MAX), i64::MAX);
+}
+
+#[test]
+fn a_finished_cycle_is_stalled_once_the_next_check_is_more_than_one_interval_overdue() {
+    let started = NOON - 60 * MINUTE;
+    let finished = cycle(started, Some(started + 1_000));
+    let case = |what, now, expected| Case {
+        what,
+        cycle: finished,
+        interval: 20 * MINUTE,
+        now,
+        expected,
+    };
+    run(
+        &[
+            // Due at 11:20; late but within one more interval until 11:40.
+            case("due 20 minutes ago", NOON - 20 * MINUTE, false),
+            case(
+                "one more interval and a millisecond",
+                NOON - 20 * MINUTE + 1,
+                true,
+            ),
+            case("40 minutes overdue", NOON, true),
+            Case {
+                what: "a new cycle starting puts it back on time",
+                cycle: cycle(NOON - MINUTE, None),
+                interval: 20 * MINUTE,
+                now: NOON,
+                expected: false,
+            },
+            Case {
+                what: "three intervals overdue",
+                cycle: cycle(NOON - 4 * MINUTE, Some(NOON - 4 * MINUTE + 1_000)),
+                interval: MINUTE,
+                now: NOON,
+                expected: true,
+            },
+        ],
+        CycleState::is_stalled,
     );
-    let started = [ra.unwrap(), rb.unwrap()];
-    assert_eq!(started.iter().filter(|s| **s).count(), 1);
+}
+
+#[test]
+fn an_unfinished_cycle_runs_until_the_larger_of_half_an_hour_and_ten_intervals_and_then_is_stalled()
+{
+    // `running` is whether the cycle is taken for running, the opposite of
+    // stalled for a cycle without an end.
+    let case = |what, started_ago, interval, now_after_start, running| {
+        (
+            Case {
+                what,
+                cycle: cycle(NOON - started_ago, None),
+                interval,
+                now: NOON - started_ago + now_after_start,
+                expected: running,
+            },
+            Case {
+                what,
+                cycle: cycle(NOON - started_ago, None),
+                interval,
+                now: NOON - started_ago + now_after_start,
+                expected: !running,
+            },
+        )
+    };
+    let cases = [
+        // A cycle three intervals old that has not ended is running.
+        case("three intervals in", 3 * MINUTE, MINUTE, 3 * MINUTE, true),
+        case(
+            "at the 30 minute floor",
+            3 * MINUTE,
+            MINUTE,
+            30 * MINUTE,
+            true,
+        ),
+        case("past the floor", 3 * MINUTE, MINUTE, 30 * MINUTE + 1, false),
+        // With a long interval the bound is ten intervals.
+        case(
+            "at ten intervals",
+            3 * MINUTE,
+            10 * MINUTE,
+            100 * MINUTE,
+            true,
+        ),
+        case(
+            "past ten intervals",
+            3 * MINUTE,
+            10 * MINUTE,
+            100 * MINUTE + 1,
+            false,
+        ),
+        // A five-minute interval has a bound of fifty minutes, from ten minutes in.
+        case("ten minutes in", 10 * MINUTE, 5 * MINUTE, 10 * MINUTE, true),
+        case(
+            "at fifty minutes",
+            10 * MINUTE,
+            5 * MINUTE,
+            50 * MINUTE,
+            true,
+        ),
+        case(
+            "past fifty minutes",
+            10 * MINUTE,
+            5 * MINUTE,
+            50 * MINUTE + 1,
+            false,
+        ),
+    ];
+    let (running, stalled): (Vec<Case>, Vec<Case>) = cases.into_iter().unzip();
+    run(&running, CycleState::is_running);
+    run(&stalled, CycleState::is_stalled);
+}
+
+#[test]
+fn a_finished_cycle_is_not_running() {
+    let finished = cycle(NOON - MINUTE, Some(NOON - MINUTE + 1_000));
+    assert!(!finished.is_running(5 * MINUTE, NOON));
 }
 
 #[tokio::test]

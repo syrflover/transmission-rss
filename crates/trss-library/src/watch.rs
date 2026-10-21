@@ -57,8 +57,8 @@
 //!
 //! # A folder that hangs
 //!
-//! Every scan runs on a blocking thread, and the cycle waits for it under the
-//! worker's lock. A mount that stops answering (NFS, SMB) would hold the lock for good,
+//! Every scan runs on a blocking thread, and the cycle waits for it. A mount
+//! that stops answering (NFS, SMB) would hold the cycle up for good,
 //! so a scan gets [`SCAN_TIMEOUT`]; past it the folder is recorded as unreadable
 //! and the cycle goes on. The thread cannot be stopped, but a scan only reads, so
 //! leaving it to finish (or hang) harms nothing. While it still runs, the folder

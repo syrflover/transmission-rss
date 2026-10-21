@@ -13,7 +13,7 @@ use rusqlite::{Connection, OpenFlags, TransactionBehavior};
 /// deliberately not part of the app settings.
 pub const DB_PATH_ENV: &str = "TRSS_DB_PATH";
 
-/// How long a connection waits for a lock held by the other process.
+/// How long a connection waits for a lock held by another connection.
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// How many prepared statements the connection keeps for `prepare_cached`.
@@ -193,6 +193,8 @@ const MIGRATIONS: &[Migration] = &[
     Migration::Sql(include_str!("../migrations/library/video_check.sql")),
     // 63: a movie's Anissia link, a movie-only work's automatic AniList search, the episode a movie job places on
     Migration::Sql(include_str!("../migrations/library/movies.sql")),
+    // 64: no worker heartbeat: one process runs on the database and the board judges a stop by the cycles alone
+    Migration::Sql(include_str!("../migrations/status/no_heartbeat.sql")),
 ];
 
 #[derive(Debug, thiserror::Error)]
@@ -364,8 +366,8 @@ mod template {
     }
 }
 
-/// Applies pending migrations inside write transactions, so two processes
-/// starting together apply each migration once: the ones in a row that are
+/// Applies pending migrations inside write transactions, so two handles
+/// opening the database together apply each migration once: the ones in a row that are
 /// no [`Migration::Remake`] in one, each remake in one of its own with
 /// foreign keys off.
 fn migrate(conn: &mut Connection) -> Result<(), DbError> {

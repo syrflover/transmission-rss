@@ -135,20 +135,15 @@ impl Worker {
         }
     }
 
-    /// Clears the bindings of the remote screens when this worker holds the
-    /// server browser's lock, with the browser or without it (see
-    /// [`Worker::with_unused_browser_lock`]): the runs they name were an
-    /// earlier worker's ([`trss_jobs::screen`]), and a job that waits for a
-    /// check would otherwise show a screen for a run that is gone. A worker
-    /// that does not hold the lock leaves them, since they may be the other
-    /// worker's.
+    /// Clears the bindings of the remote screens, with the browser or without
+    /// it: the runs they name were an earlier process's
+    /// ([`trss_jobs::screen`]), since one process runs on the app data, and a
+    /// job that waits for a check would otherwise show a screen for a run that
+    /// is gone.
     pub(crate) async fn clear_screens(&self) {
         let Some(runner) = &self.jobs else {
             return;
         };
-        if self.browser.is_none() && !self.browser_lock_unused {
-            return;
-        }
         match runner.screens().unbind_all((self.clock)()).await {
             Ok(0) => {}
             Ok(n) => {
@@ -184,9 +179,8 @@ impl Worker {
         }
     }
 
-    /// Runs the ready subtitle jobs now, if this worker can take the lock.
-    /// Returns how many runs ended; `None` when another worker holds the lock
-    /// or this worker is running jobs already.
+    /// Runs the ready subtitle jobs now, unless this worker is running them
+    /// already. Returns how many runs ended; `None` when it is running them.
     pub async fn run_jobs_once(&self, cancel: &CancellationToken) -> Result<Option<usize>, String> {
         let Some(runner) = &self.jobs else {
             return Ok(Some(0));
@@ -214,18 +208,17 @@ impl Worker {
         if !ready && !runner.has_cleanups().await.map_err(|e| e.to_string())? {
             return Ok(Some(0));
         }
-        let Some(hold) = self.hold().await.map_err(|e| e.to_string())? else {
-            return Ok(None);
-        };
         // A person's cleanups of stored files go first, in this task: no
         // job stores or links a file between a cleanup's look at it and its
         // removal (`trss_jobs::place::cleanup`).
         if let Err(err) = runner.run_cleanups().await {
             eprintln!("Stored files: cannot carry out the cleanups: {err}");
         }
-        let ran = runner.run_ready(cancel).await;
-        hold.release().await;
-        ran.map(Some).map_err(|e| e.to_string())
+        runner
+            .run_ready(cancel)
+            .await
+            .map(Some)
+            .map_err(|e| e.to_string())
     }
 
     /// The jobs until `cancel` fires: a look at the start, whenever the web
@@ -354,7 +347,7 @@ mod tests {
             (key == "TRANSMISSION_URL").then(|| "http://127.0.0.1:1/transmission/rpc".to_owned())
         })
         .unwrap();
-        let worker = Worker::new(db.clone(), &env, dir.path().join("app.db.worker.lock"))
+        let worker = Worker::new(db.clone(), &env)
             .unwrap()
             .with_clock(Arc::new(|| 2_000))
             .with_jobs(Runner::new(
@@ -433,7 +426,7 @@ mod tests {
             (key == "TRANSMISSION_URL").then(|| "http://127.0.0.1:1/transmission/rpc".to_owned())
         })
         .unwrap();
-        let worker = Worker::new(db.clone(), &env, dir.path().join("app.db.worker.lock"))
+        let worker = Worker::new(db.clone(), &env)
             .unwrap()
             .with_clock(Arc::new(|| 2_000))
             .with_jobs(Runner::new(
@@ -534,7 +527,7 @@ mod tests {
             (key == "TRANSMISSION_URL").then(|| "http://127.0.0.1:1/transmission/rpc".to_owned())
         })
         .unwrap();
-        let worker = Worker::new(db.clone(), &env, dir.path().join("app.db.worker.lock"))
+        let worker = Worker::new(db.clone(), &env)
             .unwrap()
             .with_clock(Arc::new(|| 2_000))
             .with_jobs(Runner::new(
@@ -593,25 +586,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_worker_that_holds_the_browser_lock_without_the_browser_closes_the_leftover_screens()
-    {
+    async fn a_worker_without_the_browser_closes_the_leftover_screens() {
         let (_dir, worker, db) = with_a_bound_screen().await;
         assert_eq!(bound(&db).await, 1);
-        let worker = worker.with_unused_browser_lock();
 
         worker.clear_screens().await;
 
         assert_eq!(bound(&db).await, 0);
-    }
-
-    #[tokio::test]
-    async fn a_worker_that_does_not_hold_the_browser_lock_leaves_the_screens_alone() {
-        // They may be the screens of the worker that does hold it.
-        let (_dir, worker, db) = with_a_bound_screen().await;
-        assert_eq!(bound(&db).await, 1);
-
-        worker.clear_screens().await;
-
-        assert_eq!(bound(&db).await, 1);
     }
 }

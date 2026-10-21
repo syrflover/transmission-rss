@@ -1,7 +1,7 @@
 //! The start-up check that this process can write the app data folder.
 //!
 //! The web and the worker run as one user and share the database (WAL and
-//! shared-memory files included), the lock files and the receive area. A file an earlier deploy made as another user (root, before
+//! shared-memory files included), the lock file and the receive area. A file an earlier deploy made as another user (root, before
 //! the image ran as 1000:1000) is not writable here, and without this check it
 //! would fail later and in pieces: a lock that cannot be opened, a database
 //! that opens read-only. [`check_writable`] looks once at what trss writes in
@@ -23,7 +23,7 @@ use rustix::{
 
 use crate::{
     app_data::{ARTWORK_DIR, RECEIVE_DIR, SUBTITLE_FILES_DIR},
-    lock::LockFile,
+    lock,
 };
 
 /// How many unwritable paths the message names; the rest is counted.
@@ -89,26 +89,8 @@ impl std::error::Error for AccessError {}
 
 /// What trss writes in the app data folder next to the database file, as
 /// suffixes of the database's file name: the database's WAL, shared-memory
-/// and journal files, and every lock file ([`LockFile::ALL`]). The lock files
-/// come from [`LockFile`], so a new one is checked without being added here.
-pub const DATABASE_FILE_SUFFIXES: &[&str] = &SUFFIXES;
-
-const SUFFIXES: [&str; 4 + LockFile::ALL.len()] = {
-    const BEFORE_LOCKS: [&str; 4] = ["", "-wal", "-shm", "-journal"];
-    let mut all = [""; 4 + LockFile::ALL.len()];
-    let mut at = 0;
-    while at < BEFORE_LOCKS.len() {
-        all[at] = BEFORE_LOCKS[at];
-        at += 1;
-    }
-    let mut lock = 0;
-    while lock < LockFile::ALL.len() {
-        all[at] = LockFile::ALL[lock].suffix();
-        at += 1;
-        lock += 1;
-    }
-    all
-};
+/// and journal files, and the lock file ([`lock::SUFFIX`]).
+pub const DATABASE_FILE_SUFFIXES: &[&str] = &["", "-wal", "-shm", "-journal", lock::SUFFIX];
 
 /// The folders in the app data folder that trss writes into, with their
 /// subfolders: the receive area, the work covers (and their staging) and the
@@ -289,7 +271,7 @@ mod tests {
             return;
         }
         let dir = tempfile::tempdir().unwrap();
-        let lock = dir.path().join("trss.db.worker.lock");
+        let lock = dir.path().join("trss.db.lock");
         fs::write(&lock, "").unwrap();
         mode(&lock, 0o444);
 
@@ -310,15 +292,15 @@ mod tests {
     }
 
     #[test]
-    fn the_checked_suffixes_hold_every_lock_file_once() {
-        let mut suffixes: Vec<&str> = DATABASE_FILE_SUFFIXES.to_vec();
-        for lock in LockFile::ALL {
-            let at = suffixes.iter().position(|s| *s == lock.suffix());
-            assert!(at.is_some(), "{lock:?} is not checked");
-            suffixes.remove(at.unwrap());
-        }
-        // What is left are the database's own files.
-        assert_eq!(suffixes, ["", "-wal", "-shm", "-journal"]);
+    fn the_lock_file_is_checked() {
+        let checked = DATABASE_FILE_SUFFIXES.iter().map(|suffix| {
+            let mut name = std::ffi::OsString::from("/data/trss.db");
+            name.push(suffix);
+            PathBuf::from(name)
+        });
+        assert!(checked
+            .into_iter()
+            .any(|path| path == lock::instance_lock_path(Path::new("/data/trss.db"))));
     }
 
     #[test]

@@ -42,7 +42,6 @@ use super::{ApiError, AppState};
 use trss_collect::store::{channels::ChannelError, history::HistoryError, status::StatusError};
 use trss_core::{
     calendar::{date_text, DAY_MS},
-    heartbeat::cycle_stalled,
     Millis,
 };
 
@@ -102,19 +101,17 @@ pub struct TransmissionStatus {
 #[derive(Debug, Serialize)]
 pub struct CycleStatus {
     pub started_at: Millis,
-    /// `null` while that cycle runs or if the worker died in it.
+    /// `null` while that cycle runs or if the process stopped in it.
     pub finished_at: Option<Millis>,
     /// When the next cycle is due: the start plus the interval the worker
     /// recorded when it started. `null` while no worker has recorded one.
     pub next_at: Option<Millis>,
     /// The worker is not checking the feeds, and the board says so instead of a
-    /// past time: its heartbeat has stopped while a cycle never ended or the
-    /// next cycle is more than one interval overdue, or it has held the cycle
-    /// lock past the bound while still beating. A worker that is busy
-    /// (beating), however long its cycle and the folder reading after it have
-    /// taken, is not stalled. The rule is
-    /// [`trss_core::heartbeat::cycle_stalled`]; this API only passes the stored
-    /// cycle and heartbeat, and says `false` while no interval is recorded.
+    /// past time: a cycle without an end has gone on past its bound, or the
+    /// next cycle is more than one interval overdue. The rule is
+    /// [`CycleState::is_stalled`](trss_collect::store::history::CycleState::is_stalled);
+    /// this API only passes the stored cycle, and says `false` while no
+    /// interval is recorded.
     pub stalled: bool,
 }
 
@@ -210,7 +207,6 @@ pub async fn board(state: &AppState, now: Millis, tz_offset: i64) -> Result<Boar
             taken_at: t.taken_at,
         });
     let interval = state.status.cycle_interval().await.map_err(internal)?;
-    let heartbeat = state.heartbeat.read().await.map_err(internal)?;
     let cycle = state
         .history
         .last_cycle()
@@ -220,8 +216,7 @@ pub async fn board(state: &AppState, now: Millis, tz_offset: i64) -> Result<Boar
             started_at: c.started_at,
             finished_at: c.finished_at,
             next_at: interval.map(|ms| c.started_at.saturating_add(ms)),
-            stalled: interval
-                .is_some_and(|ms| cycle_stalled(c.into(), heartbeat.as_ref(), ms, now)),
+            stalled: interval.is_some_and(|ms| c.is_stalled(ms, now)),
         });
 
     let collect_folder_set = state

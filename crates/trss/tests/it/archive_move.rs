@@ -5,8 +5,8 @@
 //! Ticket 0011's completion rows.
 //!
 //! What stays here is what only a process shows (ADR 0015, ticket 0101): that a
-//! command the web accepted reaches the worker and ends, the lock and the turns
-//! of the folders, the order of the commands and the cycles beside a move, and
+//! command the web accepted reaches the worker and ends, the turns of the
+//! folders, the order of the commands and the cycles beside a move, and
 //! a move cut short by the worker stopping. The rules of the move (the checks,
 //! which torrents move, the waits for Transmission, the ends of the command)
 //! and of the cycle meeting an archived work folder are tested in trss-collect
@@ -283,7 +283,6 @@ async fn a_worker_stopped_after_transmission_moved_finishes_the_rest_on_the_next
     task.abort();
     let _ = task.await;
     gate.release_all();
-    s.h.wait_lock_free().await;
 
     let stored = CommandStore::new(s.h.db.clone())
         .get("archive-stop-01")
@@ -335,58 +334,6 @@ async fn a_worker_stopped_after_transmission_moved_finishes_the_rest_on_the_next
 }
 
 // --- 9. the cycle cannot add while a folder moves --------------------------------------------
-
-#[tokio::test]
-async fn no_cycle_runs_while_a_folder_moves() {
-    let s = Scene::new(true).await;
-    let c = s
-        .channel(
-            "feed-a",
-            &[
-                ("Clevatess", "Clevatess/Season 02"),
-                ("Other", "Other/Season 01"),
-            ],
-        )
-        .await;
-    s.seeding(
-        1,
-        "Clevatess S02E01.mkv",
-        &s.collect.join("Clevatess/Season 02"),
-    );
-    // An item for the rule being archived and one for another rule wait in the feed.
-    s.h.feeds.set_xml(
-        "feed-a",
-        &feed_xml(&[(2, "Clevatess S02E02.mkv"), (3, "Other S01E01.mkv")]),
-    );
-
-    let gate = s.h.tr.hold("torrent-set-location");
-    s.send("archive-cycle-1", &c.rules[0].id, "archive").await;
-    let worker = s.worker();
-    let task = tokio::spawn(async move { worker.run_commands(&CancellationToken::new()).await });
-    gate.wait_arrived().await;
-
-    // Mid-move: another worker's cycle and look for commands both find the
-    // lock between processes taken.
-    let tick = s.worker().tick(&CancellationToken::new()).await.unwrap();
-    assert_eq!(tick, TickOutcome::Busy);
-    assert_eq!(s.run().await, CommandsOutcome::Busy);
-    assert!(s.h.tr.calls_of("torrent-add").is_empty());
-
-    gate.release_all();
-    assert_eq!(task.await.unwrap().unwrap(), CommandsOutcome::Ran(1));
-    assert!(!s.collect.join("Clevatess").exists());
-
-    // Afterwards the cycle runs, and the archived rule adds nothing.
-    let tick = s.worker().tick(&CancellationToken::new()).await.unwrap();
-    assert!(matches!(tick, TickOutcome::Ran(_)), "{tick:?}");
-    let adds = s.h.tr.calls_of("torrent-add");
-    assert_eq!(adds.len(), 1);
-    assert_eq!(
-        adds[0].args["download-dir"],
-        text(s.collect.join("Other/Season 01")).as_str()
-    );
-    assert!(!s.collect.join("Clevatess").exists());
-}
 
 #[tokio::test]
 async fn the_same_workers_cycle_adds_beside_a_move_and_skips_the_rule_archived_meanwhile() {
@@ -1070,7 +1017,6 @@ async fn a_start_stopped_midway_leaves_the_rule_off_until_the_next_run_finishes_
     task.abort();
     let _ = task.await;
     gate.release_all();
-    s.h.wait_lock_free().await;
 
     let stored = CommandStore::new(s.h.db.clone())
         .get(&command_id)

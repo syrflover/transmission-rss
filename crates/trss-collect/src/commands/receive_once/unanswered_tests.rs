@@ -3,7 +3,7 @@
 //! 0013), and the torrent a later start meets in the rule's folder: it is the
 //! command's own only when it carries the command's label. A command's start
 //! after the first is [`World::look_again`]; the process parts (the cycle
-//! that removes nothing meanwhile, the lock, a worker that dies) are the
+//! that removes nothing meanwhile, a worker that dies) are the
 //! worker's.
 
 use std::time::Duration;

@@ -1,5 +1,4 @@
 //! What the worker does around the watching of the watch folders (ticket 0016):
-//! a reading an alert asked for holds the worker's lock and beats the heartbeat,
 //! an archive move and the alerts it raises do not interleave, the running
 //! worker watches the folders registered while it runs, and a real `trss`
 //! process records a new episode between cycles. A real worker, real temporary
@@ -33,7 +32,6 @@ use trss_collect::{
     commands::rule_archive::work_folder::MovePolicy,
     store::channels::{ChannelInput, ChannelWithRules, RuleInput},
 };
-use trss_core::{heartbeat::HeartbeatStore, lock_path_for, CycleLock};
 use trss_library::{
     live::{LiveConfig, Reading},
     store::library::{LibraryStore, WatchFolder, WorkRecord},
@@ -201,60 +199,6 @@ impl Live {
     fn readings_since(&self, before: usize) -> Vec<Reading> {
         self.readings().split_off(before)
     }
-
-    /// A folder with two works, registered, watched, and read by the first cycle.
-    async fn two_works(&self) -> (PathBuf, WatchFolder) {
-        let root = self.folder("anime");
-        touch(&root.join("A/Season 01/A S01E01.mkv"));
-        touch(&root.join("B/Season 01/B S01E01.mkv"));
-        let folder = self.register(&root).await;
-        self.worker.start_watching().await;
-        self.h.advance(1000);
-        self.tick().await;
-        (root, folder)
-    }
-}
-
-#[tokio::test]
-async fn a_reading_an_alert_asked_for_beats_under_the_lock_and_lets_go_of_the_hold() {
-    let lib = Live::new(config()).await;
-    let (root, _folder) = lib.two_works().await;
-    let heartbeat = HeartbeatStore::new(lib.h.db.clone());
-    let before = heartbeat.read().await.unwrap().expect("the cycle's beat");
-
-    lib.h.advance(5000);
-    let stamp = lib.h.now();
-    touch(&root.join("A/Season 01/A S01E02.mkv"));
-
-    // The reading beat at its own time, then let go: the board keeps a worker
-    // that reads its folders for a long while from looking stopped.
-    eventually("the reading's beat", || async {
-        let beat = heartbeat.read().await.unwrap().unwrap();
-        beat.beat_at == stamp && beat.held_since.is_none()
-    })
-    .await;
-    assert!(before.beat_at < stamp);
-}
-
-#[tokio::test]
-async fn work_read_by_an_alert_waits_for_the_workers_lock() {
-    let lib = Live::new(config()).await;
-    let (root, folder) = lib.two_works().await;
-    let held = CycleLock::try_acquire(&lock_path_for(&lib.h.db_path()))
-        .unwrap()
-        .expect("the lock is free between cycles");
-
-    lib.h.advance(1000);
-    touch(&root.join("A/Season 01/A S01E02.mkv"));
-    // The alert comes and its debounce passes, but another cycle holds the lock.
-    tokio::time::sleep(DEBOUNCE * 5).await;
-    assert!(!lib.has_file(&folder, "A", "Season 01/A S01E02.mkv").await);
-
-    drop(held);
-    eventually("the episode is recorded once the lock is free", || async {
-        lib.has_file(&folder, "A", "Season 01/A S01E02.mkv").await
-    })
-    .await;
 }
 
 // --- the archive move ------------------------------------------------------------------

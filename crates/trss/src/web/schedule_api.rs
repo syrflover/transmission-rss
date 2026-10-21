@@ -88,7 +88,6 @@ use trss_collect::{
 };
 use trss_core::{
     calendar::{date_text, day_of, week_start, weekday},
-    heartbeat::worker_busy,
     Millis,
 };
 use trss_library::{seasons::combine::air_times, store::library::Held};
@@ -256,8 +255,8 @@ struct Airing<'a> {
 /// The torrents Transmission is downloading as of `now`: what the worker saw
 /// last, provided that look is not older than [`DOWNLOADING_FRESH_CYCLES`](trss_collect::store::status::DOWNLOADING_FRESH_CYCLES)
 /// cycle intervals ([`look_is_fresh`](trss_collect::store::status::TransmissionCounts::look_is_fresh), which also says how
-/// a busy worker's long cycle counts). Without a recorded interval (no worker
-/// of this version has run) nothing is believed.
+/// a long cycle that runs counts). Without a recorded interval (no worker of
+/// this version has run) nothing is believed.
 async fn downloading_hashes(state: &AppState, now: Millis) -> Result<HashSet<String>, ApiError> {
     let Some(counts) = state.status.transmission().await.map_err(internal)? else {
         return Ok(HashSet::new());
@@ -266,9 +265,8 @@ async fn downloading_hashes(state: &AppState, now: Millis) -> Result<HashSet<Str
         return Ok(HashSet::new());
     };
     let last = state.history.last_cycle().await.map_err(internal)?;
-    let beat = state.heartbeat.read().await.map_err(internal)?;
     let busy_cycle_started_at = last
-        .filter(|&cycle| worker_busy(cycle.into(), beat.as_ref(), interval, now))
+        .filter(|cycle| cycle.is_running(interval, now))
         .map(|cycle| cycle.started_at);
     if !counts.look_is_fresh(interval, now, busy_cycle_started_at) {
         return Ok(HashSet::new());

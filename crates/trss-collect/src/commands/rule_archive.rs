@@ -365,7 +365,8 @@ pub async fn section(ctx: &ArchiveContext, command: &Command) -> Result<Section,
 struct Start<'a> {
     ctx: &'a ArchiveContext,
     disk: Arc<dyn Disk>,
-    /// Kept until the move's blocking work returns: the worker's hold of its lock.
+    /// Kept until the move's blocking work returns: the worker's turn at the
+    /// folders and the torrent gate.
     hold: Hold,
     /// The last start the command gets: a move not finished yet ends it.
     last: bool,
@@ -377,8 +378,8 @@ struct Start<'a> {
 }
 
 /// Runs a `rule_archive` command to its end, with its turn ([`section`]) taken.
-/// See the module docs. `hold` keeps the worker's lock until the move's
-/// blocking work returns.
+/// See the module docs. `hold` keeps the folders' turn and the torrent gate
+/// until the move's blocking work returns.
 pub async fn run(
     ctx: &ArchiveContext,
     command: &Command,

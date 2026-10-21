@@ -1,4 +1,4 @@
-//! The real `trss` binary: signals, exclusivity between processes,
+//! The real `trss` binary: signals, one process on an app data folder,
 //! recovery when Transmission was down, and what it prints.
 
 use crate::common;
@@ -228,77 +228,29 @@ async fn the_worker_keeps_running_while_transmission_is_down_and_adds_when_it_re
 }
 
 #[tokio::test]
-async fn two_worker_processes_run_a_period_once() {
-    let h = harness_with_channel_a().await;
-    let mut a = Proc::spawn(&h, "a", &[]);
-    let mut b = Proc::spawn(&h, "b", &[]);
-
-    a.wait_output("trss started").await;
-    b.wait_output("trss started").await;
-    wait_until("one cycle", || cycle_finished(&h)).await;
-    wait_until("the other to have skipped", || async {
-        let skipped = |p: &Proc| {
-            let out = p.output();
-            out.contains("Another worker is running a cycle")
-                || out.contains("A cycle started recently")
-        };
-        skipped(&a) || skipped(&b)
-    })
-    .await;
-    // Give a wrongly admitted second cycle time to show itself.
-    tokio::time::sleep(Duration::from_millis(500)).await;
-
-    assert_eq!(h.feeds.hits("feed-a"), 1, "the feed was read once");
-    assert_eq!(h.tr.calls_of("torrent-add").len(), 3);
-    let finished = |p: &Proc| p.output().matches("Cycle finished").count();
-    assert_eq!(finished(&a) + finished(&b), 1);
-
-    for w in [&a, &b] {
-        w.sigterm();
-    }
-    for w in [&mut a, &mut b] {
-        assert!(w.wait_exit(Duration::from_secs(10)).await.success());
-    }
-}
-
-#[tokio::test]
-async fn the_lock_alone_keeps_a_second_process_out_of_a_running_cycle() {
+async fn a_second_process_on_the_same_app_data_stops_before_it_runs_anything() {
     let h = harness_with_channel_a().await;
     let gate = h.feeds.hold("feed-a");
 
     // The first process starts a cycle and stays in it, waiting for the feed.
     let mut a = Proc::spawn(&h, "a", &[]);
     gate.wait_arrived().await;
-    let started_at = h.history.last_cycle().await.unwrap().unwrap().started_at;
 
-    // The second one ticks every second, so its start marker allows a cycle
-    // once half a second has passed since the first one's start. Let that pass.
-    tokio::time::sleep(Duration::from_millis(800)).await;
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_millis() as i64;
-    assert!(
-        now - started_at >= 500,
-        "the marker would let a cycle start"
-    );
-
+    // The second one ticks every second, so it would start a cycle at once.
     let mut b = Proc::spawn(&h, "b", &[("TRSS_WORKER_INTERVAL_SECS", "1")]);
-    b.wait_output("Another worker is running a cycle").await;
-    // Two more ticks, so that a start would have had its chances.
-    tokio::time::sleep(Duration::from_millis(2_200)).await;
-
+    let status = b.wait_exit(Duration::from_secs(10)).await;
     let output = b.output();
+    assert!(!status.success(), "{status:?}\n{output}");
     assert!(
-        !output.contains("A cycle started recently"),
-        "the marker, not the lock, refused it:\n{output}"
+        output.contains("another trss runs on this app data"),
+        "{output}"
     );
+    // It served nothing and ran nothing.
+    assert!(!output.contains("trss listening"), "{output}");
+    assert!(!output.contains("trss started"), "{output}");
     assert!(!output.contains("Cycle started"), "{output}");
     assert_eq!(h.feeds.hits("feed-a"), 1, "the feed was read once");
     assert!(h.tr.calls_of("torrent-add").is_empty());
-
-    b.sigterm();
-    assert!(b.wait_exit(Duration::from_secs(10)).await.success());
 
     // The first process finishes its cycle undisturbed.
     gate.release_all();
@@ -307,6 +259,12 @@ async fn the_lock_alone_keeps_a_second_process_out_of_a_running_cycle() {
     assert_eq!(h.tr.calls_of("torrent-add").len(), 3);
     a.sigterm();
     assert!(a.wait_exit(Duration::from_secs(10)).await.success());
+
+    // Once it stopped, the next process starts.
+    let mut c = Proc::spawn(&h, "c", &[]);
+    c.wait_output("trss started").await;
+    c.sigterm();
+    assert!(c.wait_exit(Duration::from_secs(10)).await.success());
 }
 
 #[tokio::test]

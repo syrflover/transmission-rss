@@ -23,31 +23,20 @@
 //!
 //! # Exclusivity
 //!
-//! Two layers keep two workers from running the same cycle:
+//! One `trss` process runs on an app database: it takes the instance lock
+//! ([`trss_core::InstanceLock`]) at its start and keeps it for its life, and a
+//! second process on the same database stops before it runs anything. Within
+//! the process, what must not run twice at once keeps itself apart:
 //!
-//! 1. **An OS advisory lock** ([`trss_core::WorkerLock`], `flock` on
-//!    `<db path>.worker.lock`) is held while the worker works: for a cycle, for
-//!    the web's commands, for a reading that a watch folder's alert asked for.
-//!    Everything one worker runs at the same time shares its hold; another
-//!    worker that finds the lock taken skips its cycle and leaves the commands
-//!    alone. The kernel releases it when the holder dies, and a slow holder
-//!    keeps it for as long as it runs, so no timeout can let a second worker
-//!    in while the first is still working. No SQLite transaction is held
-//!    meanwhile, so the web keeps writing.
-//! 2. **A start marker** in the database ([`HistoryStore::try_begin_cycle`])
-//!    refuses a start less than half an interval after the previous start.
-//!    Without it, two workers whose timers are out of phase would each run a
-//!    cycle every interval, one after the other. With it, the later one keeps
-//!    skipping and the period stays one cycle.
+//! - one cycle at a time ([`Worker::tick`] says [`TickOutcome::Busy`] to a
+//!   second);
+//! - one run of the subtitle jobs at a time ([`jobs`]);
+//! - one task per background queue ([`trss_core::queue::Queue`]);
+//! - one pool over the server browser, which the binary makes once.
 //!
-//! One worker runs one cycle at a time ([`Worker::tick`] says
-//! [`TickOutcome::Busy`] to a second).
-//!
-//! While it holds the lock the worker also leaves a heartbeat in the database
-//! ([`heartbeat`]), which is how the web tells a busy worker from a dead one
-//! without touching the lock. (The Anissia, artwork and season queues and the
-//! 30-minute observation of Anissia's subtitle lines hold locks of their own,
-//! not this one.)
+//! The cycle marks its start and end in the database
+//! ([`HistoryStore::begin_cycle`]), from which the web judges whether the
+//! collection stopped.
 //!
 //! # Side by side
 //!
@@ -72,11 +61,11 @@
 //! # Watch folders
 //!
 //! The worker watches the watch folders with inotify ([`live`]) and reads the
-//! works an alert names a few seconds after it, holding the lock. After the RSS
-//! work of each cycle it reads the folders the alerts could not cover
-//! ([`watch`]): all of them at the start, the ones with a directory that has no
-//! watch, a folder that has not been read whole for an hour, and, when it is
-//! not watching at all, every folder. Reading only looks at the disk and
+//! works an alert names a few seconds after it, in its turn at the folder.
+//! After the RSS work of each cycle it reads the folders the alerts could not
+//! cover ([`watch`]): all of them at the start, the ones with a directory that
+//! has no watch, a folder that has not been read whole for an hour, and, when
+//! it is not watching at all, every folder. Reading only looks at the disk and
 //! changes nothing.
 //!
 //! After the watch folders, the worker connects the subscriptions that have no
@@ -90,13 +79,12 @@
 //! time ([`commands`]). Nothing looks for commands every few seconds: a
 //! command is started when it is stored, when the process starts, when a
 //! running one ends, or once the wait it was left for is over, and a look that
-//! failed or found another worker holding the lock is made again a few
-//! seconds later.
+//! failed is made again a few seconds later.
 //!
 //! # Subtitle jobs
 //!
 //! Beside the commands, the worker carries out the subtitle jobs the web made
-//! ([`trss_jobs`]), one at a time, holding the lock like a command: at its
+//! ([`trss_jobs`]), one at a time: at its
 //! start (after putting the jobs that wait for a source back in line), when
 //! the web rings the jobs' loop ([`crate::wake`]), and every few seconds
 //! ([`Worker::with_poll`]), for the jobs whose wait ended without a ring (a
@@ -146,10 +134,9 @@
 //! loop ([`crate::wake`]), and records the person's input, which the pool's idle
 //! end counts as use ([`browser::screen_activity`]).
 //!
-//! One worker at a time uses one container, since a pool resets it and its
-//! reaper ends the runs it does not know: the binary takes
-//! [`browser::take_lock`] for its life before it makes the pool, and runs
-//! without a server browser when another worker has it.
+//! One pool uses one container, since a pool resets it and its reaper ends
+//! the runs it does not know: the binary makes the pool once, and the one
+//! process on the app data keeps any other off the container.
 //!
 //! # Shutdown
 //!
@@ -163,10 +150,10 @@
 //!
 //! Every request to Transmission times out ([`trss_transmission::REQUEST_TIMEOUT`],
 //! connecting [`trss_transmission::CONNECT_TIMEOUT`]), so a Transmission that
-//! stops answering fails the items of the cycle instead of holding the lock
-//! for good. A cycle that has not wound down [`SHUTDOWN_GRACE`] after the
-//! shutdown request is aborted, which aborts its item tasks and releases the
-//! lock; the process then exits without waiting for the hung call. What
+//! stops answering fails the items of the cycle instead of holding it for
+//! good. A cycle that has not wound down [`SHUTDOWN_GRACE`] after the
+//! shutdown request is aborted, which aborts its item tasks; the process then
+//! exits without waiting for the hung call. What
 //! Transmission had not answered by then is not recorded (as after a kill,
 //! see below).
 //!
@@ -181,7 +168,7 @@ pub mod env;
 mod jobs;
 pub mod removal;
 
-use std::{path::PathBuf, sync::Arc, time::Duration};
+use std::{sync::Arc, time::Duration};
 
 use tokio_util::sync::CancellationToken;
 
@@ -189,9 +176,8 @@ use crate::wake::Wakes;
 use trss_core::{
     commands::{CommandError, CommandStore},
     folder_locks::FolderLocks,
-    heartbeat::{self, HeartbeatStore},
     settings::SettingsStore,
-    system_clock, Clock, Db, WorkerHold, WorkerLock,
+    system_clock, Clock, Db,
 };
 
 pub use commands::{CommandsOutcome, DEFAULT_COMMAND_RETRY, MAX_COMMANDS_AT_ONCE};
@@ -222,12 +208,6 @@ use removal::{InFlight, Removal, TorrentGate};
 
 #[derive(Debug, thiserror::Error)]
 pub enum WorkerError {
-    #[error("cannot take the worker lock {path}: {source}")]
-    Lock {
-        path: PathBuf,
-        #[source]
-        source: std::io::Error,
-    },
     #[error("cycle marker: {0}")]
     History(#[from] HistoryError),
     #[error("commands: {0}")]
@@ -244,14 +224,12 @@ pub enum WorkerError {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TickOutcome {
     Ran(CycleReport),
-    /// Another worker holds the lock, or this worker is running a cycle already.
+    /// This worker is running a cycle already.
     Busy,
-    /// A cycle started less than the minimum gap ago (by any worker).
-    TooSoon,
 }
 
-/// A collection worker. Cheap to clone; clones share the lock, the turns and
-/// the commands under way.
+/// A collection worker. Cheap to clone; clones share the turns, the cycle
+/// under way and the commands under way.
 #[derive(Clone)]
 pub struct Worker {
     /// What the collection work (cycle, commands, season link) shares.
@@ -268,13 +246,7 @@ pub struct Worker {
     /// How often the jobs' loop and the watch folders' list are looked at
     /// without a ring.
     poll: Duration,
-    min_gap: Duration,
     shutdown_grace: Duration,
-    /// How often the heartbeat is written while the lock is held.
-    heartbeat_every: Duration,
-    lock_path: PathBuf,
-    /// The lock everything this worker runs shares (see the module docs).
-    lock: WorkerLock,
     /// Between the commands' adds and the cycle's removal (see [`removal`]).
     torrents: TorrentGate,
     /// The commands this worker is carrying out now.
@@ -298,14 +270,10 @@ pub struct Worker {
     /// Rung when the season queue stored a season's entry
     /// ([`trss_library::seasons::Seasons::stored`]); `None`: not heard.
     season_stored: Option<Arc<tokio::sync::Notify>>,
-    /// Held while subtitle jobs run: one run at a time, since the worker
-    /// lock does not keep two runs of one worker apart.
+    /// Held while subtitle jobs run: one run at a time.
     jobs_running: Arc<tokio::sync::Mutex<()>>,
     /// The server browser ([`trss_browser`]); `None`: the worker has none.
     browser: Option<trss_browser::BrowserPool>,
-    /// The worker holds the server browser's lock but runs without the browser
-    /// ([`Worker::with_unused_browser_lock`]).
-    browser_lock_unused: bool,
     clock: Clock,
 }
 
@@ -321,9 +289,8 @@ pub const SHUTDOWN_GRACE: Duration = Duration::from_secs(5);
 pub const DEFAULT_POLL: Duration = Duration::from_secs(3);
 
 impl Worker {
-    /// A worker on `db`, taking its settings from `env` and its lock file from
-    /// `lock_path`. The minimum gap between cycle starts is half the interval.
-    pub fn new(db: Db, env: &WorkerEnv, lock_path: PathBuf) -> Result<Worker, WorkerError> {
+    /// A worker on `db`, taking its settings from `env`.
+    pub fn new(db: Db, env: &WorkerEnv) -> Result<Worker, WorkerError> {
         // Credentials in the Transmission URL must not reach logs or history.
         let mut redactor = Redactor::none();
         if !env.transmission_url.username().is_empty() {
@@ -348,12 +315,6 @@ impl Worker {
                 live: live.clone(),
             },
             session: env.session.clone(),
-            lock: WorkerLock::new(
-                lock_path.clone(),
-                HeartbeatStore::new(db.clone()),
-                clock.clone(),
-                heartbeat::BEAT_EVERY,
-            ),
             ctx: CollectContext {
                 channels: ChannelStore::new(db.clone()),
                 settings: SettingsStore::new(db.clone()),
@@ -378,10 +339,7 @@ impl Worker {
             interval: env.interval,
             command_retry: DEFAULT_COMMAND_RETRY,
             poll: DEFAULT_POLL,
-            min_gap: env.interval / 2,
             shutdown_grace: SHUTDOWN_GRACE,
-            heartbeat_every: heartbeat::BEAT_EVERY,
-            lock_path,
             torrents: TorrentGate::default(),
             in_flight: InFlight::default(),
             cycling: Arc::default(),
@@ -394,25 +352,12 @@ impl Worker {
             season_stored: None,
             jobs_running: Arc::default(),
             browser: None,
-            browser_lock_unused: false,
             clock,
         })
     }
 
-    /// The lock again, for a clock or a beat that changed. Builders call it
-    /// before the worker is used.
-    fn rebuild_lock(&mut self) {
-        self.lock = WorkerLock::new(
-            self.lock_path.clone(),
-            HeartbeatStore::new(self.ctx.channels.db().clone()),
-            self.clock.clone(),
-            self.heartbeat_every,
-        );
-    }
-
     pub fn with_clock(mut self, clock: Clock) -> Self {
         self.clock = clock;
-        self.rebuild_lock();
         self
     }
 
@@ -455,16 +400,6 @@ impl Worker {
         self
     }
 
-    /// Tells the worker it holds the server browser's lock (the lock of
-    /// `browser::take_lock`) but runs without the browser, because it could not prepare the
-    /// downloads folder. No other worker uses the browser then, so the remote
-    /// screens still bound to runs of an earlier worker are no one's and are
-    /// closed at the start, as for a worker that has the browser.
-    pub fn with_unused_browser_lock(mut self) -> Self {
-        self.browser_lock_unused = true;
-        self
-    }
-
     /// The server browser; `None` when the worker was given none.
     pub fn browser(&self) -> Option<&trss_browser::BrowserPool> {
         self.browser.as_ref()
@@ -498,13 +433,13 @@ impl Worker {
     pub async fn start_watching(&self) {
         self.watch
             .live
-            .start(self.watch.clone(), self.lock.clone(), self.clock.clone());
+            .start(self.watch.clone(), self.clock.clone());
         self.watch.live.sync_folders().await;
     }
 
     /// One pass of the season link, which a cycle runs after the watch folder
-    /// scan (see [`season_link`]). It takes no lock, so it is for callers that
-    /// know no cycle is running, such as tests.
+    /// scan (see [`season_link`]). It does not wait for a cycle, so it is for
+    /// callers that know no cycle is running, such as tests.
     pub async fn link_seasons(&self) -> season_link::Linked {
         let linked = season_link::link_seasons(&self.ctx.link()).await;
         self.ask_captions(&linked).await;
@@ -544,24 +479,10 @@ impl Worker {
         self.watch.live.stop();
     }
 
-    /// Overrides the minimum time between cycle starts (default: half the interval).
-    pub fn with_min_gap(mut self, gap: Duration) -> Self {
-        self.min_gap = gap;
-        self
-    }
-
     /// Overrides how long a running cycle or command may take to wind down
     /// after shutdown was asked for (default: [`SHUTDOWN_GRACE`]).
     pub fn with_shutdown_grace(mut self, grace: Duration) -> Self {
         self.shutdown_grace = grace;
-        self
-    }
-
-    /// Overrides how often the heartbeat is written while the lock is held
-    /// (default: [`heartbeat::BEAT_EVERY`]).
-    pub fn with_heartbeat_every(mut self, every: Duration) -> Self {
-        self.heartbeat_every = every;
-        self.rebuild_lock();
         self
     }
 
@@ -573,43 +494,18 @@ impl Worker {
         self
     }
 
-    /// A handle to this worker's hold of its lock; `None` when another worker
-    /// holds it.
-    pub(crate) async fn hold(&self) -> Result<Option<WorkerHold>, WorkerError> {
-        self.lock
-            .try_hold()
-            .await
-            .map_err(|source| WorkerError::Lock {
-                path: self.lock_path.clone(),
-                source,
-            })
-    }
-
-    /// Tries to run one cycle now: takes the lock, checks the start marker,
-    /// runs the cycle, and lets go of the lock. The commands and the readings
-    /// of this worker go on meanwhile.
+    /// Tries to run one cycle now, unless this worker is running one: marks
+    /// its start, runs the cycle and what follows it. The commands and the
+    /// readings of this worker go on meanwhile.
     pub async fn tick(&self, cancel: &CancellationToken) -> Result<TickOutcome, WorkerError> {
         let Ok(_one_cycle) = self.cycling.try_lock() else {
             return Ok(TickOutcome::Busy);
         };
-        let Some(hold) = self.hold().await? else {
-            return Ok(TickOutcome::Busy);
-        };
-        let outcome = self.tick_held(cancel).await;
-        hold.release().await;
-        outcome
-    }
-
-    /// One cycle and what follows it, with the lock held.
-    async fn tick_held(&self, cancel: &CancellationToken) -> Result<TickOutcome, WorkerError> {
         // The previous start is read before this cycle replaces it.
         let previous_start = self.ctx.history.last_cycle().await?.map(|c| c.started_at);
 
         let started = (self.clock)();
-        let min_gap = i64::try_from(self.min_gap.as_millis()).unwrap_or(i64::MAX);
-        if !self.ctx.history.try_begin_cycle(started, min_gap).await? {
-            return Ok(TickOutcome::TooSoon);
-        }
+        self.ctx.history.begin_cycle(started).await?;
 
         let removal = Removal {
             gate: self.torrents.clone(),
@@ -751,8 +647,8 @@ impl Worker {
 
             // After shutdown was asked for, the cycle gets a grace period to wind
             // down. Past it, the cycle is aborted: dropping it aborts its item
-            // tasks and releases its hold, and what Transmission had not yet
-            // answered is left for the next start.
+            // tasks, and what Transmission had not yet answered is left for the
+            // next start.
             let Some(joined) = self.join_within_grace(cycle, &cancel).await else {
                 println!(
                     "Cycle abandoned: it did not wind down within {}s of the shutdown request",
@@ -767,10 +663,7 @@ impl Worker {
                 }
                 Ok(Ok(TickOutcome::Ran(_))) => {}
                 Ok(Ok(TickOutcome::Busy)) => {
-                    println!("Another worker is running a cycle; skipping this one");
-                }
-                Ok(Ok(TickOutcome::TooSoon)) => {
-                    println!("A cycle started recently; skipping this one");
+                    println!("A cycle is still running; skipping this one");
                 }
                 Ok(Err(err)) => eprintln!("Cycle failed: {err}"),
                 Err(err) => eprintln!("Cycle aborted: {err}"),

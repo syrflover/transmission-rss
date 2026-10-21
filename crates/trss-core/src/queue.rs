@@ -1,60 +1,74 @@
 //! What the worker's background queues share (`docs/adr/0016-shared-parts-in-core.md`).
 //!
 //! A queue runs in a task of its own and takes one item at a time. [`Queue`]
-//! is the loop of that task: take the queue's lock file, then look for the
-//! next item, and look again after a pause when there is none. The queue
-//! hands over what it does to find and run an item, and its own intervals.
+//! is the loop of that task: look for the next item, and look again after a
+//! pause when there is none. The queue hands over what it does to find and
+//! run an item, and its own intervals. One process runs on an app database
+//! ([`crate::InstanceLock`]), and a [`Queue`] runs its loop once at a time, so
+//! one task runs each queue.
 //!
 //! A panic in one item would end that task, and the queue would stand still
 //! until the worker restarted, so each item runs through [`run_item`], which
 //! catches the panic and hands it back to the queue to put the item off like
 //! a failure. [`retry`] and [`after`] are the arithmetic of putting an item off.
 
-use std::{any::Any, future::Future, panic::AssertUnwindSafe, path::PathBuf, time::Duration};
+use std::{
+    any::Any,
+    future::Future,
+    panic::AssertUnwindSafe,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+    time::Duration,
+};
 
 use futures::FutureExt;
 use tokio_util::sync::CancellationToken;
 
-use crate::{CycleLock, Millis};
+use crate::Millis;
 
 /// How often an idle queue looks for new items.
 pub const POLL: Duration = Duration::from_secs(5);
-/// How long a queue that finds another process running it waits to look again.
-pub const LOCK_RETRY: Duration = Duration::from_secs(60);
 
-/// The loop of one background queue: it runs under the queue's lock file
-/// (one of the queue locks of [`crate::LockFile`]) until cancelled.
+/// The loop of one background queue, until cancelled. Cheap to clone; clones
+/// are the same queue, and only one of them runs the loop at a time. Two
+/// `Queue::new` of one name are two queues: the process makes each queue
+/// that runs once (`trss`'s `main`), so tests can make their own.
 #[derive(Debug, Clone)]
 pub struct Queue {
     name: &'static str,
-    lock_path: PathBuf,
     poll: Duration,
-    lock_retry: Duration,
+    /// Whether the loop runs now ([`Queue::run`]).
+    running: Arc<AtomicBool>,
+}
+
+/// Lets the queue's loop be run again once the run that holds it ends,
+/// however it ends.
+struct Running(Arc<AtomicBool>);
+
+impl Drop for Running {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::SeqCst);
+    }
 }
 
 impl Queue {
-    /// The queue `name` (the name its log lines use) under the lock file
-    /// `lock_path`. An idle queue looks for an item every `poll`, and one that
-    /// finds the lock taken tries it again after `lock_retry`.
-    pub fn new(
-        name: &'static str,
-        lock_path: PathBuf,
-        poll: Duration,
-        lock_retry: Duration,
-    ) -> Queue {
+    /// The queue `name` (the name its log lines use). An idle queue looks for
+    /// an item every `poll`.
+    pub fn new(name: &'static str, poll: Duration) -> Queue {
         Queue {
             name,
-            lock_path,
             poll,
-            lock_retry,
+            running: Arc::new(AtomicBool::new(false)),
         }
     }
 
-    /// Runs the queue until `cancel` fires. While another process holds the
-    /// lock it only waits; with the lock it calls `next` over and over, at once
-    /// after an item and after the poll interval after `None`. An item cut
-    /// short by `cancel` is dropped where it stands, so it must be one that
-    /// the next start finds again.
+    /// Runs the queue until `cancel` fires: calls `next` over and over, at
+    /// once after an item and after the poll interval after `None`. A second
+    /// run of the same queue while one runs returns at once and says so. An
+    /// item cut short by `cancel` is dropped where it stands, so it must be
+    /// one that the next start finds again.
     pub async fn run<T, N, NF>(&self, cancel: &CancellationToken, next: N)
     where
         N: FnMut() -> NF,
@@ -66,7 +80,7 @@ impl Queue {
     }
 
     /// [`Queue::run`] for a queue with upkeep to do besides its items: `upkeep`
-    /// runs as soon as the lock is taken and then every `upkeep_every`, between
+    /// runs as soon as the queue starts and then every `upkeep_every`, between
     /// two items. It is not cut short by `cancel`; the queue stops after it.
     pub async fn run_with_upkeep<T, U, UF, N, NF>(
         &self,
@@ -80,42 +94,26 @@ impl Queue {
         N: FnMut() -> NF,
         NF: Future<Output = Option<T>>,
     {
-        let name = self.name;
+        if self.running.swap(true, Ordering::SeqCst) {
+            eprintln!("{}: runs already in this process", self.name);
+            return;
+        }
+        let _running = Running(self.running.clone());
+        upkeep().await;
+        let mut upkept = tokio::time::Instant::now();
         loop {
-            // Every queue keeps its own lock file although one worker runs at
-            // a time: the worker lock stops a second worker process only
-            // from running its cycles, and that process still starts and runs
-            // its queues. The queue's lock is what keeps the two from running
-            // the same queue side by side (user decision, 2026-10-08).
-            let lock = match CycleLock::try_acquire(&self.lock_path) {
-                Ok(lock) => lock,
-                Err(e) => {
-                    eprintln!("{name}: cannot take {}: {e}", self.lock_path.display());
-                    None
-                }
+            if upkept.elapsed() >= upkeep_every {
+                upkeep().await;
+                upkept = tokio::time::Instant::now();
+            }
+            let ran = tokio::select! {
+                _ = cancel.cancelled() => return,
+                ran = next() => ran,
             };
-            let Some(_lock) = lock else {
+            if ran.is_none() {
                 tokio::select! {
                     _ = cancel.cancelled() => return,
-                    _ = tokio::time::sleep(self.lock_retry) => continue,
-                }
-            };
-            upkeep().await;
-            let mut upkept = tokio::time::Instant::now();
-            loop {
-                if upkept.elapsed() >= upkeep_every {
-                    upkeep().await;
-                    upkept = tokio::time::Instant::now();
-                }
-                let ran = tokio::select! {
-                    _ = cancel.cancelled() => return,
-                    ran = next() => ran,
-                };
-                if ran.is_none() {
-                    tokio::select! {
-                        _ = cancel.cancelled() => return,
-                        _ = tokio::time::sleep(self.poll) => {}
-                    }
+                    _ = tokio::time::sleep(self.poll) => {}
                 }
             }
         }
@@ -222,12 +220,9 @@ pub mod testing {
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        path::Path,
-        sync::{
-            atomic::{AtomicUsize, Ordering},
-            Arc, Mutex,
-        },
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc, Mutex,
     };
 
     use super::*;
@@ -235,8 +230,8 @@ mod tests {
     const SHORT: Duration = Duration::from_millis(20);
     const HOUR: Duration = Duration::from_secs(3600);
 
-    fn queue(lock: &Path, poll: Duration, lock_retry: Duration) -> Queue {
-        Queue::new("Test queue", lock.to_owned(), poll, lock_retry)
+    fn queue(poll: Duration) -> Queue {
+        Queue::new("Test queue", poll)
     }
 
     /// Runs `queue` over `next`, which says `Some` for the first `items` calls
@@ -269,30 +264,58 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_queue_holds_its_lock_while_it_runs_and_lets_go_when_it_stops() {
-        let dir = tempfile::tempdir().unwrap();
-        let lock = dir.path().join("q.lock");
+    async fn a_second_run_of_one_queue_returns_at_once_while_the_first_goes_on() {
+        let queue = queue(SHORT);
         let cancel = CancellationToken::new();
-        let (calls, task) = spawn_counting(&queue(&lock, SHORT, HOUR), &cancel, 0);
+        let (first_calls, first) = spawn_counting(&queue, &cancel, 0);
         tokio::time::sleep(Duration::from_millis(100)).await;
-        assert!(calls.load(Ordering::SeqCst) > 0);
+
+        // A clone is the same queue.
+        let (second_calls, second) = spawn_counting(&queue.clone(), &cancel, 0);
+        stops(second).await;
+        assert_eq!(second_calls.load(Ordering::SeqCst), 0);
+
+        let before = first_calls.load(Ordering::SeqCst);
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert!(before > 0);
+        assert!(first_calls.load(Ordering::SeqCst) > before);
+        cancel.cancel();
+        stops(first).await;
+    }
+
+    #[tokio::test]
+    async fn a_queue_runs_again_once_its_run_stopped_or_was_aborted() {
+        let queue = queue(SHORT);
+
+        let cancel = CancellationToken::new();
+        let (_, task) = spawn_counting(&queue, &cancel, 0);
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        cancel.cancel();
+        stops(task).await;
+
+        let cancel = CancellationToken::new();
+        let (calls, task) = spawn_counting(&queue, &cancel, 0);
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(calls.load(Ordering::SeqCst) > 0, "it did not run again");
+        task.abort();
+        assert!(task.await.unwrap_err().is_cancelled());
+
+        let (calls, task) = spawn_counting(&queue, &cancel, 0);
+        tokio::time::sleep(Duration::from_millis(100)).await;
         assert!(
-            CycleLock::try_acquire(&lock).unwrap().is_none(),
-            "the lock was free while the queue ran"
+            calls.load(Ordering::SeqCst) > 0,
+            "it did not run after an abort"
         );
         cancel.cancel();
         stops(task).await;
-        assert!(CycleLock::try_acquire(&lock).unwrap().is_some());
     }
 
     #[tokio::test]
     async fn an_item_is_followed_by_the_next_at_once_and_an_empty_look_by_a_pause() {
-        let dir = tempfile::tempdir().unwrap();
-        let lock = dir.path().join("q.lock");
         let cancel = CancellationToken::new();
         // The poll interval is an hour: five items in a row cannot have waited
         // for it, and the look that finds none is the sixth.
-        let (calls, task) = spawn_counting(&queue(&lock, HOUR, HOUR), &cancel, 5);
+        let (calls, task) = spawn_counting(&queue(HOUR), &cancel, 5);
         tokio::time::sleep(Duration::from_millis(200)).await;
         assert_eq!(calls.load(Ordering::SeqCst), 6);
         cancel.cancel();
@@ -301,10 +324,8 @@ mod tests {
 
     #[tokio::test]
     async fn an_idle_queue_looks_again_after_the_poll_interval() {
-        let dir = tempfile::tempdir().unwrap();
-        let lock = dir.path().join("q.lock");
         let cancel = CancellationToken::new();
-        let (calls, task) = spawn_counting(&queue(&lock, SHORT, HOUR), &cancel, 0);
+        let (calls, task) = spawn_counting(&queue(SHORT), &cancel, 0);
         tokio::time::sleep(Duration::from_millis(300)).await;
         let looks = calls.load(Ordering::SeqCst);
         assert!((3..=16).contains(&looks), "{looks} looks in 300 ms");
@@ -313,93 +334,19 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_queue_whose_lock_is_taken_elsewhere_waits_and_starts_when_it_is_let_go() {
-        let dir = tempfile::tempdir().unwrap();
-        let lock = dir.path().join("q.lock");
-        let held = CycleLock::try_acquire(&lock).unwrap().unwrap();
-        let cancel = CancellationToken::new();
-        let (calls, task) = spawn_counting(&queue(&lock, SHORT, SHORT), &cancel, 0);
-        tokio::time::sleep(Duration::from_millis(200)).await;
-        assert_eq!(calls.load(Ordering::SeqCst), 0, "it ran without its lock");
-
-        drop(held);
-        for _ in 0..100 {
-            if calls.load(Ordering::SeqCst) > 0 {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
-        assert!(calls.load(Ordering::SeqCst) > 0, "it did not start");
-        cancel.cancel();
-        stops(task).await;
-    }
-
-    #[tokio::test]
-    async fn two_queues_on_one_lock_file_do_not_run_side_by_side() {
-        let dir = tempfile::tempdir().unwrap();
-        let lock = dir.path().join("q.lock");
-        let cancel = CancellationToken::new();
-        let (first_calls, first) = spawn_counting(&queue(&lock, SHORT, SHORT), &cancel, 0);
-        tokio::time::sleep(Duration::from_millis(100)).await;
-        let (second_calls, second) = spawn_counting(&queue(&lock, SHORT, SHORT), &cancel, 0);
-        let before = first_calls.load(Ordering::SeqCst);
-        tokio::time::sleep(Duration::from_millis(200)).await;
-        assert!(before > 0);
-        assert!(first_calls.load(Ordering::SeqCst) > before);
-        assert_eq!(second_calls.load(Ordering::SeqCst), 0);
-        cancel.cancel();
-        stops(first).await;
-        stops(second).await;
-    }
-
-    #[tokio::test]
-    async fn a_lock_file_that_cannot_be_opened_is_tried_again_like_one_taken_elsewhere() {
-        let dir = tempfile::tempdir().unwrap();
-        let lock = dir.path().join("missing").join("q.lock");
-        let cancel = CancellationToken::new();
-        let (calls, task) = spawn_counting(&queue(&lock, SHORT, SHORT), &cancel, 0);
-        tokio::time::sleep(Duration::from_millis(100)).await;
-        assert_eq!(calls.load(Ordering::SeqCst), 0);
-
-        // The folder shows up (a volume mounted late): the next try works.
-        std::fs::create_dir(dir.path().join("missing")).unwrap();
-        for _ in 0..100 {
-            if calls.load(Ordering::SeqCst) > 0 {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
-        assert!(calls.load(Ordering::SeqCst) > 0);
-        cancel.cancel();
-        stops(task).await;
-    }
-
-    #[tokio::test]
     async fn cancel_ends_a_queue_in_each_of_its_waits() {
-        let dir = tempfile::tempdir().unwrap();
-        let lock = dir.path().join("q.lock");
-
         // In the pause after an empty look.
         let cancel = CancellationToken::new();
-        let (calls, task) = spawn_counting(&queue(&lock, HOUR, HOUR), &cancel, 0);
+        let (calls, task) = spawn_counting(&queue(HOUR), &cancel, 0);
         tokio::time::sleep(Duration::from_millis(100)).await;
         assert_eq!(calls.load(Ordering::SeqCst), 1);
         cancel.cancel();
         stops(task).await;
 
-        // In the wait for a lock held elsewhere.
-        let held = CycleLock::try_acquire(&lock).unwrap().unwrap();
-        let cancel = CancellationToken::new();
-        let (_, task) = spawn_counting(&queue(&lock, HOUR, HOUR), &cancel, 0);
-        tokio::time::sleep(Duration::from_millis(100)).await;
-        cancel.cancel();
-        stops(task).await;
-        drop(held);
-
         // In an item that does not end.
         let cancel = CancellationToken::new();
         let task = tokio::spawn({
-            let (queue, cancel) = (queue(&lock, HOUR, HOUR), cancel.clone());
+            let (queue, cancel) = (queue(HOUR), cancel.clone());
             async move {
                 queue.run(&cancel, std::future::pending::<Option<()>>).await;
             }
@@ -407,19 +354,14 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(100)).await;
         cancel.cancel();
         stops(task).await;
-        assert!(CycleLock::try_acquire(&lock).unwrap().is_some());
     }
 
     #[tokio::test]
-    async fn upkeep_runs_once_the_lock_is_taken_and_then_every_period_between_items() {
-        let dir = tempfile::tempdir().unwrap();
-        let lock = dir.path().join("q.lock");
-        let held = CycleLock::try_acquire(&lock).unwrap().unwrap();
+    async fn upkeep_runs_at_the_start_and_then_every_period_between_items() {
         let events = Arc::new(Mutex::new(Vec::<&'static str>::new()));
         let cancel = CancellationToken::new();
         let task = tokio::spawn({
-            let (queue, cancel, events) =
-                (queue(&lock, SHORT, SHORT), cancel.clone(), events.clone());
+            let (queue, cancel, events) = (queue(SHORT), cancel.clone(), events.clone());
             async move {
                 let (for_upkeep, for_items) = (events.clone(), events);
                 queue
@@ -441,11 +383,6 @@ mod tests {
                     .await;
             }
         });
-        // Without the lock there is no upkeep either.
-        tokio::time::sleep(Duration::from_millis(100)).await;
-        assert!(events.lock().unwrap().is_empty());
-
-        drop(held);
         tokio::time::sleep(Duration::from_millis(450)).await;
         cancel.cancel();
         stops(task).await;
@@ -458,12 +395,10 @@ mod tests {
 
     #[tokio::test]
     async fn upkeep_that_cancel_finds_under_way_is_finished_before_the_queue_stops() {
-        let dir = tempfile::tempdir().unwrap();
-        let lock = dir.path().join("q.lock");
         let cancel = CancellationToken::new();
         let finished = Arc::new(AtomicUsize::new(0));
         let task = tokio::spawn({
-            let (queue, cancel) = (queue(&lock, SHORT, SHORT), cancel.clone());
+            let (queue, cancel) = (queue(SHORT), cancel.clone());
             let finished = finished.clone();
             async move {
                 queue

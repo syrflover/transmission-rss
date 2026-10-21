@@ -585,7 +585,7 @@ async fn an_episode_in_transmission_is_downloading_until_the_library_holds_it() 
 }
 
 #[tokio::test]
-async fn a_worker_killed_in_a_cycle_no_longer_holds_the_downloading_look() {
+async fn a_cycle_that_runs_holds_the_downloading_look_until_it_outlives_its_bound() {
     let app = App::new().await;
     let rule = app
         .subscribe(
@@ -619,38 +619,34 @@ async fn a_worker_killed_in_a_cycle_no_longer_holds_the_downloading_look() {
         .record_cycle_interval(minute)
         .await
         .unwrap();
-    app.state
-        .status
-        .record_transmission(
+    let look = |taken_at| {
+        app.state.status.record_transmission(
             TransmissionCounts {
                 downloading: 1,
                 seeding: 0,
-                taken_at: NOW - 4 * minute,
+                taken_at,
             },
             vec!["aa".into()],
         )
-        .await
-        .unwrap();
-    // A cycle began three minutes ago and never ended.
-    assert!(app
-        .state
-        .history
-        .try_begin_cycle(NOW - 3 * minute, 0)
-        .await
-        .unwrap());
+    };
     let video = |body: &Value| body["week"]["days"][3]["cards"][0]["video"].clone();
 
+    // A cycle began three minutes ago and has not ended: the look before it,
+    // four minutes old, is past three intervals but is kept.
+    look(NOW - 4 * minute).await.unwrap();
     app.state
-        .heartbeat
-        .record(NOW - 5_000, Some(NOW - 3 * minute))
+        .history
+        .begin_cycle(NOW - 3 * minute)
         .await
         .unwrap();
     assert_eq!(video(&app.week().await), "downloading");
 
-    // The beat stopped two minutes ago: the worker is gone, not slow.
+    // A cycle without an end for 31 minutes is past the half hour a cycle may
+    // take: the process stopped in it, and the look no longer holds.
+    look(NOW - 32 * minute).await.unwrap();
     app.state
-        .heartbeat
-        .record(NOW - 2 * minute, Some(NOW - 3 * minute))
+        .history
+        .begin_cycle(NOW - 31 * minute)
         .await
         .unwrap();
     assert_eq!(video(&app.week().await), "waiting");

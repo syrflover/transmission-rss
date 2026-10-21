@@ -55,7 +55,7 @@
 //! report the destination are not touched again, and the renames move what is
 //! still at the source. Each step only ever moves things from the source to
 //! the destination, so reruns converge on everything at the destination. The
-//! blocking steps keep the worker's lock and turns ([`Hold`]) until they
+//! blocking steps keep the worker's turns ([`Hold`]) until they
 //! return, and the renames stop between two entries once shutdown is asked
 //! for.
 
@@ -162,10 +162,9 @@ pub enum MoveError {
 }
 
 /// Something kept alive until the move's blocking work has returned, even
-/// when the task that waits for it is aborted: the worker passes its hold of
-/// its lock ([`trss_core::WorkerHold::keep`]), its turn at the folders and the
-/// torrent gate, so no other worker starts, no reading records the folder
-/// half moved and no removal runs while files are still being renamed.
+/// when the task that waits for it is aborted: the worker passes its turn at
+/// the folders and the torrent gate, so no reading records the folder half
+/// moved and no removal runs while files are still being renamed.
 pub type Hold = Arc<dyn Any + Send + Sync>;
 
 /// The filesystem as the move sees it. The worker uses the metadata's

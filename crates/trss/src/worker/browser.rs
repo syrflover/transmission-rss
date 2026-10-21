@@ -1,10 +1,10 @@
 //! The server browser of the worker ([`trss_browser`]), made from the
 //! environment and the common policy in the app database.
 
-use std::{io, path::Path};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use trss_browser::{ActivitySource, BrowserPolicy, BrowserPool, PolicySource, PoolConfig};
-use trss_core::{settings::SettingsStore, Clock, CycleLock, Db, LockFile};
+use trss_core::{settings::SettingsStore, Clock, Db};
 use trss_jobs::ScreenStore;
 
 use crate::worker::env::BrowserEnv;
@@ -44,44 +44,52 @@ pub fn screen_activity(db: Db) -> ActivitySource {
     })
 }
 
-/// Takes the right to use the browser container, for as long as the guard
-/// lives (the worker keeps it for its whole life; the operating system lets it
-/// go if the worker dies). `Ok(None)` means another worker has it.
-///
-/// A pool resets the container when it is made and its reaper ends the runs
-/// it does not know, so two workers on one container would end each other's
-/// runs. One worker at a time uses it.
-pub fn take_lock(db_path: &Path) -> io::Result<Option<CycleLock>> {
-    CycleLock::try_acquire(&LockFile::Browser.path_for(db_path))
-}
+/// Whether this process has made its pool ([`connect`]).
+static CONNECTED: AtomicBool = AtomicBool::new(false);
 
 /// The pool over the browser container `env` names. This resets the
-/// container, so a browser an earlier worker left open is closed. Its idle end
-/// counts a person's input on a job's remote screen ([`screen_activity`]).
+/// container, so a browser an earlier process left open is closed. Its idle
+/// end counts a person's input on a job's remote screen ([`screen_activity`]).
+///
+/// A process makes one pool: a second would reset the container again, and
+/// each pool's reaper ends the runs it does not know, so the two would end
+/// each other's runs. A second call is refused.
 pub async fn connect(db: Db, env: &BrowserEnv, clock: Clock) -> Result<BrowserPool, String> {
+    if CONNECTED.swap(true, Ordering::SeqCst) {
+        return Err("a pool over the browser container is made already in this process".into());
+    }
     let config = PoolConfig::new(env.url.clone(), env.token.clone(), env.downloads.clone())
         .with_activity(screen_activity(db.clone()));
-    BrowserPool::new(config, clock, policy_source(db))
-        .await
-        .map_err(|e| format!("cannot set up the server browser: {e}"))
+    let pool = BrowserPool::new(config, clock, policy_source(db)).await;
+    if pool.is_err() {
+        // No pool was made: a later call may make one.
+        CONNECTED.store(false, Ordering::SeqCst);
+    }
+    pool.map_err(|e| format!("cannot set up the server browser: {e}"))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn one_worker_at_a_time_has_the_browser() {
+    #[tokio::test]
+    async fn a_process_makes_one_pool_over_the_browser_container() {
         let dir = tempfile::tempdir().unwrap();
-        let db = dir.path().join("trss.db");
+        let db = Db::open(dir.path().join("app.db")).await.unwrap();
+        // No container answers there: the pool is made all the same and
+        // resets the container at its first use.
+        let env = BrowserEnv {
+            url: "http://127.0.0.1:9/".parse().unwrap(),
+            token: "token".into(),
+            downloads: dir.path().join("downloads"),
+        };
 
-        let first = take_lock(&db).unwrap();
-        assert!(first.is_some());
-        // The lock file's name is trss-core's (`LockFile::Browser`).
-        assert!(LockFile::Browser.path_for(&db).exists());
-        assert!(take_lock(&db).unwrap().is_none(), "a second worker got it");
-
-        drop(first);
-        assert!(take_lock(&db).unwrap().is_some());
+        assert!(connect(db.clone(), &env, trss_core::system_clock())
+            .await
+            .is_ok());
+        match connect(db, &env, trss_core::system_clock()).await {
+            Ok(_) => panic!("a second pool was made"),
+            Err(reason) => assert!(reason.contains("made already"), "{reason}"),
+        }
     }
 }

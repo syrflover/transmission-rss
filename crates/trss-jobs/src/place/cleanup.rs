@@ -66,8 +66,8 @@
 //! # Removing
 //!
 //! The worker takes each asked cleanup up ([`super::Placer::run_cleanups`])
-//! in the task that runs the jobs, under the worker lock, before the jobs it
-//! runs: no store, reuse or link of a job runs between its steps, and the web
+//! in the task that runs the jobs, which runs once at a time in the process,
+//! before the jobs it runs: no store, reuse or link of a job runs between its steps, and the web
 //! makes none. That is how a check that a file is unused and its removal are
 //! kept together (the spec's serialization of a font's cleanup).
 //!
@@ -982,7 +982,7 @@ impl Placer {
     }
 
     /// Carries out each asked cleanup (see the module docs). The caller
-    /// holds the worker lock and runs no job meanwhile. Returns how many
+    /// is the task that runs the jobs and runs no job meanwhile. Returns how many
     /// ended, done or held.
     /// One that fails (the database refused a step) is told and stays
     /// asked; the others go on.

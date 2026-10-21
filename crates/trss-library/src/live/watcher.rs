@@ -1,12 +1,11 @@
 //! The task that watches one watch folder: it reads the kernel's events into
 //! its [`WatchTree`], and when something has been due for its debounce it
-//! reads that part of the folder again, holding the worker's lock and its turn
-//! at the folder.
+//! reads that part of the folder again, holding its turn at the folder.
 
 use std::{
     os::fd::{AsRawFd, RawFd},
     sync::{Arc, Mutex},
-    time::{Duration, Instant},
+    time::Instant,
 };
 
 use rustix::fd::OwnedFd;
@@ -88,8 +87,8 @@ where
 impl Task {
     pub(super) async fn run(mut self) {
         let mut tree = self.tree.take();
-        // When a reading that could not run (the lock or the turn was taken)
-        // may be tried again.
+        // When a reading that could not run (the turn was taken) may be tried
+        // again.
         let mut retry_at: Option<Instant> = None;
         // What was last written to the folder's row (`None`: nothing yet).
         let mut written: Option<Option<String>> = None;
@@ -163,8 +162,8 @@ impl Task {
         }
     }
 
-    /// Reads again what is due, if the worker's lock and the folder's turn are
-    /// free. When it could not be done now, the time to try again.
+    /// Reads again what is due, if the folder's turn is free. When it could
+    /// not be done now, the time to try again.
     async fn flush(&self, slot: &mut Option<WatchTree>) -> Option<Instant> {
         let tree = slot.as_mut()?;
         let mut due = tree.take_due(Instant::now());
@@ -174,24 +173,6 @@ impl Task {
         }
         let retry = Instant::now() + self.config.retry;
         let ctx = &self.runtime.ctx;
-        // The web sees the worker busy, not stopped, for as long as a reading
-        // takes (a whole folder on a slow disk takes minutes): the hold beats.
-        let hold = match self.runtime.lock.try_hold().await {
-            Ok(Some(hold)) => hold,
-            Ok(None) => {
-                tree.defer(due, retry);
-                return Some(retry);
-            }
-            Err(error) => {
-                eprintln!(
-                    "Watch folder {}: cannot take the worker lock: {error}",
-                    self.folder_id
-                );
-                let later = Instant::now() + self.config.retry.max(Duration::from_secs(5));
-                tree.defer(due, later);
-                return Some(later);
-            }
-        };
 
         let read = async {
             let folder = match ctx.library.folder(&self.folder_id).await {
@@ -253,9 +234,7 @@ impl Task {
             }
             None
         };
-        let next = read.await;
-        hold.release().await;
-        next
+        read.await
     }
 
     fn catching_up(&self) -> bool {

@@ -7,7 +7,7 @@
 //! is its own, which request ends at once, how the original link is got back)
 //! is tested in trss-collect (`commands::receive_once`, ADR 0015). This file
 //! keeps what only a process shows: that a command the web accepted reaches
-//! the worker and ends, the lock and the order of cycles and commands, a worker
+//! the worker and ends, the order of cycles and commands, a worker
 //! that restarts or dies, and a cycle that must not remove what a command
 //! has put in.
 //!
@@ -44,7 +44,7 @@ use trss_collect::{
 };
 use trss_core::{
     commands::{CommandState, CommandStore, MAX_ATTEMPTS},
-    lock_path_for, CycleLock, Db,
+    Db,
 };
 use trss_transmission::item_label;
 
@@ -405,7 +405,7 @@ async fn the_command_ends_only_after_its_rename_step_and_note() {
 
 // --- the next cycle ------------------------------------------------------------------------
 
-// --- restarts, two workers and the lock --------------------------------------------------------
+// --- restarts and a look that fails -------------------------------------------------------------
 
 #[tokio::test]
 async fn a_command_accepted_before_a_restart_runs_once_after_it() {
@@ -734,81 +734,6 @@ async fn a_command_whose_adds_never_get_an_answer_ends_add_failed_and_holds_the_
 }
 
 #[tokio::test]
-async fn two_workers_never_run_one_command_twice() {
-    let liar = release("guid-liar-26", 26, LIAR, "");
-    let s = Scene::failing(&[&liar], picked_rules()).await;
-    let item = s.item("LIAR GAME - 26").await;
-    s.post(CMD, &item).await;
-
-    // The first worker is held inside Transmission's `torrent-add`.
-    let gate = s.h.tr.hold("torrent-add");
-    let first = {
-        let worker = s.h.worker();
-        tokio::spawn(async move { worker.run_commands(&CancellationToken::new()).await })
-    };
-    gate.wait_arrived().await;
-
-    // The second finds the lock taken and leaves the command alone.
-    let other = Db::open(s.h.db_path()).await.unwrap();
-    assert_eq!(
-        s.run_commands_with(&s.h.worker_with_db(other)).await,
-        CommandsOutcome::Busy
-    );
-
-    gate.release_all();
-    assert_eq!(first.await.unwrap().unwrap(), CommandsOutcome::Ran(1));
-    assert_eq!(s.adds().len(), 1);
-    assert_eq!(s.run_commands().await, CommandsOutcome::Idle);
-}
-
-#[tokio::test]
-async fn a_command_waits_while_a_cycle_holds_the_lock() {
-    let liar = release("guid-liar-26", 26, LIAR, "");
-    let s = Scene::failing(&[&liar], picked_rules()).await;
-    let item = s.item("LIAR GAME - 26").await;
-    s.post(CMD, &item).await;
-    // The item has left the feed, so the cycle does not pick it itself.
-    s.feed(&[]);
-
-    // Another worker's cycle in progress (held at its first request to
-    // Transmission): the lock between processes keeps them apart.
-    let gate = s.h.tr.hold("session-set");
-    s.h.advance(300_000);
-    let cycle = {
-        let worker = s.h.worker();
-        tokio::spawn(async move { worker.tick(&CancellationToken::new()).await })
-    };
-    gate.wait_arrived().await;
-
-    assert_eq!(s.run_commands().await, CommandsOutcome::Busy);
-    assert!(s.adds().is_empty(), "no command runs inside a cycle");
-    assert_eq!(s.command(CMD).await.1["state"], "pending");
-
-    gate.release_all();
-    cycle.await.unwrap().unwrap();
-    assert_eq!(s.run_commands().await, CommandsOutcome::Ran(1));
-    assert_eq!(s.adds().len(), 1);
-}
-
-#[tokio::test]
-async fn a_busy_lock_is_not_an_error_and_the_next_look_takes_the_command() {
-    let liar = release("guid-liar-26", 26, LIAR, "");
-    let s = Scene::failing(&[&liar], picked_rules()).await;
-    let item = s.item("LIAR GAME - 26").await;
-    s.post(CMD, &item).await;
-
-    let lock = CycleLock::try_acquire(&lock_path_for(&s.h.db_path()))
-        .unwrap()
-        .expect("free lock");
-    assert_eq!(s.run_commands().await, CommandsOutcome::Busy);
-    assert_eq!(s.run_commands().await, CommandsOutcome::Busy);
-    assert_eq!(s.command(CMD).await.1["state"], "pending");
-
-    drop(lock);
-    assert_eq!(s.run_commands().await, CommandsOutcome::Ran(1));
-}
-
-#[tokio::test]
 async fn the_running_worker_picks_up_a_command_without_waiting_for_the_next_cycle() {
     let liar = release("guid-liar-26", 26, LIAR, "");
     let s = Scene::failing(&[&liar], picked_rules()).await;
@@ -903,16 +828,20 @@ async fn a_command_left_for_later_starts_again_by_itself_once_its_wait_is_over()
 }
 
 #[tokio::test]
-async fn a_look_that_finds_the_lock_taken_looks_again_by_itself() {
+async fn a_look_that_fails_looks_again_by_itself() {
     let liar = release("guid-liar-26", 26, LIAR, "");
     let s = Scene::failing(&[&liar], picked_rules()).await;
     // The item has left the feed, so the worker's own cycles do not take it.
     s.feed(&[]);
     s.post(CMD, &s.item("LIAR GAME - 26").await).await;
-    // Another process holds the worker lock when the worker starts.
-    let lock = CycleLock::try_acquire(&lock_path_for(&s.h.db_path()))
-        .unwrap()
-        .expect("free lock");
+    // The worker's looks fail while the table is away.
+    let rename = |from: &'static str, to: &'static str| {
+        s.h.db.run(move |c| {
+            c.execute_batch(&format!("ALTER TABLE {from} RENAME TO {to}"))
+                .map_err(trss_core::DbError::from)
+        })
+    };
+    rename("commands", "commands_away").await.unwrap();
 
     // A cycle an hour and no ring: what finds the command is the look again.
     let env =
@@ -926,13 +855,19 @@ async fn a_look_that_finds_the_lock_taken_looks_again_by_itself() {
         tokio::spawn(async move { worker.run(cancel).await })
     };
     tokio::time::sleep(Duration::from_millis(600)).await;
+    rename("commands_away", "commands").await.unwrap();
     assert_eq!(state_of(&s, CMD).await, "pending");
-    drop(lock);
 
     wait_for("the command to be done", || async {
         state_of(&s, CMD).await == "done"
     })
     .await;
+    let command = CommandStore::new(s.h.db.clone())
+        .get(CMD)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(command.attempts, 1);
     assert_eq!(s.adds().len(), 1);
     cancel.cancel();
     running.await.unwrap();
@@ -1212,56 +1147,6 @@ async fn a_started_process_runs_again_the_commands_an_earlier_one_left_open() {
 // --- the rule detail's view of the past items ----------------------------------------------
 
 // --- what a rule missed while it was off ------------------------------------------------------
-
-// --- the worker's heartbeat while a command holds the lock (ticket 0021) -----------------------
-
-#[tokio::test]
-async fn a_long_command_beats_and_the_board_shows_no_stall_meanwhile() {
-    use trss::web::{status_api::board, AppState};
-    use trss_collect::store::status::StatusStore;
-    use trss_core::heartbeat::HeartbeatStore;
-
-    let odd = release("guid-odd", 9, "Some Special Collection.mkv", "");
-    let s = Scene::failing(&[&odd], vec![rule("Some Special", "Some Show")]).await;
-    let item = s.item("Some Special").await;
-    s.post(CMD, &item).await;
-    let status = StatusStore::new(s.h.db.clone());
-    let heartbeat = HeartbeatStore::new(s.h.db.clone());
-    // The set-up cycle ended; its worker takes five minutes between cycles.
-    status.record_cycle_interval(300_000).await.unwrap();
-    let state = AppState::new(s.h.db.clone());
-    let stalled = |now| {
-        let state = state.clone();
-        async move { board(&state, now, 0).await.unwrap().cycle.unwrap().stalled }
-    };
-
-    let gate = s.h.tr.hold("torrent-get");
-    let worker = s.h.worker().with_heartbeat_every(Duration::from_millis(10));
-    let running = tokio::spawn(async move { worker.run_commands(&CancellationToken::new()).await });
-    gate.wait_arrived().await;
-    let started = s.h.now();
-    let held = heartbeat.read().await.unwrap().expect("a beat");
-    assert_eq!(held.held_since, Some(started));
-
-    // The command goes on for a quarter of an hour (three intervals since the
-    // cycle began): the worker is busy, and the board does not say it stopped.
-    s.h.advance(15 * 60_000);
-    let now = s.h.now();
-    for _ in 0..200 {
-        if heartbeat.read().await.unwrap().unwrap().beat_at == now {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
-    let beat = heartbeat.read().await.unwrap().unwrap();
-    assert_eq!((beat.beat_at, beat.held_since), (now, Some(started)));
-    assert!(!stalled(now).await);
-
-    gate.release_all();
-    assert_eq!(running.await.unwrap().unwrap(), CommandsOutcome::Ran(1));
-    let done = heartbeat.read().await.unwrap().unwrap();
-    assert_eq!(done.held_since, None);
-}
 
 // --- commands at once, beside the cycles (ticket 0031) -----------------------------------------
 

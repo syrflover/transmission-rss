@@ -5,11 +5,9 @@
 use crate::common;
 
 use common::*;
-use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 use trss::worker::{CycleReport, TickOutcome, Worker};
 use trss_collect::store::status::StatusStore;
-use trss_core::heartbeat::HeartbeatStore;
 
 async fn run(worker: &Worker) -> CycleReport {
     match worker.tick(&CancellationToken::new()).await.unwrap() {
@@ -98,69 +96,4 @@ async fn when_transmission_cannot_be_asked_the_old_counts_stay_and_the_cycle_sti
     let reads = status.channel_reads().await.unwrap();
     assert!(reads[0].ok);
     assert_eq!(reads[0].read_at, h.now());
-}
-
-// --- the worker's heartbeat (ticket 0021) ------------------------------------------------------
-
-#[tokio::test]
-async fn a_worker_beats_while_a_cycle_holds_the_lock_and_clears_the_hold_after_it() {
-    let h = Harness::new().await;
-    h.add_channel("feed-a", "/media/anime", &[], feed_a_rules())
-        .await;
-    let heartbeat = HeartbeatStore::new(h.db.clone());
-    assert_eq!(heartbeat.read().await.unwrap(), None);
-    let first = h.worker().with_heartbeat_every(Duration::from_millis(10));
-    let second = h.worker();
-
-    // The cycle waits for the feed, holding the lock.
-    let gate = h.feeds.hold("feed-a");
-    let started = h.now();
-    let running = {
-        let first = first.clone();
-        tokio::spawn(async move { first.tick(&CancellationToken::new()).await })
-    };
-    gate.wait_arrived().await;
-    let held = heartbeat.read().await.unwrap().expect("a beat");
-    assert_eq!(held.held_since, Some(started));
-    assert_eq!(held.beat_at, started);
-
-    // Another worker finding the lock taken writes no beat of its own.
-    h.advance(30_000);
-    assert_eq!(
-        second.tick(&CancellationToken::new()).await.unwrap(),
-        TickOutcome::Busy
-    );
-
-    // Nor does it take over the hold: it is still dated from the first's start.
-    assert_eq!(
-        heartbeat.read().await.unwrap().unwrap().held_since,
-        Some(started)
-    );
-
-    gate.release_all();
-    assert!(matches!(
-        running.await.unwrap().unwrap(),
-        TickOutcome::Ran(_)
-    ));
-    assert_eq!(heartbeat.read().await.unwrap().unwrap().held_since, None);
-}
-
-#[tokio::test]
-async fn a_cycle_that_does_not_start_leaves_no_hold() {
-    let h = Harness::new().await;
-    h.add_channel("feed-a", "/media/anime", &[], feed_a_rules())
-        .await;
-    let heartbeat = HeartbeatStore::new(h.db.clone());
-    let worker = h.worker().with_min_gap(Duration::from_secs(3600));
-    run(&worker).await;
-
-    // A second try so soon after the start is refused under the lock.
-    h.advance(1_000);
-    assert_eq!(
-        worker.tick(&CancellationToken::new()).await.unwrap(),
-        TickOutcome::TooSoon
-    );
-    let beat = heartbeat.read().await.unwrap().unwrap();
-    assert_eq!(beat.held_since, None);
-    assert_eq!(beat.beat_at, h.now());
 }

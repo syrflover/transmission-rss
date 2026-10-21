@@ -29,7 +29,7 @@ Anissia의 회차 표시 `0`처럼 뜻을 확인하지 못한 값은 숫자 회�
   한 응답에 같은 작품·제작자의 줄이 둘 이상이면 갱신 시점이 가장 새로운 줄(시점이 없거나 같으면 마지막 줄)만 관찰해요.
   쪽마다 읽는 대로 남기므로 쪽 중간에 실패해도 이미 읽은 쪽의 관찰은 남고, 다음 주기에 처음부터 다시 읽어요.
   다음 읽기는 이번 읽기를 시작한 뒤 30분이며 결과(성공·`429`·실패)와 무관해요. `429`가 더 오래 기다리라고 하면 그때까지 미뤄요. 일정은 첫 요청 전에 데이터베이스에 써서, 읽는 도중 프로세스가 죽거나 멈춰도 재시작이 바로 다시 읽지 않아요. 일정이 한 주기와 `429`가 요구할 수 있는 가장 긴 대기(1시간)를 합친 것보다 멀리 있으면(시계가 되돌아간 경우) 읽을 때가 된 것으로 봐요. 읽기가 끝날 때마다 읽은 쪽 수와 더한·건너뛴 줄 수를 한 줄 기록해요.
-  이 읽기는 `<db>.anissia-captions.lock`을 따로 잡고 RSS 수집 주기·기존 Anissia 큐와 겹치지 않으며, 요청 간격은 앱의 다른 Anissia 요청과 함께 데이터베이스로 지켜요.
+  이 읽기는 따로 돌아서 RSS 수집 주기·기존 Anissia 큐와 겹치지 않으며, 요청 간격은 앱의 다른 Anissia 요청과 함께 데이터베이스로 지켜요.
   작품마다 방영 시각에 맞춰 조회 주기를 바꾸는 안보다 요청이 훨씬 적고, 모든 작품의 변화가 30분 안에 보이며, 방영 시각·조회 멈춤 상태를 관리하지 않아요.
   연결하지 않은 작품의 관찰도 남겨 두므로, 방영 중에 작품을 연결해도 그 뒤로 관찰한 지난 회차 후보가 보여요.
   이 주기는 기존 영상 RSS 처리 주기를 변경하지 않아요.
@@ -754,7 +754,7 @@ worker를 다시 시작하면 기다리는 작업을 한 번 다시 살펴보고
 | 요구 | 실제 사용에서 본 것 | 테스트로 확인한 것 | 확인하지 않은 것 |
 | --- | --- | --- | --- |
 | 자막 후보의 관찰 모델 | 2026-10-07 서버: 배포 첫 주기에 관찰 87개가 생겼어요 ([0081]) | `trss-collect` `anissia/captions_tests.rs` `a_creator_moving_to_the_next_episode_leaves_both_candidates`, `a_line_that_leaves_the_list_leaves_its_observations` | Anissia의 덮어쓰기와 `updDt` 미래 시각 줄이기는 외부 동작이라 테스트가 없어요. `0`을 원래 표시로 보이는 화면도 없어요. |
-| 30분마다 최근 자막 목록 전체 읽기 | 2026-10-07 서버: 첫 주기에 최근 목록 5쪽을 읽었어요 ([0081]) | `trss-collect` `anissia/captions_tests.rs` `a_reading_takes_every_page_to_the_empty_one_and_observes_every_anime`, `nothing_is_read_again_within_thirty_minutes_even_after_a_restart` | 로그 문구는 겨누지 않았고, 잠금 테스트는 잠금 파일의 경로 이름만 봐요. 첫 주기 뒤의 주기와 `429`를 만난 읽기는 서버에서 못 봤고, 긴 `429` 대기에 걸리면 다음 주기를 기다려요 ([0035]). 영상 RSS 주기는 테스트가 없어요. |
+| 30분마다 최근 자막 목록 전체 읽기 | 2026-10-07 서버: 첫 주기에 최근 목록 5쪽을 읽었어요 ([0081]) | `trss-collect` `anissia/captions_tests.rs` `a_reading_takes_every_page_to_the_empty_one_and_observes_every_anime`, `nothing_is_read_again_within_thirty_minutes_even_after_a_restart` | 로그 문구는 겨누지 않았어요. 읽기가 한 번에 하나인 것은 `trss-core` `queue.rs`의 대기열 테스트가 확인하고, 자막 줄 읽기가 그 대기열로 도는지는 따로 확인하지 않았어요. 첫 주기 뒤의 주기와 `429`를 만난 읽기는 서버에서 못 봤고, 긴 `429` 대기에 걸리면 다음 주기를 기다려요 ([0035]). 영상 RSS 주기는 테스트가 없어요. |
 | 시즌 연결·새로고침 때 작품 자막 정보 읽기 | 2026-10-07 서버: 시즌 1을 3492에 연결한 뒤 에루샤의 12화 후보를 받았어요. 연결 읽기 기록은 없어요 ([0083]) | `trss` `tests/it/anissia_captions.rs` `a_season_link_made_through_the_web_is_read_by_the_worker_as_a_command`<br>`trss-collect` `anissia/captions_tests.rs` `an_anime_read_after_its_lines_were_observed_shows_the_earlier_ones_and_the_older_ones` | 서버에서 연결 읽기로 90일보다 오래된 줄이 더해진 기록은 없어요. 연결 읽기와 30분 읽기가 몇 ms 차이로 엇갈리면 옛 상태가 한 번 더 관찰될 수 있어요 ([0035]). |
 | 30분 사이의 변화와 읽지 못한 동안의 변화 | 없음 | `trss-collect` `anissia/captions_tests.rs` `a_failure_is_read_again_next_period_and_leaves_the_observations_there` | 30분 사이에 줄을 두 번 바꾸면 마지막만 남는데, 중간 상태가 남지 않음을 겨눈 테스트는 없어요. |
 | 줄은 그대로인 게시물 파일 수정 | 근거만: 2026-10-02 표본의 게시물 11곳 중 4곳이 갱신일보다 58시간 넘게 뒤에 고쳐졌어요 ([경로별 재확인]) | `trss-collect` `anissia/captions_tests.rs` `a_reading_after_which_no_line_changed_adds_nothing` | 게시물 쪽 변화가 관찰에 들어오지 않는 점은 테스트가 없어요. 범위 밖이라고 적은 실제 사례는 [0035]에 있어요. |

@@ -9,14 +9,14 @@
 //! - [`files`]: the image files in the app data folder.
 //! - [`queue`]: the worker's automatic searches and fetches.
 //!
-//! [`Artwork`] puts them together for both processes. The web carries out the
+//! [`Artwork`] puts them together for the web and the worker. The web carries out the
 //! user's choices itself: the user waits for them and needs the reason when a
-//! file or an entry is refused, and an upload's bytes arrive at the web. Both processes write
+//! file or an entry is refused, and an upload's bytes arrive at the web. Both write
 //! the app data folder and the database safely side by side: files get fresh
 //! names and never replace anything, and every selection change is checked
 //! against the selection's version in its transaction. The worker runs only
-//! the automatic queue, outside the worker lock (it touches neither the media
-//! nor Transmission).
+//! the automatic queue, beside the collection cycle (it touches neither the
+//! media nor Transmission).
 //!
 //! # Limits
 //!
@@ -89,7 +89,10 @@ pub use trss_anilist::{
     Anilist, AnilistConfig, AnilistError, ImageFetchError, FETCH_TIMEOUT, MAX_IMAGE_BYTES,
 };
 
-use trss_core::{system_clock, Clock, Db};
+use trss_core::{
+    queue::{Queue, POLL},
+    system_clock, Clock, Db,
+};
 
 use crate::store::artwork::{ArtworkError, ArtworkStore, ImageRef, Selection, Source, UserChange};
 
@@ -173,6 +176,8 @@ pub struct Artwork {
     serving: Arc<Semaphore>,
     verified: Arc<files::Verified>,
     body_timeout: Duration,
+    /// The queue's loop, which one task at a time runs ([`Artwork::run_queue`]).
+    queue: Queue,
 }
 
 impl Artwork {
@@ -197,6 +202,7 @@ impl Artwork {
             serving: Arc::new(Semaphore::new(SERVING_BUDGET)),
             verified: Arc::default(),
             body_timeout: UPLOAD_BODY_TIMEOUT,
+            queue: Queue::new(queue::QUEUE, POLL),
         }
     }
 

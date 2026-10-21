@@ -19,7 +19,7 @@ use trss_collect::{
     anissia::{captions::CaptionObserver, AnissiaQueue},
     store::anissia::AnissiaStore,
 };
-use trss_core::{access::check_app_data, db::DB_PATH_ENV, lock_path_for, Db, LockFile};
+use trss_core::{access::check_app_data, db::DB_PATH_ENV, instance_lock_path, Db, InstanceLock};
 use trss_jobs::{place::unpack, JobRun, ReceiveArea, Runner, Unpacker};
 use trss_library::{
     artwork::{AppData, Artwork},
@@ -68,6 +68,22 @@ async fn run() -> Result<(), String> {
     // Before anything is opened: a file an earlier deploy made as another user
     // stops the start here, with its path and the uid that is needed.
     check_app_data(&db_path).map_err(|e| e.to_string())?;
+    // One process on the app data: a second one stops here, before it opens
+    // the database or serves anything.
+    let lock = instance_lock_path(&db_path);
+    let instance = InstanceLock::try_take(&db_path)
+        .map_err(|e| format!("cannot take the lock {}: {e}", lock.display()))?
+        .ok_or_else(|| {
+            format!(
+                "another trss runs on this app data (it holds {}); this one stops",
+                lock.display()
+            )
+        })?;
+    // Never dropped: the kernel lets go of it when the process exits, which
+    // is after the runtime has waited for its blocking work (a folder's
+    // renames that outlive their command), not when this function returns.
+    std::mem::forget(instance);
+    remove_files_of_earlier_releases(&db_path);
     let open = || async {
         Db::open(&db_path).await.map_err(|e| {
             format!(
@@ -81,7 +97,6 @@ async fn run() -> Result<(), String> {
     let web_db = open().await?;
     // Cover images live in the app data folder: the database's folder.
     let app_data = AppData::for_database(&db_path);
-    remove_old_wake_socket(&db_path);
 
     // From here on SIGTERM and SIGINT stop the process the orderly way, the
     // waits of the start included.
@@ -182,49 +197,35 @@ async fn run() -> Result<(), String> {
         println!("The fake subtitle source is on ({FAKE_SUBTITLE_SOURCE_VAR})");
         sources = sources.with_fake(FakeSource);
     }
-    // One worker at a time uses the browser container: a second one would
-    // reset it and end the first one's runs. The lock lives as long as this
-    // process (`browser_lock`).
-    let (browser, browser_lock) = match &worker_env.browser {
-        Some(browser_env) => match trss::worker::browser::take_lock(&db_path)
-            .map_err(|e| format!("cannot take the lock of the server browser: {e}"))?
-        {
-            Some(lock) => match trss_browser::prepare_downloads_root(&browser_env.downloads) {
-                Ok(()) => {
-                    let connecting = trss::worker::browser::connect(
-                        db.clone(),
-                        browser_env,
-                        trss_core::system_clock(),
-                    );
-                    let Some(connected) = cancel.run_until_cancelled(connecting).await else {
-                        // The web is winding down with the same token.
-                        sweeping.abort();
-                        let served = serving.await.map_err(|e| e.to_string())?;
-                        println!("trss stopped");
-                        return served;
-                    };
-                    (Some(connected?), Some(lock))
-                }
-                // A first start has a downloads folder Docker made as root.
-                // That is no reason to stop the whole process (its restart
-                // policy would loop on it): it runs as it did without a
-                // browser, and the message says what to give the folder.
-                Err(reason) => {
-                    eprintln!("trss: running without a server browser: {reason}");
-                    // Keep the lock: while this worker holds it no other one
-                    // uses the browser, so the screens bound to an earlier
-                    // worker's runs are no one's and are closed at the start.
-                    (None, Some(lock))
-                }
-            },
-            None => {
-                eprintln!(
-                    "trss: another worker uses the browser container; this one runs without a server browser"
+    // One pool over the browser container for the process's life
+    // (`trss::worker::browser::connect`).
+    let browser = match &worker_env.browser {
+        Some(browser_env) => match trss_browser::prepare_downloads_root(&browser_env.downloads) {
+            Ok(()) => {
+                let connecting = trss::worker::browser::connect(
+                    db.clone(),
+                    browser_env,
+                    trss_core::system_clock(),
                 );
-                (None, None)
+                let Some(connected) = cancel.run_until_cancelled(connecting).await else {
+                    // The web is winding down with the same token.
+                    sweeping.abort();
+                    let served = serving.await.map_err(|e| e.to_string())?;
+                    println!("trss stopped");
+                    return served;
+                };
+                Some(connected?)
+            }
+            // A first start has a downloads folder Docker made as root. That
+            // is no reason to stop the whole process (its restart policy would
+            // loop on it): it runs as it did without a browser, and the
+            // message says what to give the folder.
+            Err(reason) => {
+                eprintln!("trss: running without a server browser: {reason}");
+                None
             }
         },
-        None => (None, None),
+        None => None,
     };
     let jobs = Runner::new(
         JobRun::new(db.clone()),
@@ -259,12 +260,15 @@ async fn run() -> Result<(), String> {
             jobs
         }
     };
+    // Each queue that runs is made here, once, and runs once below; a queue
+    // guards only its own runs ([`trss_core::queue::Queue`]). The web's
+    // `Artwork` above never runs its queue.
     let artwork = Artwork::new(db.clone(), Some(app_data), anilist);
     let season_info = Seasons::over(db.clone(), &artwork);
     let anissia_client = Anissia::with_defaults(db.clone(), anissia_config);
     let anissia = AnissiaQueue::new(anissia_client.clone(), AnissiaStore::new(db.clone()));
     let captions = CaptionObserver::new(anissia_client, AnissiaStore::new(db.clone()));
-    let mut worker = Worker::new(db, &worker_env, lock_path_for(&db_path))
+    let mut worker = Worker::new(db, &worker_env)
         .map_err(|e| e.to_string())?
         .with_captions(captions.clone())
         .with_jobs(jobs)
@@ -273,40 +277,34 @@ async fn run() -> Result<(), String> {
     if let Some(pool) = browser {
         println!("The server browser is on (a pool over the browser container)");
         worker = worker.with_browser(pool);
-    } else if browser_lock.is_some() {
-        worker = worker.with_unused_browser_lock();
     }
 
     // Work covers: AniList searches and image fetches, one at a time, beside
-    // the collection loop and outside its lock.
+    // the collection loop.
     let queue = tokio::spawn({
         let cancel = cancel.clone();
-        let lock = LockFile::Artwork.path_for(&db_path);
-        async move { artwork.run_queue(lock, cancel).await }
+        async move { artwork.run_queue(cancel).await }
     });
 
     // Season info: linking a first season by its folder name and the daily
     // refresh of entries that are not finished, on the same pace.
     let season_queue = tokio::spawn({
         let cancel = cancel.clone();
-        let lock = LockFile::Seasons.path_for(&db_path);
-        async move { season_info.run_queue(lock, cancel).await }
+        async move { season_info.run_queue(cancel).await }
     });
 
     // Subscribed anime: the daily refresh of their schedule snapshots, on
     // Anissia's own pace.
     let anissia_queue = tokio::spawn({
         let cancel = cancel.clone();
-        let lock = LockFile::Anissia.path_for(&db_path);
-        async move { anissia.run_queue(lock, cancel).await }
+        async move { anissia.run_queue(cancel).await }
     });
 
     // The subtitle lines of every Anissia anime: the recent list every 30
-    // minutes, whatever the collection cycle is doing, under its own lock.
+    // minutes, whatever the collection cycle is doing.
     let caption_queue = tokio::spawn({
         let cancel = cancel.clone();
-        let lock = LockFile::AnissiaCaptions.path_for(&db_path);
-        async move { captions.run_queue(lock, cancel).await }
+        async move { captions.run_queue(cancel).await }
     });
 
     println!(
@@ -327,23 +325,37 @@ async fn run() -> Result<(), String> {
     served
 }
 
-/// Removes the socket next to the database on which releases before one
-/// process heard the web's wake-ups (`<database>.wake`): nothing listens on it
-/// now.
-fn remove_old_wake_socket(db_path: &std::path::Path) {
-    let mut socket = db_path.as_os_str().to_owned();
-    socket.push(".wake");
-    let socket = PathBuf::from(socket);
-    match std::fs::remove_file(&socket) {
-        Ok(()) => println!(
-            "trss: removed the wake socket of an earlier release ({})",
-            socket.display()
-        ),
-        Err(e) if e.kind() == io::ErrorKind::NotFound => {}
-        Err(e) => eprintln!(
-            "trss: cannot remove the wake socket of an earlier release ({}): {e}",
-            socket.display()
-        ),
+/// What earlier releases kept next to the database and nothing uses now, as
+/// suffixes of the database's file name: the socket on which the worker heard
+/// the web's wake-ups, and the lock files the instance lock replaced.
+const FILES_OF_EARLIER_RELEASES: [&str; 7] = [
+    ".wake",
+    ".worker.lock",
+    ".browser.lock",
+    ".artwork.lock",
+    ".seasons.lock",
+    ".anissia.lock",
+    ".anissia-captions.lock",
+];
+
+/// Removes [`FILES_OF_EARLIER_RELEASES`] where they are, saying which. Called
+/// with the instance lock held, so no process of this release uses them.
+fn remove_files_of_earlier_releases(db_path: &std::path::Path) {
+    for suffix in FILES_OF_EARLIER_RELEASES {
+        let mut name = db_path.as_os_str().to_owned();
+        name.push(suffix);
+        let path = PathBuf::from(name);
+        match std::fs::remove_file(&path) {
+            Ok(()) => println!(
+                "trss: removed a file of an earlier release ({})",
+                path.display()
+            ),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+            Err(e) => eprintln!(
+                "trss: cannot remove a file of an earlier release ({}): {e}",
+                path.display()
+            ),
+        }
     }
 }
 

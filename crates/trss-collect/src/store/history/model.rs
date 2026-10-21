@@ -280,15 +280,47 @@ pub struct HistoryPage {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CycleState {
     pub started_at: Millis,
-    /// `None` while that cycle is running or if the worker died in it.
+    /// `None` while that cycle is running or if the process stopped in it.
     pub finished_at: Option<Millis>,
 }
 
-impl From<CycleState> for trss_core::heartbeat::CycleMarks {
-    fn from(cycle: CycleState) -> Self {
-        trss_core::heartbeat::CycleMarks {
-            started_at: cycle.started_at,
-            finished_at: cycle.finished_at,
+/// The shortest bound on how long a cycle may run and still be taken for
+/// running.
+const RUNNING_FLOOR_MS: i64 = 30 * 60_000;
+/// How many intervals a cycle may run and still be taken for running, when that
+/// is longer than [`RUNNING_FLOOR_MS`].
+const RUNNING_INTERVALS: i64 = 10;
+
+/// How long a cycle may run without an end and still be taken for running
+/// rather than stopped: the larger of 30 minutes and ten intervals, so that a
+/// short interval does not call a slow cycle stopped.
+pub fn running_bound(interval_ms: i64) -> i64 {
+    RUNNING_FLOOR_MS.max(interval_ms.saturating_mul(RUNNING_INTERVALS))
+}
+
+impl CycleState {
+    /// Whether this cycle is running as of `now`: it has started, has not
+    /// ended, and has not gone on past [`running_bound`]. What it left (the
+    /// look at Transmission) is then expected to be replaced soon.
+    pub fn is_running(&self, interval_ms: i64, now: Millis) -> bool {
+        self.finished_at.is_none()
+            && now.saturating_sub(self.started_at) <= running_bound(interval_ms)
+    }
+
+    /// Whether the collection is taken to have stopped checking as of `now`,
+    /// judged by the cycles alone: a cycle without an end that has gone on
+    /// past [`running_bound`], or a finished one whose next check (one
+    /// interval after its start) is more than one interval overdue with no
+    /// cycle started since. The readings of the watch folders and the commands
+    /// run apart from the cycles and do not count.
+    pub fn is_stalled(&self, interval_ms: i64, now: Millis) -> bool {
+        match self.finished_at {
+            None => !self.is_running(interval_ms, now),
+            Some(_) => {
+                now > self
+                    .started_at
+                    .saturating_add(interval_ms.saturating_mul(2))
+            }
         }
     }
 }

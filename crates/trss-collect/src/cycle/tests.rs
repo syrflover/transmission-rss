@@ -4,7 +4,7 @@
 //! already, which torrents are removed when their items leave the feeds, and
 //! what history records. The cycle is the world's [`World::cycle`], which runs
 //! the steps of the worker's `run_cycle` in its order against the fakes; what
-//! only a process shows (the lock, the order of cycles and commands, the
+//! only a process shows (one cycle at a time, the order of cycles and commands, the
 //! tallies of a report, a cycle that is dropped or shut down) is the worker's.
 //!
 //! Release names, hashes and secrets are made up.

@@ -1,6 +1,6 @@
 //! The pace of the requests to an outside service, kept in the database so the
-//! web and the worker, two processes, together send at most one request every
-//! spacing.
+//! web and the worker, each on its own connection, together send at most one
+//! request every spacing.
 //!
 //! A service's pace is one row of a table: when the next request may start
 //! (`next_at`) and until when the service asked for none (`blocked_until`, set

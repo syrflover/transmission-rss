@@ -9,8 +9,8 @@
 //!   reads the recent list (`/anime/caption/recent/<page>`, pages from 0) to
 //!   the empty page and observes every line of every anime, linked to a
 //!   season or not, so the episodes that pass before a season is linked are
-//!   there when it is. The reading has its own lock
-//!   (`<db path>.anissia-captions.lock`), outside the collection cycle's, and
+//!   there when it is. The reading never runs twice at once in the process
+//!   ([`trss_core::queue::Queue`]) and runs beside the collection cycle, and
 //!   its requests take their turns at the same pace as the rest of the app's
 //!   Anissia requests ([`trss_anissia::REQUEST_SPACING`], through the
 //!   database). It is not driven by the RSS cycle's interval.
@@ -43,7 +43,6 @@
 
 use std::{
     collections::{HashMap, HashSet},
-    path::PathBuf,
     sync::{Arc, Mutex},
     time::Duration,
 };
@@ -52,7 +51,7 @@ use tokio_util::sync::CancellationToken;
 
 use trss_anissia::{Anissia, AnissiaError, CaptionLine};
 use trss_core::{
-    queue::{after, run_item, Queue, LOCK_RETRY, POLL},
+    queue::{after, run_item, Queue, POLL},
     Millis,
 };
 
@@ -180,6 +179,9 @@ pub struct CaptionObserver {
     held_until: Arc<Mutex<Millis>>,
     /// Rung whenever a reading added observations.
     observed: Arc<tokio::sync::Notify>,
+    /// The observation's loop, which one task at a time runs
+    /// ([`CaptionObserver::run_queue`]).
+    queue: Queue,
 }
 
 impl CaptionObserver {
@@ -189,6 +191,7 @@ impl CaptionObserver {
             store,
             held_until: Arc::default(),
             observed: Arc::default(),
+            queue: Queue::new(QUEUE, POLL),
         }
     }
 
@@ -351,12 +354,10 @@ impl CaptionObserver {
         Some(read)
     }
 
-    /// Runs the observation until `cancel` fires: waits for the lock (another
-    /// worker may hold it) and reads whenever the period is up. A reading cut
-    /// short by the shutdown is due again at the next start.
-    pub async fn run_queue(&self, lock_path: PathBuf, cancel: CancellationToken) {
-        Queue::new(QUEUE, lock_path, POLL, LOCK_RETRY)
-            .run(&cancel, || self.run_due())
-            .await;
+    /// Runs the observation until `cancel` fires: reads whenever the period
+    /// is up. A reading cut short by the shutdown is due again at the next
+    /// start.
+    pub async fn run_queue(&self, cancel: CancellationToken) {
+        self.queue.run(&cancel, || self.run_due()).await;
     }
 }

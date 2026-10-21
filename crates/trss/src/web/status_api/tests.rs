@@ -230,7 +230,7 @@ async fn transmission_counts_and_the_last_cycle_are_reported_with_their_time() {
         )
         .await
         .unwrap();
-    assert!(state.history.try_begin_cycle(NOON - HOUR, 0).await.unwrap());
+    state.history.begin_cycle(NOON - HOUR).await.unwrap();
     state
         .history
         .finish_cycle(NOON - HOUR + 1_000)
@@ -260,7 +260,7 @@ async fn transmission_counts_and_the_last_cycle_are_reported_with_their_time() {
 #[tokio::test]
 async fn without_a_recorded_interval_nothing_is_stalled() {
     let (state, _router) = app();
-    assert!(state.history.try_begin_cycle(NOON - HOUR, 0).await.unwrap());
+    state.history.begin_cycle(NOON - HOUR).await.unwrap();
     state
         .history
         .finish_cycle(NOON - HOUR + 1_000)
@@ -269,7 +269,7 @@ async fn without_a_recorded_interval_nothing_is_stalled() {
     let stalled = |board: Board| board.cycle.unwrap().stalled;
 
     // Without a recorded interval nothing is known to be late (with one, the
-    // same cycle is late: trss-core `heartbeat` tests it).
+    // same cycle is late: trss-collect `history` tests it).
     assert!(!stalled(board(&state, NOON, 0).await.unwrap()));
 }
 
@@ -281,7 +281,7 @@ async fn cycle_of_five_minutes(state: &AppState, ago: i64, finished: bool) {
         .record_cycle_interval(5 * MINUTE)
         .await
         .unwrap();
-    assert!(state.history.try_begin_cycle(NOON - ago, 0).await.unwrap());
+    state.history.begin_cycle(NOON - ago).await.unwrap();
     if finished {
         state
             .history
@@ -296,18 +296,14 @@ fn stalled_at(board: Board) -> bool {
 }
 
 #[tokio::test]
-async fn a_worker_killed_in_a_cycle_is_stalled_once_its_heartbeat_is_stale() {
+async fn a_cycle_without_an_end_past_its_bound_is_stalled() {
     let (state, _router) = app();
-    // The cycle began ten minutes ago and never ended: well within the half
-    // hour a cycle may take, so only the heartbeat tells it from a slow one.
+    // Ten minutes in: well within the half hour a cycle may take.
     cycle_of_five_minutes(&state, 10 * MINUTE, false).await;
+    assert!(!stalled_at(board(&state, NOON, 0).await.unwrap()));
 
-    // It was killed: the beat stopped two minutes ago, and the board says so.
-    state
-        .heartbeat
-        .record(NOON - 2 * MINUTE, Some(NOON - 10 * MINUTE))
-        .await
-        .unwrap();
+    // Fifty minutes and one more: past ten intervals, the process stopped in it.
+    cycle_of_five_minutes(&state, 50 * MINUTE + 1, false).await;
     assert!(stalled_at(board(&state, NOON, 0).await.unwrap()));
 }
 

@@ -2,7 +2,7 @@ use crate::store::{
     history::{HistoryResult, HistoryStore, Observation},
     status::*,
 };
-use trss_core::{db::schema_version, heartbeat::HeartbeatStore};
+use trss_core::db::schema_version;
 
 async fn db() -> Db {
     Db::open(":memory:").await.unwrap()
@@ -436,17 +436,22 @@ async fn a_database_from_before_the_torrent_listing_has_none_until_the_worker_wr
     assert!(status.torrent_listing().await.unwrap().unwrap().holds("aa"));
 }
 
-/// The migration that added the worker's heartbeat is number 29.
-const BEFORE_HEARTBEAT: usize = 28;
+/// The migration that dropped the worker's heartbeat is number 64.
+const WITH_HEARTBEAT: usize = 63;
 
 #[tokio::test]
-async fn a_database_from_before_the_heartbeat_has_none_until_the_worker_writes_one() {
+async fn the_heartbeat_an_earlier_release_left_goes_and_the_cycle_interval_stays() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("app.db");
     {
-        let conn = trss_core::db::database_at(&path, BEFORE_HEARTBEAT);
+        let conn = trss_core::db::database_at(&path, WITH_HEARTBEAT);
         conn.execute(
             "INSERT INTO worker_info (id, cycle_interval_ms) VALUES (1, 300000)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO worker_heartbeat (id, beat_at, held_since) VALUES (1, 500, 400)",
             [],
         )
         .unwrap();
@@ -457,10 +462,17 @@ async fn a_database_from_before_the_heartbeat_has_none_until_the_worker_writes_o
     assert_eq!(schema_version_of(&db).await, schema_version());
     let status = StatusStore::new(db.clone());
     assert_eq!(status.cycle_interval().await.unwrap(), Some(300_000));
-    let heartbeat = HeartbeatStore::new(db);
-    assert_eq!(heartbeat.read().await.unwrap(), None);
-    heartbeat.record(500, Some(400)).await.unwrap();
-    assert_eq!(heartbeat.read().await.unwrap().unwrap().beat_at, 500);
+    let tables: i64 = db
+        .run(|c| {
+            Ok::<_, trss_core::DbError>(c.query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE name = 'worker_heartbeat'",
+                [],
+                |r| r.get(0),
+            )?)
+        })
+        .await
+        .unwrap();
+    assert_eq!(tables, 0);
 }
 
 #[test]

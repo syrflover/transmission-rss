@@ -11,10 +11,7 @@ use trss_collect::{
         revisions::RevisionStore, search_pace::SearchPace, status::StatusStore,
     },
 };
-use trss_core::{
-    app_data::RECEIVE_DIR, commands::CommandStore, heartbeat::HeartbeatStore,
-    settings::SettingsStore, Db,
-};
+use trss_core::{app_data::RECEIVE_DIR, commands::CommandStore, settings::SettingsStore, Db};
 use trss_jobs::{Follow, JobRequests, JobViews, PlaceStore, ReceiveArea, ScreenStore, Uploads};
 use trss_library::{
     artwork::Artwork,
@@ -31,8 +28,6 @@ pub struct AppState {
     pub channels: ChannelStore,
     pub history: HistoryStore,
     pub status: StatusStore,
-    /// The worker's heartbeat, which says whether it is busy or gone.
-    pub heartbeat: HeartbeatStore,
     /// Commands the web accepts and the worker carries out.
     pub commands: CommandStore,
     /// App-wide settings: the collect and archive folders.
@@ -95,7 +90,6 @@ impl AppState {
             channels: ChannelStore::new(db.clone()),
             history: HistoryStore::new(db.clone()),
             status: StatusStore::new(db.clone()),
-            heartbeat: HeartbeatStore::new(db.clone()),
             commands: CommandStore::new(db.clone()),
             settings: SettingsStore::new(db.clone()),
             library: LibraryStore::new(db.clone()),

@@ -5,14 +5,13 @@
 //! The worker watches each watch folder's root, work folders and season
 //! folders ([`tree`]), one inotify instance per watch folder. An alert only
 //! says *which work to read again*: the alerts of one work are gathered for a
-//! few seconds ([`LiveConfig::debounce`]), and then, holding the worker's lock
-//! ([`trss_core::WorkerLock`]) and its turn at the folder
-//! ([`watch::reading_section`](crate::watch::reading_section)), that one work is
-//! read and recorded with the code every other reading uses
-//! ([`watch::scan_works`](crate::watch::scan_works)). A reading that finds the
-//! lock taken by another worker, or its turn taken (another reading of the
-//! folder, or a command moving or renaming in the work), does not wait: it
-//! tries again shortly ([`LiveConfig::retry`]) and reads the events meanwhile.
+//! few seconds ([`LiveConfig::debounce`]), and then, holding its turn at the
+//! folder ([`watch::reading_section`](crate::watch::reading_section)), that one
+//! work is read and recorded with the code every other reading uses
+//! ([`watch::scan_works`](crate::watch::scan_works)). A reading that finds its
+//! turn taken (another reading of the folder, or a command moving or renaming
+//! in the work) does not wait: it tries again shortly ([`LiveConfig::retry`])
+//! and reads the events meanwhile.
 //! So readings of one folder never interleave, none reads a work while a
 //! command moves it, and the record is always what the disk says whatever
 //! order the alerts came in. Added times stay what the readings say: the time
@@ -85,7 +84,7 @@ use tree::WatchTree;
 pub use tree::Why;
 use watcher::{Control, SharedFd, Task};
 
-use trss_core::{Clock, Millis, WorkerLock};
+use trss_core::{Clock, Millis};
 
 use crate::store::library::WatchFolder;
 use crate::watch::WatchContext;
@@ -101,7 +100,7 @@ const ATTACH_TIMEOUT: Duration = Duration::from_secs(15);
 pub struct LiveConfig {
     /// How long the alerts of one work are gathered before it is read.
     pub debounce: Duration,
-    /// How long a reading that found the lock or its turn taken waits to try again.
+    /// How long a reading that found its turn taken waits to try again.
     pub retry: Duration,
     /// How long a folder goes without a whole read before the safety net reads it.
     pub safety_net: Duration,
@@ -177,8 +176,6 @@ struct Stats {
 #[derive(Clone)]
 pub(super) struct Runtime {
     pub ctx: WatchContext,
-    /// The worker's lock, which a reading holds (and beats under).
-    pub lock: WorkerLock,
     pub clock: Clock,
 }
 
@@ -251,11 +248,10 @@ impl LiveWatch {
     }
 
     /// Lets the folders be watched: [`LiveWatch::sync_folders`] places the
-    /// watches. `ctx` is the context the readings run with, `lock` the
-    /// worker's lock they hold.
-    pub fn start(&self, ctx: WatchContext, lock: WorkerLock, clock: Clock) {
+    /// watches. `ctx` is the context the readings run with.
+    pub fn start(&self, ctx: WatchContext, clock: Clock) {
         *self.inner.runtime.lock().unwrap_or_else(|e| e.into_inner()) =
-            Some(Runtime { ctx, lock, clock });
+            Some(Runtime { ctx, clock });
     }
 
     /// Ends every watch. The folders are read whole by every cycle again.

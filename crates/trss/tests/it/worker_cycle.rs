@@ -5,7 +5,7 @@
 //! is named, what stays in Transmission and why, how secrets are masked) is
 //! tested in trss-collect (`cycle/tests.rs`, ADR 0015), and what a torrent that
 //! is already there gets or what the cleanup takes out in trss-transmission. This file keeps what
-//! only the worker shows: the report, the cycle marker and the lock, the
+//! only the worker shows: the report, the cycle marker, one cycle at a time, the
 //! order of cycles, edits made while a cycle runs, and what a cycle does when
 //! Transmission hangs, stops or the worker shuts down.
 
@@ -245,7 +245,7 @@ async fn item_tasks_stop_when_the_cycle_is_dropped() {
     assert!(running.await.unwrap_err().is_cancelled());
 
     // The item tasks went with it: they do not go on to record what
-    // Transmission answers after the worker gave up its lock.
+    // Transmission answers after the cycle was dropped.
     add_gate.release_all();
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
     let items = h.history_items().await;
@@ -498,7 +498,7 @@ async fn a_hung_torrent_add_times_out_and_the_lock_is_released() {
         .iter()
         .all(|i| i.reason.as_deref().is_some_and(|r| !r.contains(SECRET))));
 
-    // The lock was let go: the next tick is not refused as busy.
+    // The cycle let go of its turn: the next tick is not refused as busy.
     h.advance(300_000);
     assert!(matches!(
         worker.tick(&CancellationToken::new()).await.unwrap(),
@@ -636,11 +636,12 @@ async fn secret_query_values_never_reach_history() {
 // --- exclusivity -----------------------------------------------------------------------------
 
 #[tokio::test]
-async fn a_second_worker_skips_while_the_first_is_running() {
+async fn a_second_cycle_of_the_process_skips_while_the_first_is_running() {
     let h = Harness::new().await;
     channel_a(&h).await;
     let first = h.worker();
-    let second = h.worker();
+    // What the run loop or anything else of the same process ticks with.
+    let second = first.clone();
 
     let gate = h.feeds.hold("feed-a");
     let running = {
@@ -663,42 +664,6 @@ async fn a_second_worker_skips_while_the_first_is_running() {
     ));
     assert_eq!(h.feeds.hits("feed-a"), 1, "the feed was read once");
     assert_eq!(h.tr.torrents().len(), 3);
-}
-
-#[tokio::test]
-async fn workers_started_together_run_each_period_once() {
-    let h = Harness::new().await;
-    channel_a(&h).await;
-    let gap = std::time::Duration::from_secs(150);
-    let a = h.worker().with_min_gap(gap);
-    let b = h.worker().with_min_gap(gap);
-    let token = CancellationToken::new();
-
-    let ran = |r: &Result<TickOutcome, _>| matches!(r, Ok(TickOutcome::Ran(_)));
-    let (ra, rb) = tokio::join!(a.tick(&token), b.tick(&token));
-    assert_eq!(
-        [ran(&ra), ran(&rb)].iter().filter(|r| **r).count(),
-        1,
-        "{ra:?} {rb:?}"
-    );
-
-    // Whichever of them ticks again shortly after is refused, not just the loser.
-    h.advance(10_000);
-    let (ra, rb) = tokio::join!(a.tick(&token), b.tick(&token));
-    for r in [&ra, &rb] {
-        assert!(
-            matches!(r, Ok(TickOutcome::TooSoon) | Ok(TickOutcome::Busy)),
-            "{r:?}"
-        );
-    }
-    assert_eq!(h.feeds.hits("feed-a"), 1);
-    assert_eq!(h.tr.calls_of("torrent-add").len(), 3);
-
-    // A full period later exactly one runs again.
-    h.advance(300_000);
-    let (ra, rb) = tokio::join!(a.tick(&token), b.tick(&token));
-    assert_eq!([ran(&ra), ran(&rb)].iter().filter(|r| **r).count(), 1);
-    assert_eq!(h.feeds.hits("feed-a"), 2);
 }
 
 // --- shutdown --------------------------------------------------------------------------------

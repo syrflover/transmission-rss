@@ -1,11 +1,11 @@
 //! The worker's automatic artwork work: one job at a time, in request order,
 //! each AniList request in its turn ([`trss_anilist::REQUEST_SPACING`]).
 //!
-//! It runs beside the collection loop, not under the worker lock (it touches
+//! It runs beside the collection loop, not inside a cycle (it touches
 //! neither the media nor Transmission), so a long queue (the first reading of
 //! a watch folder records hundreds of works at once) never holds up a cycle,
-//! and the web keeps answering. One process runs the queue at a time
-//! (`<db path>.artwork.lock`); jobs are rows in the database, so a restart
+//! and the web keeps answering. The queue never runs twice at once in the
+//! process ([`trss_core::queue::Queue`]); jobs are rows in the database, so a restart
 //! continues where the queue stopped.
 //!
 //! A search job looks the work's folder name up and records the decision
@@ -15,11 +15,11 @@
 //! reach AniList is tried again later ([`RETRY_DELAYS`]); AniList's `429`
 //! waits as long as it says.
 
-use std::{path::PathBuf, time::Duration};
+use std::time::Duration;
 
 use tokio_util::sync::CancellationToken;
 
-use trss_core::queue::{retry, run_item, Queue, Retry, LOCK_RETRY, POLL};
+use trss_core::queue::{retry, run_item, Retry, POLL};
 
 use crate::{
     artwork::{files, ActionError, Artwork},
@@ -273,8 +273,8 @@ impl Artwork {
 
     /// Runs the queue until `cancel` fires (see the module docs). A job cut
     /// short by the shutdown stays in the database and runs at the next start.
-    pub async fn run_queue(&self, lock_path: PathBuf, cancel: CancellationToken) {
-        Queue::new(QUEUE, lock_path, POLL, LOCK_RETRY)
+    pub async fn run_queue(&self, cancel: CancellationToken) {
+        self.queue
             .run_with_upkeep(&cancel, TIDY_EVERY, || self.maintain(), || self.run_next())
             .await;
     }

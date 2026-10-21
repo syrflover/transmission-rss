@@ -19,18 +19,10 @@
 //! the same rule, or while the removal of departed torrents is under way
 //! (below).
 //!
-//! The worker claims only while it holds the worker lock
-//! ([`trss_core::WorkerLock`]), which everything it runs shares and another
-//! worker never holds at the same time:
-//!
-//! - two workers never run one command twice, because only the holder claims,
-//!   and a worker passes over the commands it runs or left for later itself
-//!   ([`trss_core::commands::CommandStore::claim_next_excluding`]);
-//! - a lock another worker holds is not an error: the loop looks again
-//!   [`DEFAULT_COMMAND_RETRY`] later;
-//! - a command another worker started and left open when it stopped is
-//!   claimed at this worker's next look (a ring, a command's end, a retry, or
-//!   this worker's restart): nothing looks for it alone.
+//! One process runs on the app data ([`trss_core::InstanceLock`]), so nothing
+//! else claims, and a look passes over the commands this worker runs or left
+//! for later itself ([`trss_core::commands::CommandStore::claim_next_excluding`]):
+//! no command runs twice at once.
 //!
 //! # Turns
 //!
@@ -115,10 +107,9 @@
 //! holds the folder's turn, so no cycle adds a torrent into the folder while it
 //! moves, and a start cut short leaves it `running`: the next start looks at
 //! the disk and Transmission again and moves what is left (see
-//! [`rule_archive`]). Its blocking renames keep the worker's lock
-//! ([`trss_core::WorkerHold::keep`]), the command's turn at the folders and
-//! the torrent gate themselves, so a shutdown that aborts the command's task
-//! lets go of them only once the renames have returned. Once such a command
+//! [`rule_archive`]). Its blocking renames keep the command's turn at the
+//! folders and the torrent gate themselves, so a shutdown that aborts the
+//! command's task lets go of them only once the renames have returned. Once such a command
 //! ended, the subscribed creators' episodes are looked at ([`Worker::follow_once`]),
 //! as the web does after `영상 받기` for a rule that needs no move: a rule the
 //! command turned on receives what its creator posted while it was off.
@@ -156,7 +147,6 @@ use tokio_util::sync::CancellationToken;
 use trss_core::{
     commands::{Command, CommandState, Outcome},
     folder_locks::{Reservation, Section},
-    WorkerHold,
 };
 
 use trss_collect::commands::{
@@ -195,9 +185,6 @@ enum Ran {
 pub enum CommandsOutcome {
     /// Nothing was waiting.
     Idle,
-    /// Something is waiting, but another worker holds the lock (a cycle or
-    /// a command is running there).
-    Busy,
     /// This many commands were carried out to their end.
     Ran(usize),
 }
@@ -314,29 +301,22 @@ impl Worker {
         self
     }
 
-    /// One look for commands: if this worker can take the lock, claims the
-    /// waiting commands, carries them out side by side (each in its turn), and
-    /// returns once all have come out. Returns without taking the lock when
-    /// nothing is waiting. A command that is left for later is not claimed
-    /// again by the same look and does not count; the next look claims it at
-    /// once.
+    /// One look for commands: claims the waiting commands, carries them out
+    /// side by side (each in its turn), and returns once all have come out. A
+    /// command that is left for later is not claimed again by the same look
+    /// and does not count; the next look claims it at once.
     pub async fn run_commands(
         &self,
         cancel: &CancellationToken,
     ) -> Result<CommandsOutcome, WorkerError> {
-        // Looking first keeps the lock free for another worker when there is
-        // nothing to do.
         if !self.commands.has_open().await? {
             return Ok(CommandsOutcome::Idle);
         }
-        let Some(hold) = self.hold().await? else {
-            return Ok(CommandsOutcome::Busy);
-        };
         let mut batch = Batch::default();
         let mut failed = None;
         loop {
             if failed.is_none() {
-                if let Err(err) = self.fill(&mut batch, &hold, cancel).await {
+                if let Err(err) = self.fill(&mut batch, cancel).await {
                     failed = Some(err);
                 }
             }
@@ -345,7 +325,6 @@ impl Worker {
             };
             batch.settle(joined);
         }
-        hold.release().await;
         match failed {
             Some(err) => Err(err),
             None => Ok(CommandsOutcome::Ran(batch.ended)),
@@ -354,18 +333,16 @@ impl Worker {
 
     /// The worker's commands until `cancel` fires: a look at the start, and
     /// whenever the commands' loop is rung, a command ends, or one left for
-    /// later is due. A look that failed (the database) or found the lock
-    /// taken is made again [`Worker::with_command_retry`] later. Then the
-    /// commands under way get the grace period and are aborted.
+    /// later is due. A look that failed (the database) is made again
+    /// [`Worker::with_command_retry`] later. Then the commands under way get
+    /// the grace period and are aborted.
     pub(crate) async fn dispatch(&self, cancel: CancellationToken) {
         let mut batch = Batch::default();
         let mut look_again = None;
 
         loop {
             match self.look(&mut batch, &cancel).await {
-                Ok(true) => {}
-                // Another worker holds the lock.
-                Ok(false) => look_again = Some(Instant::now() + self.command_retry),
+                Ok(()) => {}
                 Err(err) => {
                     eprintln!(
                         "Commands failed: {err}; looking again in {}s",
@@ -415,35 +392,21 @@ impl Worker {
     }
 
     /// One look of the long-running loop: starts what is waiting, if there is
-    /// room and the lock can be had. `false`: another worker holds the lock.
-    async fn look(
-        &self,
-        batch: &mut Batch,
-        cancel: &CancellationToken,
-    ) -> Result<bool, WorkerError> {
+    /// room.
+    async fn look(&self, batch: &mut Batch, cancel: &CancellationToken) -> Result<(), WorkerError> {
         if cancel.is_cancelled()
             || batch.tasks.len() >= MAX_COMMANDS_AT_ONCE
             || !self.commands.has_open().await?
         {
-            return Ok(true);
+            return Ok(());
         }
-        let Some(hold) = self.hold().await? else {
-            return Ok(false);
-        };
-        let filled = self.fill(batch, &hold, cancel).await;
-        hold.release().await;
-        filled.map(|()| true)
+        self.fill(batch, cancel).await
     }
 
     /// Claims waiting commands and starts them, oldest first, while there is
     /// room. Each takes its place in line for its folders before the next is
     /// claimed, so their turns come in the order they were accepted.
-    async fn fill(
-        &self,
-        batch: &mut Batch,
-        hold: &WorkerHold,
-        cancel: &CancellationToken,
-    ) -> Result<(), WorkerError> {
+    async fn fill(&self, batch: &mut Batch, cancel: &CancellationToken) -> Result<(), WorkerError> {
         while batch.tasks.len() < MAX_COMMANDS_AT_ONCE && !cancel.is_cancelled() {
             let mut excluded = self.in_flight.ids();
             excluded.extend(batch.deferred.ids());
@@ -490,7 +453,6 @@ impl Worker {
             batch.tasks.spawn(self.clone().carry_out(
                 claim,
                 batch.deferred.clone(),
-                hold.clone(),
                 cancel.clone(),
             ));
         }
@@ -526,7 +488,6 @@ impl Worker {
         self,
         claim: Claim,
         deferred: Deferred,
-        hold: WorkerHold,
         cancel: CancellationToken,
     ) -> Carried {
         let Claim {
@@ -541,10 +502,10 @@ impl Worker {
             false => None,
         };
         // What the command's blocking work keeps until it returns, even when
-        // this task is aborted at shutdown: the lock, the turn at the folders
-        // and the gate, so no reading records a folder half moved and no
-        // removal runs while files are still being renamed.
-        let keep: Hold = Arc::new((hold.keep(), turn.clone(), gate.clone()));
+        // this task is aborted at shutdown: the turn at the folders and the
+        // gate, so no reading records a folder half moved and no removal runs
+        // while files are still being renamed.
+        let keep: Hold = Arc::new((turn.clone(), gate.clone()));
         // Dropped in this order, whatever ends the task: the command leaves
         // the in-flight set before the gate is let go, so a removal never
         // finds it neither running here nor `running` from an earlier start.
@@ -563,7 +524,6 @@ impl Worker {
         }
         drop(started);
         drop(turn);
-        hold.release().await;
         // A `start` or `resume` turned a rule on: a subscription that takes part
         // again receives its creator's episodes it missed meanwhile, as the web's
         // `영상 받기` does for a rule that needs no move
