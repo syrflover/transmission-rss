@@ -72,7 +72,7 @@ use trss_anilist::{title::Candidate, Entry, FuzzyDate, Sequel};
 use trss_library::{
     artwork::USER_MAX_WAIT,
     seasons::{combine, describe, ActionError},
-    store::seasons::{SeasonError, SeasonLink},
+    store::seasons::{Note, Origin, SeasonError, SeasonLink},
 };
 
 #[cfg(test)]
@@ -95,7 +95,9 @@ pub fn anilist_url(id: i64) -> String {
     format!("https://anilist.co/anime/{id}")
 }
 
+/// An AniList entry a season links.
 #[derive(Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "SeasonEntry"))]
 pub struct EntryView {
     id: i64,
     title: String,
@@ -128,7 +130,10 @@ impl From<&Entry> for EntryView {
     }
 }
 
+/// A sequel of the previous season's last entry, offered until the user
+/// confirms one.
 #[derive(Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "SeasonSuggestion"))]
 pub struct SuggestionView {
     id: i64,
     title: String,
@@ -164,27 +169,50 @@ impl From<Sequel> for SuggestionView {
     }
 }
 
+/// The linked entries' airing taken together.
 #[derive(Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "Airing"))]
 struct AiringView {
     start: FuzzyDate,
     end: FuzzyDate,
+    /// AniList's status (`releasing`, `finished`, ...), as the entries give it.
     state: Option<String>,
 }
 
+/// Why the last automatic search linked nothing.
 #[derive(Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "SeasonNote"))]
 struct NoteView {
-    code: &'static str,
+    code: Note,
+    /// The note as a sentence.
     message: &'static str,
+}
+
+/// What the app still has to do for a season.
+#[derive(Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "SeasonPending"))]
+#[serde(rename_all = "lowercase")]
+pub(super) enum Pending {
+    /// The season's automatic search.
+    Search,
 }
 
 /// A season's info as the API answers it.
 #[derive(Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "SeasonInfo"))]
 pub struct SeasonInfoView {
     season: u32,
+    /// Sent back with a change; a change from an older version is a
+    /// `conflict`. A season never touched has 0.
     version: i64,
-    origin: &'static str,
-    pending: Option<&'static str>,
+    /// `auto`: the app linked the entry itself (or nothing is linked yet);
+    /// `user`: the user chose.
+    origin: Origin,
+    /// The app still has the season's automatic search to do.
+    pending: Option<Pending>,
+    /// Why the last automatic search linked nothing.
     note: Option<NoteView>,
+    /// The work's first season: the only one the app searches for.
     can_auto: bool,
     entries: Vec<EntryView>,
     airing: Option<AiringView>,
@@ -229,10 +257,10 @@ pub fn season_view(
     SeasonInfoView {
         season: link.season,
         version: link.version,
-        origin: link.origin.code(),
-        pending: link.job.as_ref().map(|_| "search"),
+        origin: link.origin,
+        pending: link.job.as_ref().map(|_| Pending::Search),
         note: link.note.map(|n| NoteView {
-            code: n.code(),
+            code: n,
             message: n.message(),
         }),
         can_auto: first == Some(link.season),
@@ -369,13 +397,20 @@ async fn show(
     Ok(Json(info_of(&state, &id, season).await?))
 }
 
+/// What to search AniList for: the text (the work's folder name when left out)
+/// and the page (1 when left out).
 #[derive(Deserialize)]
-struct SearchBody {
-    q: Option<String>,
-    page: Option<u32>,
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "AnilistSearchBody"))]
+pub(super) struct SearchBody {
+    #[cfg_attr(test, ts(optional = nullable))]
+    pub q: Option<String>,
+    #[cfg_attr(test, ts(optional = nullable))]
+    pub page: Option<u32>,
 }
 
+/// One AniList entry of a search.
 #[derive(Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "SeasonCandidate"))]
 struct CandidateView {
     id: i64,
     title: String,
@@ -408,7 +443,8 @@ impl From<Candidate> for CandidateView {
 }
 
 #[derive(Serialize)]
-struct SearchView {
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "SeasonSearchPage"))]
+pub(super) struct SearchView {
     items: Vec<CandidateView>,
     has_next: bool,
     page: u32,
@@ -470,7 +506,8 @@ async fn search(
 }
 
 #[derive(Deserialize)]
-struct LinksBody {
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "SeasonLinksBody"))]
+pub(super) struct LinksBody {
     version: i64,
     anilist_ids: Vec<i64>,
 }
@@ -491,9 +528,11 @@ async fn links(
     answer(&state, &id, season, result).await
 }
 
+/// A change that names the version it was made from.
 #[derive(Deserialize)]
-struct VersionBody {
-    version: i64,
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub(super) struct VersionBody {
+    pub version: i64,
 }
 
 async fn auto(

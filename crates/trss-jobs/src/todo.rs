@@ -181,15 +181,53 @@ impl Todo {
 
     /// Its kind as a badge names it: a job's 배치 확인 and a video's episode
     /// are a `회차 확인 필요` like a mapping's.
-    pub fn badge(&self) -> &'static str {
+    pub fn badge_kind(&self) -> Badge {
         match self {
-            Todo::Auth { .. } => "auth",
-            Todo::ReceiveFailed { .. } => "receive_failed",
-            Todo::Replacement { .. } => "replacement",
+            Todo::Auth { .. } => Badge::Auth,
+            Todo::ReceiveFailed { .. } => Badge::ReceiveFailed,
+            Todo::Replacement { .. } => Badge::Replacement,
             Todo::EpisodeCheck { .. } | Todo::PlacementCheck { .. } | Todo::VideoCheck { .. } => {
-                "episode_check"
+                Badge::EpisodeCheck
             }
         }
+    }
+
+    /// [`Todo::badge_kind`]'s code.
+    pub fn badge(&self) -> &'static str {
+        self.badge_kind().code()
+    }
+}
+
+/// The kinds of to-do a badge names (`Todo::badge`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(rename = "TodoKind"))]
+#[serde(rename_all = "snake_case")]
+pub enum Badge {
+    Auth,
+    ReceiveFailed,
+    Replacement,
+    EpisodeCheck,
+}
+
+impl Badge {
+    pub const ALL: [Badge; 4] = [
+        Badge::Auth,
+        Badge::ReceiveFailed,
+        Badge::Replacement,
+        Badge::EpisodeCheck,
+    ];
+
+    pub fn code(self) -> &'static str {
+        match self {
+            Badge::Auth => "auth",
+            Badge::ReceiveFailed => "receive_failed",
+            Badge::Replacement => "replacement",
+            Badge::EpisodeCheck => "episode_check",
+        }
+    }
+
+    pub fn from_code(code: &str) -> Option<Badge> {
+        Badge::ALL.into_iter().find(|b| b.code() == code)
     }
 }
 

@@ -99,12 +99,14 @@ pub fn routes() -> Router<AppState> {
 }
 
 #[derive(Deserialize)]
-struct PreviewRequest {
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "ImportPreviewBody"))]
+pub(super) struct PreviewRequest {
     content: String,
 }
 
 #[derive(Deserialize)]
-struct ApplyRequest {
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "ImportApplyBody"))]
+pub(super) struct ApplyRequest {
     content: String,
     #[serde(default)]
     choices: Vec<ChoiceRequest>,
@@ -112,13 +114,16 @@ struct ApplyRequest {
     /// preview), `null` when none was set. A different one now makes the
     /// review stale.
     #[serde(default)]
+    #[cfg_attr(test, ts(optional = nullable))]
     reviewed_collect_folder: Option<String>,
     /// The subscription suggestions the user kept checked.
     #[serde(default)]
     subscriptions: Vec<Pick>,
 }
 
+/// What to do with a file channel that is the same as an existing one.
 #[derive(Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "ImportChoice"))]
 struct ChoiceRequest {
     /// Position of the channel in the file, as the preview numbered it.
     index: usize,
@@ -128,6 +133,7 @@ struct ChoiceRequest {
 }
 
 #[derive(Deserialize, Clone, Copy)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "ImportDecision"))]
 #[serde(rename_all = "snake_case")]
 enum DecisionRequest {
     Replace,
@@ -137,6 +143,7 @@ enum DecisionRequest {
 
 /// A rule as the review lists it.
 #[derive(Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "ImportRule"))]
 struct RuleView {
     /// The match phrase; `null` is a rule waiting for its title.
     r#match: Option<String>,
@@ -160,6 +167,7 @@ struct RuleView {
 
 /// An existing rule that a replacement would delete.
 #[derive(Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "ImportRemovedRule"))]
 struct RemovedRule {
     r#match: Option<String>,
     directory: String,
@@ -176,6 +184,7 @@ impl From<&Rule> for RemovedRule {
 
 /// The channel that already exists and is the same as a file channel.
 #[derive(Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "ImportExisting"))]
 struct ExistingView {
     id: String,
     /// Send back with a `replace` choice so a changed channel is refused.
@@ -190,7 +199,9 @@ struct ExistingView {
     title_waiting_kept: usize,
 }
 
+/// A channel of the file, as the review lists it.
 #[derive(Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "ImportChannel"))]
 struct ChannelView {
     index: usize,
     /// Masked: every query value is `***`.
@@ -207,7 +218,8 @@ struct ChannelView {
 }
 
 #[derive(Serialize)]
-struct PreviewResponse {
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "ImportPreview"))]
+pub(super) struct PreviewResponse {
     channels: Vec<ChannelView>,
     /// How many file channels need a choice.
     conflict_count: usize,
@@ -215,6 +227,7 @@ struct PreviewResponse {
 }
 
 #[derive(Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "ImportCollectFolder"))]
 struct CollectFolderView {
     /// The collect folder now; `null` when none is set. Send it back as
     /// `reviewed_collect_folder` with the apply.
@@ -444,6 +457,7 @@ async fn preview(
 }
 
 #[derive(Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "ImportAdded"))]
 struct AddedView {
     index: usize,
     id: String,
@@ -452,6 +466,7 @@ struct AddedView {
 }
 
 #[derive(Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "ImportReplaced"))]
 struct ReplacedView {
     index: usize,
     id: String,
@@ -471,6 +486,7 @@ struct ReplacedView {
 
 /// A subscription whose save folder a replacement kept.
 #[derive(Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "ImportFolderKept"))]
 struct FolderKept {
     /// The rule's place in the file channel.
     rule: usize,
@@ -480,6 +496,7 @@ struct FolderKept {
 }
 
 #[derive(Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "ImportSkipped"))]
 struct SkippedView {
     index: usize,
     url: String,
@@ -488,6 +505,7 @@ struct SkippedView {
 /// A channel the import left out because its folder is outside the collect
 /// folder.
 #[derive(Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "ImportNotImported"))]
 struct NotImportedView {
     index: usize,
     url: String,
@@ -495,6 +513,7 @@ struct NotImportedView {
 }
 
 #[derive(Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "ImportCounts"))]
 struct Counts {
     channels_added: usize,
     channels_replaced: usize,
@@ -517,7 +536,8 @@ struct Counts {
 }
 
 #[derive(Serialize)]
-struct ApplyResponse {
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "ImportResult"))]
+pub(super) struct ApplyResponse {
     added: Vec<AddedView>,
     replaced: Vec<ReplacedView>,
     skipped: Vec<SkippedView>,

@@ -164,7 +164,9 @@ pub const NOT_APPLIED: &str = "정리한 보관본이라 적용하지 않았어�
 pub const REFLECT: &str = "정리한 보관본을 반영해요";
 
 /// What a cleanable stored subtitle is.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(rename_all = "snake_case")]
 pub enum CleanKind {
     /// 지난 수정본: an applied copy of it was taken away.
     Past,

@@ -126,7 +126,7 @@ test("a copy names its episode and format", () => {
   assert.equal(view.episode, "2화");
   assert.equal(view.format, "SMI");
   assert.equal(copyView(copy("b", { episode: "SP", episode_shown: "SP" }), []).episode, "SP");
-  assert.equal(copyView(copy("c", { format: "vtt" }), []).format, OTHER_FORMAT);
+  assert.equal(copyView(copy("c", { format: "other" }), []).format, OTHER_FORMAT);
 });
 
 test("a copy with no applied file is not `적용` and shows no places", () => {

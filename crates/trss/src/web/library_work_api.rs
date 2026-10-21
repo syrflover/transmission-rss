@@ -260,6 +260,7 @@ use url::Url;
 
 use super::{
     artwork_api::image_url,
+    library_api::WatchFolderRef,
     seasons_anissia_api::{link_views, AnissiaLinkView},
     seasons_api::{season_view, work_infos, SeasonInfoView},
     subtitle_creator_api::CreatorView,
@@ -270,17 +271,24 @@ use trss_collect::{
     commands::rule_archive::{work_folder, WorkFolder},
     revision,
     rss::save_path,
-    store::{channels::ChannelWithRules, revisions::Revision},
+    store::{
+        channels::{ChannelWithRules, RuleState, SubtitleMode},
+        revisions::Revision,
+    },
 };
 use trss_core::{
     episode::{runs, shown, stored_key, EpisodeNumber, EpisodeRun},
-    settings::policy::FormatOrder,
+    settings::policy::{FormatOrder, SubtitleFormat},
     trname_names::season_episode,
 };
-use trss_jobs::place::{
-    cleanup,
-    records::{by_creator, Choice, StoredCopy},
+use trss_jobs::{
+    model::{AssetKind, SubtitleFormat as StoredFormat},
+    place::{
+        cleanup::{self, CleanKind},
+        records::{by_creator, Choice, StoredCopy},
+    },
 };
+use trss_library::discovery::Reason as UnrecognizedReason;
 use trss_library::seasons::combine::air_time_of;
 use trss_library::store::{
     artwork::JobKind,
@@ -308,13 +316,9 @@ pub fn routes() -> Router<AppState> {
         .route("/library/storage", get(storage))
 }
 
+/// A recorded file, by its path relative to the work folder.
 #[derive(Serialize)]
-struct WatchFolderRef {
-    id: String,
-    path: String,
-}
-
-#[derive(Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "WorkFile"))]
 struct FileView {
     path: String,
     added_at: Option<i64>,
@@ -332,6 +336,7 @@ impl From<FileRecord> for FileView {
 /// A subtitle file, with the creator the user named for it or, for a copy the
 /// app applied, the creator of its stored copy.
 #[derive(Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "WorkSubtitle"))]
 struct SubtitleView {
     path: String,
     added_at: Option<i64>,
@@ -347,6 +352,7 @@ struct SubtitleView {
 
 /// An applied copy's creator: its stored copy's (`null` is `제작자 알 수 없음`).
 #[derive(Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "AppliedCreator"))]
 struct AppliedCreatorView {
     creator: Option<String>,
 }
@@ -366,6 +372,7 @@ impl From<FileRecord> for SubtitleView {
 }
 
 #[derive(Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "WorkEpisode"))]
 struct EpisodeView {
     episode: String,
     /// `episode` without the leading zeros of a whole number (`02` is `2`).
@@ -386,11 +393,13 @@ struct EpisodeView {
     /// For an episode of season 0 only (left out of the others): the Anissia
     /// anime its movie is linked to, `null` while it is linked to none.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(test, ts(as = "Option<MovieRef>", optional = nullable))]
     movie: Option<Option<MovieRef>>,
 }
 
 /// The Anissia anime a movie is linked to.
 #[derive(Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 struct MovieRef {
     anime_no: i64,
     /// Anissia's title; `null` while the app has no snapshot of the anime.
@@ -399,12 +408,12 @@ struct MovieRef {
 
 /// A stored subtitle on an episode with no applied copy of it.
 #[derive(Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "StoredSubtitle"))]
 struct StoredView {
     id: String,
     name: String,
     creator: Option<String>,
-    /// `ass`, `srt`, `smi` or `other`.
-    format: &'static str,
+    format: StoredFormat,
     stored_at: i64,
     can_apply: bool,
     /// A job applies it once the episode's video comes (`영상 대기`).
@@ -423,7 +432,7 @@ impl From<trss_jobs::place::records::StoredOnly> for StoredView {
             id: stored.id,
             name: stored.name,
             creator: stored.creator,
-            format: stored.format.code(),
+            format: stored.format,
             stored_at: stored.stored_at,
             awaiting_video: stored.awaiting_video,
             approval_job: stored.awaiting_approval,
@@ -432,7 +441,9 @@ impl From<trss_jobs::place::records::StoredOnly> for StoredView {
     }
 }
 
+/// The episode's video was replaced by a higher revision: the version line.
 #[derive(Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "EpisodeRevision"))]
 struct RevisionView {
     /// `v1`; `null` when the old video's revision was not known.
     from: Option<String>,
@@ -465,6 +476,7 @@ impl From<EpisodeDetail> for EpisodeView {
 }
 
 #[derive(Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "WorkSeason"))]
 struct SeasonView {
     number: u32,
     info: SeasonInfoView,
@@ -478,49 +490,56 @@ struct SeasonView {
     episodes: Vec<EpisodeView>,
 }
 
+/// A file the scan could not attach to an episode, with why.
 #[derive(Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "UnrecognizedFile"))]
 struct UnrecognizedView {
     path: String,
-    reason: &'static str,
+    reason: UnrecognizedReason,
+    /// The reason as a sentence.
     message: &'static str,
     checked: bool,
 }
 
 #[derive(Debug, PartialEq, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "RuleChannel"))]
 struct ChannelRef {
     id: String,
     name: Option<String>,
     host: String,
 }
 
+/// A rule that saves into the work's folder.
 #[derive(Debug, PartialEq, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "WorkRule"))]
 struct RuleRef {
     id: String,
     channel: ChannelRef,
     r#match: Option<String>,
+    /// Relative to the collect folder.
     directory: String,
     save_path: String,
-    state: &'static str,
+    state: RuleState,
 }
 
 /// A subscription rule connected to a season of the work.
 #[derive(Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 struct WorkSubscription {
     season: u32,
     rule_id: String,
     rule_version: i64,
-    /// `active`, `paused` or `archived`.
-    rule_state: &'static str,
+    rule_state: RuleState,
     anime_no: i64,
     /// The Anissia title; `null` when the app has no snapshot of the anime.
     subject: Option<String>,
-    /// `follow`, `undecided` or `none`.
-    subtitles: &'static str,
+    subtitles: SubtitleMode,
     creator: Option<String>,
 }
 
 #[derive(Serialize)]
-struct WorkDetailView {
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "WorkDetail"))]
+pub(super) struct WorkDetailView {
     id: String,
     name: String,
     title: String,
@@ -549,6 +568,7 @@ struct WorkDetailView {
 
 /// The limits of an upload (`trss_jobs::upload::Limits`) the screen shows.
 #[derive(Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "UploadLimits"))]
 struct UploadLimitsView {
     /// The most files sent in one upload.
     files: usize,
@@ -563,20 +583,15 @@ struct UploadLimitsView {
 /// The work's `자막` card: the format order its first apply uses and the
 /// stored subtitles by creator.
 #[derive(Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "WorkSubtitles"))]
 struct SubtitlesView {
-    format_order: FormatOrderView,
+    format_order: OrderView,
     creators: Vec<CreatorCopies>,
-}
-
-/// An order of the three formats, and whether the work has its own.
-#[derive(Serialize)]
-struct FormatOrderView {
-    order: Vec<&'static str>,
-    own: bool,
 }
 
 /// The stored subtitles of one creator (`null`: `제작자 알 수 없음`).
 #[derive(Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "SubtitleCreatorCopies"))]
 struct CreatorCopies {
     creator: Option<String>,
     copies: Vec<CopyView>,
@@ -584,6 +599,7 @@ struct CreatorCopies {
 
 /// A stored subtitle of an episode, and what a person can ask of it.
 #[derive(Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "SubtitleCopy"))]
 struct CopyView {
     id: String,
     season: u32,
@@ -592,22 +608,23 @@ struct CopyView {
     /// `episode` without the leading zeros (`2`).
     episode_shown: String,
     name: String,
-    /// `ass`, `srt`, `smi` or `other`.
-    format: &'static str,
+    format: StoredFormat,
     stored_at: i64,
     /// Relative to the work folder.
     stored_path: String,
+    /// The copies of it that lie beside a video now.
     applied: Vec<AppliedView>,
     /// What choosing it does: `apply` it now (the episode has no subtitle) or
     /// `compare` it with the episode's first. `null` for the applied copy and
     /// for one that cannot be chosen (`blocked` says why).
-    choice: Option<&'static str>,
+    choice: Option<Choice>,
     /// Whether it can be added beside the applied copies of its creator.
     can_add: bool,
     blocked: Option<&'static str>,
 }
 
 #[derive(Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "AppliedCopy"))]
 struct AppliedView {
     /// Relative to the work folder.
     path: String,
@@ -624,10 +641,7 @@ fn creators_of(copies: Vec<StoredCopy>) -> Vec<CreatorCopies> {
                 .copies
                 .into_iter()
                 .map(|copy| CopyView {
-                    choice: copy.options.choice().map(|choice| match choice {
-                        Choice::Apply => "apply",
-                        Choice::Compare => "compare",
-                    }),
+                    choice: copy.options.choice(),
                     can_add: copy.options.add.is_ok(),
                     blocked: copy.options.blocked(),
                     id: copy.id,
@@ -635,7 +649,7 @@ fn creators_of(copies: Vec<StoredCopy>) -> Vec<CreatorCopies> {
                     episode: format!("{:02}", copy.episode),
                     episode_shown: shown(&format!("{:02}", copy.episode)).to_owned(),
                     name: copy.name,
-                    format: copy.format.code(),
+                    format: copy.format,
                     stored_at: copy.stored_at,
                     stored_path: copy.stored_path,
                     applied: copy
@@ -654,6 +668,7 @@ fn creators_of(copies: Vec<StoredCopy>) -> Vec<CreatorCopies> {
 
 /// The work's stored files and their cleanup.
 #[derive(Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "WorkStorage"))]
 struct StorageView {
     total: u64,
     cleanable: Vec<CleanableView>,
@@ -662,35 +677,39 @@ struct StorageView {
 
 /// A file that would go with a stored subtitle.
 #[derive(Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "CleanAsset"))]
 struct FileGoingView {
     id: String,
     name: String,
-    kind: &'static str,
+    kind: AssetKind,
     size: u64,
 }
 
 /// A file a stored subtitle uses that stays, and why.
 #[derive(Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "KeptAsset"))]
 struct FileStayingView {
     id: String,
     name: String,
-    kind: &'static str,
+    kind: AssetKind,
     reason: &'static str,
 }
 
 /// A stored subtitle a person may clean.
 #[derive(Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "CleanableEntry"))]
 struct CleanableView {
     id: String,
     name: String,
     season: u32,
+    /// `null` for a stored subtitle on no episode.
     episode: Option<i64>,
     creator: Option<String>,
-    format: &'static str,
+    format: StoredFormat,
     size: u64,
     stored_at: i64,
-    /// `past`, `awaiting_video`, `unplaced` or `stored`.
-    kind: &'static str,
+    kind: CleanKind,
+    /// Why it cannot be cleaned now; `null` when it can.
     blocked: Option<&'static str>,
     with: Vec<FileGoingView>,
     kept: Vec<FileStayingView>,
@@ -704,10 +723,10 @@ impl From<cleanup::Cleanable> for CleanableView {
             season: entry.season,
             episode: entry.episode,
             creator: entry.creator,
-            format: entry.format.code(),
+            format: entry.format,
             size: entry.size,
             stored_at: entry.stored_at,
-            kind: entry.kind.code(),
+            kind: entry.kind,
             blocked: entry.blocked,
             with: entry
                 .with
@@ -715,7 +734,7 @@ impl From<cleanup::Cleanable> for CleanableView {
                 .map(|f| FileGoingView {
                     id: f.id,
                     name: f.name,
-                    kind: f.kind.code(),
+                    kind: f.kind,
                     size: f.size,
                 })
                 .collect(),
@@ -725,7 +744,7 @@ impl From<cleanup::Cleanable> for CleanableView {
                 .map(|f| FileStayingView {
                     id: f.id,
                     name: f.name,
-                    kind: f.kind.code(),
+                    kind: f.kind,
                     reason: f.reason,
                 })
                 .collect(),
@@ -735,10 +754,13 @@ impl From<cleanup::Cleanable> for CleanableView {
 
 /// A cleanup the worker has not carried out, or held.
 #[derive(Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "CleaningEntry"))]
 struct CleaningView {
     id: String,
     name: String,
-    /// `asked` or `held`.
+    /// `asked`: the worker has not carried it out; `held`: it held it, and
+    /// `reason` says why.
+    #[cfg_attr(test, ts(type = r#""asked" | "held""#))]
     state: String,
     reason: Option<String>,
 }
@@ -807,7 +829,7 @@ fn rules_of(
                 save_path: save_path(collect, FsPath::new(&rule.directory))
                     .to_string_lossy()
                     .into_owned(),
-                state: rule.state.as_str(),
+                state: rule.state,
             });
         }
     }
@@ -1024,12 +1046,12 @@ async fn show(
                 season,
                 rule_id: rule.id.clone(),
                 rule_version: rule.version,
-                rule_state: rule.state.as_str(),
+                rule_state: rule.state,
                 anime_no: subscription.anissia_anime_no,
                 subject: animes
                     .get(&subscription.anissia_anime_no)
                     .map(|a| a.subject.clone()),
-                subtitles: subscription.subtitles.as_str(),
+                subtitles: subscription.subtitles,
                 creator: subscription.creator.clone(),
             })
         })
@@ -1139,8 +1161,12 @@ async fn show(
         .map_err(|e| ApiError::Internal(e.to_string()))?
         .is_some();
     let subtitles = SubtitlesView {
-        format_order: FormatOrderView {
-            order: order.iter().map(|f| f.code()).collect(),
+        format_order: OrderView {
+            // The three formats the order ranks (`other` is none of them).
+            order: order
+                .iter()
+                .filter_map(|f| SubtitleFormat::parse(f.code()))
+                .collect(),
             own,
         },
         creators: creators_of(copies),
@@ -1165,7 +1191,7 @@ async fn show(
             .into_iter()
             .map(|u| UnrecognizedView {
                 path: u.path,
-                reason: u.reason.code(),
+                reason: u.reason,
                 message: u.reason.message(),
                 checked: u.checked,
             })
@@ -1189,7 +1215,8 @@ async fn show(
 }
 
 #[derive(Serialize)]
-struct Applying {
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub(super) struct Applying {
     job_id: String,
     /// The job plans a replacement: the person compares before anything
     /// beside the video changes (`교체 승인`).
@@ -1198,7 +1225,11 @@ struct Applying {
 
 /// How to apply it: `apply` (the default) or `add`.
 #[derive(Deserialize)]
-struct ApplyBody {
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub(super) struct ApplyBody {
+    // Read as text, so that another mode is refused with the same sentence as
+    // an unreadable body; the screen sends one of `Chosen`.
+    #[cfg_attr(test, ts(as = "Option<trss_jobs::model::Chosen>", optional = nullable))]
     mode: Option<String>,
 }
 
@@ -1243,14 +1274,19 @@ async fn apply_stored(
 
 /// The order the work's first apply takes the formats in.
 #[derive(Serialize)]
-struct OrderView {
-    order: Vec<&'static str>,
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "FormatOrder"))]
+pub(super) struct OrderView {
+    order: Vec<SubtitleFormat>,
     /// Whether the work has its own order (`false`: the common policy's).
     own: bool,
 }
 
 #[derive(Deserialize)]
-struct OrderBody {
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "SubtitleOrderBody"))]
+pub(super) struct OrderBody {
+    // Read as text, so that an order that does not name each format once is
+    // refused with its own sentence.
+    #[cfg_attr(test, ts(as = "Vec<SubtitleFormat>"))]
     format_order: Vec<String>,
 }
 
@@ -1272,7 +1308,7 @@ async fn put_order(
         .map_err(|e| ApiError::Internal(e.to_string()))?;
     match known {
         true => Ok(Json(OrderView {
-            order: order.formats().iter().map(|f| f.code()).collect(),
+            order: order.formats().to_vec(),
             own: true,
         })),
         false => Err(ApiError::not_found("이 작품을 찾지 못했어요.")),
@@ -1295,24 +1331,21 @@ async fn delete_order(
     }
     let common = state.settings.policy().await.map_err(internal)?;
     Ok(Json(OrderView {
-        order: common
-            .format_order
-            .formats()
-            .iter()
-            .map(|f| f.code())
-            .collect(),
+        order: common.format_order.formats().to_vec(),
         own: false,
     }))
 }
 
 /// The files the dialog showed would go with the stored subtitle.
 #[derive(Deserialize)]
-struct CleanBody {
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub(super) struct CleanBody {
     assets: Vec<String>,
 }
 
 #[derive(Serialize)]
-struct Cleaning {
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub(super) struct Cleaning {
     cleanup_id: String,
 }
 
@@ -1350,14 +1383,15 @@ async fn clean_stored(
 
 /// How many files of one kind a work keeps, and their length.
 #[derive(Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "StorageKindUse"))]
 struct KindView {
-    /// `subtitle`, `font`, `attachment` or `cover`.
-    kind: &'static str,
+    kind: StorageKind,
     count: u64,
     size: u64,
 }
 
 #[derive(Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "StorageWork"))]
 struct WorkStorageView {
     id: String,
     /// The work title (작품명).
@@ -1368,8 +1402,34 @@ struct WorkStorageView {
 }
 
 #[derive(Serialize)]
-struct StorageList {
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "StorageOverview"))]
+pub(super) struct StorageList {
     works: Vec<WorkStorageView>,
+}
+
+/// What a work's files of one kind are: the kinds the app keeps, and the cover.
+#[derive(Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[serde(rename_all = "snake_case")]
+pub(super) enum StorageKind {
+    Subtitle,
+    Font,
+    /// Attachments and companion files.
+    Attachment,
+    /// The work's current cover image.
+    Cover,
+}
+
+impl StorageKind {
+    /// The kind of a [`cleanup::KindUse`]: `subtitle` or `font`, else an
+    /// attachment, as the records group them.
+    fn of(code: &str) -> StorageKind {
+        match code {
+            "subtitle" => StorageKind::Subtitle,
+            "font" => StorageKind::Font,
+            _ => StorageKind::Attachment,
+        }
+    }
 }
 
 /// The length of the cover image at `relative` in the app data folder: `0`
@@ -1422,7 +1482,7 @@ async fn storage(State(state): State<AppState>) -> Result<Json<StorageList>, Api
                 f.kinds
                     .iter()
                     .map(|k| KindView {
-                        kind: k.kind,
+                        kind: StorageKind::of(k.kind),
                         count: k.count,
                         size: k.size,
                     })
@@ -1431,7 +1491,7 @@ async fn storage(State(state): State<AppState>) -> Result<Json<StorageList>, Api
             .unwrap_or_default();
         if let Some(relative) = cover {
             kinds.push(KindView {
-                kind: "cover",
+                kind: StorageKind::Cover,
                 count: 1,
                 size: cover_size(&state, &relative).await,
             });

@@ -1,4 +1,5 @@
 import { api } from "@/lib/api";
+import type { VideoCheckBody } from "@/lib/api-types";
 
 import type { EpisodeSegment } from "./episodeLine.ts";
 import type { TodoKind } from "./kinds";
@@ -207,10 +208,8 @@ export interface VideoCheckTodo extends Badged {
  * A `409` (`conflict`) is another video there since the list was read; a `404` is one renamed or moved.
  */
 export function checkVideo(workId: string, path: string, seen: string): Promise<void> {
-  return api<void>(`/library/works/${encodeURIComponent(workId)}/videos/check`, {
-    method: "POST",
-    body: { path, seen },
-  });
+  const body: VideoCheckBody = { path, seen };
+  return api<void>(`/library/works/${encodeURIComponent(workId)}/videos/check`, { method: "POST", body });
 }
 
 /**

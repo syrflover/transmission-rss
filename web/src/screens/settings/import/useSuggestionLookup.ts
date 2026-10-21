@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 
 import { api, ApiError } from "@/lib/api";
 
-import type { Preview } from "./types";
+import type { ImportPreview } from "@/lib/api-types";
 
 /** What Anissia's schedule says about an anime. */
 export interface ScheduledAnime {
@@ -59,7 +59,7 @@ const LAST_WEEK = 8;
  * (each answer is cached by the server for a few minutes) until every anime of
  * the suggestions has been found.
  */
-export function useSuggestionLookup(preview: Preview | null): SuggestionLookup {
+export function useSuggestionLookup(preview: ImportPreview | null): SuggestionLookup {
   const [lookup, setLookup] = useState<SuggestionLookup>(NOTHING);
 
   useEffect(() => {

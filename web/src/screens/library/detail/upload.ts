@@ -3,25 +3,17 @@
  * (`docs/specs/subtitles.md`, 직접 찾기와 자막 올리기): which of the chosen
  * files are subtitles, fonts and ZIPs and which are left out, whether they
  * are within the limits, and whether the browser can pick a folder. No
- * browser API is called here, so it runs under `node --test`.
+ * browser API is called here, so it runs under `node --test`. `UploadLimits` is the generated type
+ * (`lib/api-types`, the `upload_limits` of the work detail), imported by a relative path and only as a type.
  *
  * The browser judges by the name only. The server judges again by what is in
  * the file, so an image named `a.ass` is sent and dropped there.
  */
 
+import type { UploadLimits } from "../../../lib/api-types/UploadLimits";
 import { sizeText } from "../../../lib/size.ts";
 
-/** The limits the server holds an upload to (`upload_limits` of the work detail). */
-export interface UploadLimits {
-  /** Files sent: subtitles, fonts and ZIPs. */
-  files: number;
-  /** Files named in all, those left out included. */
-  entries: number;
-  /** The files' bytes in all. */
-  total_bytes: number;
-  /** One file's bytes. */
-  file_bytes: number;
-}
+export type { UploadLimits };
 
 export type Kind = "subtitle" | "font" | "archive";
 

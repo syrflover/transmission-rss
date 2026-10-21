@@ -64,10 +64,14 @@ pub fn routes() -> Router<AppState> {
         )
 }
 
-/// A creator the user named for a subtitle file.
+/// A creator the user named for a subtitle file: one creator of the season's
+/// Anissia anime.
 #[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "FileCreator"))]
 pub struct CreatorView {
+    /// The app's ID of the creator's lines of the anime.
     pub source_id: String,
+    /// The creator's name as Anissia gives it.
     pub name: String,
     pub anime_no: i64,
 }
@@ -84,7 +88,8 @@ impl From<FileCreator> for CreatorView {
 
 /// One subtitle file's creator and its version.
 #[derive(Debug, Serialize)]
-struct FileCreatorView {
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "FileCreatorState"))]
+pub(super) struct FileCreatorView {
     path: String,
     version: i64,
     creator: Option<CreatorView>,
@@ -153,14 +158,18 @@ async fn source_of(
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct NameBody {
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "NameCreatorBody"))]
+pub(super) struct NameBody {
     creator: String,
 }
 
+/// The answer of naming a season's unknown subtitles a creator.
 #[derive(Serialize)]
-struct Named {
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "NamedCreators"))]
+pub(super) struct Named {
     season: u32,
     creator: CreatorView,
+    /// How many files it named: the ones that were still unknown.
     attached: usize,
 }
 
@@ -190,7 +199,8 @@ async fn name_unknown(
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct FileBody {
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "FileCreatorBody"))]
+pub(super) struct FileBody {
     path: String,
     version: i64,
     /// `null` puts the file back to `제작자 알 수 없음`.

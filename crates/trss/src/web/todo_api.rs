@@ -217,17 +217,42 @@ pub struct WorkLink {
     pub name: String,
 }
 
+/// Which of the two videos of a failed replacement a file is.
+#[derive(Debug, Clone, Copy, Serialize, PartialEq)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[serde(rename_all = "snake_case")]
+pub enum FailureRole {
+    /// The video being replaced.
+    Old,
+    /// The revision.
+    New,
+}
+
+/// What became of a file of a failed replacement.
+#[derive(Debug, Clone, Copy, Serialize, PartialEq)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[serde(rename_all = "snake_case")]
+pub enum FailureState {
+    Kept,
+    Removed,
+    ReceivedName,
+    Missing,
+    NotReceived,
+}
+
 #[derive(Debug, Serialize, PartialEq)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 pub struct FailureFile {
-    /// `old` (the video being replaced) or `new` (the revision).
-    pub role: &'static str,
+    pub role: FailureRole,
+    /// Relative to the work folder; `null` for a new video that was not
+    /// received.
     pub path: Option<String>,
-    /// `kept`, `removed`, `received_name`, `missing` or `not_received`.
-    pub state: &'static str,
+    pub state: FailureState,
 }
 
 /// A failed replacement as an episode row and the to-do source show it.
 #[derive(Debug, Serialize, PartialEq)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 pub struct RevisionFailure {
     pub at: i64,
     /// The revision's history item, which `다시 받기` receives.
@@ -240,9 +265,14 @@ pub struct RevisionFailure {
 
 /// `다시 받기` on a failed replacement (see the module docs).
 #[derive(Debug, Clone, Default, Serialize, PartialEq)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 pub struct RetryOffer {
+    /// Whether `다시 받기` is offered: the revision's download stopped before
+    /// it was received.
     pub can_retry: bool,
+    /// Why `다시 받기` is missing on such a revision, as a sentence.
     pub retry_blocked: Option<String>,
+    /// Its `다시 받기` command that has not ended yet.
     pub command: Option<CommandView>,
 }
 
@@ -309,29 +339,29 @@ pub fn failure_of(row: &Revision, base: Option<&FsPath>) -> RevisionFailure {
         shown.to_string_lossy().into_owned()
     };
     let old = FailureFile {
-        role: "old",
+        role: FailureRole::Old,
         path: Some(path(&row.episode_name)),
         state: if row.old_video_removed() {
-            "removed"
+            FailureState::Removed
         } else {
-            "kept"
+            FailureState::Kept
         },
     };
     let new = match row.new_video() {
         NewVideo::NotReceived => FailureFile {
-            role: "new",
+            role: FailureRole::New,
             path: None,
-            state: "not_received",
+            state: FailureState::NotReceived,
         },
         NewVideo::Received(name) => FailureFile {
-            role: "new",
+            role: FailureRole::New,
             path: Some(path(name)),
-            state: "received_name",
+            state: FailureState::ReceivedName,
         },
         NewVideo::Missing(name) => FailureFile {
-            role: "new",
+            role: FailureRole::New,
             path: Some(path(name)),
-            state: "missing",
+            state: FailureState::Missing,
         },
     };
     RevisionFailure {

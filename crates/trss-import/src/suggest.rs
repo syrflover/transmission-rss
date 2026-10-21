@@ -13,7 +13,9 @@ use trss_collect::store::channels::RuleInput;
 use trss_core::folders::{has_parent_dir, is_collect_folder_itself};
 
 /// The four cases of the spec's suggestion table.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(rename = "SuggestionKind"))]
+#[serde(rename_all = "snake_case")]
 pub enum Kind {
     /// An Anissia address and a creator: checked at first.
     WithCreator,

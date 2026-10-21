@@ -51,10 +51,12 @@ url.workspace = true
 # (the screens' generated TypeScript types).
 trss-core = { workspace = true, features = ["test-support", "ts"] }
 trss-anissia = { workspace = true, features = ["test-support"] }
-trss-anilist = { workspace = true, features = ["test-support"] }
+trss-anilist = { workspace = true, features = ["test-support", "ts"] }
 trss-library = { workspace = true, features = ["test-support", "ts"] }
 # The fake tracker of the past episode search tests (`trss_collect::fake`).
 trss-collect = { workspace = true, features = ["test-support", "ts"] }
+trss-jobs = { workspace = true, features = ["ts"] }
+trss-import = { workspace = true, features = ["ts"] }
 trss-transmission = { workspace = true, features = ["test-support"] }
 trss-subtitles = { workspace = true, features = ["test-support"] }
 # The sample ZIPs of the upload tests (`trss_archive::testing`).

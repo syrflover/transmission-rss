@@ -139,7 +139,10 @@ use trss_jobs::{
     follow::SeasonFacts,
     mapping::{Exception, Mapping, Saved, UserMapping},
 };
-use trss_library::mapping::preview::{self, Choice, Ground, Input, Row};
+use trss_library::mapping::{
+    preview::{self, Choice, Ground, Input, Row},
+    MappingKind,
+};
 
 pub fn routes() -> Router<AppState> {
     Router::new()
@@ -157,8 +160,10 @@ pub fn routes() -> Router<AppState> {
         )
 }
 
-/// One exception of a user's mapping.
+/// One exception of a user's mapping: one Anissia episode text to one season
+/// episode, or `null` for `받지 않음`.
 #[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "MappingException"))]
 pub struct ExceptionView {
     episode: String,
     target: Option<u32>,
@@ -205,43 +210,51 @@ impl SourceFacts {
     }
 }
 
-/// A source's episode mapping to the season (see the module docs).
+/// A source's episode mapping to the season (see the module docs): how the
+/// source's episodes map to the season's. `auto`: the app decided it from
+/// grounds that agree (`offset` is added to Anissia's whole episode),
+/// `undecided`: the grounds are missing or disagree (nothing is received
+/// automatically), `user`.
 #[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "CandidateMapping"))]
 pub struct MappingView {
     pub source_id: String,
-    /// `auto`, `undecided` or `user`.
-    pub kind: &'static str,
+    pub kind: MappingKind,
     pub offset: Option<i64>,
+    /// The grounds that agree, or why none do, as a sentence.
     pub evidence: String,
     pub decided_at: i64,
+    /// What a save or a revert carries; a source with no mapping is version 0.
     pub version: i64,
+    /// The user's exceptions.
     pub exceptions: Vec<ExceptionView>,
     /// The one line the creator's group shows for the mapping.
     pub line: String,
-    /// The default mapping the dialog opens on: `same`, `continue` or
-    /// `custom`; `None` while the mapping is undecided.
-    pub choice: Option<&'static str>,
+    /// The default mapping the dialog opens on; `None` while the mapping is
+    /// undecided.
+    pub choice: Option<Choice>,
 }
 
 impl MappingView {
     pub fn of(source_id: String, m: Mapping, facts: &SourceFacts) -> MappingView {
         MappingView {
             source_id,
-            kind: m.kind.code(),
+            kind: m.kind,
             offset: m.offset,
             evidence: m.evidence.clone(),
             decided_at: m.decided_at,
             version: m.version,
             exceptions: m.exceptions.iter().map(ExceptionView::from).collect(),
             line: m.line(&facts.episodes, facts.total),
-            choice: preview::choice_of(m.decided_offset(), facts.previous).map(Choice::code),
+            choice: preview::choice_of(m.decided_offset(), facts.previous),
         }
     }
 }
 
 /// What the answers that hold a source's mapping carry.
 #[derive(Debug, Serialize)]
-struct SourceMapping {
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub(super) struct SourceMapping {
     source_id: String,
     mapping: Option<MappingView>,
 }
@@ -324,6 +337,7 @@ fn stale(source_id: &str, current: Option<Mapping>, facts: &SourceFacts) -> ApiE
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "MappingExceptionBody"))]
 struct ExceptionBody {
     episode: String,
     target: Option<i64>,
@@ -331,7 +345,8 @@ struct ExceptionBody {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct SaveBody {
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "SaveMappingBody"))]
+pub(super) struct SaveBody {
     version: i64,
     offset: i64,
     exceptions: Vec<ExceptionBody>,
@@ -388,7 +403,8 @@ async fn save(
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct RevertBody {
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "RevertMappingBody"))]
+pub(super) struct RevertBody {
     version: i64,
 }
 
@@ -435,32 +451,31 @@ async fn revert(
     }
 }
 
-#[derive(Deserialize)]
-#[serde(rename_all = "lowercase")]
-enum ChoiceBody {
-    Same,
-    Continue,
-    Custom,
-}
-
+/// One exception row of the dialog as typed: Anissia's episode, the season
+/// episode, or `받지 않음`.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "MappingRow"))]
 struct RowBody {
     episode: String,
     target: String,
     skip: bool,
 }
 
+/// What the dialog holds: the choice made, the text of the offset box and the
+/// exception rows.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct PreviewBody {
-    choice: Option<ChoiceBody>,
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "MappingInput"))]
+pub(super) struct PreviewBody {
+    choice: Option<Choice>,
     custom: String,
     exceptions: Vec<RowBody>,
 }
 
 /// The texts under each choice of the dialog.
 #[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "MappingPreviews"))]
 struct Previews {
     same: String,
     #[serde(rename = "continue")]
@@ -470,7 +485,9 @@ struct Previews {
 
 /// What the dialog shows for what is typed in it (see the module docs).
 #[derive(Debug, Serialize)]
-struct PreviewView {
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "MappingPreview"))]
+pub(super) struct PreviewView {
+    /// Why `앞 시즌에 이어 셈` cannot be chosen; `null` when it can.
     continue_reason: Option<&'static str>,
     previews: Previews,
     offset: Option<i64>,
@@ -490,11 +507,7 @@ async fn preview(
     let anime_no = check(&state, &id, season, &source_id).await?;
     let facts = facts(&state, &id, season, anime_no, &source_id).await?;
     let input = Input {
-        choice: body.choice.map(|choice| match choice {
-            ChoiceBody::Same => Choice::Same,
-            ChoiceBody::Continue => Choice::Continue,
-            ChoiceBody::Custom => Choice::Custom,
-        }),
+        choice: body.choice,
         custom: body.custom,
         rows: body
             .exceptions

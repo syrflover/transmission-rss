@@ -385,6 +385,7 @@ pub fn runs<'a>(texts: impl IntoIterator<Item = &'a str>) -> Vec<EpisodeRun> {
 
 /// A run as an answer carries it, for a screen to name and shorten.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct EpisodeSegment {
     /// `1–4`, `7`, `SP` ([`EpisodeRun::text`]).
     pub text: String,

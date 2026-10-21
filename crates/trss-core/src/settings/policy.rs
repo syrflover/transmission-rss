@@ -24,7 +24,9 @@ pub const IDLE_TIMEOUT_SECONDS: RangeInclusive<u32> = 60..=3600;
 pub const CONCURRENT_JOBS: RangeInclusive<u32> = 1..=3;
 
 /// A subtitle file format the app ranks.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(rename_all = "lowercase")]
 pub enum SubtitleFormat {
     Ass,
     Srt,

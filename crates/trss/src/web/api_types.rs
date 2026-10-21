@@ -29,8 +29,10 @@ use std::{
 use ts_rs::{Config, TypeVisitor, TS};
 
 use super::{
-    archive_api, channels_api, commands_api, error, history_api, past_search_api, rules_api,
-    save_folder_api, schedule_api, setup_api, status_api, subscriptions_api,
+    archive_api, artwork_api, channels_api, commands_api, error, history_api, import_api,
+    library_api, library_work_api, mapping_api, past_search_api, rules_api, save_folder_api,
+    schedule_api, seasons_anissia_api, seasons_api, setup_api, status_api, subscriptions_api,
+    subtitle_creator_api, video_check_api, watch_folders_api,
 };
 
 /// Where the generated files are committed.
@@ -96,6 +98,53 @@ fn roots(v: &mut impl TypeVisitor) {
     v.visit::<subscriptions_api::Subscribed>();
     v.visit::<subscriptions_api::CreatorBody>();
     v.visit::<subscriptions_api::LinkBody>();
+
+    // The library screens' APIs.
+    v.visit::<library_api::WorkPage>();
+    v.visit::<trss_library::store::library::Sort>();
+    v.visit::<trss_library::store::library::Filter>();
+    v.visit::<library_work_api::WorkDetailView>();
+    v.visit::<library_work_api::Applying>();
+    v.visit::<library_work_api::ApplyBody>();
+    v.visit::<library_work_api::OrderView>();
+    v.visit::<library_work_api::OrderBody>();
+    v.visit::<library_work_api::CleanBody>();
+    v.visit::<library_work_api::Cleaning>();
+    v.visit::<library_work_api::StorageList>();
+    v.visit::<seasons_api::SeasonInfoView>();
+    v.visit::<seasons_api::SearchBody>();
+    v.visit::<seasons_api::SearchView>();
+    v.visit::<seasons_api::LinksBody>();
+    v.visit::<seasons_api::VersionBody>();
+    v.visit::<seasons_anissia_api::AnissiaLinkView>();
+    v.visit::<seasons_anissia_api::SearchBody>();
+    v.visit::<seasons_anissia_api::SearchView>();
+    v.visit::<seasons_anissia_api::LinkBody>();
+    v.visit::<seasons_anissia_api::CandidatesView>();
+    v.visit::<seasons_anissia_api::movie::MovieLinkView>();
+    v.visit::<seasons_anissia_api::movie::MovieCandidatesView>();
+    v.visit::<artwork_api::ArtworkView>();
+    v.visit::<artwork_api::SearchView>();
+    v.visit::<artwork_api::PickBody>();
+    v.visit::<mapping_api::MappingView>();
+    v.visit::<mapping_api::SourceMapping>();
+    v.visit::<mapping_api::PreviewView>();
+    v.visit::<mapping_api::PreviewBody>();
+    v.visit::<mapping_api::SaveBody>();
+    v.visit::<mapping_api::RevertBody>();
+    v.visit::<subtitle_creator_api::Named>();
+    v.visit::<subtitle_creator_api::FileCreatorView>();
+    v.visit::<subtitle_creator_api::NameBody>();
+    v.visit::<subtitle_creator_api::FileBody>();
+    v.visit::<watch_folders_api::FolderList>();
+    v.visit::<watch_folders_api::Added>();
+    v.visit::<watch_folders_api::Removed>();
+    v.visit::<watch_folders_api::AddBody>();
+    v.visit::<video_check_api::CheckBody>();
+    v.visit::<import_api::PreviewRequest>();
+    v.visit::<import_api::PreviewResponse>();
+    v.visit::<import_api::ApplyRequest>();
+    v.visit::<import_api::ApplyResponse>();
 }
 
 /// Writes every type of [`roots`] and the types they hold into `dir`, one file
@@ -327,8 +376,19 @@ fn enums_serialize_as_their_codes() {
     use trss_core::commands::CommandState;
     use trss_library::store::setup::Step;
 
-    use super::{archive_api::GroundKind, past_search_api::PollState, rules_api::HeldBy};
+    use super::{
+        archive_api::GroundKind,
+        artwork_api::ImageStatus,
+        library_work_api::StorageKind,
+        past_search_api::PollState,
+        rules_api::HeldBy,
+        seasons_anissia_api::{EpisodeForm, TitleKind},
+        seasons_api::Pending as SeasonPending,
+        todo_api::{FailureRole, FailureState},
+    };
     use crate::archive_batch::FailureKind;
+    use trss_jobs::place::records;
+    use trss_library::artwork::Unavailable;
 
     fn same<T: serde::Serialize + Copy>(all: &[T], code: impl Fn(T) -> &'static str) {
         for one in all {
@@ -399,7 +459,228 @@ fn enums_serialize_as_their_codes() {
         UndoFileState::code,
     );
 
+    // The library screens' codes.
+    {
+        use trss_core::settings::policy::SubtitleFormat;
+        use trss_import::suggest::Kind as SuggestionKind;
+        use trss_jobs::{
+            model::{AssetKind, ItemState, SubtitleFormat as StoredFormat, Wait},
+            place::cleanup::CleanKind,
+            todo::Badge,
+        };
+        use trss_library::{
+            discovery::Reason,
+            mapping::{preview::Choice as MappingChoice, MappingKind},
+            store::{
+                artwork as cover,
+                library::{Filter, Sort, SubtitleCoverage},
+                seasons::{Note as SeasonNote, Origin},
+            },
+        };
+
+        same(
+            &[
+                SubtitleCoverage::All,
+                SubtitleCoverage::Some,
+                SubtitleCoverage::None,
+            ],
+            SubtitleCoverage::code,
+        );
+        same(&Sort::ALL, Sort::code);
+        same(&Filter::ALL, Filter::code);
+        same(&Badge::ALL, Badge::code);
+        same(&SubtitleFormat::ALL, SubtitleFormat::code);
+        same(
+            &[
+                StoredFormat::Ass,
+                StoredFormat::Srt,
+                StoredFormat::Smi,
+                StoredFormat::Other,
+            ],
+            StoredFormat::code,
+        );
+        same(
+            &[
+                AssetKind::Subtitle,
+                AssetKind::Font,
+                AssetKind::Attachment,
+                AssetKind::Companion,
+                AssetKind::Other,
+            ],
+            AssetKind::code,
+        );
+        same(
+            &[
+                CleanKind::Past,
+                CleanKind::AwaitingVideo,
+                CleanKind::Unplaced,
+                CleanKind::Stored,
+            ],
+            CleanKind::code,
+        );
+        same(
+            &[
+                ItemState::Pending,
+                ItemState::Running,
+                ItemState::Waiting,
+                ItemState::Held,
+                ItemState::Failed,
+                ItemState::Done,
+            ],
+            ItemState::code,
+        );
+        same(
+            &[
+                Wait::Auth,
+                Wait::Subtitle,
+                Wait::Placement,
+                Wait::Approval,
+                Wait::Video,
+            ],
+            Wait::code,
+        );
+        same(
+            &[
+                Reason::SeasonMismatch,
+                Reason::OutsideSeason,
+                Reason::InSubfolder,
+                Reason::Partial,
+                Reason::NoEpisode,
+                Reason::InvalidName,
+            ],
+            Reason::code,
+        );
+        same(
+            &[
+                cover::Mode::Auto,
+                cover::Mode::Manual,
+                cover::Mode::Disabled,
+            ],
+            cover::Mode::code,
+        );
+        same(
+            &[cover::Source::Anilist, cover::Source::Upload],
+            cover::Source::code,
+        );
+        same(
+            &[cover::Format::Jpeg, cover::Format::Png, cover::Format::Webp],
+            cover::Format::code,
+        );
+        same(
+            &[cover::JobKind::Search, cover::JobKind::Fetch],
+            cover::JobKind::code,
+        );
+        same(
+            &[
+                cover::Note::NoMatch,
+                cover::Note::Ambiguous,
+                cover::Note::Incomplete,
+                cover::Note::Failed,
+                cover::Note::Gone,
+                cover::Note::NoImage,
+                cover::Note::Rejected,
+            ],
+            cover::Note::code,
+        );
+        same(&[Origin::Auto, Origin::User], Origin::code);
+        same(
+            &[
+                SeasonNote::NoMatch,
+                SeasonNote::Ambiguous,
+                SeasonNote::Incomplete,
+                SeasonNote::Failed,
+            ],
+            SeasonNote::code,
+        );
+        same(
+            &[MappingKind::Auto, MappingKind::Undecided, MappingKind::User],
+            MappingKind::code,
+        );
+        same(
+            &[
+                MappingChoice::Same,
+                MappingChoice::Continue,
+                MappingChoice::Custom,
+            ],
+            MappingChoice::code,
+        );
+        same(
+            &[
+                SuggestionKind::WithCreator,
+                SuggestionKind::AddressOnly,
+                SuggestionKind::Unreadable,
+                SuggestionKind::None,
+            ],
+            SuggestionKind::code,
+        );
+        // The artwork status is `available` or an `Unavailable`'s code.
+        for (one, text) in [
+            (ImageStatus::Available, "available"),
+            (
+                ImageStatus::from(Unavailable::Missing),
+                Unavailable::Missing.code(),
+            ),
+            (
+                ImageStatus::from(Unavailable::Mismatch),
+                Unavailable::Mismatch.code(),
+            ),
+            (
+                ImageStatus::from(Unavailable::Unverified),
+                Unavailable::Unverified.code(),
+            ),
+        ] {
+            assert_eq!(serde_json::to_value(one).unwrap(), json!(text));
+        }
+        // What the copy's choice said before.
+        for (one, text) in [
+            (records::Choice::Apply, "apply"),
+            (records::Choice::Compare, "compare"),
+        ] {
+            assert_eq!(serde_json::to_value(one).unwrap(), json!(text));
+        }
+    }
+
     // These took the place of string literals, not of a `code()`.
+    for (one, text) in [
+        (EpisodeForm::Number, "number"),
+        (EpisodeForm::Zero, "zero"),
+        (EpisodeForm::Text, "text"),
+    ] {
+        assert_eq!(serde_json::to_value(one).unwrap(), json!(text));
+    }
+    for (one, text) in [
+        (TitleKind::Native, "native"),
+        (TitleKind::English, "english"),
+        (TitleKind::Romaji, "romaji"),
+        (TitleKind::Korean, "korean"),
+        (TitleKind::Folder, "folder"),
+    ] {
+        assert_eq!(serde_json::to_value(one).unwrap(), json!(text));
+    }
+    for (one, text) in [
+        (StorageKind::Subtitle, "subtitle"),
+        (StorageKind::Font, "font"),
+        (StorageKind::Attachment, "attachment"),
+        (StorageKind::Cover, "cover"),
+    ] {
+        assert_eq!(serde_json::to_value(one).unwrap(), json!(text));
+    }
+    assert_eq!(
+        serde_json::to_value(SeasonPending::Search).unwrap(),
+        json!("search")
+    );
+    for (one, text) in [(FailureRole::Old, "old"), (FailureRole::New, "new")] {
+        assert_eq!(serde_json::to_value(one).unwrap(), json!(text));
+    }
+    for (one, text) in [
+        (FailureState::Kept, "kept"),
+        (FailureState::Removed, "removed"),
+        (FailureState::ReceivedName, "received_name"),
+        (FailureState::Missing, "missing"),
+        (FailureState::NotReceived, "not_received"),
+    ] {
+        assert_eq!(serde_json::to_value(one).unwrap(), json!(text));
+    }
     for (one, text) in [
         (FailureKind::Refused, "refused"),
         (FailureKind::ArchiveFailed, "archive_failed"),

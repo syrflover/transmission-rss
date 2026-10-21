@@ -3,6 +3,11 @@ name = "trss-import"
 version.workspace = true
 edition.workspace = true
 
+[features]
+# Derives `ts_rs::TS` for the types the API sends or takes, which the `trss`
+# tests turn into the screens' TypeScript types. Off in every build of the app.
+ts = ["dep:ts-rs"]
+
 [dependencies]
 trss-anissia.workspace = true
 trss-collect.workspace = true
@@ -12,3 +17,4 @@ regex.workspace = true
 serde = { workspace = true, features = ["derive"] }
 yaml_serde.workspace = true
 url.workspace = true
+ts-rs = { workspace = true, optional = true }

@@ -37,6 +37,7 @@ use trss_collect::store::channels::{
 
 /// A suggestion the user checked, by its place in the file.
 #[derive(Debug, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(rename = "ImportPick"))]
 pub struct Pick {
     /// The channel's place in the file, as the preview numbered it.
     channel: usize,
@@ -65,6 +66,11 @@ pub struct Wanted {
 
 /// A checked suggestion that was left out.
 #[derive(Debug, Serialize)]
+#[cfg_attr(
+    feature = "ts",
+    derive(ts_rs::TS),
+    ts(rename = "SubscriptionNotCreated")
+)]
 pub struct NotCreated {
     channel: usize,
     rule: usize,
@@ -219,6 +225,7 @@ pub fn subscriptions(wanted: &[Wanted], resolved: &Resolved) -> Vec<ImportSubscr
 
 /// A rule that became a subscription.
 #[derive(Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(rename = "SubscriptionCreated"))]
 struct Created {
     channel: usize,
     rule: usize,
@@ -236,6 +243,7 @@ struct Created {
 
 /// What became of the checked suggestions.
 #[derive(Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(rename = "ImportSubscriptions"))]
 pub struct SubscriptionsResult {
     created: Vec<Created>,
     /// Checked suggestions that did not become subscriptions, with the reason;

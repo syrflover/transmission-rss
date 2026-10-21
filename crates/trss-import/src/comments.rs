@@ -78,6 +78,7 @@ pub enum Reading {
 /// The weekday and time the comment gives, kept for showing when Anissia
 /// cannot be reached.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(rename = "CommentAirs"))]
 pub struct Airs {
     /// 0 (Sunday) to 6 (Saturday), as Anissia numbers its weekdays.
     pub week: u8,

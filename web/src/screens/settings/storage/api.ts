@@ -1,6 +1,6 @@
 import { api } from "@/lib/api";
 
-import type { StorageOverview } from "../../library/storage.ts";
+import type { StorageOverview } from "@/lib/api-types";
 
 /** The works with a stored file or a cover, each with its size per kind, the biggest first. */
 export function loadStorage(signal?: AbortSignal): Promise<StorageOverview> {

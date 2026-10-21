@@ -35,7 +35,9 @@ use unicode_normalization::UnicodeNormalization;
 use crate::store::library::overview::{SubtitleCoverage, WorkOverview};
 
 /// How a page is ordered.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(rename = "SortKey"))]
+#[serde(rename_all = "lowercase")]
 pub enum Sort {
     Title,
     /// The latest season's first linked entry's start year, latest first.
@@ -84,7 +86,9 @@ impl Sort {
 }
 
 /// Which works are listed.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(rename = "FilterKey"))]
+#[serde(rename_all = "lowercase")]
 pub enum Filter {
     All,
     /// An entry linked to the latest season is airing now.

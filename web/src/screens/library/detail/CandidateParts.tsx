@@ -5,7 +5,7 @@ import { cn } from "@/lib/utils";
 
 import { btnAction } from "../../collect/channels/styles";
 import { jobPath } from "../../todo/api";
-import type { Candidate, CandidateJob } from "../api";
+import type { SubtitleCandidate, CandidateJob } from "../api";
 import { CheckIcon, ExternalIcon } from "../icons";
 import { jobStatus, KIND_TEXT, updatedText, type CreatePhase, type Kind } from "./candidates";
 
@@ -42,7 +42,7 @@ export function JobStatusLink({ job }: { job: CandidateJob | null }) {
 }
 
 /** `Anissia 갱신 9월 30일 23:06`: when Anissia's line was updated, which is neither the post's nor the episode's date. */
-export function UpdatedAt({ candidate }: { candidate: Candidate }) {
+export function UpdatedAt({ candidate }: { candidate: SubtitleCandidate }) {
   return <span>Anissia 갱신 {updatedText(candidate)}</span>;
 }
 

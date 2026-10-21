@@ -97,7 +97,9 @@ pub mod reason;
 const LAST_WINDOW_MS: i64 = 7 * 24 * 60 * 60 * 1000;
 
 /// Who decided a mapping.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(rename_all = "lowercase")]
 pub enum MappingKind {
     /// The app, from grounds that agree.
     Auto,

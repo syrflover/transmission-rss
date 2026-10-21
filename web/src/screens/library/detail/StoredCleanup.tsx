@@ -6,7 +6,7 @@ import { forget } from "@/lib/cached";
 import { cn } from "@/lib/utils";
 
 import { btnDanger, btnDangerSolid, btnNeutral } from "../../collect/channels/styles";
-import { cleanStored, STORAGE_KEY } from "../api";
+import { cleanStored, STORAGE_KEY, type Cleaning } from "../api";
 import {
   CHANGED_NOTICE,
   canClean,
@@ -292,7 +292,7 @@ function CleanConfirm({
     if (busy || view.blocked !== null) return;
     setBusy(true);
     setError(null);
-    let answer: { cleanup_id: string };
+    let answer: Cleaning;
     try {
       answer = await cleanStored(workId, entry.id, cleanBody(entry).assets);
     } catch (e) {

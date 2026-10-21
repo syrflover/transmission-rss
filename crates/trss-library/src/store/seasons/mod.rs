@@ -67,7 +67,9 @@ use trss_core::{
 };
 
 /// Who made the current links of a season.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(rename = "SeasonOrigin"))]
+#[serde(rename_all = "lowercase")]
 pub enum Origin {
     /// The app linked the entry itself, or nothing is linked yet.
     Auto,
@@ -93,7 +95,9 @@ impl Origin {
 }
 
 /// Why the last automatic search linked nothing.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(rename = "SeasonNoteCode"))]
+#[serde(rename_all = "snake_case")]
 pub enum Note {
     /// No AniList title equals the folder name.
     NoMatch,

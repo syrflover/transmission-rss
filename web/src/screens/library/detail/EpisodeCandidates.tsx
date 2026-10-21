@@ -1,7 +1,7 @@
 import { Button } from "@/components/ui/button";
 
 import { btnAction } from "../../collect/channels/styles";
-import type { Candidate, CandidateList } from "../api";
+import type { SubtitleCandidate, CandidateList } from "../api";
 import { CreateStatus, JobStatusLink, PostLink, UpdatedAt } from "./CandidateParts";
 import { isHeld, useCreateJob } from "./candidates";
 
@@ -18,12 +18,12 @@ export interface EpisodeCandidateSource {
 }
 
 /** The quiet note on an episode's row: a creator, or how many creators, have a subtitle for it. */
-export function candidateNote(candidates: readonly Candidate[]): string {
+export function candidateNote(candidates: readonly SubtitleCandidate[]): string {
   return candidates.length === 1 ? `자막 후보 · ${candidates[0].creator}` : `자막 후보 ${candidates.length}명`;
 }
 
 /** One creator's candidate for the episode with a `받기` that makes a job of this one candidate, the same as the section's. */
-function EpisodePick({ candidate: c, season, source }: { candidate: Candidate; season: number; source: EpisodeCandidateSource }) {
+function EpisodePick({ candidate: c, season, source }: { candidate: SubtitleCandidate; season: number; source: EpisodeCandidateSource }) {
   const { phase, create, resend } = useCreateJob(source.workId, season, source.onMade, source.list.max_job_candidates, source.movie);
   return (
     <li className="flex flex-col gap-1.5">
@@ -52,7 +52,7 @@ function EpisodePick({ candidate: c, season, source }: { candidate: Candidate; s
 }
 
 /** The `자막 후보` cell of an expanded episode row. */
-export function EpisodePicks({ candidates, season, source }: { candidates: readonly Candidate[]; season: number; source: EpisodeCandidateSource }) {
+export function EpisodePicks({ candidates, season, source }: { candidates: readonly SubtitleCandidate[]; season: number; source: EpisodeCandidateSource }) {
   return (
     <div className="col-span-full min-w-0" data-testid="episode-candidates">
       <dt className="text-[12px] font-semibold text-text-muted">자막 후보</dt>

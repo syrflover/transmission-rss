@@ -1,3 +1,13 @@
+import type { AssetKind } from "../../lib/api-types/AssetKind";
+import type { CleanAsset } from "../../lib/api-types/CleanAsset";
+import type { CleanKind } from "../../lib/api-types/CleanKind";
+import type { CleanableEntry } from "../../lib/api-types/CleanableEntry";
+import type { CleaningEntry } from "../../lib/api-types/CleaningEntry";
+import type { KeptAsset } from "../../lib/api-types/KeptAsset";
+import type { StorageKind } from "../../lib/api-types/StorageKind";
+import type { StorageOverview } from "../../lib/api-types/StorageOverview";
+import type { StorageWork } from "../../lib/api-types/StorageWork";
+import type { WorkStorage } from "../../lib/api-types/WorkStorage";
 import { sizeText } from "../../lib/size.ts";
 import { carriesTime, receivedAt } from "./received.ts";
 import { MOVIE_LABEL } from "./detail/movie.ts";
@@ -5,83 +15,11 @@ import { MOVIE_LABEL } from "./detail/movie.ts";
 /**
  * The stored files of a work and what can be cleaned (`GET /api/library/works/{id}` `storage`, `GET
  * /api/library/storage`, `POST .../stored/{id}/clean`), and the decisions the screens take from them: the labels, the
- * texts of sizes and dates, what the confirmation lists and sends, and how a refused clean is read. It has no `@/`
- * imports so it runs under `node --test`; `api.ts` re-exports the types.
+ * texts of sizes and dates, what the confirmation lists and sends, and how a refused clean is read. The types are generated (`lib/api-types`) and imported by a relative path, only as
+ * types, so the module runs under `node --test`; `api.ts` re-exports them.
  */
 
-/** Why a stored file can be cleaned: `past` 지난 수정본, `awaiting_video` 영상 대기, `stored` 보관만 함, `unplaced` 회차에 붙지 않음. */
-export type CleanKind = "past" | "awaiting_video" | "stored" | "unplaced";
-
-export type AssetKind = "subtitle" | "font" | "attachment" | "companion";
-
-/** A file a cleanup deletes now. */
-export interface CleanAsset {
-  id: string;
-  name: string;
-  kind: AssetKind;
-  size: number;
-}
-
-/** A file linked to the stored copy that stays, and why. */
-export interface KeptAsset {
-  id: string;
-  name: string;
-  kind: AssetKind;
-  reason: string;
-}
-
-/** A stored subtitle that can be cleaned (or says why it cannot be now). */
-export interface CleanableEntry {
-  id: string;
-  name: string;
-  season: number;
-  /** `null` for `unplaced`. */
-  episode: number | null;
-  /** `null` is `제작자 알 수 없음`. */
-  creator: string | null;
-  format: "ass" | "srt" | "smi" | "other";
-  size: number;
-  /** Unix milliseconds. */
-  stored_at: number;
-  kind: CleanKind;
-  /** Why it cannot be cleaned now; the entry then has no `정리`. */
-  blocked: string | null;
-  /** What the cleanup deletes now. */
-  with: CleanAsset[];
-  /** The linked files that stay. */
-  kept: KeptAsset[];
-}
-
-/** A clean that was asked for and that the worker has not finished (`asked`) or could not (`held`). */
-export interface CleaningEntry {
-  id: string;
-  name: string;
-  state: "asked" | "held";
-  reason: string | null;
-}
-
-export interface WorkStorage {
-  /** Bytes of every file the app stored for the work. */
-  total: number;
-  cleanable: CleanableEntry[];
-  cleaning: CleaningEntry[];
-}
-
-export type StorageKind = "subtitle" | "font" | "attachment" | "cover";
-
-export interface StorageWork {
-  id: string;
-  /** The work title (작품명). */
-  name: string;
-  total: number;
-  kinds: { kind: StorageKind; count: number; size: number }[];
-  /** How many stored files can be cleaned. */
-  cleanable: number;
-}
-
-export interface StorageOverview {
-  works: StorageWork[];
-}
+export type { AssetKind, CleanAsset, CleanKind, CleanableEntry, CleaningEntry, KeptAsset, StorageKind, StorageOverview, StorageWork, WorkStorage };
 
 // --- texts ----------------------------------------------------------------------------------------------------------
 
@@ -100,6 +38,7 @@ export const ASSET_LABEL: Record<AssetKind, string> = {
   font: "폰트",
   attachment: "첨부",
   companion: "구성 파일",
+  other: "기타",
 };
 
 export const STORAGE_KIND_LABEL: Record<StorageKind, string> = {

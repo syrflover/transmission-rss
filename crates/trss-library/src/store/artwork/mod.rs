@@ -53,7 +53,9 @@ use trss_core::{
 };
 
 /// How a work's cover is chosen.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(rename = "ArtworkMode"))]
+#[serde(rename_all = "lowercase")]
 pub enum Mode {
     /// The app selects a clear AniList match by itself.
     Auto,
@@ -83,7 +85,9 @@ impl Mode {
 }
 
 /// Where the selected cover comes from.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(rename = "ArtworkSource"))]
+#[serde(rename_all = "lowercase")]
 pub enum Source {
     Anilist,
     Upload,
@@ -107,7 +111,9 @@ impl Source {
 }
 
 /// An image format the app accepts, judged from the bytes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(rename = "ImageFormat"))]
+#[serde(rename_all = "lowercase")]
 pub enum Format {
     Jpeg,
     Png,
@@ -166,7 +172,9 @@ pub struct ImageRef {
     pub format: Format,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(rename = "ArtworkJobKind"))]
+#[serde(rename_all = "lowercase")]
 pub enum JobKind {
     /// Look the work's folder name up on AniList and select a clear match.
     Search,
@@ -203,7 +211,9 @@ pub struct Job {
 }
 
 /// Why the last automatic search or fetch left the cover as it is.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(rename = "ArtworkNoteCode"))]
+#[serde(rename_all = "snake_case")]
 pub enum Note {
     /// No AniList title equals the folder name.
     NoMatch,

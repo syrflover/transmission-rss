@@ -79,6 +79,7 @@ pub fn routes() -> Router<AppState> {
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "WatchFolder"))]
 pub struct FolderView {
     pub id: String,
     pub path: String,
@@ -113,24 +114,28 @@ impl From<FolderSummary> for FolderView {
 }
 
 #[derive(Serialize)]
-struct FolderList {
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "WatchFolderList"))]
+pub(super) struct FolderList {
     folders: Vec<FolderView>,
 }
 
 #[derive(Serialize)]
-struct Added {
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "WatchFolderAdded"))]
+pub(super) struct Added {
     folder: FolderView,
     works_found: usize,
 }
 
 #[derive(Serialize)]
-struct Removed {
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "WatchFolderRemoved"))]
+pub(super) struct Removed {
     removed_works: usize,
 }
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct AddBody {
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "AddWatchFolderBody"))]
+pub(super) struct AddBody {
     path: String,
 }
 

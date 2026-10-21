@@ -9,7 +9,7 @@ import { usePolled } from "../../todo/poll";
 import {
   candidatesKey,
   loadCandidates,
-  type Candidate,
+  type SubtitleCandidate,
   type CandidateJob,
   type CandidateList,
   type CandidateMapping,
@@ -39,7 +39,7 @@ import { candidateKey, MOVIE_LABEL, type AnissiaTarget } from "./movie.ts";
  * episode mapping (자막의 회차 대응) that tells them apart does not exist yet.
  */
 export function matchesEpisode(
-  c: Pick<Candidate, "episode_key" | "movie_episode">,
+  c: Pick<SubtitleCandidate, "episode_key" | "movie_episode">,
   episode: Pick<WorkEpisode, "episode_key">,
 ): boolean {
   return candidateKey(c) === episode.episode_key;
@@ -49,12 +49,12 @@ export function matchesEpisode(
  * A candidate's episode as shown, always with its own label: `24화`; text that is no episode number (`0`, `SP`) as
  * written. A movie's candidate is about the movie, whatever its text says: `본편`.
  */
-export function candidateLabel(c: Pick<Candidate, "episode" | "episode_shown" | "episode_form" | "movie_episode">): string {
+export function candidateLabel(c: Pick<SubtitleCandidate, "episode" | "episode_shown" | "episode_form" | "movie_episode">): string {
   if (c.movie_episode != null) return MOVIE_LABEL;
   return c.episode_form === "number" ? episodeLabel(c.episode_shown) : c.episode;
 }
 
-type Ranked = Pick<Candidate, "episode_rank" | "episode_form">;
+type Ranked = Pick<SubtitleCandidate, "episode_rank" | "episode_form">;
 
 /** The episodes in the order asked for: numbers ascending (or descending), then the other texts as written. */
 function compareEpisodes(a: Ranked, b: Ranked, order: EpisodeOrder): number {
@@ -93,14 +93,14 @@ export function holdingsOf(list: CandidateList, episodes: readonly WorkEpisode[]
   return has;
 }
 
-export function kindOf(c: Candidate, holdings: Holdings): Kind {
+export function kindOf(c: SubtitleCandidate, holdings: Holdings): Kind {
   if (c.job?.state === "done") return "received";
   if (c.revision !== null) return "revision";
   return holdings.has(candidateKey(c)) ? "has" : "missing";
 }
 
 /** A job holds the candidate (running, waiting or done), so it cannot be taken again; `failed` and `held` can. */
-export function isHeld(c: Candidate): boolean {
+export function isHeld(c: SubtitleCandidate): boolean {
   const state = c.job?.state;
   return state === "pending" || state === "running" || state === "waiting" || state === "done";
 }
@@ -148,10 +148,10 @@ function active(list: CandidateList): boolean {
 /** One episode of a creator: its newest observation, and the older ones the user still has picked. */
 export interface CandidateRow {
   key: string;
-  candidate: Candidate;
+  candidate: SubtitleCandidate;
   kind: Kind;
   /** Older observations of the episode that stay on screen because they are picked, newest first. */
-  picked: { candidate: Candidate; kind: Kind }[];
+  picked: { candidate: SubtitleCandidate; kind: Kind }[];
 }
 
 export interface CandidateGroup {
@@ -193,7 +193,7 @@ export function groupsOf(
   picked: ReadonlySet<number>,
 ): CandidateGroup[] {
   const holdings = holdingsOf(list, episodes);
-  const bySource = new Map<string, Candidate[]>();
+  const bySource = new Map<string, SubtitleCandidate[]>();
   for (const c of list.candidates) {
     const group = bySource.get(c.source_id);
     if (group) group.push(c);
@@ -202,7 +202,7 @@ export function groupsOf(
 
   const groups: CandidateGroup[] = [];
   for (const [sourceId, observed] of bySource) {
-    const byEpisode = new Map<string, Candidate[]>();
+    const byEpisode = new Map<string, SubtitleCandidate[]>();
     for (const c of observed) {
       const key = candidateKey(c);
       const same = byEpisode.get(key);
@@ -267,9 +267,9 @@ export function candidatesOf(
   list: CandidateList,
   episode: WorkEpisode,
   subscribed: string | null,
-): Candidate[] {
+): SubtitleCandidate[] {
   if (episode.subtitle.length > 0) return [];
-  const newest = new Map<string, Candidate>();
+  const newest = new Map<string, SubtitleCandidate>();
   for (const c of list.candidates) {
     if (!matchesEpisode(c, episode)) continue;
     const seen = newest.get(c.source_id);
@@ -283,7 +283,7 @@ export function candidatesOf(
 // --- dates ---------------------------------------------------------------------------------
 
 /** `9월 30일 23:06`, with the year when it is not this year's. It is the time Anissia's line was updated, nothing else. */
-export function updatedText(c: Candidate, now: Date = new Date()): string {
+export function updatedText(c: SubtitleCandidate, now: Date = new Date()): string {
   if (c.updated_at === null) {
     return c.updated_parse_failed ? `${c.updated} (날짜를 읽지 못했어요)` : "알 수 없음";
   }

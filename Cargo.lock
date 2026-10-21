@@ -2962,6 +2962,7 @@ dependencies = [
  "thiserror",
  "tokio",
  "trss-core",
+ "ts-rs",
  "unicode-normalization",
  "url",
 ]
@@ -3087,6 +3088,7 @@ dependencies = [
  "trss-anissia",
  "trss-collect",
  "trss-core",
+ "ts-rs",
  "url",
  "yaml_serde",
 ]
@@ -3112,6 +3114,7 @@ dependencies = [
  "trss-core",
  "trss-library",
  "trss-subtitles",
+ "ts-rs",
  "url",
  "uuid",
  "zip",

@@ -1,6 +1,6 @@
 import { WEEKDAYS_SHORT } from "@/lib/weekday";
 
-import type { ChannelView, Decision, PickRequest, RuleView, SuggestionKind } from "./types";
+import type { ImportChannel, ImportDecision, ImportPick, ImportRule, SuggestionKind } from "@/lib/api-types";
 
 /**
  * Where a subscription suggestion stands in the review:
@@ -18,9 +18,9 @@ export type Standing = "pickable" | "none" | "skipped" | "not_imported" | "block
 export const UNLISTED_NOTE = "Anissia 편성표에 없는 작품이라서 규칙만 가져와요.";
 
 export function standing(
-  channel: ChannelView,
-  rule: RuleView,
-  decision: Decision | undefined,
+  channel: ImportChannel,
+  rule: ImportRule,
+  decision: ImportDecision | undefined,
   unlisted: ReadonlySet<number>,
 ): Standing {
   const suggestion = rule.suggestion;
@@ -40,11 +40,11 @@ export type Picks = Record<string, boolean>;
 
 /** Whether the suggestion is checked now: the user's mark, else how the review starts. */
 export function isPicked(
-  channel: ChannelView,
-  rule: RuleView,
+  channel: ImportChannel,
+  rule: ImportRule,
   index: number,
   picks: Picks,
-  decision: Decision | undefined,
+  decision: ImportDecision | undefined,
   unlisted: ReadonlySet<number>,
 ): boolean {
   if (standing(channel, rule, decision, unlisted) !== "pickable") return false;
@@ -53,11 +53,11 @@ export function isPicked(
 
 /** The checked suggestions of the channels that are imported, as the apply takes them. */
 export function pickedRequests(
-  channels: ChannelView[],
+  channels: ImportChannel[],
   picks: Picks,
-  choices: Record<number, Decision>,
+  choices: Record<number, ImportDecision>,
   unlisted: ReadonlySet<number>,
-): PickRequest[] {
+): ImportPick[] {
   return channels.flatMap((channel) =>
     channel.rules.flatMap((rule, index) =>
       isPicked(channel, rule, index, picks, choices[channel.index], unlisted)
@@ -68,7 +68,7 @@ export function pickedRequests(
 }
 
 /** How many rules of a channel fall in each of the spec's four cases. */
-export function caseCounts(channel: ChannelView): Record<SuggestionKind, number> {
+export function caseCounts(channel: ImportChannel): Record<SuggestionKind, number> {
   const counts: Record<SuggestionKind, number> = { with_creator: 0, address_only: 0, unreadable: 0, none: 0 };
   for (const rule of channel.rules) counts[rule.suggestion.kind] += 1;
   return counts;

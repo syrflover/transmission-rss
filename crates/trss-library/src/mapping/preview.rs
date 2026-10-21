@@ -28,7 +28,9 @@ const NO_PREVIOUS: &str = "앞 시즌이 없어서 고를 수 없어요.";
 const PAST: &str = "시즌 회차 수 밖";
 
 /// The default mapping the user picks: `같은 번호`, `앞 시즌에 이어 셈` or `직접 차이`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(rename = "MappingChoice"))]
+#[serde(rename_all = "lowercase")]
 pub enum Choice {
     Same,
     Continue,

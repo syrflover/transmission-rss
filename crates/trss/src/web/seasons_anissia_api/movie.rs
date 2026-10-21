@@ -89,7 +89,9 @@ pub fn routes() -> Router<AppState> {
 
 const MOVIE_NOT_FOUND: &str = "이 작품의 이 극장판을 찾지 못했어요.";
 
+/// A movie's link as the server answers it: the movie's episode, not a season.
 #[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "MovieLink"))]
 pub struct MovieLinkView {
     episode: u32,
     version: i64,
@@ -236,7 +238,8 @@ async fn link(
 }
 
 #[derive(Serialize)]
-struct MovieCandidatesView {
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "MovieSubtitleCandidates"))]
+pub(in crate::web) struct MovieCandidatesView {
     episode: u32,
     anime_no: Option<i64>,
     read_at: Option<i64>,
@@ -317,8 +320,8 @@ async fn candidates(
             .map(|(c, episode_rank)| CandidateObservation {
                 job: latest.get(&c.id).map(|p| PickView {
                     id: p.job_id.clone(),
-                    state: p.item_state.code(),
-                    wait: p.item_wait.map(trss_jobs::Wait::code),
+                    state: p.item_state,
+                    wait: p.item_wait,
                 }),
                 episode_rank,
                 movie_episode: Some(episode),

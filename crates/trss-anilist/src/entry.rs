@@ -6,6 +6,7 @@ use trss_core::Millis;
 
 /// AniList's date, any part of which may be unknown.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct FuzzyDate {
     pub year: Option<i32>,
     pub month: Option<u32>,

@@ -47,7 +47,8 @@ fn parse_seen(seen: &str) -> Option<SeenFile> {
 }
 
 #[derive(Deserialize)]
-struct CheckBody {
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "VideoCheckBody"))]
+pub(super) struct CheckBody {
     path: String,
     seen: String,
 }

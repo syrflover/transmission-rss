@@ -46,7 +46,9 @@ pub struct EpisodeRange {
 }
 
 /// How many of the episodes that have a video also have a subtitle.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(rename_all = "lowercase")]
 pub enum SubtitleCoverage {
     /// There is a video, and every episode with a video has a subtitle.
     All,

@@ -3,10 +3,12 @@
 
 macro_rules! codes {
     ($(#[$meta:meta])* $name:ident { $($(#[$vmeta:meta])* $variant:ident = $code:literal),+ $(,)? }) => {
+        // The derives come first: the `ts` helper attributes of `$meta` need them.
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize)]
+        #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
         $(#[$meta])*
-        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
         pub enum $name {
-            $($(#[$vmeta])* $variant),+
+            $($(#[$vmeta])* #[serde(rename = $code)] $variant),+
         }
 
         impl $name {
@@ -61,6 +63,7 @@ codes! {
 
 codes! {
     /// What a waiting job or item waits for.
+    #[cfg_attr(feature = "ts", ts(rename = "ItemWait"))]
     Wait {
         /// A person has to pass the site's check (`인증 필요`).
         Auth = "auth",
@@ -145,6 +148,7 @@ codes! {
 codes! {
     /// A subtitle's format as the analysis found it; `other` is a subtitle the
     /// app keeps but does not apply by itself (SSA, WebVTT, images).
+    #[cfg_attr(feature = "ts", ts(rename = "StoredFormat"))]
     SubtitleFormat {
         Ass = "ass",
         Srt = "srt",
@@ -168,6 +172,7 @@ codes! {
 codes! {
     /// What a person chose to apply from a stored subtitle (`chosen` of a
     /// plan row; see `migrations/jobs/chosen_rows.sql` in `trss-core`).
+    #[cfg_attr(feature = "ts", ts(rename = "ApplyMode"))]
     Chosen {
         /// As the episode's subtitle: a replacement when it has one.
         Apply = "apply",

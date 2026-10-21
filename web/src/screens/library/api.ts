@@ -1,16 +1,111 @@
 import { api, ApiError } from "@/lib/api";
 import { forget, forgetPrefix } from "@/lib/cached";
-import type { Command } from "@/lib/commands";
+import type {
+  AnilistPage,
+  AnilistSearchBody,
+  AnissiaLink as SeasonAnissiaLink,
+  AnissiaLinkBody,
+  AnissiaPage,
+  AnissiaSearchBody,
+  ApplyBody,
+  ApplyMode,
+  Applying,
+  ArtworkState,
+  CandidateMapping,
+  Cleaning,
+  CleanBody,
+  FileCreatorBody,
+  FileCreatorState,
+  FormatOrder,
+  LibraryWorkPage,
+  MappingInput,
+  MappingPreview,
+  MovieLink,
+  MovieSubtitleCandidates,
+  NamedCreators,
+  NameCreatorBody,
+  PickArtworkBody,
+  RevertMappingBody,
+  SaveMappingBody,
+  SeasonInfo,
+  SeasonLinksBody,
+  SeasonSearchPage,
+  SortKey,
+  FilterKey,
+  SourceMapping,
+  SubtitleCandidates,
+  SubtitleFormat,
+  SubtitleOrderBody,
+  VersionBody,
+  WorkDetail,
+} from "@/lib/api-types";
 
 import { forgetWeek } from "../schedule/api";
-import type { EpisodeSegment } from "../todo/episodeLine.ts";
-import type { TodoKind } from "../todo/kinds";
-import type { FormatOrder, SubtitleFormat, WorkSubtitles } from "./detail/subtitles.ts";
 import type { AnissiaTarget } from "./detail/movie.ts";
-import type { UploadLimits } from "./detail/upload.ts";
-import type { WorkStorage } from "./storage.ts";
 
-export type { FormatOrder, SubtitleCopy, SubtitleCreatorCopies, SubtitleFormat, WorkSubtitles } from "./detail/subtitles.ts";
+/*
+ * The shapes of these APIs are generated from the Rust types (`lib/api-types`, `cargo types`); the types below are the
+ * ones the screens import from here. A type of this file that is not re-exported is a shape of the screen's own.
+ */
+export type {
+  AnilistCandidate,
+  AnilistPage,
+  AnissiaAnime,
+  AnissiaCandidate,
+  AnissiaHolder,
+  AnissiaPage,
+  ApplyMode,
+  Applying,
+  ArtworkImage,
+  ArtworkMode,
+  ArtworkState,
+  CandidateJob,
+  CandidateMapping,
+  CandidateRevision,
+  Cleaning,
+  EpisodeRange,
+  EpisodeRevision,
+  FailureFile,
+  FileCreator,
+  FileCreatorState,
+  FilterKey,
+  FormatOrder,
+  FuzzyDate,
+  ImageStatus,
+  LibraryWork,
+  LibraryWorkPage,
+  MappingChoice,
+  MappingException,
+  MappingInput,
+  MappingPreview,
+  MappingRow,
+  MovieLink,
+  NamedCreators,
+  ReferenceTitle,
+  RevisionFailure,
+  SeasonCandidate,
+  SeasonEntry,
+  SeasonInfo,
+  SeasonSearchPage,
+  SeasonSuggestion,
+  SortKey,
+  SourceMapping,
+  StoredSubtitle,
+  SubtitleCandidate,
+  SubtitleCopy,
+  SubtitleCoverage,
+  SubtitleCreatorCopies,
+  SubtitleFormat,
+  UnrecognizedFile,
+  WorkDetail,
+  WorkEpisode,
+  WorkFile,
+  WorkRule,
+  WorkSeason,
+  WorkSubscription,
+  WorkSubtitle,
+  WorkSubtitles,
+} from "@/lib/api-types";
 
 export type {
   AssetKind,
@@ -29,63 +124,6 @@ export type {
  * The library list (`src/web/library_api.rs`): the works with the summary the
  * list shows, one page at a time. Times are Unix milliseconds, `null` when unknown.
  */
-
-/** A run of consecutive episodes, written as in the file names (`first === last` for one). */
-export interface EpisodeRange {
-  first: string;
-  last: string;
-  /** How the screen shows it: the ends without leading zeros (`1–3`), the end alone for one episode. */
-  text: string;
-}
-
-/** How many of the episodes with a video also have a subtitle; `null` for a work whose folder is gone. */
-export type SubtitleCoverage = "all" | "some" | "none";
-
-export interface LibraryWork {
-  id: string;
-  /** The work's folder name. */
-  name: string;
-  /** The work title (작품명): the Anissia title of the lowest season from 1 on linked to an anime, else the folder name. */
-  title: string;
-  /** The work's folder is not there any more (`폴더 없음`). */
-  missing: boolean;
-  watch_folder: { id: string; path: string };
-  /** The highest season number recorded for the work. */
-  latest_season: number | null;
-  /** The work is a movie and nothing else: its latest season is 0 and its one episode is the movie (`본편`). */
-  movie_only: boolean;
-  /** Episodes of the latest season that have a video / a subtitle. */
-  video: EpisodeRange[];
-  subtitle: EpisodeRange[];
-  subtitle_coverage: SubtitleCoverage | null;
-  /** A subtitle file the scan could not attach to an episode. */
-  subtitle_check_needed: boolean;
-  /** When the work first appeared. */
-  added_at: number | null;
-  /** The latest known time a video / subtitle was added, over every season. */
-  video_added_at: number | null;
-  subtitle_added_at: number | null;
-  /** Where the cover image is served while the work has one; it may still fail (the placeholder stays). */
-  cover_url: string | null;
-  /** The kinds of its to-dos that need the person, the grid's badges on the cover, in the to-do list's order. */
-  todos: TodoKind[];
-}
-
-/** How a page is ordered (`sort=` of the request). */
-export type SortKey = "title" | "year" | "added" | "video" | "subtitle";
-/** Which works a page lists (`filter=` of the request). */
-export type FilterKey = "all" | "airing" | "complete" | "partial" | "none" | "check";
-
-/** One page of the list. */
-export interface LibraryWorkPage {
-  items: LibraryWork[];
-  /** Where the page after this one starts (`after=`); `null` after the last page. */
-  next: string | null;
-  /** How many works the filter and the search match, over every page. */
-  total: number;
-  /** How many works the library has, whatever the filter and the search. */
-  library_count: number;
-}
 
 export interface WorkPageQuery {
   sort: SortKey;
@@ -132,122 +170,6 @@ export const workPath = (id: string) => `/library/${encodeURIComponent(id)}`;
 
 // --- one work (`src/web/library_work_api.rs`) ---------------------------------------
 
-/** A recorded file, by its path relative to the work folder. `added_at` is `null` when unknown. */
-export interface WorkFile {
-  path: string;
-  added_at: number | null;
-}
-
-/** The creator the user named for a subtitle file: one creator of the season's Anissia anime. */
-export interface FileCreator {
-  /** The app's ID of the creator's lines of the anime. */
-  source_id: string;
-  /** The creator's name as Anissia gives it. */
-  name: string;
-  anime_no: number;
-}
-
-/**
- * A subtitle file. `creator` is `null` for `제작자 알 수 없음`, which every file found in a watch folder is until the
- * user names one; `creator_version` is what a change of it names, so a change made from an older version is refused.
- * `applied` is set for a copy trss applied beside a video: its creator is the stored copy's (`null` is
- * `제작자 알 수 없음`), it comes before a creator the user named for the path, so `creator` is `null` for it, and its
- * creator is not changed from here.
- */
-export interface WorkSubtitle extends WorkFile {
-  creator: FileCreator | null;
-  creator_version: number;
-  applied: { creator: string | null } | null;
-}
-
-/** The episode's video was replaced by a higher revision of the same release: the quiet version line. */
-export interface EpisodeRevision {
-  /** `v1`; `null` when the old video's revision was not known. */
-  from: string | null;
-  /** `v2`. */
-  to: string;
-  /** When the new video took the episode name (Unix milliseconds). */
-  replaced_at: number;
-}
-
-/** One of the two videos of a replacement that failed, and what became of it. */
-export interface FailureFile {
-  role: "old" | "new";
-  /** Relative to the work folder; `null` for a new video that was not received. */
-  path: string | null;
-  state: "kept" | "removed" | "received_name" | "missing" | "not_received";
-}
-
-/** A replacement of the episode's video that failed (`받기 실패`), with why and both files. */
-export interface EpisodeFailure {
-  at: number;
-  /** The revision's history item, which `다시 받기` receives. */
-  history_item_id: number;
-  reason: string;
-  files: FailureFile[];
-  /** Whether `다시 받기` is offered: the revision's download stopped before it was received. */
-  can_retry: boolean;
-  /**
-   * Why `다시 받기` is missing on such a revision, as a sentence; also `이미 같거나 더 높은 수정본(v3)이 있어서 다시
-   * 받지 않아요.` when the episode's place is known to hold the same or a higher revision already.
-   */
-  retry_blocked: string | null;
-  /** Its `다시 받기` command that has not ended yet. */
-  command: Command | null;
-}
-
-export interface WorkEpisode {
-  /** As written in the file names; `01` and `13`/`013` are one episode. */
-  episode: string;
-  /** `episode` without the leading zeros of a whole number (`1` for `01`). */
-  episode_shown: string;
-  /** The key two texts of one episode share (`n:1` for `01` and `1`, `t:SP`): what the candidates' `episode_key` is compared with. */
-  episode_key: string;
-  /** The episode as a number, `null` when it is no number. */
-  sort: number | null;
-  /** When AniList schedules it (Unix milliseconds); only for a releasing entry with a schedule, else `null`. */
-  air_at: number | null;
-  video: WorkFile[];
-  subtitle: WorkSubtitle[];
-  /** Set when the video was replaced by a higher revision; `null` otherwise. */
-  revision: EpisodeRevision | null;
-  /** Set while a replacement of the video has failed; `null` otherwise. */
-  failure: EpisodeFailure | null;
-  /**
-   * Stored subtitles on the episode with no applied copy beside its video (`보관본 있음`), oldest first. One whose
-   * last comparison a person ended with `현재 유지` is left out while the episode has a subtitle.
-   */
-  stored: StoredSubtitle[];
-  /**
-   * Only on an episode of season 0: the Anissia anime its movie is linked to (`title` is `null` while the app has no
-   * snapshot of the anime), `null` while it is linked to none. Left out on the other seasons' episodes.
-   */
-  movie?: { anime_no: number; title: string | null } | null;
-}
-
-/** A stored subtitle of an episode that is not applied beside its video. */
-export interface StoredSubtitle {
-  id: string;
-  /** The stored file's name. */
-  name: string;
-  /** The creator it was received from; `null` is `제작자 알 수 없음`. */
-  creator: string | null;
-  format: "ass" | "srt" | "smi" | "other";
-  /** When it was stored (Unix milliseconds). */
-  stored_at: number;
-  /** Whether `적용` can ask for it: a format the app applies, from a job whose record is there. */
-  can_apply: boolean;
-  /** A job applies it once the episode's video comes (`영상 대기`); it asks for no `적용`. */
-  awaiting_video: boolean;
-  /** The job waiting for the user to approve replacing the episode's subtitle with it (`교체 승인`); it asks for no `적용`. */
-  approval_job: string | null;
-  /** The episode has a subtitle: `적용` goes to the comparison (`교체 승인`), not to applying at once; missing is `false`. */
-  compare?: boolean;
-}
-
-/** `apply` takes the stored copy as the episode's subtitle; `add` puts the same creator's other format beside it. */
-export type ApplyMode = "apply" | "add";
-
 /**
  * Asks to apply the stored subtitle `storedId` beside the episode's video; answers the job. `compare` is `true` when
  * the episode has a subtitle: the job compares and waits for the person's `교체 승인`, so the job's page is the next
@@ -257,18 +179,20 @@ export function applyStored(
   id: string,
   storedId: string,
   mode: ApplyMode = "apply",
-): Promise<{ job_id: string; compare: boolean }> {
-  return api<{ job_id: string; compare: boolean }>(
-    `/library/works/${encodeURIComponent(id)}/stored/${encodeURIComponent(storedId)}/apply`,
-    { method: "POST", body: { mode } },
-  );
+): Promise<Applying> {
+  const body: ApplyBody = { mode };
+  return api<Applying>(`/library/works/${encodeURIComponent(id)}/stored/${encodeURIComponent(storedId)}/apply`, {
+    method: "POST",
+    body,
+  });
 }
 
 const orderPath = (id: string) => `/library/works/${encodeURIComponent(id)}/subtitle-order`;
 
 /** Sets the work's own format order; a `400` has the sentence for a bad one. */
 export function putSubtitleOrder(id: string, order: SubtitleFormat[]): Promise<FormatOrder> {
-  return api<FormatOrder>(orderPath(id), { method: "PUT", body: { format_order: order } });
+  const body: SubtitleOrderBody = { format_order: order };
+  return api<FormatOrder>(orderPath(id), { method: "PUT", body });
 }
 
 /** Takes the work's own order away; the answer is the global order. */
@@ -281,96 +205,12 @@ export function deleteSubtitleOrder(id: string): Promise<FormatOrder> {
  * listed; answers the cleanup's id. A `409` is a `conflict`: the stored file cannot be cleaned (its message is why),
  * or its files changed since (`current` is the new entry).
  */
-export function cleanStored(id: string, storedId: string, assets: string[]): Promise<{ cleanup_id: string }> {
-  return api<{ cleanup_id: string }>(
-    `/library/works/${encodeURIComponent(id)}/stored/${encodeURIComponent(storedId)}/clean`,
-    { method: "POST", body: { assets } },
-  );
-}
-
-export interface WorkSeason {
-  number: number;
-  /** The AniList entries the season links, taken together. */
-  info: SeasonInfo;
-  /** The Anissia anime the season is linked to. */
-  anissia: AnissiaLink;
-  /** The episodes that have a video, as runs (`1–3`, `5`). */
-  video_ranges: string[];
-  /** The episodes that have a subtitle, as runs. */
-  subtitle_ranges: string[];
-  /** Ascending. */
-  episodes: WorkEpisode[];
-}
-
-/** A file the scan could not attach to an episode, with why. */
-export interface UnrecognizedFile {
-  path: string;
-  reason: string;
-  /** The reason as a sentence. */
-  message: string;
-  /** A video the app asks about (`회차 확인 필요`) whose `확인함` holds for it. */
-  checked: boolean;
-}
-
-/** A subscription rule connected to a season of the work. */
-export interface WorkSubscription {
-  season: number;
-  rule_id: string;
-  rule_version: number;
-  rule_state: "active" | "paused" | "archived";
-  anime_no: number;
-  /** Anissia's title; `null` when the app has no snapshot of the anime. */
-  subject: string | null;
-  subtitles: "follow" | "undecided" | "none";
-  creator: string | null;
-}
-
-/** A rule that saves into the work's folder. */
-export interface WorkRule {
-  id: string;
-  channel: { id: string; name: string | null; host: string };
-  match: string | null;
-  /** Relative to the collect folder. */
-  directory: string;
-  save_path: string;
-  state: "active" | "paused" | "archived";
-}
-
-export interface WorkDetail {
-  id: string;
-  /** The work's folder name. */
-  name: string;
-  /** The work title (작품명), as the library list gives it. */
-  title: string;
-  /**
-   * The work is a movie and nothing else: no season folder and one video directly in the work folder. Its only
-   * season is 0 and its only episode `1` is the movie (`본편`).
-   */
-  movie_only: boolean;
-  missing: boolean;
-  watch_folder: { id: string; path: string };
-  folder_path: string;
-  added_at: number | null;
-  /** The first season's first linked AniList entry's native title (a movie-only work's: season 0's). */
-  native_title: string | null;
-  /** The subscription rules connected to a season of this work, by season. */
-  subscriptions: WorkSubscription[];
-  /** Ascending by season number. */
-  seasons: WorkSeason[];
-  unrecognized: UnrecognizedFile[];
-  rules: WorkRule[];
-  /** Where the cover image is served while the work has one. */
-  cover_url: string | null;
-  /** The worker still has to receive the cover's image; the old image shows until then. */
-  cover_pending: boolean;
-  /** What the app stored for the work, and the stored subtitles that can be cleaned (`파일` card). */
-  storage: WorkStorage;
-  /** The received subtitles by creator and the format order (`자막` card); a server without them leaves it out. */
-  subtitles?: WorkSubtitles;
-  /** What an upload of subtitle files is held to. */
-  upload_limits: UploadLimits;
-  /** The most bytes of a cover image the server takes. */
-  cover_max_bytes: number;
+export function cleanStored(id: string, storedId: string, assets: string[]): Promise<Cleaning> {
+  const body: CleanBody = { assets };
+  return api<Cleaning>(`/library/works/${encodeURIComponent(id)}/stored/${encodeURIComponent(storedId)}/clean`, {
+    method: "POST",
+    body,
+  });
 }
 
 /** The cache key of one work's page. */
@@ -388,49 +228,6 @@ export async function loadWork(id: string, signal?: AbortSignal): Promise<WorkDe
 
 // --- a work's cover (`src/web/artwork_api.rs`) ----------------------------------------
 
-/** `auto`: the app picks a clear AniList match; `manual`: the user chose; `disabled`: no cover, no search. */
-export type ArtworkMode = "auto" | "manual" | "disabled";
-/** The image file, checked when the state was read. Only `available` is shown. */
-export type ImageStatus = "available" | "missing" | "mismatch" | "unverified";
-
-export interface ArtworkImage {
-  id: string;
-  origin: "anilist" | "upload";
-  format: "jpeg" | "png" | "webp";
-  byte_size: number;
-  status: ImageStatus;
-  url: string;
-}
-
-export interface ArtworkState {
-  mode: ArtworkMode;
-  source: "anilist" | "upload" | null;
-  anilist_media_id: number | null;
-  /** Sent back with a change; a change from an older version is a `conflict`. */
-  version: number;
-  image: ArtworkImage | null;
-  /** Automatic work still to do: looking the title up, or receiving the image. */
-  pending: "search" | "fetch" | null;
-  /** Why the last automatic attempt left the cover as it is. */
-  note: { code: string; message: string } | null;
-}
-
-/** One AniList entry of a search. `thumb_url` is AniList's own image address. */
-export interface AnilistCandidate {
-  id: number;
-  title: string;
-  titles: string[];
-  format: string | null;
-  season_year: number | null;
-  thumb_url: string | null;
-}
-
-export interface AnilistPage {
-  items: AnilistCandidate[];
-  has_next: boolean;
-  page: number;
-}
-
 const artworkPath = (id: string) => `/library/works/${encodeURIComponent(id)}/artwork`;
 
 export function loadArtwork(id: string, signal?: AbortSignal): Promise<ArtworkState> {
@@ -438,14 +235,13 @@ export function loadArtwork(id: string, signal?: AbortSignal): Promise<ArtworkSt
 }
 
 export function searchAnilist(id: string, q: string, page: number, signal?: AbortSignal): Promise<AnilistPage> {
-  return api<AnilistPage>(`${artworkPath(id)}/search`, { method: "POST", body: { q, page }, signal });
+  const body: AnilistSearchBody = { q, page };
+  return api<AnilistPage>(`${artworkPath(id)}/search`, { method: "POST", body, signal });
 }
 
 export function pickArtwork(id: string, version: number, anilistMediaId: number): Promise<ArtworkState> {
-  return api<ArtworkState>(`${artworkPath(id)}/pick`, {
-    method: "POST",
-    body: { version, anilist_media_id: anilistMediaId },
-  });
+  const body: PickArtworkBody = { version, anilist_media_id: anilistMediaId };
+  return api<ArtworkState>(`${artworkPath(id)}/pick`, { method: "POST", body });
 }
 
 export function uploadArtwork(id: string, version: number, file: File): Promise<ArtworkState> {
@@ -454,7 +250,8 @@ export function uploadArtwork(id: string, version: number, file: File): Promise<
 
 /** `clear`: no cover and no automatic search; `auto`: back to automatic with a new search; `repair`: the chosen AniList entry's image again. */
 export function changeArtwork(id: string, version: number, action: "clear" | "auto" | "repair"): Promise<ArtworkState> {
-  return api<ArtworkState>(`${artworkPath(id)}/${action}`, { method: "POST", body: { version } });
+  const body: VersionBody = { version };
+  return api<ArtworkState>(`${artworkPath(id)}/${action}`, { method: "POST", body });
 }
 
 /** The cover URL the list and the detail show for a state. */
@@ -464,87 +261,27 @@ export function coverUrlOf(state: ArtworkState): string | null {
 
 // --- a season's info (`src/web/seasons_api.rs`) ---------------------------------------
 
-/** A date AniList may know only in part. */
-export interface FuzzyDate {
-  year: number | null;
-  month: number | null;
-  day: number | null;
-}
-
-/** An AniList entry a season links. */
-export interface SeasonEntry {
-  id: number;
-  title: string;
-  romaji: string | null;
-  english: string | null;
-  native: string | null;
-  format: string | null;
-  status: string | null;
-  episodes: number | null;
-  start: FuzzyDate;
-  end: FuzzyDate;
-  url: string;
-}
-
-/** A sequel of the previous season's last entry, offered until the user confirms one. */
-export interface SeasonSuggestion {
-  id: number;
-  title: string;
-  romaji: string | null;
-  english: string | null;
-  native: string | null;
-  format: string | null;
-  status: string | null;
-  start: FuzzyDate;
-  url: string;
-}
-
-export type AiringState = "releasing" | "finished" | "not_yet_released" | "cancelled" | "hiatus";
-
-export interface SeasonInfo {
-  season: number;
-  /** Sent back with a change; a change from an older version is a `conflict`. A season never touched has 0. */
-  version: number;
-  /** `auto`: the app linked the entry itself (or nothing is linked yet). */
-  origin: "auto" | "user";
-  /** The app still has the season's automatic search to do. */
-  pending: "search" | null;
-  /** Why the last automatic search linked nothing. */
-  note: { code: string; message: string } | null;
-  /** The work's first season: the only one the app searches for. */
-  can_auto: boolean;
-  /** The most entries a season links. */
-  max_entries: number;
-  entries: SeasonEntry[];
-  airing: { start: FuzzyDate; end: FuzzyDate; state: AiringState | string | null } | null;
-  /** `null` when unknown (no entry, or an entry's count is unknown). */
-  episodes: number | null;
-  studios: string[];
-  genres: string[];
-  anilist_url: string | null;
-  /** The first entry's description as plain text paragraphs; `null` without one. */
-  synopsis: string[] | null;
-  suggestions: SeasonSuggestion[];
-}
-
 const seasonPath = (id: string, season: number) => `/library/works/${encodeURIComponent(id)}/seasons/${season}`;
 
 export function loadSeasonInfo(id: string, season: number, signal?: AbortSignal): Promise<SeasonInfo> {
   return api<SeasonInfo>(`${seasonPath(id, season)}/info`, { signal });
 }
 
-export function searchSeason(id: string, season: number, q: string, page: number, signal?: AbortSignal): Promise<AnilistPage> {
-  return api<AnilistPage>(`${seasonPath(id, season)}/search`, { method: "POST", body: { q, page }, signal });
+export function searchSeason(id: string, season: number, q: string, page: number, signal?: AbortSignal): Promise<SeasonSearchPage> {
+  const body: AnilistSearchBody = { q, page };
+  return api<SeasonSearchPage>(`${seasonPath(id, season)}/search`, { method: "POST", body, signal });
 }
 
 /** Makes `anilistIds` the season's entries, in this order (empty unlinks). */
 export function setSeasonLinks(id: string, season: number, version: number, anilistIds: number[]): Promise<SeasonInfo> {
-  return api<SeasonInfo>(`${seasonPath(id, season)}/links`, { method: "POST", body: { version, anilist_ids: anilistIds } });
+  const body: SeasonLinksBody = { version, anilist_ids: anilistIds };
+  return api<SeasonInfo>(`${seasonPath(id, season)}/links`, { method: "POST", body });
 }
 
 /** Unlinks the first season and asks for a new automatic search. */
 export function restartSeasonAuto(id: string, season: number, version: number): Promise<SeasonInfo> {
-  return api<SeasonInfo>(`${seasonPath(id, season)}/auto`, { method: "POST", body: { version } });
+  const body: VersionBody = { version };
+  return api<SeasonInfo>(`${seasonPath(id, season)}/auto`, { method: "POST", body });
 }
 
 /** Asks AniList again for the season's entries, finished ones too. */
@@ -554,83 +291,17 @@ export function refreshSeason(id: string, season: number): Promise<SeasonInfo> {
 
 // --- a season's Anissia link (`src/web/seasons_anissia_api.rs`) -----------------------
 
-/** The Anissia anime a season is linked to, as Anissia last listed it. */
-export interface AnissiaAnime {
-  anime_no: number;
-  subject: string;
-  original_subject: string | null;
-  /** `ON`, `OFF`, or `END` for an anime that has finished. */
-  status: string;
-  /** The anime's page on Anissia. */
-  url: string;
-}
-
-/** A subscription connected to the season: the season's anime is the subscription's. */
-export interface AnissiaHolder {
-  rule_id: string;
-  anime_no: number;
-  subject: string | null;
-}
-
-export interface AnissiaLink {
-  season: number;
-  /**
-   * Set for a movie's link (`movie_link`): the movie's episode number, an episode of season 0 (`season` is 0). A
-   * movie is linked apart from the seasons, and no subscription holds it.
-   */
-  movie?: number;
-  /** Sent back with a change; a change from an older version is a `conflict`. A season or a movie never linked has 0. */
-  version: number;
-  anime: AnissiaAnime | null;
-  /** Set while a subscription is connected to the season: the season's anime is the subscription's. */
-  subscription: AnissiaHolder | null;
-  /** Titles to read when writing a search: nothing is searched with them. No duplicates. */
-  reference_titles: ReferenceTitle[];
-}
-
-/** A title of the season's linked AniList entries (`korean`: a synonym with Hangul) or the work's folder name. */
-export interface ReferenceTitle {
-  kind: "native" | "english" | "romaji" | "korean" | "folder";
-  title: string;
-}
-
-/** An anime of Anissia's full list. */
-export interface AnissiaCandidate {
-  anime_no: number;
-  subject: string;
-  original_subject: string | null;
-  status: string;
-  /** 0 (Sunday) to 6 (Saturday), 7 (`기타`) or 8 (`신작`). */
-  week: number;
-  start_date: string | null;
-  end_date: string | null;
-  genres: string[];
-  url: string;
-}
-
-export interface AnissiaPage {
-  /** The text searched for. */
-  q: string;
-  items: AnissiaCandidate[];
-  has_next: boolean;
-  page: number;
-  /** The last page a search answers. */
-  max_page: number;
-}
+/**
+ * A link as the screen holds it: a season's (`AnissiaLink` of the API), or a movie's, which names its `movie` (the
+ * movie's episode number, an episode of season 0; `season` is 0, and no subscription holds a movie).
+ */
+export type AnissiaLink = SeasonAnissiaLink & { movie?: number };
 
 /** Where a picked anime came from: the server checks it against that very list. */
 export type AnissiaSource = { week: number } | { q: string; page: number };
 
-/** A movie's link as the server answers it (`GET`, `link` and a `409`'s `current`): the movie's episode, not a season. */
-export interface MovieLinkAnswer {
-  episode: number;
-  version: number;
-  anime: AnissiaAnime | null;
-  reference_titles: ReferenceTitle[];
-}
-
 /** A link answer as the screen holds it: a season's as it is, a movie's as a link of season 0 that names its `movie`. */
-export function anissiaLinkOf(answer: AnissiaLink | MovieLinkAnswer): AnissiaLink {
+export function anissiaLinkOf(answer: SeasonAnissiaLink | MovieLink): AnissiaLink {
   if (!("episode" in answer)) return answer;
   return {
     season: 0,
@@ -653,7 +324,7 @@ const targetKey = (target: AnissiaTarget) => (target.kind === "season" ? String(
 
 /** The movie's link, read now. */
 export async function loadMovieLink(id: string, episode: number, signal?: AbortSignal): Promise<AnissiaLink> {
-  return anissiaLinkOf(await api<MovieLinkAnswer>(anissiaPath(id, { kind: "movie", episode }), { signal }));
+  return anissiaLinkOf(await api<MovieLink>(anissiaPath(id, { kind: "movie", episode }), { signal }));
 }
 
 /** The cache key of a movie's link. */
@@ -661,7 +332,8 @@ export const movieLinkKey = (id: string, episode: number) => `library:movie-link
 
 /** Searches Anissia's full list (finished anime included) for the user's `q`, which is required. */
 export function searchAnissia(id: string, target: AnissiaTarget, q: string, page: number, signal?: AbortSignal): Promise<AnissiaPage> {
-  return api<AnissiaPage>(`${anissiaPath(id, target)}/search`, { method: "POST", body: { q, page }, signal });
+  const body: AnissiaSearchBody = { q, page };
+  return api<AnissiaPage>(`${anissiaPath(id, target)}/search`, { method: "POST", body, signal });
 }
 
 /** Links the season or the movie to `animeNo` (`null` cuts the link). */
@@ -672,133 +344,22 @@ export async function setAnissiaLink(
   animeNo: number | null,
   source?: AnissiaSource,
 ): Promise<AnissiaLink> {
-  const body = { version, anime_no: animeNo, ...source };
-  return anissiaLinkOf(await api<AnissiaLink | MovieLinkAnswer>(`${anissiaPath(id, target)}/link`, { method: "POST", body }));
+  const body: AnissiaLinkBody = { version, anime_no: animeNo, ...source };
+  return anissiaLinkOf(await api<SeasonAnissiaLink | MovieLink>(`${anissiaPath(id, target)}/link`, { method: "POST", body }));
 }
 
 /** The link a `409` of a link change carries (`current`), whichever target it was for. */
 export function currentLink(current: unknown): AnissiaLink {
-  return anissiaLinkOf(current as AnissiaLink | MovieLinkAnswer);
+  return anissiaLinkOf(current as SeasonAnissiaLink | MovieLink);
 }
 
 // --- a season's subtitle candidates (`src/web/seasons_anissia_api.rs`) -----------------
 
-/** How a subtitle job stands for one candidate: the job's item for it. */
-export interface CandidateJob {
-  /** The job whose page `/todo/job/<id>` shows it. */
-  id: string;
-  state: "pending" | "running" | "waiting" | "held" | "failed" | "done";
-  /** What a `waiting` item waits for: a person's check or a source it cannot read yet. */
-  wait: "auth" | "subtitle" | "placement" | "approval" | "video" | null;
-}
-
 /**
- * A revision candidate: the same creator's subtitle of the episode was received from an earlier observation, or the
- * user named the creator for the season's subtitle file of the episode (`of` and `same_post` are then `null`: the
- * file's post is not known).
+ * A season's candidates as the screen holds them. A movie's (`MovieSubtitleCandidates`) is held as a season 0's that
+ * names its `movie` (the movie's episode, an episode of season 0), with no `mappings` and no episode counts.
  */
-export interface CandidateRevision {
-  /** The earlier observation. */
-  of: number | null;
-  /** The earlier observation had the same post address: the post was fixed, not posted again. */
-  same_post: boolean | null;
-}
-
-/**
- * One observation of a creator's Anissia line. A creator can have several
- * observations of one episode (the post was fixed or posted again); the IDs
- * grow with the time they were observed.
- */
-export interface Candidate {
-  id: number;
-  /** The app's ID of the creator's lines of the anime; `creator` is only the display name. */
-  source_id: string;
-  creator: string;
-  post_url: string;
-  /** Anissia's text as written (`12`, `13.5`, `0`): not a number to compute with. */
-  episode: string;
-  /** `episode` without the leading zeros of a whole number. */
-  episode_shown: string;
-  /** The key two texts of one episode share (`n:13` for `013`, `13` and `13.0`, `t:SP`); equal keys are one episode. */
-  episode_key: string;
-  /** The episode's place among the list's episodes, from `0`: numbers by value, then the other texts; one rank per episode. */
-  episode_rank: number;
-  /** `number`, `zero` (the number 0, the line a creator registers before the first episode) or `text` (`SP`). */
-  episode_form: "number" | "zero" | "text";
-  /**
-   * Only on a movie's candidates: the movie (an episode of season 0) the candidate is about, whatever its `episode`
-   * text says (`극장판`, `0`, `1`, `SP`); the candidate belongs to that episode's row, not to the one `episode_key` names.
-   */
-  movie_episode?: number;
-  /** Anissia's `updDt` as received. */
-  updated: string;
-  updated_at: number | null;
-  updated_parse_failed: boolean;
-  first_seen_at: number;
-  sort_at: number;
-  revision: CandidateRevision | null;
-  job: CandidateJob | null;
-}
-
-export interface CandidateList {
-  season: number;
-  /** Set for a movie's candidates: the movie's episode, an episode of season 0 (`season` is 0, and `mappings` is empty). */
-  movie?: number;
-  /** `null` for a season with no Anissia link (no candidates). */
-  anime_no: number | null;
-  /** When the 30-minute reading last read Anissia's whole recent list. */
-  read_at: number | null;
-  /** The latest `새로고침` of the anime. */
-  refresh: Command | null;
-  /** Newest first. */
-  candidates: Candidate[];
-  /** The episodes each creator's candidates are about, as runs. */
-  creator_episodes: { source_id: string; episode_segments: EpisodeSegment[] }[];
-  /** The sources' episode mappings to the season (the app's decision, or the user's). */
-  mappings: CandidateMapping[];
-  /** The episodes of the earlier seasons together when each is known (`0` for the first season); `null` otherwise. */
-  previous_episodes?: number | null;
-  /** The season's own episode count when it is known. */
-  season_episodes?: number | null;
-  /** The most candidates one job takes. */
-  max_job_candidates: number;
-}
-
-/**
- * How a source's episodes map to the season's: `auto` (the app decided it from grounds that agree;
- * `offset` is added to Anissia's whole episode), `undecided` (the grounds are missing or disagree;
- * nothing is received automatically) or `user`.
- */
-export interface CandidateMapping {
-  source_id: string;
-  kind: "auto" | "undecided" | "user";
-  offset: number | null;
-  /** The grounds that agree, or why none do, as a sentence. */
-  evidence: string;
-  decided_at: number;
-  /** What a save or a revert carries; a source with no mapping is version 0. */
-  version: number;
-  /** The user's exceptions: one Anissia episode text to one season episode, or `null` for 받지 않음. */
-  exceptions: MappingException[];
-  /** The one line the creator's group shows for the mapping (`직접 정함 · 13화 → 1화`, `자동 · <근거>`). */
-  line: string;
-  /** The default mapping the dialog opens on; `null` while the mapping is undecided. */
-  choice: MappingChoice | null;
-}
-
-/** The default mapping the user picks in `회차 대응 정하기`. */
-export type MappingChoice = "same" | "continue" | "custom";
-
-export interface MappingException {
-  episode: string;
-  target: number | null;
-}
-
-/** A source's mapping as the revert and a `409` carry it (`null` when the source has none). */
-export interface SourceMapping {
-  source_id: string;
-  mapping: CandidateMapping | null;
-}
+export type CandidateList = SubtitleCandidates & { movie?: number };
 
 const mappingPath = (id: string, season: number, sourceId: string) =>
   `${anissiaPath(id, { kind: "season", season })}/sources/${encodeURIComponent(sourceId)}/mapping`;
@@ -808,43 +369,9 @@ export function saveMapping(
   id: string,
   season: number,
   sourceId: string,
-  body: { version: number; offset: number; exceptions: MappingException[] },
+  body: SaveMappingBody,
 ): Promise<CandidateMapping> {
   return api<CandidateMapping>(mappingPath(id, season, sourceId), { method: "PUT", body });
-}
-
-/** One exception row of the dialog as typed: Anissia's episode, the season episode, or `받지 않음`. */
-export interface MappingRow {
-  episode: string;
-  target: string;
-  skip: boolean;
-}
-
-/** What the dialog holds: the choice made, the text of the offset box and the exception rows. */
-export interface MappingInput {
-  choice: MappingChoice | null;
-  custom: string;
-  exceptions: MappingRow[];
-}
-
-/** What the dialog shows for its input (`POST …/mapping/preview`), written by the server. */
-export interface MappingPreview {
-  /** Why `앞 시즌에 이어 셈` cannot be chosen; `null` when it can. */
-  continue_reason: string | null;
-  /** The text under each choice; empty when it has none. */
-  previews: { same: string; continue: string; custom: string };
-  /** The offset of the choice made, and with `exceptions` what `저장` sends; `null` while there is none. */
-  offset: number | null;
-  /** The sentence for an offset box that holds no usable offset. */
-  offset_problem: string | null;
-  /** The exceptions the rows say; empty while a row cannot be saved. */
-  exceptions: MappingException[];
-  /** The sentence for the first row that cannot be saved. */
-  exceptions_problem: string | null;
-  /** A season episode that two or more episodes land on. */
-  warnings: string[];
-  /** The episodes to offer as exceptions. */
-  to_add: string[];
 }
 
 /** What the dialog would show for `input`, without saving anything. */
@@ -860,20 +387,18 @@ export function previewMapping(
 
 /** `자동으로 되돌리기`: drops the user's mapping so the app decides again. */
 export function revertMapping(id: string, season: number, sourceId: string, version: number): Promise<SourceMapping> {
-  return api<SourceMapping>(`${mappingPath(id, season, sourceId)}/revert`, { method: "POST", body: { version } });
+  const body: RevertMappingBody = { version };
+  return api<SourceMapping>(`${mappingPath(id, season, sourceId)}/revert`, { method: "POST", body });
 }
 
 /** The cache key of one season's (or movie's) candidates (the anime is in it, so a new link never shows the old one's list). */
 export const candidatesKey = (id: string, target: AnissiaTarget, animeNo: number | null) =>
   `library:candidates:${id}:${targetKey(target)}:${animeNo ?? "none"}`;
 
-/** What a movie's `candidates` answers: a season's without `mappings`, with `episode` in place of `season`. */
-type MovieCandidates = Omit<CandidateList, "season" | "movie" | "mappings"> & { episode: number };
-
 export async function loadCandidates(id: string, target: AnissiaTarget, signal?: AbortSignal): Promise<CandidateList> {
   if (target.kind === "season") return api<CandidateList>(`${anissiaPath(id, target)}/candidates`, { signal });
-  const { episode, ...list } = await api<MovieCandidates>(`${anissiaPath(id, target)}/candidates`, { signal });
-  return { ...list, season: 0, movie: episode, mappings: [] };
+  const { episode, ...list } = await api<MovieSubtitleCandidates>(`${anissiaPath(id, target)}/candidates`, { signal });
+  return { ...list, season: 0, movie: episode, mappings: [], previous_episodes: null, season_episodes: null };
 }
 
 /** The command `새로고침` sends: reads the anime's subtitle lines now. */
@@ -881,24 +406,10 @@ export const ANISSIA_CAPTIONS_KIND = "anissia_captions";
 
 // --- the creator of a season's subtitle files (`src/web/subtitle_creator_api.rs`) -----
 
-/** The answer of naming a season's unknown subtitles a creator. */
-export interface NamedCreators {
-  season: number;
-  creator: FileCreator;
-  /** How many files it named: the ones that were still unknown. */
-  attached: number;
-}
-
 /** Names the creator `creator` (one of the season's Anissia anime) for every subtitle file of the season that has none. */
 export function nameUnknownCreators(id: string, season: number, creator: string): Promise<NamedCreators> {
-  return api<NamedCreators>(`${seasonPath(id, season)}/subtitle-creators`, { method: "POST", body: { creator } });
-}
-
-/** One subtitle file's creator now. */
-export interface FileCreatorState {
-  path: string;
-  version: number;
-  creator: FileCreator | null;
+  const body: NameCreatorBody = { creator };
+  return api<NamedCreators>(`${seasonPath(id, season)}/subtitle-creators`, { method: "POST", body });
 }
 
 /** Changes one subtitle file's creator from `version` (`null` creator: back to `제작자 알 수 없음`). */
@@ -908,8 +419,6 @@ export function setFileCreator(
   file: { path: string; version: number },
   creator: string | null,
 ): Promise<FileCreatorState> {
-  return api<FileCreatorState>(`${seasonPath(id, season)}/subtitle-creators/file`, {
-    method: "PUT",
-    body: { path: file.path, version: file.version, creator },
-  });
+  const body: FileCreatorBody = { path: file.path, version: file.version, creator };
+  return api<FileCreatorState>(`${seasonPath(id, season)}/subtitle-creators/file`, { method: "PUT", body });
 }

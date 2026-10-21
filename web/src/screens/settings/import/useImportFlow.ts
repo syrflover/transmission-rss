@@ -8,7 +8,14 @@ import { everythingChanged, KEYS } from "@/screens/collect/cache";
 import { loadCollection } from "../collection/api";
 
 import { isPicked, pickedRequests, pickKey, standing, type Picks } from "./suggestions";
-import type { ApplyResult, ChoiceRequest, Decision, Preview } from "./types";
+import type {
+  ImportApplyBody,
+  ImportChoice,
+  ImportDecision,
+  ImportPreview,
+  ImportPreviewBody,
+  ImportResult,
+} from "@/lib/api-types";
 import { useSuggestionLookup, type SuggestionLookup } from "./useSuggestionLookup";
 
 /** The server refuses a request body over 2 MB; say so before sending, so the browser does not read a large file. */
@@ -19,10 +26,10 @@ export type ImportStep = "pick" | "review" | "result";
 export interface ImportFlow {
   step: ImportStep;
   fileName: string | null;
-  preview: Preview | null;
-  result: ApplyResult | null;
+  preview: ImportPreview | null;
+  result: ImportResult | null;
   /** Choice per file channel index, for channels that already exist. */
-  choices: Record<number, Decision>;
+  choices: Record<number, ImportDecision>;
   /** Reading and checking the file. */
   reading: boolean;
   applying: boolean;
@@ -42,7 +49,7 @@ export interface ImportFlow {
   /** Checks or unchecks every suggestion of the channel that can be checked. */
   pickAll(channel: number, on: boolean): void;
   chooseFile(file: File): Promise<void>;
-  choose(index: number, decision: Decision): void;
+  choose(index: number, decision: ImportDecision): void;
   apply(): Promise<void>;
   /** Reviews the same file again after a stale review. */
   reviewAgain(): Promise<void>;
@@ -60,9 +67,9 @@ export function useImportFlow(): ImportFlow {
   const [step, setStep] = useState<ImportStep>("pick");
   const [content, setContent] = useState<string | null>(null);
   const [fileName, setFileName] = useState<string | null>(null);
-  const [preview, setPreview] = useState<Preview | null>(null);
-  const [result, setResult] = useState<ApplyResult | null>(null);
-  const [choices, setChoices] = useState<Record<number, Decision>>({});
+  const [preview, setPreview] = useState<ImportPreview | null>(null);
+  const [result, setResult] = useState<ImportResult | null>(null);
+  const [choices, setChoices] = useState<Record<number, ImportDecision>>({});
   const [picks, setPicks] = useState<Picks>({});
   const [reading, setReading] = useState(false);
   const [applying, setApplying] = useState(false);
@@ -81,10 +88,8 @@ export function useImportFlow(): ImportFlow {
     setPickError(null);
     setApplyError(null);
     try {
-      const next = await api<Preview>("/import/legacy/preview", {
-        method: "POST",
-        body: { content: text },
-      });
+      const request: ImportPreviewBody = { content: text };
+      const next = await api<ImportPreview>("/import/legacy/preview", { method: "POST", body: request });
       setContent(text);
       setFileName(name);
       setPreview(next);
@@ -117,7 +122,7 @@ export function useImportFlow(): ImportFlow {
     [review],
   );
 
-  const choose = useCallback((index: number, decision: Decision) => {
+  const choose = useCallback((index: number, decision: ImportDecision) => {
     setChoices((previous) => ({ ...previous, [index]: decision }));
   }, []);
 
@@ -152,7 +157,7 @@ export function useImportFlow(): ImportFlow {
 
   const apply = useCallback(async () => {
     if (!preview || content === null || undecided > 0) return;
-    const body: ChoiceRequest[] = preview.channels.flatMap((channel) =>
+    const body: ImportChoice[] = preview.channels.flatMap((channel) =>
       channel.existing
         ? [
             {
@@ -167,15 +172,13 @@ export function useImportFlow(): ImportFlow {
     setApplying(true);
     setApplyError(null);
     try {
-      const done = await api<ApplyResult>("/import/legacy/apply", {
-        method: "POST",
-        body: {
-          content,
-          choices: body,
-          reviewed_collect_folder: preview.collect_folder.current,
-          subscriptions: pickedRequests(preview.channels, picks, choices, lookup.unlisted),
-        },
-      });
+      const request: ImportApplyBody = {
+        content,
+        choices: body,
+        reviewed_collect_folder: preview.collect_folder.current,
+        subscriptions: pickedRequests(preview.channels, picks, choices, lookup.unlisted),
+      };
+      const done = await api<ImportResult>("/import/legacy/apply", { method: "POST", body: request });
       setResult(done);
       setContent(null);
       setStep("result");

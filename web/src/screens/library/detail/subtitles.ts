@@ -1,3 +1,10 @@
+import type { ApplyMode } from "../../../lib/api-types/ApplyMode";
+import type { Applying } from "../../../lib/api-types/Applying";
+import type { FormatOrder } from "../../../lib/api-types/FormatOrder";
+import type { SubtitleCopy } from "../../../lib/api-types/SubtitleCopy";
+import type { SubtitleCreatorCopies } from "../../../lib/api-types/SubtitleCreatorCopies";
+import type { SubtitleFormat } from "../../../lib/api-types/SubtitleFormat";
+import type { WorkSubtitles } from "../../../lib/api-types/WorkSubtitles";
 import { carriesTime, receivedAt } from "../received.ts";
 import { creatorText } from "../storage.ts";
 import { rowLabel } from "./movie.ts";
@@ -5,56 +12,11 @@ import { rowLabel } from "./movie.ts";
 /**
  * The pure parts of the `자막` card (`library.md`, 오른쪽 카드 열): what each stored copy says of itself and which
  * actions it is offered, the line of the format order and the moves of its editor. Nothing here reads the server or
- * decides what may be applied; the server sends `choice`, `can_add` and `blocked`, and these only show them. It has no
- * `@/` imports so it runs under `node --test`.
+ * decides what may be applied; the server sends `choice`, `can_add` and `blocked`, and these only show them. The
+ * types are generated (`lib/api-types`) and imported by a relative path, only as types, so it runs under `node --test`.
  */
 
-/** A subtitle format the app applies; the settings' policy names the same three. */
-export type SubtitleFormat = "ass" | "srt" | "smi";
-
-/** The order of the subtitle formats a work picks by: its own (`own`) or the global one. */
-export interface FormatOrder {
-  order: SubtitleFormat[];
-  own: boolean;
-}
-
-/** A stored copy of a subtitle, as the `자막` card lists it. */
-export interface SubtitleCopy {
-  id: string;
-  season: number;
-  /** As written in the file names. */
-  episode: string;
-  /** `episode` without the leading zeros (`2` for `02`). */
-  episode_shown: string;
-  name: string;
-  /** A format code; a code the app does not apply is read as `그 밖의 형식`. */
-  format: string;
-  /** When it was stored (Unix milliseconds). */
-  stored_at: number;
-  /** Relative to the work folder. */
-  stored_path: string;
-  /** The copies of it that lie beside a video now; none when it is not the episode's subtitle. */
-  applied: { path: string; applied_at: number }[];
-  /** `apply`: the episode has no subtitle, so applying is direct; `compare`: it opens the replacement comparison. */
-  choice: "apply" | "compare" | null;
-  /** `추가 적용`: the same creator's other format, which never takes off the applied copy. */
-  can_add: boolean;
-  /** Why the copy cannot be chosen; `null` for a copy that can, and for the applied copy itself. */
-  blocked: string | null;
-}
-
-/** The copies of one creator; `null` is `제작자 알 수 없음`. */
-export interface SubtitleCreatorCopies {
-  creator: string | null;
-  copies: SubtitleCopy[];
-}
-
-/** What the `자막` card shows (`GET /api/library/works/{id}` `subtitles`). */
-export interface WorkSubtitles {
-  format_order: FormatOrder;
-  /** By creator's name, `제작자 알 수 없음` last; the copies by season, episode, then newest first. */
-  creators: SubtitleCreatorCopies[];
-}
+export type { FormatOrder, SubtitleCopy, SubtitleCreatorCopies, SubtitleFormat, WorkSubtitles };
 
 /** The words of the formats the app applies; any other code is `그 밖의 형식`. */
 const FORMAT_TEXT: Record<SubtitleFormat, string> = { ass: "ASS", srt: "SRT", smi: "SMI" };
@@ -108,7 +70,7 @@ export function actionName(view: CopyView, action: CopyAction): string {
 }
 
 /** The mode the request carries. */
-export function actionMode(action: CopyAction): "apply" | "add" {
+export function actionMode(action: CopyAction): ApplyMode {
   return action === "add" ? "add" : "apply";
 }
 
@@ -174,7 +136,7 @@ export function copyView(copy: SubtitleCopy, group: readonly SubtitleCopy[], mov
 /** What the card does once the server answered: `compare` when the job plans a replacement to approve. */
 export type ApplyOutcome = { kind: "compare"; job: string } | { kind: "sent"; job: string };
 
-export function applyOutcome(answer: { job_id: string; compare: boolean }): ApplyOutcome {
+export function applyOutcome(answer: Applying): ApplyOutcome {
   return { kind: answer.compare ? "compare" : "sent", job: answer.job_id };
 }
 

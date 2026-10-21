@@ -158,9 +158,10 @@ use trss_collect::store::{
     channels::{season_holders, Rule, SeasonAnimeError},
 };
 use trss_core::episode::{ranks, segments, shown, stored_key, EpisodeNumber, EpisodeSegment};
+use trss_jobs::{ItemState, Wait};
 use trss_library::store::seasons::SeasonError;
 
-mod movie;
+pub(super) mod movie;
 #[cfg(test)]
 mod tests;
 
@@ -191,7 +192,9 @@ const SEASON_NOT_FOUND: &str = "이 작품의 이 시즌을 찾지 못했어요.
 /// The most pages of one search the screen can ask for.
 const MAX_PAGE: u32 = 100;
 
+/// The Anissia anime a season is linked to, as Anissia last listed it.
 #[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "AnissiaAnime"))]
 pub struct LinkedAnime {
     anime_no: i64,
     subject: String,
@@ -199,6 +202,7 @@ pub struct LinkedAnime {
     /// Anissia's `ON` or `OFF` for an anime the schedule lists, `END` for a
     /// finished one.
     status: String,
+    /// The anime's page on Anissia.
     url: String,
 }
 
@@ -216,22 +220,37 @@ impl From<&Anime> for LinkedAnime {
 
 /// The subscription that holds a season.
 #[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "AnissiaHolder"))]
 pub struct HoldingSubscription {
     rule_id: String,
     anime_no: i64,
     subject: Option<String>,
 }
 
-/// A title the user can read to choose what to search for. `kind` is `native`,
-/// `english`, `romaji` or `korean` (an AniList entry's titles) or `folder` (the
-/// work's folder name).
+/// Where a title the user can read comes from: an AniList entry's titles
+/// (`korean` is a synonym with Hangul) or the work's folder name.
+#[derive(Debug, Clone, Copy, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "ReferenceTitleKind"))]
+#[serde(rename_all = "lowercase")]
+pub enum TitleKind {
+    Native,
+    English,
+    Romaji,
+    Korean,
+    Folder,
+}
+
+/// A title the user can read to choose what to search for.
 #[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 pub struct ReferenceTitle {
-    kind: &'static str,
+    kind: TitleKind,
     title: String,
 }
 
+/// A season's link to an Anissia anime.
 #[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "AnissiaLink"))]
 pub struct AnissiaLinkView {
     season: u32,
     version: i64,
@@ -247,7 +266,7 @@ pub struct AnissiaLinkView {
 /// ones and ones already listed (compared without regard to case).
 fn reference_titles(entries: &[trss_anilist::Entry], folder: &str) -> Vec<ReferenceTitle> {
     let mut out: Vec<ReferenceTitle> = Vec::new();
-    let mut add = |kind: &'static str, title: Option<&str>| {
+    let mut add = |kind: TitleKind, title: Option<&str>| {
         let Some(title) = title.map(str::trim).filter(|t| !t.is_empty()) else {
             return;
         };
@@ -261,13 +280,13 @@ fn reference_titles(entries: &[trss_anilist::Entry], folder: &str) -> Vec<Refere
     for entry in entries {
         // Korean first: Anissia finds an anime by its Korean title.
         for korean in &entry.korean_titles {
-            add("korean", Some(korean));
+            add(TitleKind::Korean, Some(korean));
         }
-        add("native", entry.native.as_deref());
-        add("english", entry.english.as_deref());
-        add("romaji", entry.romaji.as_deref());
+        add(TitleKind::Native, entry.native.as_deref());
+        add(TitleKind::English, entry.english.as_deref());
+        add(TitleKind::Romaji, entry.romaji.as_deref());
     }
-    add("folder", Some(folder));
+    add(TitleKind::Folder, Some(folder));
     out
 }
 
@@ -382,13 +401,20 @@ async fn show(
     Ok(Json(view_of(&state, &id, season).await?))
 }
 
+/// What to search Anissia's full list for: the text (required) and the page
+/// (1 when left out).
 #[derive(Deserialize)]
-struct SearchBody {
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "AnissiaSearchBody"))]
+pub(super) struct SearchBody {
+    #[cfg_attr(test, ts(optional = nullable))]
     q: Option<String>,
+    #[cfg_attr(test, ts(optional = nullable))]
     page: Option<u32>,
 }
 
+/// An anime of Anissia's full list.
 #[derive(Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "AnissiaCandidate"))]
 struct CandidateView {
     anime_no: i64,
     subject: String,
@@ -420,7 +446,9 @@ impl From<&ScheduleEntry> for CandidateView {
 }
 
 #[derive(Serialize)]
-struct SearchView {
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "AnissiaPage"))]
+pub(super) struct SearchView {
+    /// The text searched for.
     q: String,
     items: Vec<CandidateView>,
     has_next: bool,
@@ -509,14 +537,19 @@ async fn search(
 }
 
 #[derive(Deserialize)]
-struct LinkBody {
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "AnissiaLinkBody"))]
+pub(super) struct LinkBody {
     version: i64,
     /// The anime to link; `null` cuts the link.
+    #[cfg_attr(test, ts(optional = nullable))]
     anime_no: Option<i64>,
     /// The schedule's week the anime was picked from (the `편성표` tab)...
+    #[cfg_attr(test, ts(optional = nullable))]
     week: Option<u8>,
     /// ...or the search it was picked from (the `전체 목록` tab).
+    #[cfg_attr(test, ts(optional = nullable))]
     q: Option<String>,
+    #[cfg_attr(test, ts(optional = nullable))]
     page: Option<u32>,
 }
 
@@ -629,7 +662,11 @@ async fn link(
     }
 }
 
+/// One observation of a creator's Anissia line. A creator can have several
+/// observations of one episode (the post was fixed or posted again); the IDs
+/// grow with the time they were observed.
 #[derive(Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "SubtitleCandidate"))]
 struct CandidateObservation {
     id: i64,
     source_id: String,
@@ -643,11 +680,11 @@ struct CandidateObservation {
     episode_key: String,
     /// The episode's position among the list's episodes in ascending order.
     episode_rank: usize,
-    /// `number`, `zero` (the number 0, in any spelling) or `text`.
-    episode_form: &'static str,
+    episode_form: EpisodeForm,
     /// For a movie's candidates only: the movie (an episode of season 0) the
     /// candidate belongs to, whatever its `episode` text says.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(test, ts(optional))]
     movie_episode: Option<u32>,
     updated: String,
     updated_at: Option<i64>,
@@ -658,14 +695,34 @@ struct CandidateObservation {
     job: Option<PickView>,
 }
 
+/// What an episode's text is: a `number`, `zero` (the number 0 in any
+/// spelling, the line a creator registers before the first episode) or `text`
+/// (`SP`).
 #[derive(Serialize)]
-struct PickView {
-    id: String,
-    state: &'static str,
-    wait: Option<&'static str>,
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[serde(rename_all = "lowercase")]
+pub(super) enum EpisodeForm {
+    Number,
+    Zero,
+    Text,
 }
 
+/// How a subtitle job stands for one candidate: the job's item for it.
 #[derive(Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "CandidateJob"))]
+struct PickView {
+    /// The job whose page shows it.
+    id: String,
+    state: ItemState,
+    /// What a `waiting` item waits for.
+    wait: Option<Wait>,
+}
+
+/// A revision candidate: the same creator's subtitle of the episode was
+/// received from an earlier observation, or the user named the creator for the
+/// season's subtitle file of the episode.
+#[derive(Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "CandidateRevision"))]
 struct RevisionView {
     /// The earlier observation whose subtitle was received; `null` when the
     /// candidate revises a subtitle file whose creator the user named.
@@ -675,13 +732,15 @@ struct RevisionView {
 }
 
 #[derive(Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 struct CreatorEpisodes {
     source_id: String,
     episode_segments: Vec<EpisodeSegment>,
 }
 
 #[derive(Serialize)]
-struct CandidatesView {
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "SubtitleCandidates"))]
+pub(super) struct CandidatesView {
     season: u32,
     anime_no: Option<i64>,
     read_at: Option<i64>,
@@ -710,9 +769,9 @@ impl From<&trss_collect::store::anissia::Candidate> for CandidateObservation {
             episode_key: stored_key(&c.episode),
             episode_rank: 0,
             episode_form: match EpisodeNumber::parse(&c.episode) {
-                None => "text",
-                Some(number) if number.is_zero() => "zero",
-                Some(_) => "number",
+                None => EpisodeForm::Text,
+                Some(number) if number.is_zero() => EpisodeForm::Zero,
+                Some(_) => EpisodeForm::Number,
             },
             movie_episode: None,
             updated: c.updated.clone(),
@@ -857,8 +916,8 @@ async fn candidates(
             .map(|(c, episode_rank)| CandidateObservation {
                 job: latest.get(&c.id).map(|p| PickView {
                     id: p.job_id.clone(),
-                    state: p.item_state.code(),
-                    wait: p.item_wait.map(trss_jobs::Wait::code),
+                    state: p.item_state,
+                    wait: p.item_wait,
                 }),
                 episode_rank,
                 ..CandidateObservation::from(c)

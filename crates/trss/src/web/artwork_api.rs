@@ -67,11 +67,14 @@ use bytes::{Bytes, BytesMut};
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 
-use super::{ApiError, AppState};
+use super::{
+    seasons_api::{SearchBody, VersionBody},
+    ApiError, AppState,
+};
 use trss_anilist::{title::Candidate, ImageFetchError, MAX_IMAGE_BYTES};
 use trss_library::{
-    artwork::{ActionError, Artwork, USER_MAX_WAIT},
-    store::artwork::{ArtworkError, Selection, UserChange},
+    artwork::{ActionError, Artwork, Unavailable, USER_MAX_WAIT},
+    store::artwork::{ArtworkError, Format, JobKind, Mode, Note, Selection, Source, UserChange},
 };
 
 #[cfg(test)]
@@ -102,30 +105,60 @@ pub fn image_url(work_id: &str, image_id: &str) -> String {
     )
 }
 
+/// The image file, checked when the state was read. Only `available` is shown.
 #[derive(Serialize)]
-struct ImageView {
-    id: String,
-    origin: &'static str,
-    format: &'static str,
-    byte_size: u64,
-    status: &'static str,
-    url: String,
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[serde(rename_all = "lowercase")]
+pub(super) enum ImageStatus {
+    Available,
+    Missing,
+    Mismatch,
+    Unverified,
+}
+
+impl From<Unavailable> for ImageStatus {
+    fn from(unavailable: Unavailable) -> Self {
+        match unavailable {
+            Unavailable::Missing => ImageStatus::Missing,
+            Unavailable::Mismatch => ImageStatus::Mismatch,
+            Unavailable::Unverified => ImageStatus::Unverified,
+        }
+    }
 }
 
 #[derive(Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "ArtworkImage"))]
+struct ImageView {
+    id: String,
+    origin: Source,
+    format: Format,
+    byte_size: u64,
+    status: ImageStatus,
+    url: String,
+}
+
+/// Why the last automatic attempt left the cover as it is.
+#[derive(Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "ArtworkNote"))]
 struct NoteView {
-    code: &'static str,
+    code: Note,
+    /// The note as a sentence.
     message: &'static str,
 }
 
 #[derive(Serialize)]
-struct ArtworkView {
-    mode: &'static str,
-    source: Option<&'static str>,
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "ArtworkState"))]
+pub(super) struct ArtworkView {
+    mode: Mode,
+    source: Option<Source>,
     anilist_media_id: Option<i64>,
+    /// Sent back with a change; a change from an older version is a
+    /// `conflict`.
     version: i64,
     image: Option<ImageView>,
-    pending: Option<&'static str>,
+    /// Automatic work still to do: looking the title up, or receiving the
+    /// image.
+    pending: Option<JobKind>,
     note: Option<NoteView>,
 }
 
@@ -135,28 +168,28 @@ async fn view(artwork: &Artwork, selection: Selection) -> ArtworkView {
         None => None,
         Some(image) => {
             let status = match artwork.image_state(image.clone()).await {
-                Ok(_) => "available",
-                Err(unavailable) => unavailable.code(),
+                Ok(_) => ImageStatus::Available,
+                Err(unavailable) => unavailable.into(),
             };
             Some(ImageView {
                 url: image_url(&selection.work_id, &image.id),
                 id: image.id,
-                origin: image.origin.code(),
-                format: image.format.code(),
+                origin: image.origin,
+                format: image.format,
                 byte_size: image.byte_size,
                 status,
             })
         }
     };
     ArtworkView {
-        mode: selection.mode.code(),
-        source: selection.source.map(|s| s.code()),
+        mode: selection.mode,
+        source: selection.source,
         anilist_media_id: selection.anilist_media_id,
         version: selection.version,
         image,
-        pending: selection.job.map(|j| j.kind.code()),
+        pending: selection.job.map(|j| j.kind),
         note: selection.note.map(|n| NoteView {
-            code: n.code(),
+            code: n,
             message: n.message(),
         }),
     }
@@ -260,13 +293,9 @@ async fn image(
     response
 }
 
-#[derive(Deserialize)]
-struct SearchBody {
-    q: Option<String>,
-    page: Option<u32>,
-}
-
+/// One AniList entry of a search. `thumb_url` is AniList's own image address.
 #[derive(Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "AnilistCandidate"))]
 struct CandidateView {
     id: i64,
     title: String,
@@ -297,7 +326,8 @@ impl From<Candidate> for CandidateView {
 }
 
 #[derive(Serialize)]
-struct SearchView {
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "AnilistPage"))]
+pub(super) struct SearchView {
     items: Vec<CandidateView>,
     has_next: bool,
     page: u32,
@@ -356,7 +386,8 @@ async fn search(
 }
 
 #[derive(Deserialize)]
-struct PickBody {
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "PickArtworkBody"))]
+pub(super) struct PickBody {
     version: i64,
     anilist_media_id: i64,
 }
@@ -454,11 +485,6 @@ async fn read_body(body: Body, declared: Option<u64>, limit: usize) -> Result<By
         out.extend_from_slice(&chunk);
     }
     Ok(out.freeze())
-}
-
-#[derive(Deserialize)]
-struct VersionBody {
-    version: i64,
 }
 
 async fn change(

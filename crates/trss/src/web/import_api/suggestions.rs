@@ -20,7 +20,7 @@ use trss_collect::store::channels::{ChannelWithRules, RuleInput};
 use trss_import::{
     comments::{Airs, Reading},
     picks::Resolved,
-    suggest::suggest,
+    suggest::{suggest, Kind},
 };
 
 /// The longest the apply waits for its turn to ask Anissia, per request.
@@ -28,9 +28,9 @@ const MAX_WAIT: Duration = Duration::from_secs(8);
 
 /// What the comment above a rule offers, for the review.
 #[derive(Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "ImportSuggestion"))]
 pub(super) struct SuggestionView {
-    /// `with_creator`, `address_only`, `unreadable` or `none`.
-    kind: &'static str,
+    kind: Kind,
     /// Anissia's `animeNo` of an address that was read.
     anime_no: Option<i64>,
     /// The creator the comment names; `null` is `제작자 미정`.
@@ -73,7 +73,7 @@ pub(super) fn views(
                 .zip(*kept)
                 .is_some_and(|(e, index)| e.rules[index].subscription.is_some());
             SuggestionView {
-                kind: suggestion.kind().code(),
+                kind: suggestion.kind(),
                 anime_no,
                 creator,
                 comment_airs: airs,

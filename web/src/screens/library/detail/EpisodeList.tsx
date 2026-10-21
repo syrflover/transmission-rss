@@ -6,7 +6,7 @@ import { dateTime } from "@/lib/time";
 
 import { ApiError } from "@/lib/api";
 
-import { applyStored, type EpisodeFailure, type EpisodeRevision, type FailureFile, type StoredSubtitle, type WorkEpisode, type WorkFile, type WorkSeason } from "../api";
+import { applyStored, type RevisionFailure, type EpisodeRevision, type FailureFile, type StoredSubtitle, type WorkEpisode, type WorkFile, type WorkSeason } from "../api";
 import { jobPath } from "../../todo/api";
 import { CheckIcon, ChevronIcon, MinusIcon } from "../icons";
 import { airDay, baseName, inOrder, ORDERS, rowId, type EpisodeOrder } from "./model";
@@ -15,7 +15,7 @@ import { EmptyState } from "../../ScreenFrame";
 import { inputClass } from "../../collect/channels/styles";
 import { RetryActions } from "../../collect/history/RetryActions";
 import { retryStatus, useItemRetry } from "../../collect/history/useRetry";
-import type { Candidate } from "../api";
+import type { SubtitleCandidate } from "../api";
 import { candidatesOf } from "./candidates";
 import { candidateNote, EpisodePicks, type EpisodeCandidateSource } from "./EpisodeCandidates";
 import { ApplyStatus, JobLink } from "./ApplyStatus";
@@ -75,7 +75,7 @@ const FAILURE_STATE: Record<FailureFile["state"], string> = {
  * read again, so the row shows the replacement going on (the failure gone) or
  * still failed.
  */
-function FailureRetry({ failure, onRetried }: { failure: EpisodeFailure; onRetried: () => Promise<void> }) {
+function FailureRetry({ failure, onRetried }: { failure: RevisionFailure; onRetried: () => Promise<void> }) {
   const { phase, submit, resend, recheck } = useItemRetry(failure.history_item_id, failure.command, onRetried);
   const status = retryStatus(phase);
   return (
@@ -96,7 +96,7 @@ function FailureRetry({ failure, onRetried }: { failure: EpisodeFailure; onRetri
  * what became of each. Neither file is taken as the episode's video here. One
  * whose download stopped offers `다시 받기`, or says why it does not.
  */
-function Failure({ failure, onRetried }: { failure: EpisodeFailure; onRetried: () => Promise<void> }) {
+function Failure({ failure, onRetried }: { failure: RevisionFailure; onRetried: () => Promise<void> }) {
   return (
     <div className="col-span-full min-w-0">
       <dt className="text-[12px] font-semibold text-urgent">받기 실패 · {dateTime(failure.at)}</dt>
@@ -262,7 +262,7 @@ function Details({
   animeNo: number | null;
   episode: WorkEpisode;
   /** The subtitle candidates of the episode, none without a source. */
-  picks: readonly Candidate[];
+  picks: readonly SubtitleCandidate[];
   source: EpisodeCandidateSource | undefined;
   onRetried: () => Promise<void>;
   onCreatorChanged: () => void;
@@ -354,7 +354,7 @@ function Row({
   /** The episode is the one of a movie-only work: its row is `본편`. */
   movieOnly: boolean;
   missing: boolean;
-  picks: readonly Candidate[];
+  picks: readonly SubtitleCandidate[];
   source: EpisodeCandidateSource | undefined;
   open: boolean;
   onToggle: () => void;
@@ -427,7 +427,7 @@ function Row({
   );
 }
 
-const NO_PICKS: readonly Candidate[] = [];
+const NO_PICKS: readonly SubtitleCandidate[] = [];
 
 interface EpisodeListProps {
   workId: string;

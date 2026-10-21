@@ -1,55 +1,25 @@
 import { api } from "@/lib/api";
+import type { AddWatchFolderBody, WatchFolder, WatchFolderAdded, WatchFolderList, WatchFolderRemoved } from "@/lib/api-types";
 
-/**
- * The watch folders (`src/web/watch_folders_api.rs`): the folders the app reads
- * for works. Each carries the counts its row shows; `checked_at` is the last
- * attempt to read it and `error` a sentence while that attempt could not read
- * everything (what was found before is kept).
+/*
+ * The watch folders (`src/web/watch_folders_api.rs`): the folders the app reads for works. The shapes are generated
+ * (`lib/api-types`).
  */
-export interface WatchFolder {
-  id: string;
-  path: string;
-  /** The collect or archive folder: the app keeps it registered while the settings use it, so it cannot be unregistered. */
-  automatic: boolean;
-  /** Every work of the folder, including the ones whose folder is gone. */
-  works: number;
-  /** Of those, the works whose folder is gone (`폴더 없음`). */
-  missing_works: number;
-  /** Works linked to Anissia; none can be before linking exists. */
-  linked_works: number;
-  /** Works found after the folder's first check, within the last 7 days. */
-  new_works: number;
-  checked_at: number | null;
-  error: string | null;
-  /** A sentence while the worker could not watch every directory for changes (how many and why); it then checks those itself every cycle. */
-  watch_note: string | null;
-}
-
-export interface WatchFolderList {
-  folders: WatchFolder[];
-}
-
-export interface AddedFolder {
-  folder: WatchFolder;
-  works_found: number;
-}
-
-export interface RemovedFolder {
-  removed_works: number;
-}
+export type { WatchFolder, WatchFolderList };
 
 export function loadWatchFolders(signal?: AbortSignal): Promise<WatchFolderList> {
   return api<WatchFolderList>("/library/watch-folders", { signal });
 }
 
 /** Registers the folder and reads it once; a refusal is an `invalid` error with the reason as its message. */
-export function addWatchFolder(path: string): Promise<AddedFolder> {
-  return api<AddedFolder>("/library/watch-folders", { method: "POST", body: { path } });
+export function addWatchFolder(path: string): Promise<WatchFolderAdded> {
+  const body: AddWatchFolderBody = { path };
+  return api<WatchFolderAdded>("/library/watch-folders", { method: "POST", body });
 }
 
 /** Removes the folder and its works from the library; no file on the disk is touched. */
-export function removeWatchFolder(id: string): Promise<RemovedFolder> {
-  return api<RemovedFolder>(`/library/watch-folders/${id}`, { method: "DELETE" });
+export function removeWatchFolder(id: string): Promise<WatchFolderRemoved> {
+  return api<WatchFolderRemoved>(`/library/watch-folders/${id}`, { method: "DELETE" });
 }
 
 /** The command kind of `다시 확인` (`src/web/commands_api.rs`). */

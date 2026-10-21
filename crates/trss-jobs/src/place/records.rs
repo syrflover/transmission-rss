@@ -1655,7 +1655,9 @@ pub struct StoredOptions {
 }
 
 /// What choosing a stored subtitle does ([`StoredOptions::choice`]).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(rename = "CopyChoice"))]
+#[serde(rename_all = "lowercase")]
 pub enum Choice {
     /// It is applied at once: the episode has no subtitle.
     Apply,

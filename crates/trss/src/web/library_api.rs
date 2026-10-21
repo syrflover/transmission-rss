@@ -92,21 +92,27 @@ use std::collections::HashMap;
 
 use super::{artwork_api::image_url, todo_api::todo_list, ApiError, AppState};
 use trss_core::episode::range_text;
+use trss_jobs::todo::Badge;
 use trss_library::store::library::{
-    Cursor, EpisodeRange, Filter, LibraryError, ListQuery, Sort, WorkOverview,
+    Cursor, EpisodeRange, Filter, LibraryError, ListQuery, Sort, SubtitleCoverage, WorkOverview,
 };
 
 pub fn routes() -> Router<AppState> {
     Router::new().route("/library/works", get(list))
 }
 
+/// The watch folder a work is in.
 #[derive(Serialize)]
-struct WatchFolderRef {
-    id: String,
-    path: String,
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub(super) struct WatchFolderRef {
+    pub id: String,
+    pub path: String,
 }
 
+/// A run of consecutive episodes, written as in the file names (`first` equals
+/// `last` for one).
 #[derive(Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "EpisodeRange"))]
 struct RangeView {
     first: String,
     last: String,
@@ -125,7 +131,9 @@ impl From<EpisodeRange> for RangeView {
     }
 }
 
+/// A work as the library list shows it.
 #[derive(Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "LibraryWork"))]
 struct WorkView {
     id: String,
     name: String,
@@ -136,13 +144,13 @@ struct WorkView {
     movie_only: bool,
     video: Vec<RangeView>,
     subtitle: Vec<RangeView>,
-    subtitle_coverage: Option<&'static str>,
+    subtitle_coverage: Option<SubtitleCoverage>,
     subtitle_check_needed: bool,
     added_at: Option<i64>,
     video_added_at: Option<i64>,
     subtitle_added_at: Option<i64>,
     cover_url: Option<String>,
-    todos: Vec<&'static str>,
+    todos: Vec<Badge>,
 }
 
 impl WorkView {
@@ -151,11 +159,17 @@ impl WorkView {
         image_ids: &HashMap<String, String>,
         badges: &mut HashMap<String, Vec<&'static str>>,
     ) -> Self {
+        let todos = badges
+            .remove(&work.id)
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(Badge::from_code)
+            .collect();
         WorkView {
             cover_url: image_ids
                 .get(&work.id)
                 .map(|image| image_url(&work.id, image)),
-            todos: badges.remove(&work.id).unwrap_or_default(),
+            todos,
             id: work.id,
             name: work.dir_name,
             title: work.title,
@@ -168,7 +182,7 @@ impl WorkView {
             movie_only: work.movie_only,
             video: work.video.into_iter().map(RangeView::from).collect(),
             subtitle: work.subtitle.into_iter().map(RangeView::from).collect(),
-            subtitle_coverage: work.subtitle_coverage.map(|c| c.code()),
+            subtitle_coverage: work.subtitle_coverage,
             subtitle_check_needed: work.subtitle_check_needed,
             added_at: work.first_seen_at,
             video_added_at: work.video_added_at,
@@ -178,7 +192,8 @@ impl WorkView {
 }
 
 #[derive(Serialize)]
-struct WorkPage {
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "LibraryWorkPage"))]
+pub(super) struct WorkPage {
     items: Vec<WorkView>,
     next: Option<String>,
     total: usize,

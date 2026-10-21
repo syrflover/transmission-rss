@@ -137,7 +137,9 @@ impl FileKind {
 }
 
 /// Why a file is not attached to an episode.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, serde::Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(rename = "UnrecognizedReason"))]
+#[serde(rename_all = "snake_case")]
 pub enum Reason {
     /// The `SxxEyy` in the name is not the season of the folder it is in.
     SeasonMismatch,

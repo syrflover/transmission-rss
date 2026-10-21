@@ -3,10 +3,10 @@ import { cn } from "@/lib/utils";
 import { AlertIcon, BackIcon, CheckIcon, ChevronIcon } from "../icons";
 import { ActionBar, Banner, BTN, CARD, Facts, Labeled, Tag } from "../parts";
 import { caseCounts, standing, UNLISTED_NOTE, weekLabel } from "./suggestions";
-import type { ChannelView, Decision, RuleView } from "./types";
+import type { ImportChannel, ImportDecision, ImportRule } from "@/lib/api-types";
 import type { ImportFlow } from "./useImportFlow";
 
-const OPTIONS: { value: Decision; label: string; describe: (channel: ChannelView) => string }[] = [
+const OPTIONS: { value: ImportDecision; label: string; describe: (channel: ImportChannel) => string }[] = [
   {
     value: "replace",
     label: "교체",
@@ -39,7 +39,7 @@ export function RuleName({ phrase }: { phrase: string | null }) {
   return phrase === null ? <Tag>제목 대기</Tag> : <span className="font-bold break-words">{phrase}</span>;
 }
 
-function RemovedRules({ channel }: { channel: ChannelView }) {
+function RemovedRules({ channel }: { channel: ImportChannel }) {
   const removed = channel.existing?.removed_rules ?? [];
   const waiting = channel.existing?.title_waiting_kept ?? 0;
   const keptNote = waiting > 0 && (
@@ -69,7 +69,7 @@ function RemovedRules({ channel }: { channel: ChannelView }) {
   );
 }
 
-function ChannelCard({ channel, flow }: { channel: ChannelView; flow: ImportFlow }) {
+function ChannelCard({ channel, flow }: { channel: ImportChannel; flow: ImportFlow }) {
   const chosen = flow.choices[channel.index];
   const existing = channel.existing;
 
@@ -155,8 +155,8 @@ function SuggestionBlock({
   index,
   flow,
 }: {
-  channel: ChannelView;
-  rule: RuleView;
+  channel: ImportChannel;
+  rule: ImportRule;
   index: number;
   flow: ImportFlow;
 }) {
@@ -273,10 +273,10 @@ function RuleRow({
   channel,
   flow,
 }: {
-  rule: RuleView;
+  rule: ImportRule;
   no: number;
   replacing: boolean;
-  channel: ChannelView;
+  channel: ImportChannel;
   flow: ImportFlow;
 }) {
   return (
@@ -316,7 +316,7 @@ function RuleRow({
 }
 
 /** The four cases of a channel's comments as count chips, and the keep-all and drop-all buttons. */
-function SuggestionToolbar({ channel, flow }: { channel: ChannelView; flow: ImportFlow }) {
+function SuggestionToolbar({ channel, flow }: { channel: ImportChannel; flow: ImportFlow }) {
   const counts = caseCounts(channel);
   const decision = flow.choices[channel.index];
   const pickable = channel.rules.filter(
@@ -359,7 +359,7 @@ function SuggestionToolbar({ channel, flow }: { channel: ChannelView; flow: Impo
   );
 }
 
-function RulesFold({ channel, flow }: { channel: ChannelView; flow: ImportFlow }) {
+function RulesFold({ channel, flow }: { channel: ImportChannel; flow: ImportFlow }) {
   const replacing = flow.choices[channel.index] === "replace";
   const notImported = channel.not_imported !== null;
   const skipped = flow.choices[channel.index] === "skip" || notImported;
