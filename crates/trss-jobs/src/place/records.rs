@@ -1052,13 +1052,20 @@ pub struct RowPaths {
 /// removed ([`crate::place::cleanup`]) is in none.
 ///
 /// A row made its asset ([`RowPaths::made`]) when the asset is no older than
-/// the row's package (the job's package of the row's post, [`stored`]) and
-/// the first entry of the asset in that package is the row's, by its name:
-/// the store that makes an asset enters it in the same transaction, and a
-/// later row with the same bytes reuses it with a later entry, or in a
-/// package made after it. One case reads wrong: a job cut between two stores
-/// of one post whose later row reuses an asset another job made meanwhile
-/// shows that row as new.
+/// the row's package (the job's package of the row's post, [`stored`], made
+/// by the first store of that post in any run) and the first entry of the
+/// asset in that package, in the order the stores entered them, has the
+/// row's name. The store that makes an asset enters it in the same
+/// transaction, so a row that made its asset always reads as new. A row that
+/// reused an asset reads as new too when that asset was made after the
+/// row's package by anything else (another job, or this job for another
+/// post) and no earlier row of the package entered it. The stores of one
+/// package can span runs, so this needs no cut: a run cut between two
+/// stores, or a row stored in a later run (an unchanged Drive font that went
+/// away and is received again), after another job stored the same bytes in
+/// between. A row whose name and bytes are an earlier row's of the package
+/// reads as new as well. Telling these apart exactly would need the store to
+/// record whether it made the asset.
 pub fn row_paths(c: &Connection, job_id: &str) -> rusqlite::Result<Vec<(i64, RowPaths)>> {
     let mut stmt = c.prepare_cached(
         "SELECT p.position, coalesce(s.work_id, k.work_id), coalesce(a.relative_path, k.relative_path),

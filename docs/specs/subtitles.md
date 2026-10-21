@@ -535,6 +535,7 @@ Tistory 게시물은 첨부를 모두 받아서 회차 하나를 골라도 파�
   `HEAD`가 실패하거나 `Last-Modified`가 없거나 값이 다르면 받아요. 받지 않은 기록은 파일 경로 없이 쓸 폰트 자산을 가리키고, 다음 회차는 그 기록과 비교해요.
   받지 않은 폰트는 보관할 때 다시 확인해요. 그사이 폰트가 정리됐거나 파일이 바뀌었거나 없어지면, 그 게시물을 받은 항목을 대기로 돌려 폰트를 다시 받아요. 없는 폰트로 자막을 잇지 않아요.
   작업 상세는 폰트마다 `받지 않음(바뀌지 않음)`·`받아서 같음`·`새로 받음`을 적고, 압축 파일에는 `묶음 전체를 받음 · 새로 보관한 파일 N개`를 적어요.
+  `받아서 같음`과 `새로 받음`은 보관본·자산 기록에서 셈해요(0153). 그래서 한 게시물의 줄을 여러 실행에 걸쳐 보관하는 동안(실행이 끊기거나, 바뀌지 않아 받지 않은 Drive 폰트가 없어져 다음 실행에서 다시 받을 때) 다른 작업이 같은 바이트를 먼저 보관하면, 그 바이트를 다시 쓴 줄도 `새로 받음`으로 보여요. 한 묶음에 이름과 바이트가 같은 줄이 둘이면 뒤의 줄도 `새로 받음`으로 보여요.
 - Naver·Tistory 첨부는 미리 읽을 수 있는 정보가 크기뿐이라 아래 규칙대로 다시 받아 내용으로 비교해요.
   개별 파일을 받을 수 있지만 변경 여부를 사전에 확인할 신뢰할 만한 정보가 없으면 필요한 해당 파일만 받아 내용으로 비교해요.
   동일하면 기존 자산을 재사용하고, 갱신된 내용이면 별도 자산으로 보관하며, 확인 목적의 재수신을 표시해요.
@@ -672,7 +673,7 @@ trss가 관리하지 않는 기존 자막은, 승인을 반영하면서 지우�
 - 계획이 세는 줄 수는 형식의 표지(ASS·SSA `Dialogue:` 줄, SRT·WebVTT 시간 줄, SMI `<SYNC>`)만 세요. [내용 비교](#내용-비교)를 한 계획은 버전 줄에 비교가 읽은 대사 수를 보여줘요. SMI의 빈 `<SYNC>`처럼 대사가 아닌 표지는 그 수에 들지 않아요.
 - 끊긴 반영이 `.trss/aside/`에 남긴 파일은 화면에 보이지 않아, 사람이 작품 폴더에서 직접 지워야 해요.
 - 관리하지 않던 자막을 2에서 들인 뒤 3에서 맞바꾸지 않으면(밀려난 파일이 승인한 것과 달라 다시 맞바꾸거나, 그사이 파일이 없어지거나 하면), 계획은 다시 비교하지만 들인 보관본은 `제작자 알 수 없음` 보관본으로 남아요. 같은 바이트를 다음에 들이면 그 보관본을 다시 써요.
-- 이전 적용본을 4에서 옮긴 뒤 기록 전에 끊기면, 그 적용본의 기록은 끝나지 않은 채 남아요. 파일은 `.trss/aside/`에 있어요.
+- 이전 적용본을 4에서 옮긴 뒤 기록 전에 끊기면, 그 적용본의 기록은 끝나지 않은 채 남아요. 파일은 `.trss/aside/`에 있어요. 대소문자만 다른 이름의 적용본을 교체해 새 자막의 이름을 대상 경로의 이름으로 바꾼 뒤 기록 전에 끊겨도 같아요. 다시 한 실행은 대상 이름의 새 자막을 적용본으로 기록하지만, 다른 대소문자 경로의 이전 적용본 기록은 끝내지 않아요. 두 경우 모두 그 기록은 없는 파일을 가리키고, 보관 파일 정리는 그 보관본을 영상 옆에 적용한 것으로 보고 정리하지 않아요(`영상 옆에 적용한 보관본은 정리할 수 없어요`).
 - 같은 출처의 새 수정본이 앞 작업의 계획이 기다리는 동안 들어오면, 앞 계획은 그 작업이 다시 돌 때(사람이 결정할 때) `새 수정본 발견`으로 닫혀요. 그때까지 두 작업이 모두 `교체 승인`에 있어요.
 
 #### 내용 비교
@@ -1077,7 +1078,7 @@ worker를 다시 시작하면 기다리는 작업을 한 번 다시 살펴보고
 | 보관본은 지우지 않음 | 2026-10-07 서버: 1화 승인 뒤 교체된 원래 자막이 `제작자 알 수 없음` 보관본으로 남았어요 ([0083]) | `trss-jobs` `tests/it/replace.rs` `a_revision_waits_for_approval_then_replaces_and_the_earlier_stored_copy_stays` | 없음 |
 | 회차 줄의 `교체 승인` 배지 | 없음 | `trss` `web/library_work_api/tests.rs` `a_stored_subtitle_waiting_for_a_replacement_names_its_job` | 배지 글자 `교체 승인`을 서버에서 본 기록이 없어요. 보관본에 `적용`을 두지 않는 쪽은 칸을 나누는 것으로만 겨눠요. |
 | 한계: 줄 수는 형식의 표지만 셈 | 없음 | `trss-jobs` `place/replace/lines.rs` `each_format_counts_its_dialogue_lines`, `what_is_not_its_format_is_not_counted` | 없음 |
-| 한계: 끊긴 반영이 남긴 파일과 기록 | 없음 | `trss-jobs` `tests/it/replace.rs` `a_replacement_cut_after_its_swap_records_the_new_copy_and_keeps_the_original_aside`, `a_replacement_cut_after_taking_off_an_earlier_copy_leaves_that_file_aside` | 없음 |
+| 한계: 끊긴 반영이 남긴 파일과 기록 | 없음 | `trss-jobs` `tests/it/replace.rs` `a_replacement_cut_after_its_swap_records_the_new_copy_and_keeps_the_original_aside`, `a_replacement_cut_after_taking_off_an_earlier_copy_leaves_that_file_aside` | 대소문자만 다른 이름을 교체한 뒤 끊긴 경우와, 그 기록 때문에 보관 파일 정리가 보관본을 남기는 점은 테스트가 없어요. |
 | 한계: 들인 뒤 맞바꾸지 않으면 들인 보관본이 남음 | 없음 | `trss-jobs` `tests/it/replace.rs` `an_unmanaged_subtitle_changed_right_before_the_swap_stays_and_its_import_is_kept` | 들인 뒤 파일이 없어져 맞바꾸지 못하는 갈래는 테스트가 없어요. |
 | 한계: 같은 출처의 새 수정본이 앞 계획이 기다리는 동안 들어옴 | 없음 | `trss-jobs` `tests/it/choose.rs` `a_newer_revision_still_keeps_a_row_nobody_chose_stored_only` | 없음 |
 
