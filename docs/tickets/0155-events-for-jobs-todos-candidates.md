@@ -2,13 +2,13 @@
 
 - 상태: 대기
 - 출처: [구조 가볍게 하기 명세의 화면 알림](lighter-structure.md#화면-알림)
-- 막는 티켓: [0154](0154-change-events-and-command-reads.md)(SSE 경로), 쓰기 길 모으기 명세의 티켓([0153](0153-no-effect-records.md) 뒤에 써요, [명세의 결정](lighter-structure.md#결정))
+- 막는 티켓: [0154](0154-change-events-and-command-reads.md)(SSE 경로), [0164](0164-db-change-events.md)(DB 연결이 바뀐 표를 알림)
 
 ## 작업
 
 [0154](0154-change-events-and-command-reads.md)가 만든 SSE 경로와 바뀜을 내보내는 방법으로, 명세 표의 다음 6곳을 주기 조회에서 이벤트로 옮겨요. 바뀜은 대부분 `trss-jobs`와 `trss-library` 안에서 생겨요.
 
-[0152](0152-interrupted-jobs-stop.md)의 `중단됨`과 다시 시작도 작업의 상태가 바뀌는 것이므로 같은 이벤트를 보내요. 0152와 이 티켓 중 나중에 하는 쪽이 그 이벤트를 보내게 해요.
+[0152](0152-interrupted-jobs-stop.md)의 `중단됨`과 다시 시작도 작업의 상태가 바뀌는 것이므로 같은 이벤트가 가요. [0164](0164-db-change-events.md) 뒤에는 DB 연결이 알리므로 따로 보낼 코드가 없어요.
 
 ## 완료 기준
 

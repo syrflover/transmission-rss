@@ -2,7 +2,7 @@
 
 - 상태: 대기
 - 출처: [구조 가볍게 하기 명세의 화면 알림](lighter-structure.md#화면-알림)
-- 막는 티켓: [0154](0154-change-events-and-command-reads.md)(SSE 경로), [0148](0148-one-instance-lock-and-cycle-stall.md)(수집 주기만 보는 멈춤 판정), 쓰기 길 모으기 명세의 티켓([0153](0153-no-effect-records.md) 뒤에 써요, [명세의 결정](lighter-structure.md#결정))
+- 막는 티켓: [0154](0154-change-events-and-command-reads.md)(SSE 경로), [0148](0148-one-instance-lock-and-cycle-stall.md)(수집 주기만 보는 멈춤 판정), [0164](0164-db-change-events.md)(DB 연결이 바뀐 표를 알림)
 
 ## 작업
 
