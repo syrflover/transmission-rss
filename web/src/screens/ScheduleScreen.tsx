@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { useCached } from "@/lib/cached";
 import { quarterName } from "@/lib/quarter";
 import { clock } from "@/lib/time";
+import type { FirstRun, Home, Step, Week } from "@/lib/api-types";
 
 import { EmptyState, ScreenFrame } from "./ScreenFrame";
 import { Checklist } from "./schedule/Checklist";
@@ -10,7 +11,7 @@ import { DayRow, TODAY_ID } from "./schedule/DayRow";
 import { monthDay } from "./schedule/format";
 import { SideColumn, SummaryLine } from "./schedule/Side";
 import { BTN } from "./settings/parts";
-import { loadHome, setSkipped, WEEK_KEY, type FirstRun, type Home, type Step, type Week } from "./schedule/api";
+import { loadHome, setSkipped, WEEK_KEY } from "./schedule/api";
 
 const POLL_MS = 30_000;
 /** From this width the collection status sits beside the schedule; below it, a line above. */

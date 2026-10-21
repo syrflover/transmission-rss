@@ -8,6 +8,7 @@ import { isOpen } from "@/lib/commands";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import type { ChannelBrief, Rule } from "@/lib/api-types";
 
 import { ArchiveBanner } from "../archive/ArchiveBanner";
 import { KEYS, subscriptionChanged, suggestionGone } from "../cache";
@@ -23,15 +24,7 @@ import {
   inputClass,
   labelClass,
 } from "../channels/styles";
-import {
-  channelName,
-  createRule,
-  deleteRule,
-  reorderRules,
-  saveRule,
-  type ChannelBrief,
-  type Rule,
-} from "./api";
+import { channelName, createRule, deleteRule, reorderRules, saveRule } from "./api";
 import { ArchiveMoveNotice } from "./ArchiveMoveNotice";
 import { SaveFolderFields } from "../folder/SaveFolderFields";
 import { ArchivedWorkNotice } from "./ArchivedWorkNotice";

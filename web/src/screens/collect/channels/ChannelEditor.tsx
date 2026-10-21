@@ -5,16 +5,10 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import type { Channel, ChannelDraft, QueryParam } from "@/lib/api-types";
 
 import { LockIcon } from "../icons";
-import {
-  createChannel,
-  deleteChannel,
-  saveChannel,
-  type Channel,
-  type ChannelDraft,
-  type QueryParam,
-} from "./api";
+import { createChannel, deleteChannel, saveChannel } from "./api";
 import { queryNames, queryPairs } from "./query";
 import {
   btnDanger,

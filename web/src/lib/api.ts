@@ -8,13 +8,10 @@
  * the user's input.
  */
 
-export type ApiErrorCode =
-  | "invalid"
-  | "not_found"
-  | "conflict"
-  | "unavailable"
-  | "internal"
-  | "network";
+import type { ErrorBody, ErrorCode } from "@/lib/api-types";
+
+/** The server's error codes (generated from `ErrorCode`) and `network`, which only the browser can raise. */
+export type ApiErrorCode = ErrorCode | "network";
 
 export class ApiError extends Error {
   readonly code: ApiErrorCode;
@@ -74,7 +71,7 @@ export async function api<T>(
   }
 
   if (!response.ok) {
-    const error = json as { error?: ApiErrorCode; message?: string; current?: unknown };
+    const error = json as Partial<ErrorBody>;
     throw new ApiError(
       error.error ?? "internal",
       error.message ?? UNKNOWN_MESSAGE,

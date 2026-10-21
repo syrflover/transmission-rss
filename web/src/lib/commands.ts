@@ -1,4 +1,11 @@
 import { api } from "@/lib/api";
+import type {
+  Command,
+  CommandKind,
+  CommandOutcome,
+  CommandRequest,
+  CommandState,
+} from "@/lib/api-types";
 
 /**
  * Web commands (`src/web/commands_api.rs`): actions the web accepts and the
@@ -6,23 +13,7 @@ import { api } from "@/lib/api";
  * `보관`·`복원`) share these.
  */
 
-export type CommandState = "pending" | "running" | "done" | "failed";
-
-export interface CommandOutcome {
-  /** A code of the command's kind: for a retry (`receive_once`), a history result. */
-  result: string;
-  reason: string | null;
-}
-
-export interface Command {
-  id: string;
-  kind: string;
-  state: CommandState;
-  created_at: number;
-  updated_at: number;
-  finished_at: number | null;
-  outcome: CommandOutcome | null;
-}
+export type { Command, CommandKind, CommandOutcome, CommandState };
 
 /** Whether the worker has not ended the command yet. */
 export function isOpen(command: Pick<Command, "state">): boolean {
@@ -42,8 +33,13 @@ export function newCommandId(): string {
 }
 
 /** Sends a command; `202` when stored now, `200` when the same command was stored before: both give its current state. */
-export function sendCommand(id: string, kind: string, payload: unknown): Promise<Command> {
-  return api<Command>("/commands", { method: "POST", body: { id, kind, payload } });
+export function sendCommand<K extends CommandKind>(
+  id: string,
+  kind: K,
+  payload: Extract<CommandRequest, { kind: K }>["payload"],
+): Promise<Command> {
+  const body: CommandRequest = { id, kind, payload } as CommandRequest;
+  return api<Command>("/commands", { method: "POST", body });
 }
 
 export function getCommand(id: string): Promise<Command> {

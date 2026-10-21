@@ -12,6 +12,7 @@ use trss_core::Millis;
 
 /// The video line of a card.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "snake_case")]
 pub enum VideoState {
     /// `영상 받음`: the library has the episode's video.
@@ -37,6 +38,7 @@ pub enum VideoState {
 /// subtitle side will fill (`자막 받는 중`, `인증 필요`, `회차 확인 필요`);
 /// nothing produces them yet, so the weekly schedule never sends them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "snake_case")]
 pub enum SubtitleState {
     /// `자막 받음`: the library has a subtitle for the episode.
@@ -82,6 +84,7 @@ pub fn is_off(anime: &Anime) -> bool {
 /// Where an anime's run is, as the subscription cards and the schedule picker
 /// say it (`표: Anissia의 방영 상태` in `docs/specs/web-app.md`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "snake_case")]
 pub enum RunState {
     /// It has not started: the start date is still to come. The screens show

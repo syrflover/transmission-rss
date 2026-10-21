@@ -47,12 +47,14 @@ transmission-rpc.workspace = true
 url.workspace = true
 
 [dev-dependencies]
-trss-core = { workspace = true, features = ["test-support"] }
+# The `ts` features derive the types the API sends, for `web::api_types`
+# (the screens' generated TypeScript types).
+trss-core = { workspace = true, features = ["test-support", "ts"] }
 trss-anissia = { workspace = true, features = ["test-support"] }
 trss-anilist = { workspace = true, features = ["test-support"] }
-trss-library = { workspace = true, features = ["test-support"] }
+trss-library = { workspace = true, features = ["test-support", "ts"] }
 # The fake tracker of the past episode search tests (`trss_collect::fake`).
-trss-collect = { workspace = true, features = ["test-support"] }
+trss-collect = { workspace = true, features = ["test-support", "ts"] }
 trss-transmission = { workspace = true, features = ["test-support"] }
 trss-subtitles = { workspace = true, features = ["test-support"] }
 # The sample ZIPs of the upload tests (`trss_archive::testing`).
@@ -64,4 +66,5 @@ rusqlite.workspace = true
 rustix.workspace = true
 tempfile.workspace = true
 tower.workspace = true
+ts-rs.workspace = true
 tokio-tungstenite.workspace = true

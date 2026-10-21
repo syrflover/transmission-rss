@@ -89,6 +89,7 @@ pub fn routes() -> Router<AppState> {
 /// A channel as the screen sees it. There is deliberately no field with the
 /// URL's secret values.
 #[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "Channel"))]
 pub struct ChannelView {
     pub id: String,
     pub position: i64,
@@ -112,6 +113,7 @@ pub struct ChannelView {
 }
 
 #[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "QueryParam"))]
 pub struct QueryParamView {
     pub name: String,
     pub secret: bool,
@@ -157,7 +159,8 @@ fn view(channel: &Channel, rule_count: usize) -> ChannelView {
 }
 
 #[derive(Serialize)]
-struct ChannelList {
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub(super) struct ChannelList {
     channels: Vec<ChannelView>,
     /// The most characters of a channel's display name, for the editor to
     /// keep within (a new channel has none to carry it).
@@ -165,7 +168,8 @@ struct ChannelList {
 }
 
 #[derive(Serialize)]
-struct Removed {
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "ChannelRemoved"))]
+pub(super) struct Removed {
     removed_rules: usize,
 }
 
@@ -176,8 +180,9 @@ struct Removed {
 // No `Debug`: these carry the URL with its secret values.
 
 #[derive(Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "ChannelDraft"))]
 #[serde(deny_unknown_fields)]
-struct CreateBody {
+pub(super) struct CreateBody {
     url: String,
     #[serde(default)]
     excludes: Vec<String>,
@@ -185,15 +190,18 @@ struct CreateBody {
     #[serde(default)]
     secret: HashMap<String, bool>,
     #[serde(default)]
+    #[cfg_attr(test, ts(optional = nullable))]
     past_search: Option<String>,
     /// Optional display name; blank or absent means unnamed.
     #[serde(default)]
+    #[cfg_attr(test, ts(optional = nullable))]
     name: Option<String>,
 }
 
 #[derive(Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "ChannelUpdate"))]
 #[serde(deny_unknown_fields)]
-struct UpdateBody {
+pub(super) struct UpdateBody {
     /// The version the client saw.
     version: i64,
     url: String,
@@ -202,9 +210,11 @@ struct UpdateBody {
     #[serde(default)]
     secret: HashMap<String, bool>,
     #[serde(default)]
+    #[cfg_attr(test, ts(optional = nullable))]
     past_search: Option<String>,
     /// Optional display name; blank or absent means unnamed.
     #[serde(default)]
+    #[cfg_attr(test, ts(optional = nullable))]
     name: Option<String>,
 }
 

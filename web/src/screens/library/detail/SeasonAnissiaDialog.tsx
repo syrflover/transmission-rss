@@ -5,10 +5,10 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ApiError } from "@/lib/api";
 import { cn } from "@/lib/utils";
+import type { ScheduleEntry } from "@/lib/api-types";
 
 import { PickAnime } from "../../collect/subs/add/PickAnime";
 import { todayWeek } from "../../collect/subs/format";
-import type { ScheduleEntry } from "../../collect/subs/api";
 import { btnNeutral, btnPrimary, hintClass, inputClass } from "../../collect/channels/styles";
 import {
   currentLink,

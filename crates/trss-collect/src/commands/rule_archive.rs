@@ -146,6 +146,7 @@ pub const KEPT: &str = "kept";
 pub const FAILED: &str = "failed";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(rename = "ArchiveDirection"))]
 #[serde(rename_all = "snake_case")]
 pub enum Direction {
     /// `보관`: off, then into the archive folder.
@@ -176,6 +177,7 @@ impl Direction {
 
 /// The content of a `rule_archive` request.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(deny_unknown_fields)]
 pub struct RuleArchive {
     pub rule_id: String,

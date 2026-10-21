@@ -160,6 +160,7 @@ const PLACE_UNREAD: &str = "폴더의 회차 영상이 어떤 수정본인지 �
 /// `folder`; it is read so those stored commands still parse, and ignored.
 /// A new request with one is refused by the web.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(deny_unknown_fields)]
 pub struct ReceiveOnce {
     /// The history item to receive again.
@@ -171,6 +172,7 @@ pub struct ReceiveOnce {
     /// The folder an earlier version of this command let a person choose. Never
     /// written, never used; see above.
     #[serde(default, skip_serializing)]
+    #[cfg_attr(feature = "ts", ts(skip))]
     pub folder: Option<String>,
 }
 

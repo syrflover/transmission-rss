@@ -33,6 +33,7 @@ pub struct Grounds {
 
 /// The range offered, and why.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(rename = "RangeSuggestion"))]
 pub struct Suggestion {
     /// Release numbers; `None` when there is nothing to offer and the person writes them.
     pub from: Option<u32>,

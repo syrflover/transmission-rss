@@ -7,10 +7,11 @@ import { useCached } from "@/lib/cached";
 import { ago } from "@/lib/time";
 import { cn } from "@/lib/utils";
 import { WEEKDAYS_LONG } from "@/lib/weekday";
+import type { Schedule, ScheduleEntry } from "@/lib/api-types";
 
 import { KEYS } from "../../cache";
 import { btnNeutral, hintClass, inputClass, labelClass } from "../../channels/styles";
-import { fetchSchedule, type Schedule, type ScheduleEntry } from "../api";
+import { fetchSchedule } from "../api";
 import { endText, RUN_TEXT, startDate, WEEK_OTHER, WEEK_TABS, WEEK_UPCOMING } from "../format";
 import { optionClass } from "./draft";
 

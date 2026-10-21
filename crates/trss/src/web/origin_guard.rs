@@ -53,7 +53,8 @@ use axum::{
     response::{IntoResponse, Response},
     Json,
 };
-use serde_json::json;
+
+use super::error::{ErrorBody, ErrorCode};
 
 /// The environment variable that lists the host names the web answers to.
 pub const HOSTS_VAR: &str = "TRSS_WEB_HOSTS";
@@ -263,7 +264,7 @@ pub async fn guard(
             refusal(
                 api,
                 StatusCode::MISDIRECTED_REQUEST,
-                "host_not_allowed",
+                ErrorCode::HostNotAllowed,
                 &format!(
                     "이 주소 이름으로는 trss를 열 수 없어요. IP 주소로 들어오거나, 서버의 .env에서 {HOSTS_VAR}에 이 이름을 더해 주세요."
                 ),
@@ -275,16 +276,16 @@ pub async fn guard(
             refusal(
                 api,
                 StatusCode::FORBIDDEN,
-                "forbidden",
+                ErrorCode::Forbidden,
                 "다른 사이트에서 보낸 요청은 받지 않아요.",
             )
         }
     }
 }
 
-fn refusal(api: bool, status: StatusCode, code: &str, message: &str) -> Response {
+fn refusal(api: bool, status: StatusCode, code: ErrorCode, message: &str) -> Response {
     if api {
-        (status, Json(json!({ "error": code, "message": message }))).into_response()
+        (status, Json(ErrorBody::new(code, message))).into_response()
     } else {
         (
             status,

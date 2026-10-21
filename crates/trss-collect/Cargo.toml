@@ -6,6 +6,9 @@ edition.workspace = true
 [features]
 # The fake feed and nyaa servers (`fake`), for the tests of the crates above.
 test-support = ["dep:axum", "trss-core/test-support", "trss-transmission/test-support"]
+# Derives `ts_rs::TS` for the types the API sends or takes, which the `trss`
+# tests turn into the screens' TypeScript types. Off in every build of the app.
+ts = ["dep:ts-rs"]
 
 [dependencies]
 trss-core.workspace = true
@@ -33,6 +36,7 @@ transmission-rpc.workspace = true
 url.workspace = true
 uuid.workspace = true
 axum = { workspace = true, optional = true }
+ts-rs = { workspace = true, optional = true }
 
 [dev-dependencies]
 trss-core = { workspace = true, features = ["test-support"] }

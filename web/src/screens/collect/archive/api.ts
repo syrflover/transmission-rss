@@ -1,8 +1,8 @@
 import { api, ApiError } from "@/lib/api";
 import { getCommand, isOpen, newCommandId, type Command } from "@/lib/commands";
+import type { ArchiveKeepBody, ArchiveKept, ArchiveSuggestion, ArchiveSuggestionList } from "@/lib/api-types";
 
 import { sendArchive } from "../rules/api";
-import type { Anime } from "../subs/api";
 
 /**
  * The archive suggestions (`src/web/archive_api.rs`): rules the app suggests
@@ -10,47 +10,14 @@ import type { Anime } from "../subs/api";
  * Archiving itself is the rule's `rule_archive` command (`rules/api.ts`).
  */
 
-/**
- * Why a rule is suggested: `ended` (the anime's end date has passed),
- * `unlisted` (it has no end date and Anissia no longer lists it) or `quiet`
- * (no new matching item for 4 weeks).
- */
-export interface Ground {
-  /** What `수집 유지` names the ground by. */
-  key: string;
-  kind: "ended" | "unlisted" | "quiet";
-  /** `ended`: the end date as Anissia gave it (`YYYY-MM-DD` or `YYYY-MM`). */
-  end_date: string | null;
-  /** `quiet`: the moment the 4 weeks count from (Unix ms). */
-  since: number | null;
-}
-
-export interface ArchiveSuggestion {
-  rule_id: string;
-  channel_id: string;
-  channel_name: string | null;
-  channel_host: string;
-  state: "active" | "paused";
-  /** The rule's match phrase. */
-  title: string;
-  directory: string;
-  anime: Anime | null;
-  last_received_at: number | null;
-  grounds: Ground[];
-  /** What archiving the rule would do with its work folder now. */
-  after: string;
-}
-
 export function fetchArchiveSuggestions(signal?: AbortSignal): Promise<ArchiveSuggestion[]> {
-  return api<{ suggestions: ArchiveSuggestion[] }>("/archive-suggestions", { signal }).then((r) => r.suggestions);
+  return api<ArchiveSuggestionList>("/archive-suggestions", { signal }).then((r) => r.suggestions);
 }
 
 /** `수집 유지`: the rule is not suggested again on the grounds the user saw. */
 export async function keepCollecting(suggestion: ArchiveSuggestion): Promise<void> {
-  await api<{ kept: number }>("/archive-suggestions/keep", {
-    method: "POST",
-    body: { rule_id: suggestion.rule_id, grounds: suggestion.grounds.map((g) => g.key) },
-  });
+  const body: ArchiveKeepBody = { rule_id: suggestion.rule_id, grounds: suggestion.grounds.map((g) => g.key) };
+  await api<ArchiveKept>("/archive-suggestions/keep", { method: "POST", body });
 }
 
 /** How often an open archive command is asked for, in milliseconds. */

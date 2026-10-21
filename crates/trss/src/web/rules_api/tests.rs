@@ -421,6 +421,43 @@ async fn the_second_save_from_an_old_version_is_a_conflict_that_shows_the_saved_
 }
 
 #[tokio::test]
+async fn an_unknown_state_is_refused_only_after_the_version_is_checked() {
+    let app = App::new().await;
+    let a = app.channel("a.test", &[], &[("Alpha", "a")]).await;
+    let rule = app.list().await["rules"][0].clone();
+    let uri = format!("/api/rules/{}", rule["id"].as_str().unwrap());
+    let (status, _, _) = app
+        .call(
+            Method::PUT,
+            &uri,
+            Some(rule_body(&a.channel, &rule, json!({ "directory": "one" }))),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let unknown = json!({ "state": "sleeping" });
+    let (status, _, old) = app
+        .call(
+            Method::PUT,
+            &uri,
+            Some(rule_body(&a.channel, &rule, unknown.clone())),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(old["error"], "conflict");
+
+    let (status, _, current) = app
+        .call(
+            Method::PUT,
+            &uri,
+            Some(rule_body(&a.channel, &old["current"], unknown)),
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(current["error"], "invalid");
+}
+
+#[tokio::test]
 async fn a_delete_from_an_old_version_is_a_conflict() {
     let app = App::new().await;
     let a = app.channel("a.test", &[], &[("Alpha", "a")]).await;

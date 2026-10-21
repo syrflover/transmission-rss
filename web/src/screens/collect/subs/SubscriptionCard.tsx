@@ -1,7 +1,7 @@
+import type { SubscriptionItem } from "@/lib/api-types";
 import { useId } from "react";
 import { Link } from "react-router-dom";
 
-import type { SubscriptionItem } from "./api";
 import { airing, endText, RUN_TEXT, startDate, subtitleChoice } from "./format";
 
 const tag =

@@ -1,3 +1,5 @@
+import type { Anime } from "../../../lib/api-types/Anime";
+
 /**
  * A save folder taken as a work and a season, `<work>/Season NN`
  * (`docs/specs/collection.md`, 방영작 구독). The subscribe, title and rule
@@ -74,12 +76,8 @@ export function matchingWorks<T extends { name: string; title: string }>(works: 
 /** What a suggestion is asked from: a release's work, or a work folder picked or typed. */
 export type Asked = { release: string } | { work: string };
 
-/** The anime a folder is for, as far as the suggestion reads it. */
-export interface AnimeOfFolder {
-  anime_no: number;
-  /** `YYYY-MM-DD` or `YYYY-MM`; without it the airing is placed today. */
-  start_date: string | null;
-}
+/** The anime a folder is for, as far as the suggestion reads it (`start_date` places the airing; without it, today). */
+export type AnimeOfFolder = Pick<Anime, "anime_no" | "start_date">;
 
 export function suggestionPath(asked: Asked, anime: AnimeOfFolder | null): string {
   const params = new URLSearchParams();

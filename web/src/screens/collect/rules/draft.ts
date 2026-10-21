@@ -1,4 +1,5 @@
-import type { Rule, RuleFields } from "./api";
+import type { Rule } from "@/lib/api-types";
+import type { RuleFields } from "./api";
 
 /** What the detail form holds: the fields as typed, before they are checked. */
 export interface Draft {

@@ -4,10 +4,11 @@ import { Button } from "@/components/ui/button";
 import { ApiError } from "@/lib/api";
 import { useCached } from "@/lib/cached";
 import { cn } from "@/lib/utils";
+import type { ArchiveSuggestion } from "@/lib/api-types";
 
 import { KEYS, suggestionGone } from "../cache";
 import { btnNeutral } from "../channels/styles";
-import { fetchArchiveSuggestions, keepCollecting, type ArchiveSuggestion } from "./api";
+import { fetchArchiveSuggestions, keepCollecting } from "./api";
 import { archBorder, archFill, btnArch } from "./ArchiveSuggestions";
 import { groundText } from "./ground";
 

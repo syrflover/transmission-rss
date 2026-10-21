@@ -6,10 +6,11 @@ import { ApiError } from "@/lib/api";
 import { useCached } from "@/lib/cached";
 import { dateTime } from "@/lib/time";
 import { cn } from "@/lib/utils";
+import type { TitleCandidate } from "@/lib/api-types";
 
 import { candidatesChanged, KEYS } from "../cache";
 import { btnAction, btnNeutral } from "../channels/styles";
-import { fetchCandidates, rejectCandidate, type TitleCandidate } from "./api";
+import { fetchCandidates, rejectCandidate } from "./api";
 
 /** The page that gives a work to a waiting subscription (`NameTitle`). */
 export function nameTitleLink(channelId: string, work: string): string {

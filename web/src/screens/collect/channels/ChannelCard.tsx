@@ -1,9 +1,10 @@
 import { useId, useRef, useState, type ReactNode } from "react";
 
 import { Button } from "@/components/ui/button";
+import type { Channel } from "@/lib/api-types";
 
 import { EditIcon, LockIcon } from "../icons";
-import { channelTitle, type Channel } from "./api";
+import { channelTitle } from "./api";
 import { ChannelEditor } from "./ChannelEditor";
 import { btnNeutral } from "./styles";
 

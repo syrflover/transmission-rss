@@ -38,6 +38,7 @@ pub const FAILED: &str = "failed";
 
 /// The content of an `anissia_captions` request.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(deny_unknown_fields)]
 pub struct AnissiaCaptions {
     /// Anissia's `animeNo`.

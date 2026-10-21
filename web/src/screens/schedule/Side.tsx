@@ -5,9 +5,9 @@ import { when } from "@/lib/time";
 import { cn } from "@/lib/utils";
 
 import { useBoard, type Load } from "../collect/status/StatusBoard";
-import { STALLED, STALLED_SHORT, type Board } from "../collect/status/api";
-import type { Week } from "./api";
+import { STALLED, STALLED_SHORT } from "../collect/status/api";
 import { quarterName } from "@/lib/quarter";
+import type { Board, Week } from "@/lib/api-types";
 
 /** Where the schedule to add a subscription from opens: Anissia's `신작`. */
 export const ADD_FROM_SCHEDULE = "/collect/subs/add?week=8";

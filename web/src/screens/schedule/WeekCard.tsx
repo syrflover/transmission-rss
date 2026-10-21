@@ -2,11 +2,11 @@ import { useState, type ComponentType, type ComponentProps } from "react";
 import { Link } from "react-router-dom";
 
 import { cn } from "@/lib/utils";
+import type { Card, SubtitleState, VideoState } from "@/lib/api-types";
 
 import { LockIcon } from "../collect/icons";
 import { CheckIcon, MinusIcon, QuestionIcon } from "../library/icons";
 import { workPath } from "../library/api";
-import type { Card, SubtitleState, VideoState } from "./api";
 import { DownloadIcon, SubtitleIcon } from "./icons";
 
 type SvgIcon = ComponentType<ComponentProps<"svg">>;

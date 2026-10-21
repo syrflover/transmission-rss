@@ -33,6 +33,7 @@ pub const FAILED: &str = "failed";
 
 /// The content of a `watch_rescan` request.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(deny_unknown_fields)]
 pub struct WatchRescan {
     pub folder_id: String,

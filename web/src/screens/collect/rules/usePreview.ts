@@ -2,8 +2,9 @@ import { useEffect, useRef, useState } from "react";
 
 import { ApiError } from "@/lib/api";
 import { peek, store } from "@/lib/cached";
+import type { Preview } from "@/lib/api-types";
 
-import { previewRule, type Preview, type RuleFields } from "./api";
+import { previewRule, type RuleFields } from "./api";
 
 export type PreviewState =
   | { state: "loading"; previous: Preview | null }

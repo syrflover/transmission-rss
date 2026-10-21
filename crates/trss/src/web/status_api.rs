@@ -64,6 +64,7 @@ struct StatusQuery {
 }
 
 #[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 pub struct ChannelStatus {
     pub id: String,
     pub name: Option<String>,
@@ -78,6 +79,7 @@ pub struct ChannelStatus {
 }
 
 #[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "StatusDay"))]
 pub struct Day {
     /// `YYYY-MM-DD` in the viewer's time zone.
     pub date: String,
@@ -85,12 +87,14 @@ pub struct Day {
 }
 
 #[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 pub struct Received {
     pub total: u32,
     pub days: Vec<Day>,
 }
 
 #[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 pub struct TransmissionStatus {
     pub downloading: u32,
     pub seeding: u32,
@@ -99,6 +103,7 @@ pub struct TransmissionStatus {
 }
 
 #[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 pub struct CycleStatus {
     pub started_at: Millis,
     /// `null` while that cycle runs or if the process stopped in it.
@@ -116,6 +121,7 @@ pub struct CycleStatus {
 }
 
 #[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 pub struct Board {
     pub now: Millis,
     pub channels: Vec<ChannelStatus>,

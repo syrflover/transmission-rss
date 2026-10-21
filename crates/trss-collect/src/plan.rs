@@ -84,7 +84,9 @@ impl PastSince {
 }
 
 /// What made an item past for a rule.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(rename_all = "snake_case")]
 pub enum PastCause {
     /// The item was recorded before the rule became a subscription.
     Subscribed,

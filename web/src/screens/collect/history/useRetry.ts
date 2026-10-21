@@ -1,16 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { ApiError } from "@/lib/api";
+import type { HistoryItem, ReceiveOnce } from "@/lib/api-types";
 
-import {
-  getCommand,
-  getHistoryItem,
-  newCommandId,
-  sendRetry,
-  type Command,
-  type HistoryItem,
-  type RetryPayload,
-} from "./api";
+import { getCommand, getHistoryItem, newCommandId, sendRetry, type Command } from "./api";
 
 /** How often a running command is asked for its state, in milliseconds. */
 export const POLL_MS = 2000;
@@ -36,7 +29,7 @@ export type RetryPhase =
 interface Attempt {
   id: string;
   /** `null` for a command found on the item at load: it is only followed, never resent. */
-  payload: RetryPayload | null;
+  payload: ReceiveOnce | null;
 }
 
 /**

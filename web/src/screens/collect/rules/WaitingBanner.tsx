@@ -2,12 +2,12 @@ import { Link } from "react-router-dom";
 
 import { Button } from "@/components/ui/button";
 import { useCached } from "@/lib/cached";
+import type { Rule, TitleCandidate } from "@/lib/api-types";
 
 import { KEYS } from "../cache";
 import { btnAction } from "../channels/styles";
 import { nameTitleLink } from "../subs/Candidates";
-import { fetchCandidates, type TitleCandidate } from "../subs/api";
-import type { Rule } from "./api";
+import { fetchCandidates } from "../subs/api";
 
 const calm = "rounded-xl border border-hairline bg-surface-2 px-3.5 py-3 text-[13px] leading-normal text-text-secondary";
 const blue =

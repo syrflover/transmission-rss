@@ -2,9 +2,9 @@ import type { ReactNode } from "react";
 
 import { Button } from "@/components/ui/button";
 import { dateTime } from "@/lib/time";
+import type { PreviewItem } from "@/lib/api-types";
 
 import { btnNeutral, hintClass } from "../../channels/styles";
-import type { PreviewItem } from "../../rules/api";
 import { PHASE_TEXT, type ReceivePhase } from "./useReceive";
 
 const check = "mt-0.5 size-[18px] flex-none accent-focus";

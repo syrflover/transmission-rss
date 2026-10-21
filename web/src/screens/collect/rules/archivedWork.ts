@@ -1,16 +1,8 @@
-/**
- * The work in the archive folder that a rule saving to `directory` would bring
- * into the collect folder, by the library's records. `merges` is whether the
- * collect folder has the work too, so the two become one. It is declared here,
- * not in `api.ts`, so this module imports nothing and runs and is type-checked
- * under `node --test`.
- */
-export interface ArchivedWork {
-  work: string;
-  archive_folder: string;
-  collect_folder: string;
-  merges: boolean;
-}
+import type { ArchivedWork } from "../../../lib/api-types/ArchivedWork";
+
+// The type is generated (`lib/api-types`). It is imported by a relative path and only as a type, so this module
+// still imports nothing at run time and runs and is type-checked under `node --test`.
+export type { ArchivedWork };
 
 /**
  * The request that asks which work of the archive folder a rule saving to

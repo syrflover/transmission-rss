@@ -6,7 +6,10 @@ use axum::{
 };
 use serde_json::json;
 
-use super::state::AppState;
+use super::{
+    error::{ErrorBody, ErrorCode},
+    state::AppState,
+};
 
 /// JSON API mounted under `/api`.
 ///
@@ -56,7 +59,7 @@ async fn health() -> Json<serde_json::Value> {
 async fn not_found() -> Response {
     (
         StatusCode::NOT_FOUND,
-        Json(json!({ "error": "not_found", "message": "없는 API 경로예요." })),
+        Json(ErrorBody::new(ErrorCode::NotFound, "없는 API 경로예요.")),
     )
         .into_response()
 }

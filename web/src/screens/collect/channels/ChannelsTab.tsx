@@ -2,11 +2,12 @@ import { useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { useCached } from "@/lib/cached";
+import type { Channel, ChannelList } from "@/lib/api-types";
 
 import { EmptyState } from "../../ScreenFrame";
 import { KEYS, channelsChanged } from "../cache";
 import { PlusIcon } from "../icons";
-import { channelTitle, listChannels, type Channel, type ChannelList } from "./api";
+import { channelTitle, listChannels } from "./api";
 import { ChannelCard } from "./ChannelCard";
 import { ChannelEditor } from "./ChannelEditor";
 import { CollectFolderNote } from "./CollectFolderNote";

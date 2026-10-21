@@ -11,6 +11,9 @@ edition.workspace = true
 # API), `loopback`, for the tests that start a server on a loopback address,
 # and `fake_http`, for the fake HTTP services of the tests.
 test-support = ["rusqlite/backup", "tokio/net"]
+# Derives `ts_rs::TS` for the types the API sends or takes, which the `trss`
+# tests turn into the screens' TypeScript types. Off in every build of the app.
+ts = ["dep:ts-rs"]
 
 [dependencies]
 futures.workspace = true
@@ -22,6 +25,7 @@ serde_json.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["rt", "macros", "time", "sync"] }
 tokio-util.workspace = true
+ts-rs = { workspace = true, optional = true }
 
 [dev-dependencies]
 rusqlite = { workspace = true, features = ["backup"] }

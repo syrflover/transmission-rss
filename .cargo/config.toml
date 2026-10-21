@@ -7,3 +7,8 @@
 # database took 2.3 s instead of 0.18 s, more than half of it in the kernel.
 # The image builds copy this file, so the app runs the SQLite the tests ran.
 LIBSQLITE3_FLAGS = "-DSQLITE_DEFAULT_MEMSTATUS=0"
+
+[alias]
+# Writes the screens' TypeScript types again from the API's Rust types
+# (`web::api_types`), into web/src/lib/api-types.
+types = "test -p trss --lib -- --ignored --exact web::api_types::write_committed_files"

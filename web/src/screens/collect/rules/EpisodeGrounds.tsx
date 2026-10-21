@@ -3,9 +3,10 @@ import { useState } from "react";
 import { ApiError } from "@/lib/api";
 import { isOpen } from "@/lib/commands";
 import { cn } from "@/lib/utils";
+import type { EpisodeUndo, Rule } from "@/lib/api-types";
 
 import { btnAction, btnNeutral, hintClass } from "../channels/styles";
-import { applyEpisode, type EpisodeUndo, type Rule } from "./api";
+import { applyEpisode } from "./api";
 import { useEpisodeUndo, type UndoPhase } from "./useEpisodeUndo";
 
 /**

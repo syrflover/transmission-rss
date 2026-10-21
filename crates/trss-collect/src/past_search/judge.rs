@@ -197,7 +197,9 @@ pub enum Why {
     Unreadable,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(rename = "ResultState"))]
+#[serde(rename_all = "snake_case")]
 pub enum State {
     Missing,
     Replace,

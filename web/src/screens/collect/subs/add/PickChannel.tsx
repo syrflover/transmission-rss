@@ -4,11 +4,11 @@ import { Link } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { useCached } from "@/lib/cached";
 import { cn } from "@/lib/utils";
+import type { Channel, ChannelList, ScheduleEntry } from "@/lib/api-types";
 
 import { KEYS } from "../../cache";
-import { channelTitle, listChannels, type Channel, type ChannelList } from "../../channels/api";
+import { channelTitle, listChannels } from "../../channels/api";
 import { btnNeutral } from "../../channels/styles";
-import type { ScheduleEntry } from "../api";
 import { optionClass } from "./draft";
 
 /** Step 2: the RSS channel that carries the anime's releases. */

@@ -2,9 +2,10 @@ import { useId } from "react";
 
 import { Button } from "@/components/ui/button";
 import { useCached } from "@/lib/cached";
+import type { Creators, ScheduleEntry, SubtitleMode } from "@/lib/api-types";
 
 import { btnNeutral } from "../../channels/styles";
-import { fetchCreators, type Creators, type ScheduleEntry, type SubtitleMode } from "../api";
+import { fetchCreators } from "../api";
 import { SUBTITLE_NOTES } from "../format";
 
 const radio = "mt-0.5 size-[18px] flex-none accent-focus";

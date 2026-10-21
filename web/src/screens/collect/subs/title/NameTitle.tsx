@@ -5,11 +5,12 @@ import { Button } from "@/components/ui/button";
 import { ApiError } from "@/lib/api";
 import { useAfterDelay, useCached } from "@/lib/cached";
 import { cn } from "@/lib/utils";
+import type { Rule, RuleList } from "@/lib/api-types";
 
 import { candidatesChanged, KEYS } from "../../cache";
 import { btnNeutral, btnPrimary, hintClass } from "../../channels/styles";
 import { SaveFolderFields, type FolderChange } from "../../folder/SaveFolderFields";
-import { channelName, listRules, type Rule, type RuleFields, type RuleList } from "../../rules/api";
+import { channelName, listRules, type RuleFields } from "../../rules/api";
 import { usePreview } from "../../rules/usePreview";
 import { nameTitle } from "../api";
 import { airing } from "../format";

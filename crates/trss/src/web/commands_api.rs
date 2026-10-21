@@ -112,8 +112,11 @@ pub fn routes() -> Router<AppState> {
 
 /// A command as the screen sees it.
 #[derive(Debug, Clone, PartialEq, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "Command"))]
 pub struct CommandView {
     pub id: String,
+    /// One of the kinds in the table above ([`CommandKind`]).
+    #[cfg_attr(test, ts(as = "CommandKind"))]
     pub kind: String,
     /// `pending`, `running`, `done` or `failed`.
     pub state: CommandState,
@@ -125,6 +128,7 @@ pub struct CommandView {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "CommandOutcome"))]
 pub struct OutcomeView {
     /// A code of the command's kind; for `receive_once`, a history result.
     pub result: String,
@@ -161,6 +165,44 @@ struct CreateBody {
     payload: Value,
 }
 
+/// The kinds of command, as `POST /commands` names them. The screens send
+/// them through [`CommandRequest`]; the web stores the kind as text, and the
+/// tests of [`super::api_types`] keep this list and [`Request::read`] together.
+#[cfg(test)]
+#[derive(Serialize, ts_rs::TS)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum CommandKind {
+    ReceiveOnce,
+    ReceivePast,
+    RuleArchive,
+    WatchRescan,
+    EpisodeUndo,
+    AnissiaCaptions,
+}
+
+/// A request to `POST /commands` as a screen writes it: the ID, the kind and
+/// the kind's own payload.
+#[cfg(test)]
+#[derive(Serialize, ts_rs::TS)]
+pub(super) struct CommandRequest {
+    pub id: String,
+    #[serde(flatten)]
+    pub command: CommandPayload,
+}
+
+/// A command's kind with the payload that kind takes.
+#[cfg(test)]
+#[derive(Serialize, ts_rs::TS)]
+#[serde(tag = "kind", content = "payload", rename_all = "snake_case")]
+pub(super) enum CommandPayload {
+    ReceiveOnce(receive_once::ReceiveOnce),
+    ReceivePast(PastRequest),
+    RuleArchive(rule_archive::RuleArchive),
+    WatchRescan(watch_rescan::WatchRescan),
+    EpisodeUndo(episode_undo::EpisodeUndo),
+    AnissiaCaptions(anissia_captions::AnissiaCaptions),
+}
+
 const BAD_BODY: &str = "요청 내용을 읽지 못했어요. 화면을 새로고침한 뒤 다시 시도해 주세요.";
 const MISMATCH: &str =
     "이 명령 ID는 다른 내용으로 이미 접수됐어요. 화면을 새로고침한 뒤 다시 시도해 주세요.";
@@ -193,7 +235,7 @@ pub(super) fn now_millis() -> i64 {
 
 /// A request read into a kind's own payload, before it is checked against the
 /// stored data.
-enum Request {
+pub(super) enum Request {
     ReceiveOnce(receive_once::ReceiveOnce),
     ReceivePast(PastRequest),
     RuleArchive(rule_archive::RuleArchive),
@@ -204,15 +246,16 @@ enum Request {
 
 /// What the browser sends to receive a result of a past episode search.
 #[derive(Debug, Clone, Deserialize)]
+#[cfg_attr(test, derive(Serialize, ts_rs::TS), ts(rename = "ReceivePastRequest"))]
 #[serde(deny_unknown_fields)]
-struct PastRequest {
-    rule_id: String,
-    search_id: String,
-    key: String,
+pub(super) struct PastRequest {
+    pub(super) rule_id: String,
+    pub(super) search_id: String,
+    pub(super) key: String,
 }
 
 impl Request {
-    fn read(kind: &str, payload: Value) -> Result<Request, ApiError> {
+    pub(super) fn read(kind: &str, payload: Value) -> Result<Request, ApiError> {
         match kind {
             receive_past::KIND => {
                 let payload: PastRequest =
@@ -248,7 +291,7 @@ impl Request {
         }
     }
 
-    fn kind(&self) -> &'static str {
+    pub(super) fn kind(&self) -> &'static str {
         match self {
             Request::ReceiveOnce(_) => receive_once::KIND,
             Request::ReceivePast(_) => receive_past::KIND,

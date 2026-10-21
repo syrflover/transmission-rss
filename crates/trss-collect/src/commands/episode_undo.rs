@@ -201,6 +201,7 @@ const RULE_CHANGED: &str =
 
 /// The content of an `episode_undo` request.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(rename = "EpisodeUndoRequest"))]
 #[serde(deny_unknown_fields)]
 pub struct EpisodeUndo {
     pub rule_id: String,

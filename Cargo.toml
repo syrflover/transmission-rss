@@ -73,6 +73,10 @@ tokio-util = "0.7"
 tower = { version = "0.5.3", features = ["util"] }
 tower-http = { version = "0.7.1", features = ["fs", "set-header"] }
 transmission-rpc = "0.5"
+# Generates the screens' TypeScript types from the API's Rust types. Only the
+# tests build it: the crates that derive it do so behind their `ts` feature,
+# and `trss` enables that feature in its dev-dependencies.
+ts-rs = "12"
 unicode-normalization = "0.1.25"
 url = "2"
 uuid = { version = "1", features = ["v4"] }

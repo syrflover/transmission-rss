@@ -25,10 +25,60 @@ use axum::{
     response::{IntoResponse, Response},
     Json,
 };
-use serde_json::{json, Value};
+use serde::Serialize;
+#[cfg(test)]
+use serde_json::json;
+use serde_json::Value;
 
 use trss_anilist::AnilistError;
 use trss_collect::store::channels::ChannelError;
+
+/// The `error` of a failed call's body.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[serde(rename_all = "snake_case")]
+pub enum ErrorCode {
+    Invalid,
+    NotFound,
+    Conflict,
+    Unavailable,
+    Internal,
+    HostNotAllowed,
+    Forbidden,
+    Gone,
+}
+
+/// The body of every failed `/api` call.
+#[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub struct ErrorBody {
+    pub error: ErrorCode,
+    /// A full Korean sentence for the screen to show as is.
+    pub message: String,
+    /// The server's current value, on a `conflict` that has one; absent
+    /// otherwise.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(test, ts(optional, type = "unknown"))]
+    pub current: Option<Value>,
+}
+
+/// The `current` of the `conflict` that a channel already has a rule following
+/// the anime: the rule, for the screen to open.
+#[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub struct AlreadySubscribed {
+    pub rule_id: String,
+}
+
+impl ErrorBody {
+    pub fn new(error: ErrorCode, message: impl Into<String>) -> Self {
+        ErrorBody {
+            error,
+            message: message.into(),
+            current: None,
+        }
+    }
+}
 
 #[derive(Debug)]
 pub enum ApiError {
@@ -75,32 +125,32 @@ impl IntoResponse for ApiError {
         let (status, body) = match self {
             ApiError::Invalid(message) => (
                 StatusCode::BAD_REQUEST,
-                json!({ "error": "invalid", "message": message }),
+                ErrorBody::new(ErrorCode::Invalid, message),
             ),
             ApiError::NotFound(message) => (
                 StatusCode::NOT_FOUND,
-                json!({ "error": "not_found", "message": message }),
+                ErrorBody::new(ErrorCode::NotFound, message),
             ),
-            ApiError::Conflict { message, current } => {
-                let mut body = json!({ "error": "conflict", "message": message });
-                if let Some(current) = current {
-                    body["current"] = current;
-                }
-                (StatusCode::CONFLICT, body)
-            }
+            ApiError::Conflict { message, current } => (
+                StatusCode::CONFLICT,
+                ErrorBody {
+                    current,
+                    ..ErrorBody::new(ErrorCode::Conflict, message)
+                },
+            ),
             ApiError::Unavailable(message) => (
                 StatusCode::BAD_GATEWAY,
-                json!({ "error": "unavailable", "message": message }),
+                ErrorBody::new(ErrorCode::Unavailable, message),
             ),
             ApiError::Busy(message) => (
                 StatusCode::SERVICE_UNAVAILABLE,
-                json!({ "error": "unavailable", "message": message }),
+                ErrorBody::new(ErrorCode::Unavailable, message),
             ),
             ApiError::Internal(detail) => {
                 eprintln!("trss: internal error: {detail}");
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,
-                    json!({ "error": "internal", "message": INTERNAL_MESSAGE }),
+                    ErrorBody::new(ErrorCode::Internal, INTERNAL_MESSAGE),
                 )
             }
         };
@@ -130,12 +180,12 @@ impl From<ChannelError> for ApiError {
             ),
             ChannelError::Invalid(reason) => ApiError::Invalid(reason.into()),
             // `current` names the rule that follows the anime, for the screen
-            // to open (`{ "rule_id": … }`).
+            // to open ([`AlreadySubscribed`]).
             ChannelError::AlreadySubscribed { rule_id } => ApiError::Conflict {
                 message:
                     "이 채널에서 이미 구독 중인 작품이에요. 구독 탭에서 그 구독을 열어 주세요."
                         .into(),
-                current: Some(json!({ "rule_id": rule_id })),
+                current: serde_json::to_value(AlreadySubscribed { rule_id }).ok(),
             },
             ChannelError::Db(e) => ApiError::Internal(e.to_string()),
         }

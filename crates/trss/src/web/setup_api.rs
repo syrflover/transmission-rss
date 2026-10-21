@@ -48,14 +48,16 @@ pub fn routes() -> Router<AppState> {
 }
 
 #[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 pub struct StepView {
     /// `folder` or `import`.
-    pub step: &'static str,
+    pub step: Step,
     pub done: bool,
     pub skipped: bool,
 }
 
 #[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "FirstRun"))]
 pub struct FirstRunView {
     /// The checklist is shown: it has not ended and a step is neither done nor
     /// skipped.
@@ -73,7 +75,7 @@ fn view_of(run: FirstRun) -> FirstRunView {
         steps: Step::ALL
             .into_iter()
             .map(|step| StepView {
-                step: step.code(),
+                step,
                 done: run.done(step),
                 skipped: run.skipped(step),
             })
@@ -93,7 +95,8 @@ pub async fn checklist(state: &AppState) -> Result<Option<FirstRunView>, ApiErro
 }
 
 #[derive(Deserialize)]
-struct SkipBody {
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub(super) struct SkipBody {
     skipped: bool,
 }
 

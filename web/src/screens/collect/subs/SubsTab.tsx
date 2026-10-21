@@ -3,6 +3,7 @@ import { Link, Route, Routes } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { useCached } from "@/lib/cached";
 import { quarterName } from "@/lib/quarter";
+import type { SubscriptionItem, SubscriptionList } from "@/lib/api-types";
 
 import { EmptyState } from "../../ScreenFrame";
 import { ArchiveSuggestions } from "../archive/ArchiveSuggestions";
@@ -12,7 +13,7 @@ import { PlusIcon } from "../icons";
 import { AddSubscription } from "./add/AddSubscription";
 import { Candidates } from "./Candidates";
 import { NameTitle } from "./title/NameTitle";
-import { listSubscriptions, type SubscriptionItem, type SubscriptionList } from "./api";
+import { listSubscriptions } from "./api";
 import { SubscriptionCard } from "./SubscriptionCard";
 
 const grid = "m-0 grid list-none grid-cols-[repeat(auto-fill,minmax(min(100%,300px),1fr))] gap-3.5 p-0";

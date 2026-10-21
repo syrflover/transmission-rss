@@ -4,10 +4,11 @@ import { Link } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { useCached } from "@/lib/cached";
 import { cn } from "@/lib/utils";
+import type { ArchiveSuggestion } from "@/lib/api-types";
 
 import { KEYS, ruleArchived, suggestionGone } from "../cache";
 import { btnNeutral } from "../channels/styles";
-import { archiveRule, fetchArchiveSuggestions, type ArchiveSuggestion } from "./api";
+import { archiveRule, fetchArchiveSuggestions } from "./api";
 import { groundText, suggestionTitle } from "./ground";
 
 /** The accent of the suggestions: purple, the calm color of `보관`, not a warning. */

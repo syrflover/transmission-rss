@@ -1,6 +1,10 @@
+import type { ArchiveDirection } from "../../../lib/api-types/ArchiveDirection";
+import type { RuleState } from "../../../lib/api-types/RuleState";
+
 /**
  * Whether an ended folder move still says something about the rule as it is
- * now. It imports nothing, so it runs and is type-checked under `node --test`.
+ * now. It imports only types (by a relative path, erased at run time), so it
+ * runs and is type-checked under `node --test`.
  *
  * - An archive tells while the rule is archived, a restore while it collects.
  * - `start` and `resume` (a rule that waited for its work folder) tell that they
@@ -10,8 +14,8 @@
  * - A failed archive or restore tells whatever the rule is now.
  */
 export function moveStillTells(
-  move: { direction: "archive" | "restore" | "start" | "resume"; command: { state: string } },
-  ruleState: "active" | "paused" | "archived",
+  move: { direction: ArchiveDirection; command: { state: string } },
+  ruleState: RuleState,
 ): boolean {
   const failed = move.command.state === "failed";
   switch (move.direction) {

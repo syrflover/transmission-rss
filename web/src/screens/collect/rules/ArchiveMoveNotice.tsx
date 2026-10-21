@@ -2,9 +2,9 @@ import { Button } from "@/components/ui/button";
 import { isOpen } from "@/lib/commands";
 import { ago, dateTime } from "@/lib/time";
 import { cn } from "@/lib/utils";
+import type { ArchiveDirection, ArchiveMove, Rule } from "@/lib/api-types";
 
 import { btnAction, btnNeutral } from "../channels/styles";
-import type { ArchiveDirection, ArchiveMove, Rule } from "./api";
 import { moveStillTells } from "./moveStillTells";
 import type { MovePhase } from "./useArchiveMove";
 

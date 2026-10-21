@@ -226,7 +226,12 @@ use hub::{
     MIN_SIDE,
 };
 
-use super::{commands_api::now_millis, env::BrowserAccess, ApiError, AppState};
+use super::{
+    commands_api::now_millis,
+    env::BrowserAccess,
+    error::{ErrorBody, ErrorCode},
+    ApiError, AppState,
+};
 
 /// How often a person's input is recorded for the worker's idle end.
 pub const INPUT_EVERY: Duration = Duration::from_secs(10);
@@ -580,8 +585,8 @@ async fn answered(
     })
 }
 
-fn refuse(status: StatusCode, error: &str, message: &str) -> Response {
-    (status, Json(json!({ "error": error, "message": message }))).into_response()
+fn refuse(status: StatusCode, error: ErrorCode, message: &str) -> Response {
+    (status, Json(ErrorBody::new(error, message))).into_response()
 }
 
 #[derive(Debug, Deserialize)]
@@ -602,7 +607,11 @@ async fn socket(
     // browser: `crate::web::origin_guard`, around the whole router, refuses a
     // WebSocket whose `Origin` is missing or not the request's own.
     let Some(remote) = state.remote.clone() else {
-        return refuse(StatusCode::SERVICE_UNAVAILABLE, "unavailable", NO_BROWSER);
+        return refuse(
+            StatusCode::SERVICE_UNAVAILABLE,
+            ErrorCode::Unavailable,
+            NO_BROWSER,
+        );
     };
     let screen = match state.screens.screen(&id).await {
         Ok(screen) => screen,
@@ -615,14 +624,18 @@ async fn socket(
                 match job_exists(&state, &id).await {
                     Ok(true) => {}
                     Ok(false) => {
-                        return refuse(StatusCode::NOT_FOUND, "not_found", "작업을 찾지 못했어요.")
+                        return refuse(
+                            StatusCode::NOT_FOUND,
+                            ErrorCode::NotFound,
+                            "작업을 찾지 못했어요.",
+                        )
                     }
                     Err(e) => return e.into_response(),
                 }
             }
             return refuse(
                 StatusCode::CONFLICT,
-                "conflict",
+                ErrorCode::Conflict,
                 "이 작업은 사이트 확인을 기다리고 있지 않아요.",
             );
         }
@@ -630,7 +643,7 @@ async fn socket(
     let Some(binding) = screen.seat() else {
         return refuse(
             StatusCode::GONE,
-            "gone",
+            ErrorCode::Gone,
             "이 작업의 서버 브라우저가 닫혔어요. 작업 화면을 다시 열면 다시 준비해요.",
         );
     };
@@ -639,7 +652,7 @@ async fn socket(
     {
         return refuse(
             StatusCode::GONE,
-            "gone",
+            ErrorCode::Gone,
             "연결하려던 서버 브라우저 실행이 끝났어요. 작업을 다시 읽어 주세요.",
         );
     }

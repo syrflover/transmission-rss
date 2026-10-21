@@ -2,8 +2,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { ApiError } from "@/lib/api";
 import { getCommand, isOpen, newCommandId, type Command } from "@/lib/commands";
+import type { ArchiveDirection, ArchiveMove, Rule } from "@/lib/api-types";
 
-import { getRule, sendArchive, type ArchiveDirection, type ArchiveMove, type Rule } from "./api";
+import { getRule, sendArchive } from "./api";
 
 /** How often an open command is asked for its state, in milliseconds. */
 export const POLL_MS = 2000;

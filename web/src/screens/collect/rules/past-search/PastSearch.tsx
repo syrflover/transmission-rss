@@ -6,17 +6,12 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils";
+import type { ResultItem, ResultState, SearchContext, SearchResult, StartSearchBody } from "@/lib/api-types";
 
 import { btnAction, btnNeutral, hintClass, inputClass, labelClass } from "../../channels/styles";
 import { PickRow, ProgressRows, SelectionBar } from "../../subs/add/PastItems";
 import { useCommandRows } from "../../subs/add/useReceive";
-import {
-  receivePast,
-  type ResultItem,
-  type ResultState,
-  type SearchContext,
-  type SearchResult,
-} from "./api";
+import { receivePast } from "./api";
 import { usePastSearch } from "./usePastSearch";
 import { useRangeLabel } from "./useRangeLabel";
 
@@ -70,7 +65,7 @@ function RangeStep({
   context: SearchContext;
   error: string | null;
   disabled: string | null;
-  onSearch: (body: { query: string; from: number; to: number }) => void;
+  onSearch: (body: StartSearchBody) => void;
   onClose: () => void;
 }) {
   const uid = useId();

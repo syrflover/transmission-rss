@@ -4,11 +4,12 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useCached } from "@/lib/cached";
 import { cn } from "@/lib/utils";
+import type { FolderSuggestion, FolderWork } from "@/lib/api-types";
 
 import { KEYS } from "../cache";
 import { hintClass, inputClass, labelClass } from "../channels/styles";
 import { optionClass } from "../subs/add/draft";
-import { fetchFolderWorks, fetchSuggestion, type FolderSuggestion, type FolderWork } from "./api";
+import { fetchFolderWorks, fetchSuggestion } from "./api";
 import {
   folderOf,
   matchingWorks,

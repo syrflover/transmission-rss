@@ -3,9 +3,10 @@ import { useId, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { ApiError } from "@/lib/api";
 import { useCached } from "@/lib/cached";
+import type { Creators } from "@/lib/api-types";
 
 import { btnAction, btnNeutral } from "../../collect/channels/styles";
-import { changeCreator, fetchCreators, type Creators } from "../../collect/subs/api";
+import { changeCreator, fetchCreators } from "../../collect/subs/api";
 import { CreatorPicker } from "../../collect/subs/CreatorPicker";
 import { subtitleChoice } from "../../collect/subs/format";
 import { nameUnknownCreators, setFileCreator, type WorkSeason, type WorkSubscription, type WorkSubtitle } from "../api";

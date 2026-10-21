@@ -78,6 +78,7 @@ const MAX_LIMIT: usize = 200;
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "HistoryItem"))]
 pub struct HistoryItemView {
     pub id: i64,
     pub channel_id: String,
@@ -89,7 +90,7 @@ pub struct HistoryItemView {
     pub first_seen_at: i64,
     /// A result code: `received` (`추가함`), `no_match`, `excluded`, `duplicate`,
     /// `add_failed` or `version_unknown` (`버전 미상`).
-    pub result: &'static str,
+    pub result: HistoryResult,
     pub result_label: &'static str,
     /// When the result was decided, Unix milliseconds.
     pub result_at: i64,
@@ -114,6 +115,7 @@ pub struct HistoryItemView {
 }
 
 #[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "NameTitle"))]
 pub struct NameTitleView {
     /// The work part of the item's title: the match phrase it would give.
     pub work: String,
@@ -122,6 +124,7 @@ pub struct NameTitleView {
 }
 
 #[derive(Debug, Default, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "HistoryCounts"))]
 pub struct Counts {
     pub total: i64,
     pub received: i64,
@@ -133,7 +136,8 @@ pub struct Counts {
 }
 
 #[derive(Serialize)]
-struct HistoryList {
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "HistoryPage"))]
+pub(super) struct HistoryList {
     items: Vec<HistoryItemView>,
     /// Pass as `after` for the next page; `null` on the last one.
     next: Option<String>,
@@ -256,7 +260,7 @@ fn views(
                 channel_deleted: channel.is_none(),
                 title: item.title,
                 first_seen_at: item.first_seen_at,
-                result: item.result.code(),
+                result: item.result,
                 result_label: item.result.label(),
                 result_at: item.result_at,
                 rule_label: rule.map(Directory::rule_label),

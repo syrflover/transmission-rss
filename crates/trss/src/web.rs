@@ -20,6 +20,8 @@ use tower_http::{
 };
 
 pub mod api;
+#[cfg(test)]
+mod api_types;
 pub mod archive_api;
 pub mod artwork_api;
 pub mod browser_net;

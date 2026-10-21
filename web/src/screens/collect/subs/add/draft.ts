@@ -1,5 +1,4 @@
-import type { Channel } from "../../channels/api";
-import type { ScheduleEntry, SubtitleMode, TitleGroup } from "../api";
+import type { Channel, ScheduleEntry, SubtitleMode, TitleGroup } from "@/lib/api-types";
 
 /** What the subscribe flow has collected so far. */
 export interface Draft {

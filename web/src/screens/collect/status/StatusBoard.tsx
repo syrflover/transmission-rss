@@ -5,10 +5,11 @@ import { useCached } from "@/lib/cached";
 import { when } from "@/lib/time";
 import { cn } from "@/lib/utils";
 import { WEEKDAYS_SHORT } from "@/lib/weekday";
+import type { Board } from "@/lib/api-types";
 
 import { KEYS } from "../cache";
 import { channelName } from "../rules/api";
-import { loadBoard, STALLED, STALLED_SHORT, type Board } from "./api";
+import { loadBoard, STALLED, STALLED_SHORT } from "./api";
 
 const POLL_MS = 30_000;
 /** The history filter the `실패·중복` link opens. */

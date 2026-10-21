@@ -141,7 +141,9 @@ impl fmt::Debug for Channel {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(rename_all = "snake_case")]
 pub enum RuleState {
     Active,
     /// `영상 받기` is off: the rule keeps its place and its work folder, and
@@ -222,7 +224,9 @@ impl RuleInput {
 }
 
 /// How a subscription gets subtitles (`docs/specs/collection.md`, 방영작 구독).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(rename_all = "snake_case")]
 pub enum SubtitleMode {
     /// Follow the subtitle creator named in the subscription.
     Follow,

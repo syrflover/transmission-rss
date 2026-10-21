@@ -5,7 +5,9 @@ use trss_core::Millis;
 
 /// What became of an RSS item. The codes are stored in the database and are
 /// stable; the Korean labels are what the screens show.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(rename_all = "snake_case")]
 pub enum HistoryResult {
     /// `received` (추가함): Transmission took the torrent (a rule selected the
     /// item, or a retry of a failed one added it). Not that the download is done.

@@ -1,7 +1,7 @@
 import { dateTime } from "@/lib/time";
+import type { ArchiveSuggestion, Ground } from "@/lib/api-types";
 
 import { startDate } from "../subs/format";
-import type { ArchiveSuggestion, Ground } from "./api";
 
 /** The work a suggestion is for: the anime's name, else the rule's phrase. */
 export function suggestionTitle(s: Pick<ArchiveSuggestion, "anime" | "title">): string {

@@ -1,11 +1,11 @@
 import { Button } from "@/components/ui/button";
 import { useAfterDelay } from "@/lib/cached";
 import { cn } from "@/lib/utils";
+import type { Preview, PreviewItem, PreviewKind } from "@/lib/api-types";
 
 import { btnNeutral } from "../channels/styles";
 import { ReceivedAs } from "../subs/add/PastItems";
 import { PHASE_TEXT, type ReceivePhase } from "../subs/add/useReceive";
-import type { Preview, PreviewItem, PreviewKind } from "./api";
 import type { PreviewState } from "./usePreview";
 
 const KIND: Record<PreviewKind, { label: string; badge: string }> = {

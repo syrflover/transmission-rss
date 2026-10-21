@@ -2,9 +2,10 @@ import { useId, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { useCached } from "@/lib/cached";
+import type { Creators } from "@/lib/api-types";
 
 import { btnAction, btnNeutral } from "../channels/styles";
-import { fetchCreators, type Creators } from "./api";
+import { fetchCreators } from "./api";
 
 const radio = "mt-0.5 size-[18px] flex-none accent-focus";
 const option =

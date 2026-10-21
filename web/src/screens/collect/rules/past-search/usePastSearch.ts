@@ -1,15 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { ApiError } from "@/lib/api";
+import type { SearchContext, SearchResult, StartSearchBody } from "@/lib/api-types";
 
-import {
-  cancelSearch,
-  pollSearch,
-  searchContext,
-  startSearch,
-  type SearchContext,
-  type SearchResult,
-} from "./api";
+import { cancelSearch, pollSearch, searchContext, startSearch } from "./api";
 
 /** How often a running search is asked how far it is, in milliseconds. */
 const POLL_MS = 700;
@@ -73,7 +67,7 @@ export function usePastSearch(ruleId: string) {
   }, [ruleId]);
 
   const begin = useCallback(
-    async (context: SearchContext, body: { query: string; from: number; to: number }) => {
+    async (context: SearchContext, body: StartSearchBody) => {
       try {
         const { search_id } = await startSearch(ruleId, body);
         searchId.current = search_id;

@@ -1,6 +1,6 @@
 import { WEEKDAYS_LONG, WEEKDAYS_SHORT } from "@/lib/weekday";
+import type { Anime, RunState, SubscriptionBrief } from "@/lib/api-types";
 
-import type { Anime, RunState, SubscriptionBrief } from "./api";
 
 /** The tabs of the schedule: Sunday to Saturday, `기타` and `신작`, as Anissia groups them. */
 export const WEEK_TABS: readonly string[] = [...WEEKDAYS_SHORT, "기타", "신작"];

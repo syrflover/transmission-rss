@@ -40,7 +40,7 @@ use trss_collect::{
     episode_offset::{self, decide, first_release, gather, may_decide, worth_offering},
     plan::preview::{preview, Edit},
     store::{
-        channels::{ChannelError, ChannelWithRules, Rule, RuleInput, RuleState},
+        channels::{ChannelError, ChannelWithRules, Rule, RuleInput, RuleState, UndoFileState},
         history::HistoryItem,
     },
 };
@@ -48,6 +48,7 @@ use trss_core::{episode::signed, settings::CollectionSettings};
 
 /// What the app offers for a rule's offset.
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 pub struct EpisodeSuggestion {
     /// The offset `적용` saves; `null` when the grounds do not say one and the
     /// user has to write it.
@@ -58,6 +59,7 @@ pub struct EpisodeSuggestion {
 
 /// The last `되돌리기` of a rule's automatic offset.
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "EpisodeUndo"))]
 pub struct EpisodeUndoView {
     /// The command; it ends `done` (`undone`) once the value is back, or
     /// `failed` with the reason nothing changed.
@@ -73,11 +75,12 @@ pub struct EpisodeUndoView {
 
 /// One video of an undo.
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "EpisodeUndoFile"))]
 pub struct UndoFileView {
     pub from_name: String,
     pub to_name: String,
     /// `pending`, `renamed` or `kept` (left as it is, for the `reason`).
-    pub state: &'static str,
+    pub state: UndoFileState,
     pub reason: Option<String>,
 }
 
@@ -347,7 +350,7 @@ async fn undos(state: &AppState, ids: Vec<String>) -> HashMap<String, EpisodeUnd
                             .map(|f| UndoFileView {
                                 from_name: f.file.from_name.clone(),
                                 to_name: f.file.to_name.clone(),
-                                state: f.state.code(),
+                                state: f.state,
                                 reason: f.reason.clone(),
                             })
                             .collect()
@@ -375,8 +378,9 @@ fn with_previous(basis: &str, previous: i64) -> String {
 }
 
 #[derive(Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "RuleEpisodeBody"))]
 #[serde(deny_unknown_fields)]
-pub(super) struct EpisodeBody {
+pub(in crate::web) struct EpisodeBody {
     /// The version the client saw.
     version: i64,
     episode: i64,

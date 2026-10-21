@@ -1,11 +1,12 @@
 import { useEffect, useId } from "react";
 
 import { setTodoCount } from "@/app/todo-count";
+import type { ArchiveSuggestion, TitleCandidate } from "@/lib/api-types";
 
 import { EmptyState, ScreenFrame } from "./ScreenFrame";
 import { KEYS as COLLECT_KEYS } from "./collect/cache";
-import { fetchArchiveSuggestions, type ArchiveSuggestion } from "./collect/archive/api";
-import { fetchCandidates, type TitleCandidate } from "./collect/subs/api";
+import { fetchArchiveSuggestions } from "./collect/archive/api";
+import { fetchCandidates } from "./collect/subs/api";
 import {
   fetchFollowSuggestions,
   fetchJobs,

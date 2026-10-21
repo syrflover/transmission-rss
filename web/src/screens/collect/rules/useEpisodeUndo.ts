@@ -2,8 +2,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { ApiError } from "@/lib/api";
 import { getCommand, isOpen, newCommandId, type Command } from "@/lib/commands";
+import type { EpisodeUndo, Rule } from "@/lib/api-types";
 
-import { getRule, sendEpisodeUndo, type EpisodeUndo, type Rule } from "./api";
+import { getRule, sendEpisodeUndo } from "./api";
 import { POLL_MS } from "./useArchiveMove";
 
 /**

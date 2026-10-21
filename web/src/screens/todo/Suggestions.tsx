@@ -2,13 +2,12 @@ import { Link } from "react-router-dom";
 
 import { Button } from "@/components/ui/button";
 import { when } from "@/lib/time";
+import type { ArchiveSuggestion, Ground, TitleCandidate } from "@/lib/api-types";
 
-import type { ArchiveSuggestion, Ground } from "../collect/archive/api";
 import { suggestionTitle } from "../collect/archive/ground";
 import { btnNeutral } from "../collect/channels/styles";
 import { nameTitleLink } from "../collect/subs/Candidates";
 import { startDate } from "../collect/subs/format";
-import type { TitleCandidate } from "../collect/subs/api";
 import type { FollowSuggestion } from "./api";
 import { Tag } from "./badges";
 import { segmentsText } from "../library/detail/episodeKey.ts";

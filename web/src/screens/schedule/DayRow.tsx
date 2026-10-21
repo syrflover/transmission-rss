@@ -1,6 +1,6 @@
 import { cn } from "@/lib/utils";
+import type { ScheduleDay } from "@/lib/api-types";
 
-import type { Day } from "./api";
 import { monthDay, weekdayName } from "./format";
 import { WeekCard } from "./WeekCard";
 
@@ -17,7 +17,7 @@ function Today() {
  * One day of the week: the date and weekday in a column, then the cards of what
  * airs, wrapping across the width. A day with nothing airing is one thin line.
  */
-export function DayRow({ day }: { day: Day }) {
+export function DayRow({ day }: { day: ScheduleDay }) {
   const empty = day.cards.length === 0;
   const name = weekdayName(day.weekday);
   return (

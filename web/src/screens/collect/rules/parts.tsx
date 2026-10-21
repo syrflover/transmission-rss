@@ -7,10 +7,10 @@ import { cn } from "@/lib/utils";
 import { workPath } from "@/screens/library/api";
 import { coverOf } from "@/screens/library/model";
 import { Cover } from "@/screens/library/WorkItem";
+import type { Rule, RuleSeason } from "@/lib/api-types";
 
 import { btnNeutral } from "../channels/styles";
 import { airing, subtitleChoice } from "../subs/format";
-import type { Rule, RuleSeason } from "./api";
 import { parseEpisode, type Draft } from "./draft";
 
 /** The empty box that keeps the poster's size for a rule with no cover. */

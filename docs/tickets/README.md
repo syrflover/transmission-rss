@@ -199,7 +199,7 @@
 | [0154](0154-change-events-and-command-reads.md) | 바뀜을 알리는 SSE 경로를 만들고 명령과 지난 회차 검색의 주기 조회를 바꿔요 | 대기 | 0147 |
 | [0155](0155-events-for-jobs-todos-candidates.md) | 자막 작업·할 일·자막 후보·보관 파일 정리를 이벤트로 다시 읽어요 | 대기 | 0154, 쓰기 길 모으기 |
 | [0156](0156-events-for-covers-schedule-status.md) | 표지·시즌 정보·편성·상태판을 이벤트로 다시 읽고 남은 주기 조회를 없애요 | 대기 | 0148, 0154, 쓰기 길 모으기 |
-| [0157](0157-generated-types-collect.md) | 화면 타입 생성 도구를 들이고 수집 화면이 쓰는 API의 타입을 생성해요 | 대기 | 0145 |
+| [0157](0157-generated-types-collect.md) | 화면 타입 생성 도구를 들이고 수집 화면이 쓰는 API의 타입을 생성해요 | 완료 | 0145 |
 | [0158](0158-generated-types-library.md) | 라이브러리 화면이 쓰는 API의 타입을 생성해요 | 대기 | 0157 |
 | [0159](0159-generated-types-rest-and-events.md) | 나머지 화면과 이벤트의 API 타입을 생성하고 손으로 쓴 타입을 없애요 | 대기 | 0155, 0156, 0158 |
 | [0160](0160-test-setup-costs.md) | 테스트 바이너리가 테스트마다 들이는 준비 비용을 측정하고 줄여요 | 대기 | 0150, 0153, 0159 |

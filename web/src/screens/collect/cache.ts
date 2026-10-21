@@ -1,10 +1,8 @@
 import { forget, forgetPrefix, patch } from "@/lib/cached";
 import { forgetLibrary, WORK_PREFIX } from "@/screens/library/api";
 import { forgetWeek } from "@/screens/schedule/api";
+import type { ArchiveSuggestion, ChannelList, RuleList } from "@/lib/api-types";
 
-import type { ArchiveSuggestion } from "./archive/api";
-import type { ChannelList } from "./channels/api";
-import type { RuleList } from "./rules/api";
 
 /**
  * The cache keys of the collection screens, and what a write on one screen

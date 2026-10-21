@@ -84,6 +84,7 @@ const GONE: &str = "이 검색은 끝났거나 서버가 다시 시작돼서 결
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "SearchContext"))]
 pub struct Context {
     pub rule_id: String,
     pub channel_id: String,
@@ -230,15 +231,17 @@ async fn context(
 // ---------------------------------------------------------------------------
 
 #[derive(Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "StartSearchBody"))]
 #[serde(deny_unknown_fields)]
-struct StartBody {
+pub(super) struct StartBody {
     query: String,
     from: u32,
     to: u32,
 }
 
 #[derive(Serialize)]
-struct Started {
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "SearchStarted"))]
+pub(super) struct Started {
     search_id: String,
 }
 
@@ -246,14 +249,16 @@ struct Started {
 const BAD_RANGE: &str = "릴리스 회차 범위를 1 이상으로, 시작이 끝보다 크지 않게 적어 주세요.";
 
 #[derive(Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "SearchRangeBody"))]
 #[serde(deny_unknown_fields)]
-struct RangeBody {
+pub(super) struct RangeBody {
     from: u32,
     to: u32,
 }
 
 /// The folder episodes of a typed range of releases.
 #[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 pub struct RangeLabel {
     pub from: u32,
     pub to: u32,
@@ -409,10 +414,20 @@ async fn start(
 // Following a search
 // ---------------------------------------------------------------------------
 
+/// Where a search is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "SearchState"))]
+#[serde(rename_all = "snake_case")]
+pub enum PollState {
+    Running,
+    Failed,
+    Done,
+}
+
 #[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "SearchPoll"))]
 pub struct Poll {
-    /// `running`, `failed` or `done`.
-    pub state: &'static str,
+    pub state: PollState,
     pub rule_id: String,
     /// While running: the extra searches sent, and how many are planned.
     pub sent: usize,
@@ -423,6 +438,7 @@ pub struct Poll {
 }
 
 #[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "SearchResult"))]
 pub struct ResultView {
     pub from: u32,
     pub to: u32,
@@ -446,11 +462,12 @@ pub struct ResultView {
 }
 
 #[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "ResultItem"))]
 pub struct ItemView {
     pub key: String,
     pub title: String,
     /// See [`trss_collect::past_search::judge::State::code`].
-    pub state: &'static str,
+    pub state: trss_collect::past_search::judge::State,
     pub note: Option<String>,
     pub release: Option<u32>,
     pub half: bool,
@@ -465,7 +482,7 @@ impl From<&Item> for ItemView {
         ItemView {
             key: item.key.clone(),
             title: item.title.clone(),
-            state: item.state.code(),
+            state: item.state,
             note: item.note.clone(),
             release: item.release,
             half: item.half,
@@ -520,7 +537,7 @@ async fn poll(
         .status(&search_id)
         .ok_or_else(|| ApiError::not_found(GONE))?;
     let mut poll = Poll {
-        state: "running",
+        state: PollState::Running,
         rule_id,
         sent: 0,
         needed: 0,
@@ -533,11 +550,11 @@ async fn poll(
             poll.needed = needed;
         }
         Status::Failed(sentence) => {
-            poll.state = "failed";
+            poll.state = PollState::Failed;
             poll.error = Some(sentence);
         }
         Status::Done(outcome) => {
-            poll.state = "done";
+            poll.state = PollState::Done;
             let label = result_label(&state, &outcome).await;
             poll.result = Some(result_view(&outcome, label));
         }

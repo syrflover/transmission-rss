@@ -68,7 +68,9 @@ pub struct NewUndoFile {
 }
 
 /// Where the rename of one video is.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(rename_all = "snake_case")]
 pub enum UndoFileState {
     Pending,
     Renamed,

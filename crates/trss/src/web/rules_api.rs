@@ -161,12 +161,14 @@ use trss_collect::{
             Channel, ChannelError, ChannelWithRules, OrderItem, Rule, RuleInput, RuleState,
             SeasonRef,
         },
-        history::{HistoryError, HistoryItem, HistoryQuery, HistoryStore, MAX_PAGE_SIZE},
+        history::{
+            HistoryError, HistoryItem, HistoryQuery, HistoryResult, HistoryStore, MAX_PAGE_SIZE,
+        },
     },
 };
 use trss_core::commands::{Accepted, Command, CommandState};
 
-mod episode;
+pub(super) mod episode;
 #[cfg(test)]
 mod tests;
 
@@ -198,6 +200,7 @@ const PREVIEW_LIST_LIMIT: usize = 100;
 
 /// A regular expression that does not compile, said for people.
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 pub struct RegexProblem {
     /// A full sentence for the screen.
     pub message: String,
@@ -229,6 +232,7 @@ fn regex_problem(err: &regex::Error) -> RegexProblem {
 
 /// A stored rule as the screen sees it.
 #[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "Rule"))]
 pub struct RuleView {
     pub id: String,
     pub channel_id: String,
@@ -256,8 +260,7 @@ pub struct RuleView {
     /// The last `되돌리기` of the rule's automatic offset (an `episode_undo`
     /// command), open or ended; `null` when it never had one.
     pub episode_undo: Option<episode::EpisodeUndoView>,
-    /// `active`, `paused` or `archived`.
-    pub state: &'static str,
+    pub state: RuleState,
     /// An earlier rule takes an item that this rule also matches.
     pub overlap: bool,
     /// Set when the rule's regular expression does not compile.
@@ -279,6 +282,7 @@ pub struct RuleView {
 
 /// The season a subscription is connected to and how far it has come.
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "RuleSeason"))]
 pub struct RuleSeasonView {
     pub season_id: String,
     pub work_id: String,
@@ -293,8 +297,19 @@ pub struct RuleSeasonView {
     pub episodes: Option<u32>,
 }
 
+/// What holds a season: another `subscription`, or the anime the season was
+/// linked to from the work detail (`link`), which the work detail changes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[serde(rename_all = "snake_case")]
+pub enum HeldBy {
+    Subscription,
+    Link,
+}
+
 /// A season that another anime holds, which kept a rule from connecting.
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "SeasonBlocked"))]
 pub struct SeasonBlockedView {
     pub work_id: String,
     /// The work title (작품명); `null` when the work is gone.
@@ -303,16 +318,16 @@ pub struct SeasonBlockedView {
     /// Anissia's `animeNo` of the holder, and its title when the app has one.
     pub holder_anime_no: Option<i64>,
     pub holder_subject: Option<String>,
-    /// What holds the season: another `subscription`, or the anime the season
-    /// was linked to from the work detail (`link`), which the work detail changes.
-    pub held_by: &'static str,
+    pub held_by: HeldBy,
 }
 
 /// An archive or restore of a rule and where it is.
 #[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "ArchiveMove"))]
 pub struct ArchiveMoveView {
-    /// `archive` or `restore`.
-    pub direction: &'static str,
+    /// `archive` or `restore`; the web's own `start` and `resume` too, while
+    /// a rule waits for its work folder to come out of the archive folder.
+    pub direction: rule_archive::Direction,
     /// The command; its outcome's `result` is `moved`, `kept` (the rule
     /// changed state and the folder stayed, for the `reason`) or `failed`.
     pub command: CommandView,
@@ -321,13 +336,14 @@ pub struct ArchiveMoveView {
 fn archive_move_view(command: &Command) -> Option<ArchiveMoveView> {
     let payload: RuleArchive = serde_json::from_str(&command.payload).ok()?;
     Some(ArchiveMoveView {
-        direction: payload.direction.code(),
+        direction: payload.direction,
         command: CommandView::from(command),
     })
 }
 
 /// The channel a rule belongs to, enough to name and group its rules.
 #[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 pub struct ChannelBrief {
     pub id: String,
     pub position: i64,
@@ -354,7 +370,8 @@ fn brief(cwr: &ChannelWithRules) -> ChannelBrief {
 }
 
 #[derive(Debug, Serialize)]
-struct RuleList {
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub(super) struct RuleList {
     rules: Vec<RuleView>,
     channels: Vec<ChannelBrief>,
     /// The app's collect folder, which every rule's `directory` is relative
@@ -364,12 +381,14 @@ struct RuleList {
 }
 
 #[derive(Serialize)]
-struct RuleGroup {
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub(super) struct RuleGroup {
     rules: Vec<RuleView>,
 }
 
 #[derive(Serialize)]
-struct Removed {
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "RuleRemoved"))]
+pub(super) struct Removed {
     removed: bool,
 }
 
@@ -717,9 +736,9 @@ async fn blocked_by(state: &AppState, season_id: &str) -> Result<SeasonBlockedVi
         holder_anime_no,
         holder_subject,
         held_by: if held_by_subscription {
-            "subscription"
+            HeldBy::Subscription
         } else {
-            "link"
+            HeldBy::Link
         },
     })
 }
@@ -817,7 +836,7 @@ fn views(
             episode_previous: analysis.episodes.previous.get(&rule.id).copied(),
             episode_suggestion: analysis.episodes.suggestion.get(&rule.id).cloned(),
             episode_undo: analysis.episodes.undo.get(&rule.id).cloned(),
-            state: rule.state.as_str(),
+            state: rule.state,
             overlap: analysis.overlap.contains(&rule.id),
             error: analysis.errors.get(&rule.id).cloned(),
             last_received_at: analysis.last_received.get(&rule.id).copied(),
@@ -915,10 +934,12 @@ async fn list_rules(State(state): State<AppState>) -> Result<Json<RuleList>, Api
 
 /// The editable fields of a rule, as the screen sends them.
 #[derive(Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "RuleFieldsBody"))]
 #[serde(deny_unknown_fields)]
-struct RuleFields {
+pub(super) struct RuleFields {
     /// Blank or `null` means the rule waits for its title.
     #[serde(default)]
+    #[cfg_attr(test, ts(optional = nullable))]
     r#match: Option<String>,
     #[serde(default)]
     regex: bool,
@@ -930,21 +951,26 @@ struct RuleFields {
     episode: i64,
     /// `active` (the default), `paused` or `archived`; a save sends the stored
     /// one (see the module docs).
+    // Read as text, so an unknown state is refused where it always was: after
+    // the rule and its version are checked.
     #[serde(default)]
+    #[cfg_attr(test, ts(as = "Option<RuleState>", optional = nullable))]
     state: Option<String>,
 }
 
 #[derive(Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "RuleCreateBody"))]
 #[serde(deny_unknown_fields)]
-struct CreateBody {
+pub(super) struct CreateBody {
     channel_id: String,
     #[serde(flatten)]
     fields: RuleFields,
 }
 
 #[derive(Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "RuleUpdateBody"))]
 #[serde(deny_unknown_fields)]
-struct UpdateBody {
+pub(super) struct UpdateBody {
     /// The version the client saw.
     version: i64,
     /// The channel the client believes the rule belongs to.
@@ -959,8 +985,9 @@ struct DeleteQuery {
 }
 
 #[derive(Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "RuleOrderBody"))]
 #[serde(deny_unknown_fields)]
-struct OrderBody {
+pub(super) struct OrderBody {
     channel_id: String,
     /// Every rule of the channel once, in the wanted order, each with the
     /// version the client saw.
@@ -968,17 +995,20 @@ struct OrderBody {
 }
 
 #[derive(Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "RuleOrderEntry"))]
 struct OrderEntry {
     id: String,
     version: i64,
 }
 
 #[derive(Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "RulePreviewBody"))]
 #[serde(deny_unknown_fields)]
-struct PreviewBody {
+pub(super) struct PreviewBody {
     channel_id: String,
     /// The rule being edited; absent for a rule not saved yet.
     #[serde(default)]
+    #[cfg_attr(test, ts(optional = nullable))]
     rule_id: Option<String>,
     /// The edited fields (the `state` is ignored: a preview always judges the
     /// rule as if it were collecting).
@@ -986,6 +1016,7 @@ struct PreviewBody {
     /// Where the edited rule stands among the channel's rules, from 0. Absent
     /// keeps its place (a new rule goes last).
     #[serde(default)]
+    #[cfg_attr(test, ts(optional = nullable))]
     position: Option<usize>,
     /// The rule not saved yet is a subscription about to be made: the preview
     /// says what the app offers its offset before anything is received
@@ -1162,15 +1193,18 @@ async fn delete_rule(
 }
 
 #[derive(Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "RuleSwitchBody"))]
 #[serde(deny_unknown_fields)]
-struct SwitchBody {
+pub(super) struct SwitchBody {
     /// The version the client saw.
     version: i64,
     /// `영상 받기`.
     #[serde(default)]
+    #[cfg_attr(test, ts(optional = nullable))]
     video: Option<bool>,
     /// `자막 받기`.
     #[serde(default)]
+    #[cfg_attr(test, ts(optional = nullable))]
     subtitles: Option<bool>,
 }
 
@@ -1301,6 +1335,7 @@ struct ArchivedWorkQuery {
 /// A work of the archive folder that a rule saving to the typed folder would
 /// bring into the collect folder.
 #[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "ArchivedWork"))]
 pub struct ArchivedWorkView {
     /// The work folder's name.
     pub work: String,
@@ -1312,7 +1347,8 @@ pub struct ArchivedWorkView {
 }
 
 #[derive(Serialize)]
-struct ArchivedWorkAnswer {
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub(super) struct ArchivedWorkAnswer {
     archived: Option<ArchivedWorkView>,
 }
 
@@ -1374,6 +1410,7 @@ async fn reorder_rules(
 
 /// How an item relates to the edited rule.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "PreviewKind"))]
 #[serde(rename_all = "snake_case")]
 pub enum Kind {
     /// The edited rule is the first to match: it would take the item.
@@ -1390,6 +1427,7 @@ pub enum Kind {
 }
 
 #[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 pub struct TakenBy {
     /// The rule that takes the item; `null` for the edited rule itself.
     pub rule_id: Option<String>,
@@ -1397,6 +1435,7 @@ pub struct TakenBy {
 }
 
 #[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 pub struct PreviewItem {
     pub id: i64,
     /// The title as history stores it.
@@ -1418,9 +1457,9 @@ pub struct PreviewItem {
     /// was given one), `resumed` (it came while the rule was paused or
     /// archived) or `first_read` (the feed already held it when the channel
     /// was first read). Only for [`Kind::Past`].
-    pub past_cause: Option<&'static str>,
-    /// What history recorded for the item so far, as its stable code.
-    pub stored_result: &'static str,
+    pub past_cause: Option<PastCause>,
+    /// What history recorded for the item so far.
+    pub stored_result: HistoryResult,
     /// The whole episode the release names (`24` of `- 24`), for an item the
     /// edited rule takes ([`Kind::Mine`], [`Kind::Past`]); `null` otherwise or
     /// when the title names none. A screen receiving several sends the lowest
@@ -1432,6 +1471,7 @@ pub struct PreviewItem {
 }
 
 #[derive(Debug, Default, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 pub struct PreviewCounts {
     /// Recorded items of the channel that were judged.
     pub total: usize,
@@ -1446,6 +1486,7 @@ pub struct PreviewCounts {
 }
 
 #[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 pub struct Preview {
     /// Set when the edited rule's regular expression does not compile; the rule
     /// then matches nothing and `items` is empty.
@@ -1462,6 +1503,7 @@ pub struct Preview {
     /// (`subscribing`), and only with a value. The rule detail carries its own
     /// in the rule's view.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(test, ts(optional))]
     pub episode_suggestion: Option<episode::EpisodeSuggestion>,
     /// The earliest release among the items the edited rule may be asked to
     /// receive (taken by it and not received by any rule), listed or not.
@@ -1522,8 +1564,8 @@ impl From<preview::PreviewItem> for PreviewItem {
                 r#match: by.r#match,
             }),
             excluded_by: item.excluded_by,
-            past_cause: item.past_cause.map(PastCause::code),
-            stored_result: item.stored_result.code(),
+            past_cause: item.past_cause,
+            stored_result: item.stored_result,
             release: item.release,
             episode_name: item.episode_name,
         }

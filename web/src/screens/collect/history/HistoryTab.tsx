@@ -3,18 +3,13 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 
 import { Button } from "@/components/ui/button";
 import { patch, useCached } from "@/lib/cached";
+import type { ChannelList, HistoryCounts, HistoryItem, HistoryPage } from "@/lib/api-types";
 
 import { EmptyState } from "../../ScreenFrame";
 import { KEYS } from "../cache";
-import { listChannels, channelTitle, type ChannelList } from "../channels/api";
+import { listChannels, channelTitle } from "../channels/api";
 import { btnNeutral, inputClass } from "../channels/styles";
-import {
-  listHistory,
-  type HistoryCounts,
-  type HistoryFilter,
-  type HistoryItem,
-  type HistoryPage,
-} from "./api";
+import { listHistory, type HistoryFilter } from "./api";
 import {
   RESULT_CHIPS,
   chipCount,

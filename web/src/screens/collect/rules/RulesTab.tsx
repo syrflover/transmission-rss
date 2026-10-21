@@ -4,10 +4,11 @@ import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { peek, store, useCached } from "@/lib/cached";
 import { cn } from "@/lib/utils";
+import type { Rule, RuleList as Loaded } from "@/lib/api-types";
 
 import { KEYS, ruleCountChanged, withoutRule } from "../cache";
 import { btnNeutral } from "../channels/styles";
-import { listRules, ruleTitle, type Rule, type RuleList as Loaded } from "./api";
+import { listRules, ruleTitle } from "./api";
 import { RuleDetail } from "./RuleDetail";
 import { RuleList, type SortKey } from "./RuleList";
 

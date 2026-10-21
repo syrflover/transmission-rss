@@ -6,10 +6,11 @@ import { Label } from "@/components/ui/label";
 import { ApiError } from "@/lib/api";
 import { ago } from "@/lib/time";
 import { cn } from "@/lib/utils";
+import type { Channel, TitleGroup, Titles } from "@/lib/api-types";
 
-import { channelTitle, type Channel } from "../../channels/api";
+import { channelTitle } from "../../channels/api";
 import { btnNeutral, hintClass, inputClass, labelClass } from "../../channels/styles";
-import { fetchTitles, type TitleGroup, type Titles } from "../api";
+import { fetchTitles } from "../api";
 import { optionClass } from "./draft";
 
 type State =

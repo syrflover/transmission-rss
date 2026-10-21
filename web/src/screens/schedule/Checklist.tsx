@@ -3,10 +3,11 @@ import { Link } from "react-router-dom";
 
 import { ApiError } from "@/lib/api";
 import { cn } from "@/lib/utils";
+import type { FirstRun, Step } from "@/lib/api-types";
 
 import { CheckIcon } from "../library/icons";
 import { BTN, CARD } from "../settings/parts";
-import { setSkipped, type FirstRun, type Step } from "./api";
+import { setSkipped } from "./api";
 
 interface StepInfo {
   title: string;

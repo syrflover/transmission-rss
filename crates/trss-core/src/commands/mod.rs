@@ -63,6 +63,7 @@ impl From<rusqlite::Error> for CommandError {
 
 /// Where a command is. `Done` and `Failed` are final.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "snake_case")]
 pub enum CommandState {
     /// Accepted; no worker has started it.

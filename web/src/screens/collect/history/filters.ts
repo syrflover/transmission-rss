@@ -1,4 +1,5 @@
-import { HISTORY_RESULTS, type HistoryCounts, type HistoryFilter, type HistoryResult } from "./api";
+import type { HistoryCounts, HistoryResult } from "@/lib/api-types";
+import { HISTORY_RESULTS, type HistoryFilter } from "./api";
 
 /**
  * The list's filters live in the URL so a link (the status board's `실패·중복 N개`,

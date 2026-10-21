@@ -2,11 +2,12 @@ import { useMemo } from "react";
 
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import type { ChannelBrief, Rule } from "@/lib/api-types";
 
 import { EmptyState } from "../../ScreenFrame";
 import { PlusIcon } from "../icons";
 import { btnAction } from "../channels/styles";
-import { channelName, ruleTitle, type ChannelBrief, type Rule } from "./api";
+import { channelName, ruleTitle } from "./api";
 
 export type SortKey = "order" | "title";
 

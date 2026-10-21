@@ -2,10 +2,10 @@ import { useId, useState, type MouseEvent } from "react";
 import { Link } from "react-router-dom";
 
 import { Button } from "@/components/ui/button";
+import type { HistoryItem } from "@/lib/api-types";
 
 import { btnAction } from "../channels/styles";
 import { nameTitleLink } from "../subs/Candidates";
-import type { HistoryItem } from "./api";
 import { RESULT_LABEL } from "./filters";
 import { clock } from "./format";
 import { ChevronIcon, PlusIcon } from "./icons";

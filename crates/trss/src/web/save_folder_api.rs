@@ -43,6 +43,7 @@ const BAD_QUERY: &str =
 
 /// A work a save folder can be in.
 #[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "FolderWork"))]
 pub struct FolderWorkView {
     /// The work's folder name: what the work field takes.
     name: String,
@@ -53,11 +54,13 @@ pub struct FolderWorkView {
 }
 
 #[derive(Debug, Serialize)]
-struct WorksAnswer {
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "FolderWorksAnswer"))]
+pub(super) struct WorksAnswer {
     works: Vec<FolderWorkView>,
 }
 
 #[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "FolderSuggestion"))]
 struct SuggestionView {
     /// The work field: the library work's folder name when it is one.
     work: String,
@@ -71,7 +74,8 @@ struct SuggestionView {
 }
 
 #[derive(Debug, Serialize)]
-struct SuggestionAnswer {
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "FolderSuggestionAnswer"))]
+pub(super) struct SuggestionAnswer {
     suggestion: Option<SuggestionView>,
 }
 

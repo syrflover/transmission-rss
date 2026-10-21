@@ -112,6 +112,7 @@ const TITLE_LIMIT: usize = 200;
 
 /// The snapshot of a subscribed anime, as Anissia last listed it.
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "Anime"))]
 pub struct AnimeView {
     pub anime_no: i64,
     pub subject: String,
@@ -147,10 +148,11 @@ impl From<&Anime> for AnimeView {
 
 /// A rule's subscription.
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 pub struct SubscriptionBrief {
     pub anissia_anime_no: i64,
     /// `follow`, `undecided` or `none`.
-    pub subtitles: &'static str,
+    pub subtitles: SubtitleMode,
     pub creator: Option<String>,
     pub season_id: Option<String>,
     pub subscribed_at: Millis,
@@ -168,7 +170,7 @@ pub fn subscription_brief(
     let anime = animes.get(&subscription.anissia_anime_no);
     SubscriptionBrief {
         anissia_anime_no: subscription.anissia_anime_no,
-        subtitles: subscription.subtitles.as_str(),
+        subtitles: subscription.subtitles,
         creator: subscription.creator.clone(),
         season_id: subscription.season_id.clone(),
         subscribed_at: subscription.subscribed_at,
@@ -178,6 +180,7 @@ pub fn subscription_brief(
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "Quarter"))]
 pub struct QuarterView {
     year: i32,
     /// 1 to 4.
@@ -194,6 +197,7 @@ impl From<Quarter> for QuarterView {
 }
 
 #[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "ScheduleEntry"))]
 struct ScheduleEntryView {
     anime_no: i64,
     week: u8,
@@ -214,13 +218,15 @@ struct ScheduleEntryView {
 }
 
 #[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 struct SubscribedRule {
     rule_id: String,
     channel_id: String,
 }
 
 #[derive(Debug, Serialize)]
-struct Schedule {
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub(super) struct Schedule {
     week: u8,
     entries: Vec<ScheduleEntryView>,
     /// When Anissia was asked (Unix ms).
@@ -230,6 +236,7 @@ struct Schedule {
 }
 
 #[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "Creator"))]
 struct CreatorView {
     name: String,
     captions: usize,
@@ -237,7 +244,8 @@ struct CreatorView {
 }
 
 #[derive(Debug, Serialize)]
-struct Creators {
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub(super) struct Creators {
     anime_no: i64,
     creators: Vec<CreatorView>,
     fetched_at: Millis,
@@ -382,10 +390,12 @@ async fn creators(
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 struct SubscriptionItem {
     rule_id: String,
     /// `active` or `paused` (`영상 받기` off).
-    state: &'static str,
+    #[cfg_attr(test, ts(type = r#""active" | "paused""#))]
+    state: RuleState,
     rule_version: i64,
     channel_id: String,
     channel_name: Option<String>,
@@ -405,7 +415,8 @@ struct SubscriptionItem {
 }
 
 #[derive(Debug, Serialize)]
-struct SubscriptionList {
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub(super) struct SubscriptionList {
     /// The current quarter in Asia/Seoul.
     quarter: QuarterView,
     /// Subscriptions that are not archived (paused ones too, with their
@@ -456,7 +467,7 @@ async fn list(State(state): State<AppState>) -> Result<Json<SubscriptionList>, A
             let quarter = Quarter::of_anime(anime, subscription.subscribed_at);
             items.push(SubscriptionItem {
                 rule_id: rule.id.clone(),
-                state: rule.state.as_str(),
+                state: rule.state,
                 rule_version: rule.version,
                 channel_id: cwr.channel.id.clone(),
                 channel_name: cwr.channel.name.clone(),
@@ -491,6 +502,7 @@ async fn list(State(state): State<AppState>) -> Result<Json<SubscriptionList>, A
 }
 
 #[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "TitleGroup"))]
 struct TitleView {
     /// The work, the way the newest item writes it: the rule's match phrase.
     work: String,
@@ -502,7 +514,8 @@ struct TitleView {
 }
 
 #[derive(Debug, Serialize)]
-struct Titles {
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub(super) struct Titles {
     /// How many items the channel's history holds (the newest ones are read).
     recorded_items: usize,
     /// How many works match `q`.
@@ -638,6 +651,7 @@ pub async fn title_candidates(state: &AppState) -> Result<Vec<TitleCandidate>, A
 
 /// A subscription that waits for a title, as the work is offered to it.
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "WaitingSub"))]
 pub struct WaitingView {
     pub rule_id: String,
     pub rule_version: i64,
@@ -648,6 +662,7 @@ pub struct WaitingView {
 }
 
 #[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "TitleCandidate"))]
 struct CandidateView {
     channel_id: String,
     channel_name: Option<String>,
@@ -684,7 +699,8 @@ pub fn waiting_views(cwr: &ChannelWithRules, animes: &HashMap<i64, Anime>) -> Ve
 }
 
 #[derive(Serialize)]
-struct CandidateList {
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "TitleCandidateList"))]
+pub(super) struct CandidateList {
     candidates: Vec<CandidateView>,
 }
 
@@ -736,15 +752,17 @@ async fn candidates(State(state): State<AppState>) -> Result<Json<CandidateList>
 }
 
 #[derive(Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "RejectCandidateBody"))]
 #[serde(deny_unknown_fields)]
-struct RejectBody {
+pub(super) struct RejectBody {
     channel_id: String,
     /// The work of the candidate, as the candidate lists it.
     work: String,
 }
 
 #[derive(Serialize)]
-struct Rejected {
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "CandidateRejected"))]
+pub(super) struct Rejected {
     rejected: bool,
 }
 
@@ -770,14 +788,16 @@ async fn reject_candidate(
 }
 
 #[derive(Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "NameTitleBody"))]
 #[serde(deny_unknown_fields)]
-struct TitleBody {
+pub(super) struct TitleBody {
     /// The version the client saw.
     version: i64,
     /// The work of a release title the channel's history holds.
     work: String,
     /// A new save folder; absent keeps the subscription's.
     #[serde(default)]
+    #[cfg_attr(test, ts(optional = nullable))]
     directory: Option<String>,
 }
 
@@ -906,8 +926,9 @@ pub(super) async fn named_creator(
 const BAD_BODY: &str = "요청 내용을 읽지 못했어요. 화면을 새로고침한 뒤 다시 시도해 주세요.";
 
 #[derive(Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "NewSubscription"))]
 #[serde(deny_unknown_fields)]
-struct SubscribeBody {
+pub(super) struct SubscribeBody {
     channel_id: String,
     /// Anissia's `animeNo`.
     anissia_anime_no: i64,
@@ -917,11 +938,13 @@ struct SubscribeBody {
     /// [`TitleView::work`]): the rule's match phrase. Absent, the subscription
     /// waits for its title (`아직 첫 화 전이에요`).
     #[serde(default)]
+    #[cfg_attr(test, ts(optional = nullable))]
     work: Option<String>,
     /// `follow`, `undecided` or `none`.
-    subtitles: String,
+    subtitles: SubtitleMode,
     /// The creator to follow; only with `follow`, and one of the anime's.
     #[serde(default)]
+    #[cfg_attr(test, ts(optional = nullable))]
     creator: Option<String>,
     /// The save folder, relative to the collect folder.
     directory: String,
@@ -937,6 +960,7 @@ struct SubscribeBody {
     /// It is the person's own value. Absent leaves the default (`1`, numbers
     /// as they are).
     #[serde(default)]
+    #[cfg_attr(test, ts(optional = nullable))]
     episode: Option<i64>,
 }
 
@@ -945,7 +969,8 @@ struct SubscribeBody {
 const MAX_TICKED: usize = 100;
 
 #[derive(Serialize)]
-struct Subscribed {
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub(super) struct Subscribed {
     rule: RuleView,
 }
 
@@ -955,7 +980,7 @@ async fn subscribe(
 ) -> Result<(StatusCode, Json<Subscribed>), ApiError> {
     let Json(b) = parsed.map_err(|_| ApiError::invalid(BAD_BODY))?;
 
-    let subtitles = SubtitleMode::parse(&b.subtitles).ok_or_else(|| ApiError::invalid(BAD_BODY))?;
+    let subtitles = b.subtitles;
     let directory = b.directory.trim().to_owned();
     rules_api::check_work_folder(&directory)?;
     if std::path::Path::new(&directory).is_absolute() {
@@ -1072,8 +1097,9 @@ fn ticked(
 }
 
 #[derive(Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "ChangeCreatorBody"))]
 #[serde(deny_unknown_fields)]
-struct CreatorBody {
+pub(super) struct CreatorBody {
     /// The version the client saw.
     version: i64,
     /// The creator to follow, one of the anime's; `null` is `제작자 미정`.
@@ -1144,8 +1170,9 @@ async fn change_creator(
 }
 
 #[derive(Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "LinkRuleBody"))]
 #[serde(deny_unknown_fields)]
-struct LinkBody {
+pub(super) struct LinkBody {
     /// The version the client saw.
     version: i64,
     /// Anissia's `animeNo`.
@@ -1153,9 +1180,10 @@ struct LinkBody {
     /// The schedule week the anime was picked from, to find its entry.
     week: u8,
     /// `follow`, `undecided` or `none`.
-    subtitles: String,
+    subtitles: SubtitleMode,
     /// The creator to follow; only with `follow`, and one of the anime's.
     #[serde(default)]
+    #[cfg_attr(test, ts(optional = nullable))]
     creator: Option<String>,
 }
 
@@ -1165,7 +1193,7 @@ async fn link_rule(
     parsed: Result<Json<LinkBody>, JsonRejection>,
 ) -> Result<Json<RuleView>, ApiError> {
     let Json(b) = parsed.map_err(|_| ApiError::invalid(BAD_BODY))?;
-    let subtitles = SubtitleMode::parse(&b.subtitles).ok_or_else(|| ApiError::invalid(BAD_BODY))?;
+    let subtitles = b.subtitles;
     let rule = rule_at(&state, &id, b.version).await?;
     if rule.subscription.is_some() {
         return Err(ApiError::invalid(

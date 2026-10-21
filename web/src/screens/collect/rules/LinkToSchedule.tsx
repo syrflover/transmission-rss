@@ -2,17 +2,13 @@ import { useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { ApiError } from "@/lib/api";
+import type { Rule, ScheduleEntry, SubtitleMode } from "@/lib/api-types";
 
 import { btnNeutral, btnPrimary } from "../channels/styles";
-import {
-  linkToSchedule,
-  type ScheduleEntry,
-  type SubtitleMode,
-} from "../subs/api";
+import { linkToSchedule } from "../subs/api";
 import { PickAnime } from "../subs/add/PickAnime";
 import { PickSubtitles } from "../subs/add/PickSubtitles";
 import { todayWeek } from "../subs/format";
-import type { Rule } from "./api";
 
 /**
  * `편성표와 연결`: makes an existing rule a subscription. The anime comes from

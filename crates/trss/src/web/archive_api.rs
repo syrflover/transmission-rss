@@ -181,13 +181,24 @@ pub async fn archive_suggestions(state: &AppState) -> Result<Vec<ArchiveSuggesti
     Ok(gather(state).await?.suggestions)
 }
 
+/// Why a rule is suggested: `ended` (the anime's end date has passed),
+/// `unlisted` (it has none and Anissia no longer lists the anime) or `quiet`
+/// (no new item for 4 weeks).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[serde(rename_all = "snake_case")]
+pub(super) enum GroundKind {
+    Ended,
+    Unlisted,
+    Quiet,
+}
+
 #[derive(Debug, Serialize)]
-struct GroundView {
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "Ground"))]
+pub(super) struct GroundView {
     /// What `POST /archive-suggestions/keep` names the ground by.
     key: String,
-    /// `ended` (the anime's end date has passed), `unlisted` (it has none and
-    /// Anissia no longer lists the anime) or `quiet` (no new item for 4 weeks).
-    kind: &'static str,
+    kind: GroundKind,
     /// `ended`: the end date as Anissia gave it.
     end_date: Option<String>,
     /// `quiet`: the moment the 4 weeks count from (Unix ms).
@@ -200,12 +211,12 @@ impl From<&Ground> for GroundView {
             Ground::Ended {
                 over: Over::EndDate(date),
                 ..
-            } => ("ended", Some(date.clone()), None),
+            } => (GroundKind::Ended, Some(date.clone()), None),
             Ground::Ended {
                 over: Over::Unlisted,
                 ..
-            } => ("unlisted", None, None),
-            Ground::Quiet { since, .. } => ("quiet", None, Some(*since)),
+            } => (GroundKind::Unlisted, None, None),
+            Ground::Quiet { since, .. } => (GroundKind::Quiet, None, Some(*since)),
         };
         GroundView {
             key: ground.key(),
@@ -217,13 +228,15 @@ impl From<&Ground> for GroundView {
 }
 
 #[derive(Debug, Serialize)]
-struct SuggestionView {
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "ArchiveSuggestion"))]
+pub(super) struct SuggestionView {
     rule_id: String,
     channel_id: String,
     channel_name: Option<String>,
     channel_host: String,
     /// `active` or `paused`.
-    state: &'static str,
+    #[cfg_attr(test, ts(type = r#""active" | "paused""#))]
+    state: RuleState,
     /// The rule's match phrase.
     title: String,
     directory: String,
@@ -238,7 +251,8 @@ struct SuggestionView {
 }
 
 #[derive(Debug, Serialize)]
-struct SuggestionList {
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "ArchiveSuggestionList"))]
+pub(super) struct SuggestionList {
     suggestions: Vec<SuggestionView>,
 }
 
@@ -279,7 +293,7 @@ async fn list(State(state): State<AppState>) -> Result<Json<SuggestionList>, Api
                 channel_id: cwr.channel.id.clone(),
                 channel_name: cwr.channel.name.clone(),
                 channel_host: host,
-                state: rule.state.as_str(),
+                state: rule.state,
                 title: rule.r#match.clone().unwrap_or_default(),
                 directory: rule.directory.clone(),
                 anime: rule
@@ -297,15 +311,17 @@ async fn list(State(state): State<AppState>) -> Result<Json<SuggestionList>, Api
 }
 
 #[derive(Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "ArchiveKeepBody"))]
 #[serde(deny_unknown_fields)]
-struct KeepBody {
+pub(super) struct KeepBody {
     rule_id: String,
     /// The `key`s of the grounds the user saw.
     grounds: Vec<String>,
 }
 
 #[derive(Serialize)]
-struct Kept {
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "ArchiveKept"))]
+pub(super) struct Kept {
     kept: usize,
 }
 

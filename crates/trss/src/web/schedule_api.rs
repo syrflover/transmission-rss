@@ -100,6 +100,7 @@ pub fn routes() -> Router<AppState> {
 }
 
 #[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "Card"))]
 pub struct Card {
     pub rule_id: String,
     pub anime_no: i64,
@@ -123,6 +124,7 @@ pub struct Card {
 }
 
 #[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "ScheduleDay"))]
 pub struct DayView {
     /// `YYYY-MM-DD`, Asia/Seoul.
     pub date: String,
@@ -133,6 +135,7 @@ pub struct DayView {
 }
 
 #[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 pub struct NextQuarter {
     pub quarter: QuarterView,
     /// Subscriptions of a coming quarter.
@@ -142,6 +145,7 @@ pub struct NextQuarter {
 }
 
 #[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "Week"))]
 pub struct WeekView {
     pub start: String,
     pub end: String,
@@ -153,6 +157,7 @@ pub struct WeekView {
 }
 
 #[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "Home"))]
 pub struct Answer {
     pub now: Millis,
     pub first_run: Option<FirstRunView>,

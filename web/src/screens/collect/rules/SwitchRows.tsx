@@ -2,8 +2,9 @@ import { useId, useState } from "react";
 
 import { ApiError } from "@/lib/api";
 import { cn } from "@/lib/utils";
+import type { Rule } from "@/lib/api-types";
 
-import { switchRule, type Rule } from "./api";
+import { switchRule } from "./api";
 
 export const SUBTITLES_NEED_VIDEO = "영상 받기를 켜야 자막을 받을 수 있어요";
 
