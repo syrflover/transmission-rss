@@ -22,6 +22,8 @@ use rustix::fs::{renameat_with, OFlags, RenameFlags, CWD};
 /// included. There is no fallback: a filesystem without the flag answers
 /// `InvalidInput` or `Unsupported` ([`noreplace_unsupported`]).
 pub fn rename_noreplace(from: &Path, to: &Path) -> io::Result<()> {
+    #[cfg(any(test, feature = "test-support"))]
+    testing::before_rename(&[from, to]);
     rename_noreplace_at(CWD, from, CWD, to)
 }
 
@@ -131,6 +133,8 @@ pub fn rename_noreplace_synced(from: &Path, to: &Path) -> io::Result<()> {
 /// otherwise, and nothing moves). There is no fallback: a filesystem without
 /// the flag answers `InvalidInput` or `Unsupported`.
 pub fn rename_exchange(a: &Path, b: &Path) -> io::Result<()> {
+    #[cfg(any(test, feature = "test-support"))]
+    testing::before_rename(&[a, b]);
     renameat_with(CWD, a, CWD, b, RenameFlags::EXCHANGE).map_err(io::Error::from)
 }
 
@@ -230,8 +234,10 @@ pub fn without_part(name: &str) -> Option<&str> {
 
 /// What a test sees of the syncs: which files and folders were synced, and a
 /// sync that fails on request, since a sync leaves nothing on the disk a test
-/// could look at. Paths are compared as the system spells them (links
-/// resolved), and every test keeps to its own temporary folder.
+/// could look at. And a change a test makes right before a rename, which a
+/// person or another program could make between a caller's look and its
+/// rename. Paths are compared as the system spells them (links resolved), and
+/// every test keeps to its own temporary folder.
 #[cfg(any(test, feature = "test-support"))]
 pub mod testing {
     use std::{
@@ -248,6 +254,8 @@ pub mod testing {
         /// The files synced, by device and inode, whatever name they had.
         synced_files: HashMap<(u64, u64), usize>,
         failing: HashSet<PathBuf>,
+        /// What runs once right before the next rename that names a path.
+        renaming: HashMap<PathBuf, Box<dyn FnOnce() + Send>>,
     }
 
     static STATE: LazyLock<Mutex<State>> = LazyLock::new(Mutex::default);
@@ -311,6 +319,38 @@ pub mod testing {
                 .copied()
                 .unwrap_or(0),
             Err(_) => 0,
+        }
+    }
+
+    /// Runs what a test asked to run before a rename that names one of
+    /// `paths` ([`before_rename_of`]), outside the lock.
+    pub(super) fn before_rename(paths: &[&Path]) {
+        if state().renaming.is_empty() {
+            return;
+        }
+        let hooks: Vec<_> = paths
+            .iter()
+            .filter_map(|path| state().renaming.remove(&spelled(path)))
+            .collect();
+        for hook in hooks {
+            hook();
+        }
+    }
+
+    /// Runs `hook` once, right before the next rename that names `path` on
+    /// either side ([`super::rename_noreplace`], [`super::rename_exchange`]),
+    /// unless the guard is dropped first. `path` need not be there yet.
+    pub fn before_rename_of(path: &Path, hook: impl FnOnce() + Send + 'static) -> BeforeRename {
+        let path = spelled(path);
+        state().renaming.insert(path.clone(), Box::new(hook));
+        BeforeRename(path)
+    }
+
+    pub struct BeforeRename(PathBuf);
+
+    impl Drop for BeforeRename {
+        fn drop(&mut self) {
+            state().renaming.remove(&self.0);
         }
     }
 
@@ -600,6 +640,47 @@ mod tests {
         assert_eq!(text(&to.join("b")), "bytes");
         // The folder the file went to was synced before the failing one.
         assert_eq!(testing::syncs_of(&to), 1);
+    }
+
+    #[test]
+    fn a_change_a_test_asks_for_runs_once_right_before_a_rename_that_names_its_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let (a, b, c) = (
+            dir.path().join("a"),
+            dir.path().join("b"),
+            dir.path().join("c"),
+        );
+        put(&a, "new");
+        put(&b, "current");
+        let at = b.clone();
+        let _hook = testing::before_rename_of(&b, move || put(&at, "changed"));
+        // A rename that does not name `b` leaves it alone.
+        rename_noreplace(&a, &c).unwrap();
+        assert_eq!(text(&b), "current");
+        // The exchange takes what the change left there; the next does not
+        // run it again.
+        rename_exchange(&c, &b).unwrap();
+        assert_eq!(
+            (text(&b), text(&c)),
+            ("new".to_owned(), "changed".to_owned())
+        );
+        rename_exchange(&c, &b).unwrap();
+        assert_eq!(
+            (text(&b), text(&c)),
+            ("changed".to_owned(), "new".to_owned())
+        );
+
+        // A path not there yet, before a rename that replaces nothing.
+        let (d, e) = (dir.path().join("d"), dir.path().join("e"));
+        put(&d, "mine");
+        let at = e.clone();
+        let _hook = testing::before_rename_of(&e, move || put(&at, "theirs"));
+        let err = rename_noreplace(&d, &e).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::AlreadyExists);
+        assert_eq!(
+            (text(&d), text(&e)),
+            ("mine".to_owned(), "theirs".to_owned())
+        );
     }
 
     #[test]

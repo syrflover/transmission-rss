@@ -13,7 +13,7 @@ use std::{
 
 use rusqlite::params;
 use tokio_util::sync::CancellationToken;
-use trss_core::Db;
+use trss_core::{files::testing, Db};
 use trss_jobs::{
     area::ReceiveArea,
     model::{Chosen, Outcome, PlanAction},
@@ -925,6 +925,37 @@ async fn a_file_that_takes_the_name_while_an_apply_is_cut_is_kept_for_a_replacem
     assert_eq!(std::fs::read(s.work().join(target)).unwrap(), b"mine");
     assert_eq!(s.count("subtitle_applied").await, 0);
     assert_eq!(s.count("subtitle_replacements").await, 1);
+}
+
+#[tokio::test]
+async fn a_file_that_takes_the_name_right_before_an_apply_publishes_is_kept_for_a_replacement_to_approve(
+) {
+    let s = setup().await;
+    let id = make(&s, "c1", "2", "/ok/Show-02", false).await;
+    // Someone's own subtitle comes under the name after the run's checks,
+    // right before the rename that publishes the new copy.
+    let target = s.work().join("Season 01/Show S01E02.ass");
+    let at = target.clone();
+    let _mine = testing::before_rename_of(&target, move || std::fs::write(at, b"mine").unwrap());
+    run(&s).await;
+
+    // The new copy is not published over it and goes; the episode has a
+    // subtitle now, so its replacement waits for a person.
+    let d = detail(&s, &id).await;
+    assert_eq!(
+        (d.row.state, d.row.wait),
+        (JobState::Waiting, Some(Wait::Approval)),
+        "{:?} {:?}",
+        d.row.note,
+        d.events
+    );
+    assert!(d.events.iter().any(|e| e
+        .message
+        .ends_with("적용하려던 이름에 다른 파일이 먼저 생겨 덮어쓰지 않았어요")));
+    assert_eq!(std::fs::read(&target).unwrap(), b"mine");
+    assert_eq!(s.count("subtitle_applied").await, 0);
+    assert_eq!(s.count("subtitle_replacements").await, 1);
+    assert_eq!(names(&s.work().join(".trss/staging")), Vec::<String>::new());
 }
 
 #[tokio::test]

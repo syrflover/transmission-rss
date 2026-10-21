@@ -7,7 +7,7 @@ edition.workspace = true
 # `db::database_at`, for the tests of the crates above that start from an
 # older schema, `queue::testing`, for the tests of the queues above,
 # `files::testing`, for the tests of the writes above that look at which files
-# were synced, new databases copied from one migrated once (SQLite's backup
+# were synced or change a file right before a rename, new databases copied from one migrated once (SQLite's backup
 # API), `loopback`, for the tests that start a server on a loopback address,
 # and `fake_http`, for the fake HTTP services of the tests.
 test-support = ["rusqlite/backup", "tokio/net"]

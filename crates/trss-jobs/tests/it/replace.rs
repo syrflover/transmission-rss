@@ -12,7 +12,7 @@ use std::{
 };
 
 use tokio_util::sync::CancellationToken;
-use trss_core::Db;
+use trss_core::{files::testing, Db};
 use trss_jobs::{
     model::{Chosen, Outcome, PathAction, PlanState},
     place::replace::{ADOPTED, AWAITING_APPROVAL},
@@ -899,6 +899,51 @@ async fn the_existing_subtitle_changed_to_other_bytes_of_its_size_asks_to_compar
     assert_eq!(v.plan.version, 2);
     // Its bytes are not the app's copy any more.
     assert_eq!(v.plan.paths[0].applied_id, None);
+}
+
+#[tokio::test]
+async fn a_subtitle_changed_right_before_the_swap_is_swapped_back_and_the_new_copy_goes() {
+    let s = setup().await;
+    let (job, _) = revision_approved(&s).await;
+    let original = inode(&s.at(TARGET));
+    let stored = names(&s.at(&format!(".trss/subtitles/{CREATOR}")));
+    // A person edits the subtitle after every check of the run, right before
+    // the swap: the swap takes the edited file off.
+    let mut edited = fake::ass("Show-02");
+    edited.extend_from_slice(b"Dialogue: 0,0:00:03.00,0:00:04.00,Default,,0,0,0,,edited\n");
+    let (at, bytes) = (s.at(TARGET), edited.clone());
+    let _edit =
+        testing::before_rename_of(&s.at(TARGET), move || std::fs::write(at, bytes).unwrap());
+    run(&s).await;
+
+    // Swapped back: the edited file is in its place, the same file, and the
+    // new copy the swap back put aside is gone, as is anything staged.
+    assert_eq!(s.read(TARGET), edited);
+    assert_eq!(inode(&s.at(TARGET)), original);
+    assert_eq!(s.temps(), Vec::<String>::new());
+    // The plan is stale as for a file changed after approval, and nothing
+    // else changed: the earlier applied copy's record and the stored copies
+    // are as they were.
+    let v = versions(&s, &job).await;
+    assert_eq!(v[0].1, PlanState::Stale, "{v:?}");
+    assert!(
+        v[0].2
+            .as_deref()
+            .is_some_and(|r| r.contains("기존 자막이 비교한 뒤 바뀌었어요")),
+        "{v:?}"
+    );
+    assert_eq!(
+        s.count("SELECT count(*) FROM subtitle_applied WHERE removed_at IS NULL")
+            .await,
+        1
+    );
+    assert_eq!(s.count("SELECT count(*) FROM subtitle_applied").await, 1);
+    assert_eq!(names(&s.at(&format!(".trss/subtitles/{CREATOR}"))), stored);
+    // The person compares again, with the edited file not the app's.
+    waiting_for_approval(&detail(&s, &job).await);
+    let next = view(&s, &job).await.plan;
+    assert_eq!(next.version, 2);
+    assert_eq!(next.paths[0].applied_id, None);
 }
 
 /// A recorded object as a file system mounted again (after the machine
