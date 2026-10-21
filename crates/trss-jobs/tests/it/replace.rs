@@ -11,11 +11,9 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use rusqlite::params;
 use tokio_util::sync::CancellationToken;
 use trss_core::Db;
 use trss_jobs::{
-    area::object_of,
     model::{Chosen, Outcome, PathAction, PlanState},
     place::replace::{ADOPTED, AWAITING_APPROVAL},
     place::{
@@ -61,11 +59,13 @@ impl Setup {
         std::fs::read(self.at(path)).unwrap()
     }
 
-    /// What is left in the work folder's temporary folders: a
-    /// replacement's, and the staging folder of stores and applies.
+    /// What is left in the work folder's temporary folders: the staging
+    /// folder of new copies, what a replacement moves aside, and the
+    /// folder earlier releases used for both.
     fn temps(&self) -> Vec<String> {
         let mut left = names(&self.at(".trss/tmp"));
         left.extend(names(&self.at(".trss/staging")));
+        left.extend(names(&self.at(".trss/aside")));
         left
     }
 
@@ -267,6 +267,7 @@ async fn a_revision_waits_for_approval_then_replaces_and_the_earlier_stored_copy
         (TARGET, PathAction::Replace)
     );
     assert!(path.applied_id.is_some(), "the app's applied copy");
+    let original = inode(&s.at(TARGET));
     assert_eq!(path.file.as_ref().unwrap().lines, Some(24));
     assert_eq!(plan.asset_lines, Some(24));
     let v = view(&s, &job).await;
@@ -323,16 +324,15 @@ async fn a_revision_waits_for_approval_then_replaces_and_the_earlier_stored_copy
         1
     );
     assert_eq!(s.count("SELECT count(*) FROM subtitle_applied").await, 2);
-    // Nothing protective or temporary is left, and every effect ended done.
+    // The new copy took the original's place in one swap, the original going
+    // into `.trss/aside/`, which is empty again: the original's file is
+    // nowhere once the replacement is recorded. No protective copy was made,
+    // and nothing staged is left.
+    assert_ne!(inode(&s.at(TARGET)), original);
+    assert!(s.at(".trss/aside").is_dir());
+    assert!(with_inode(&s.work(), original).is_empty());
+    assert!(!s.at(".trss/tmp").exists());
     assert_eq!(s.temps(), Vec::<String>::new());
-    assert_eq!(
-        s.count(
-            "SELECT count(*) FROM subtitle_file_effects
-              WHERE plan_id IS NOT NULL AND state <> 'done'"
-        )
-        .await,
-        0
-    );
     // An approval is used once.
     assert_eq!(decide(&s, &job, &plan, true).await, Decided::Stale);
 }
@@ -907,10 +907,9 @@ fn renumbered(column: &str) -> String {
     format!("'999999' || substr({column}, instr({column}, ':'))")
 }
 
-/// Rewrites the objects the job's plans and effects recorded to
-/// [`renumbered`] ones, past the triggers that keep a plan's evidence:
-/// `which` of the plans' videos (`video`), the files beside them (`paths`)
-/// and the effects' files (`effects`).
+/// Rewrites the objects the job's plans recorded to [`renumbered`] ones,
+/// past the triggers that keep a plan's evidence: `which` of the plans'
+/// videos (`video`) and the files beside them (`paths`).
 async fn mounted_again(s: &Setup, job: &str, which: &'static [&'static str]) {
     let job = job.to_owned();
     s.db.run(move |c| -> Result<(), trss_core::DbError> {
@@ -940,11 +939,6 @@ async fn mounted_again(s: &Setup, job: &str, which: &'static [&'static str]) {
                     "UPDATE subtitle_replacement_paths SET object = {}
                       WHERE object IS NOT NULL
                         AND plan_id IN (SELECT id FROM subtitle_replacements WHERE job_id = ?1)",
-                    renumbered("object")
-                ),
-                "effects" => format!(
-                    "UPDATE subtitle_file_effects SET object = {}
-                      WHERE object IS NOT NULL AND job_id = ?1",
                     renumbered("object")
                 ),
                 other => panic!("no such record: {other}"),
@@ -1062,31 +1056,60 @@ async fn approving_a_plan_with_a_kept_file_adds_beside_it() {
 }
 
 #[tokio::test]
-async fn no_room_for_the_copies_stops_before_anything_beside_the_video_changes() {
+async fn no_room_for_the_new_copy_stops_before_anything_beside_the_video_changes() {
     let s = setup().await;
     let (job, plan) = revision_approved(&s).await;
-    let tmp = s.at(".trss/tmp");
-    std::fs::create_dir_all(&tmp).unwrap();
-    std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o555)).unwrap();
+    // The new copy is the only one written: no room for it fails the plan.
+    let staging = s.at(".trss/staging");
+    std::fs::create_dir_all(&staging).unwrap();
+    std::fs::set_permissions(&staging, std::fs::Permissions::from_mode(0o555)).unwrap();
     run(&s).await;
-    std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::fs::set_permissions(&staging, std::fs::Permissions::from_mode(0o755)).unwrap();
     let v = versions(&s, &job).await;
     assert_eq!(v[0].1, PlanState::Failed, "{v:?}");
+    assert!(
+        v[0].2
+            .as_deref()
+            .is_some_and(|r| r.contains("새 자막을 준비하지 못해 교체하지 않았어요")),
+        "{v:?}"
+    );
     assert_eq!(s.read(TARGET), fake::ass("Show-02"));
     assert_eq!(s.temps(), Vec::<String>::new());
     assert_eq!(
         s.store.place.plan(&job).await.unwrap()[0].outcome,
         Some(Outcome::Failed)
     );
-    assert_eq!(
-        s.count(
-            "SELECT count(*) FROM subtitle_file_effects
-              WHERE plan_id IS NOT NULL AND state <> 'abandoned'"
-        )
-        .await,
-        0
-    );
     let _ = plan;
+}
+
+#[tokio::test]
+async fn an_unmanaged_subtitle_that_cannot_be_imported_is_swapped_back_and_the_plan_fails() {
+    let s = setup().await;
+    let (job, plan) = unmanaged_waiting(&s).await;
+    let original = inode(&s.at(TARGET));
+    decide(&s, &job, &plan, true).await;
+    // The unknown creator's folder cannot be read, so no name can be chosen
+    // for the import.
+    write(&s, ".trss/subtitles/제작자 알 수 없음", b"not a folder");
+    run(&s).await;
+    let v = versions(&s, &job).await;
+    assert_eq!(v[0].1, PlanState::Failed, "{v:?}");
+    assert!(
+        v[0].2
+            .as_deref()
+            .is_some_and(|r| r.contains("관리하지 않던 자막을 들이지 못해 교체하지 않았어요")),
+        "{v:?}"
+    );
+    // The import came after the swap: the file is back in its place, the
+    // same file, and the new copy swapped off it is gone.
+    assert_eq!(s.read(TARGET), MINE.as_bytes());
+    assert_eq!(inode(&s.at(TARGET)), original);
+    assert_eq!(s.temps(), Vec::<String>::new());
+    assert_eq!(s.count("SELECT count(*) FROM subtitle_applied").await, 0);
+    assert_eq!(
+        s.store.place.plan(&job).await.unwrap()[0].outcome,
+        Some(Outcome::Failed)
+    );
 }
 
 #[tokio::test]
@@ -1394,139 +1417,57 @@ fn sha2_of(bytes: &[u8]) -> Vec<u8> {
 }
 
 // ---------------------------------------------------------------------------
-// A worker killed while carrying out an approved plan
+// A run cut short while carrying out an approved plan
 //
-// The revision's plan replaces the app's copy at `TARGET`: an apply of the
-// new copy and a removal of the old. Each test leaves the two effects as a
-// worker killed at one point would, then runs the job again.
+// Nothing records a replacement's files before its transaction: each test
+// leaves the work folder as a run cut at one point would, cuts the job and
+// restarts it, then runs it again.
 
-struct Left {
-    apply_temp: String,
-    removal_temp: String,
-    aside: String,
+/// The files in the work folder's `.trss/aside/`, by name.
+fn asides(s: &Setup) -> Vec<String> {
+    names(&s.at(".trss/aside"))
 }
 
-/// Records an effect of `plan` as a killed worker left it.
-#[allow(clippy::too_many_arguments)]
-async fn left_effect(
-    s: &Setup,
-    plan: &Plan,
-    id: &str,
-    kind: &'static str,
-    source: &str,
-    state: &'static str,
-    temp: &str,
-    target: &str,
-    bytes: &[u8],
-    object: Option<String>,
-) {
-    let sha = trss_jobs::area::hex(&sha2_of(bytes));
-    let (video, source) = match kind {
-        "apply" => (Some(plan.video.path.clone()), None),
-        _ => (None, Some(source.to_owned())),
-    };
-    let (id, job, plan_id, position) = (
-        id.to_owned(),
-        plan.job_id.clone(),
-        plan.id.clone(),
-        plan.position,
-    );
-    let (temp, target, folder) = (temp.to_owned(), target.to_owned(), plan.folder.clone());
-    let size = bytes.len() as i64;
-    s.db.run(move |c| {
-        c.execute(
-            "INSERT INTO subtitle_file_effects
-                 (id, job_id, position, kind, state, folder, temp, target, video, source,
-                  plan_id, size, sha256, object, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, 1, 1)",
-            params![
-                id, job, position, kind, state, folder, temp, target, video, source, plan_id, size,
-                sha, object
-            ],
-        )
-        .map_err(trss_core::DbError::from)
-    })
-    .await
-    .unwrap();
+fn inode(path: &Path) -> u64 {
+    std::fs::metadata(path).unwrap().ino()
 }
 
-fn write(s: &Setup, path: &str, bytes: &[u8]) -> String {
+/// The paths under `dir` whose file has the inode `ino`.
+fn with_inode(dir: &Path, ino: u64) -> Vec<PathBuf> {
+    let mut found = Vec::new();
+    for entry in std::fs::read_dir(dir).unwrap() {
+        let path = entry.unwrap().path();
+        let meta = std::fs::symlink_metadata(&path).unwrap();
+        if meta.is_dir() {
+            found.extend(with_inode(&path, ino));
+        } else if meta.ino() == ino {
+            found.push(path);
+        }
+    }
+    found
+}
+
+/// Writes `bytes` to the new file `path` (its folders made).
+fn write(s: &Setup, path: &str, bytes: &[u8]) {
     let at = s.at(path);
     std::fs::create_dir_all(at.parent().unwrap()).unwrap();
     std::fs::write(&at, bytes).unwrap();
-    object_of(&std::fs::metadata(&at).unwrap())
 }
 
-fn object(s: &Setup, path: &str) -> String {
-    object_of(&std::fs::metadata(s.at(path)).unwrap())
-}
-
-/// The plan's two effects left `apply_state` and `removal_state`, with the
-/// files a worker at that point had written: the new copy's temporary file
-/// once prepared, the protective copy once the removal is prepared, and the
-/// old copy moved aside once set aside.
-async fn killed(
-    s: &Setup,
-    plan: &Plan,
-    apply_state: &'static str,
-    removal_state: &'static str,
-) -> Left {
-    let left = Left {
-        apply_temp: ".trss/tmp/a1".to_owned(),
-        removal_temp: ".trss/tmp/r1".to_owned(),
-        aside: ".trss/tmp/r1.aside".to_owned(),
-    };
-    let new = fake::ass("Show-02v2");
-    let old = fake::ass("Show-02");
-    let apply_object = match apply_state {
-        "intended" => None,
-        _ => Some(write(s, &left.apply_temp, &new)),
-    };
-    let removal_object = match removal_state {
-        "intended" => None,
-        _ => Some(write(s, &left.removal_temp, &old)),
-    };
-    if removal_state == "set_aside" {
-        std::fs::rename(s.at(TARGET), s.at(&left.aside)).unwrap();
-    }
+/// The job, its plan approved, cut short in the middle of its run and
+/// restarted by a person.
+async fn cut(s: &Setup, job: &str) {
     s.sql(format!(
-        "UPDATE subtitle_jobs SET state = 'running' WHERE id = '{}'",
-        plan.job_id
+        "UPDATE subtitle_jobs SET state = 'running' WHERE id = '{job}'"
     ))
     .await;
-    cut_and_restart(&s.store, &plan.job_id).await;
-    left_effect(
-        s,
-        plan,
-        "e-apply",
-        "apply",
-        TARGET,
-        apply_state,
-        &left.apply_temp,
-        TARGET,
-        &new,
-        apply_object,
-    )
-    .await;
-    left_effect(
-        s,
-        plan,
-        "e-remove",
-        "remove",
-        TARGET,
-        removal_state,
-        &left.removal_temp,
-        &left.aside,
-        &old,
-        removal_object,
-    )
-    .await;
-    left
+    cut_and_restart(&s.store, job).await;
 }
 
-/// The replacement ended as one: the new copy at the target, recorded once,
-/// the old copy recorded removed, nothing protective left, the plan done.
-async fn replaced_once(s: &Setup, job: &str) {
+/// The row ended as the comparison ends a first apply beside the same
+/// bytes: the new copy at `TARGET`, recorded as the applied copy
+/// ([`ADOPTED`]) once, the plan stale, the job done.
+async fn adopted_after_the_cut(s: &Setup, job: &str, new: &[u8]) {
     let d = detail(s, job).await;
     assert_eq!(
         d.row.state,
@@ -1535,437 +1476,248 @@ async fn replaced_once(s: &Setup, job: &str) {
         d.row.note,
         d.events
     );
-    assert_eq!(s.read(TARGET), fake::ass("Show-02v2"));
-    assert_eq!(s.count("SELECT count(*) FROM subtitle_applied").await, 2);
-    assert_eq!(
-        s.count("SELECT count(*) FROM subtitle_applied WHERE removed_at IS NULL")
-            .await,
-        1
-    );
-    assert_eq!(s.temps(), Vec::<String>::new());
-    assert_eq!(versions(s, job).await[0].1, PlanState::Done);
-    assert_eq!(
-        s.count(
-            "SELECT count(*) FROM subtitle_file_effects
-              WHERE plan_id IS NOT NULL AND state NOT IN ('done', 'abandoned')"
-        )
-        .await,
-        0
-    );
-}
-
-#[tokio::test]
-async fn killed_after_claiming_the_effects_carries_the_plan_out_anew() {
-    let s = setup().await;
-    let (job, plan) = revision_approved(&s).await;
-    killed(&s, &plan, "intended", "intended").await;
-    run(&s).await;
-    replaced_once(&s, &job).await;
-}
-
-#[tokio::test]
-async fn killed_after_the_protective_copy_carries_the_plan_out_anew() {
-    let s = setup().await;
-    let (job, plan) = revision_approved(&s).await;
-    killed(&s, &plan, "prepared", "prepared").await;
-    run(&s).await;
-    replaced_once(&s, &job).await;
-    // The first try's effects were abandoned, their files removed.
-    assert_eq!(
-        s.count("SELECT count(*) FROM subtitle_file_effects WHERE state = 'abandoned'")
-            .await,
-        2
-    );
-}
-
-#[tokio::test]
-async fn killed_after_setting_the_old_copy_aside_publishes_the_new_one() {
-    let s = setup().await;
-    let (job, plan) = revision_approved(&s).await;
-    killed(&s, &plan, "prepared", "set_aside").await;
-    assert!(!s.at(TARGET).exists());
-    run(&s).await;
-    replaced_once(&s, &job).await;
-}
-
-#[tokio::test]
-async fn killed_after_setting_aside_but_before_its_record_is_found_set_aside() {
-    let s = setup().await;
-    let (job, plan) = revision_approved(&s).await;
-    let left = killed(&s, &plan, "prepared", "prepared").await;
-    std::fs::rename(s.at(TARGET), s.at(&left.aside)).unwrap();
-    run(&s).await;
-    replaced_once(&s, &job).await;
-}
-
-#[tokio::test]
-async fn killed_after_publishing_before_its_record_records_it_once() {
-    let s = setup().await;
-    let (job, plan) = revision_approved(&s).await;
-    let left = killed(&s, &plan, "prepared", "set_aside").await;
-    std::fs::rename(s.at(&left.apply_temp), s.at(TARGET)).unwrap();
-    run(&s).await;
-    replaced_once(&s, &job).await;
-}
-
-/// As recording the publish of the plan's new copy `bytes` (the file
-/// `object` at `TARGET`) would have: the apply effect done, the copy
-/// applied, an earlier copy recorded at the path removed.
-async fn recorded_applied(s: &Setup, plan: &Plan, bytes: &[u8], object: String) {
-    let (job, stored) = (plan.job_id.clone(), plan.stored_id.clone());
-    let sha = trss_jobs::area::hex(&sha2_of(bytes));
-    let size = bytes.len() as i64;
-    s.db.run(move |c| {
-        c.execute(
-            "UPDATE subtitle_applied SET removed_at = 2
-              WHERE work_id = ?1 AND path = ?2 AND removed_at IS NULL",
-            params![WORK, TARGET],
-        )?;
-        c.execute(
-            "INSERT INTO subtitle_applied
-                 (id, work_id, stored_id, season, episode, video_path, path, byte_size,
-                  sha256, object, job_id, applied_at)
-             VALUES ('ap2', ?1, ?2, 1, 2, ?3, ?4, ?5, ?6, ?7, ?8, 2)",
-            params![WORK, stored, VIDEO, TARGET, size, sha, object, job],
-        )?;
-        c.execute(
-            "UPDATE subtitle_file_effects SET state = 'done' WHERE id = 'e-apply'",
-            [],
-        )?;
-        c.execute(
-            "UPDATE subtitle_job_plan SET outcome = 'applied', applied_id = 'ap2'
-              WHERE job_id = ?1",
-            [job],
-        )
-        .map_err(trss_core::DbError::from)
-    })
-    .await
-    .unwrap();
-}
-
-/// The revision's plan published, recorded and done, as a worker killed
-/// before the clean-up left it: the protective copy and the old copy aside
-/// still there.
-async fn done_before_clean_up(s: &Setup, plan: &Plan) -> Left {
-    let left = killed(s, plan, "prepared", "set_aside").await;
-    let publish = object(s, &left.apply_temp);
-    std::fs::rename(s.at(&left.apply_temp), s.at(TARGET)).unwrap();
-    recorded_applied(s, plan, &fake::ass("Show-02v2"), publish).await;
-    s.sql(format!(
-        "UPDATE subtitle_replacements SET state = 'done' WHERE id = '{}'",
-        plan.id
-    ))
-    .await;
-    left
-}
-
-#[tokio::test]
-async fn killed_after_the_plan_was_done_cleans_up() {
-    let s = setup().await;
-    let (job, plan) = revision_approved(&s).await;
-    done_before_clean_up(&s, &plan).await;
-    run(&s).await;
-    replaced_once(&s, &job).await;
-}
-
-#[tokio::test]
-async fn killed_while_cleaning_up_removes_what_is_left() {
-    let s = setup().await;
-    let (job, plan) = revision_approved(&s).await;
-    let left = done_before_clean_up(&s, &plan).await;
-    // The old copy aside went; its protective copy did not yet.
-    std::fs::remove_file(s.at(&left.aside)).unwrap();
-    assert!(s.at(&left.removal_temp).exists());
-    run(&s).await;
-    replaced_once(&s, &job).await;
-}
-
-#[tokio::test]
-async fn a_job_held_before_its_clean_up_keeps_its_replacement_done() {
-    let s = setup().await;
-    let (job, plan) = revision_approved(&s).await;
-    let left = done_before_clean_up(&s, &plan).await;
-    s.store
-        .run
-        .hold_stuck(&job, "여러 번 끊겼어요".to_owned(), 9)
-        .await
-        .unwrap();
-    assert_eq!(versions(&s, &job).await[0].1, PlanState::Done);
-    assert_eq!(
-        s.store.place.plan(&job).await.unwrap()[0].outcome,
-        Some(Outcome::Applied)
-    );
-    assert_eq!(
-        s.count("SELECT count(*) FROM subtitle_file_effects WHERE state = 'held'")
-            .await,
-        0
-    );
-    // Its leftovers wait for the clean-up of the job's next run.
-    assert!(s.at(&left.aside).exists());
-    s.sql(format!(
-        "UPDATE subtitle_jobs SET state = 'pending' WHERE id = '{job}'"
-    ))
-    .await;
-    run(&s).await;
-    replaced_once(&s, &job).await;
-}
-
-#[tokio::test]
-async fn killed_after_importing_before_its_record_records_the_import_once() {
-    let s = setup().await;
-    let (job, plan) = unmanaged_waiting(&s).await;
-    decide(&s, &job, &plan, true).await;
-    // The new copy and the protective copy prepared, the protective copy
-    // imported as the unknown creator's and published; nothing recorded it.
-    let new = fake::ass("Show-02");
-    let imported = ".trss/subtitles/제작자 알 수 없음/Show S01E02.ass";
-    let apply_object = write(&s, ".trss/tmp/a1", &new);
-    let removal_object = write(&s, ".trss/tmp/r1", MINE.as_bytes());
-    let import_object = write(&s, imported, MINE.as_bytes());
-    s.sql(format!(
-        "UPDATE subtitle_jobs SET state = 'running' WHERE id = '{job}'"
-    ))
-    .await;
-    cut_and_restart(&s.store, &job).await;
-    #[rustfmt::skip]
-    let effects = [
-        ("e-apply", "apply", ".trss/tmp/a1", TARGET, new.clone(), apply_object),
-        ("e-remove", "remove", ".trss/tmp/r1", ".trss/tmp/r1.aside", MINE.as_bytes().to_vec(), removal_object),
-        ("e-import", "import", ".trss/tmp/i1", imported, MINE.as_bytes().to_vec(), import_object),
-    ];
-    for (id, kind, temp, target, bytes, object) in effects {
-        left_effect(
-            &s,
-            &plan,
-            id,
-            kind,
-            TARGET,
-            "prepared",
-            temp,
-            target,
-            &bytes,
-            Some(object),
-        )
-        .await;
-    }
-    run(&s).await;
-    let d = detail(&s, &job).await;
-    assert_eq!(
-        d.row.state,
-        JobState::Done,
-        "{:?} {:?}",
-        d.row.note,
-        d.events
-    );
     assert_eq!(s.read(TARGET), new);
-    assert_eq!(std::fs::read(s.at(imported)).unwrap(), MINE.as_bytes());
-    // One stored subtitle of the creator nobody named: the carrying out
-    // anew found the recorded import's bytes and reused them.
-    assert_eq!(
-        s.count("SELECT count(*) FROM subtitle_stored WHERE creator IS NULL")
-            .await,
-        1
-    );
-    // The import published before its record is the one recorded: nothing
-    // else came of it in the unknown creator's folder.
-    let unknown = s.at(".trss/subtitles/제작자 알 수 없음");
-    assert_eq!(names(&unknown), ["Show S01E02.ass"]);
-    assert_eq!(
-        s.count(
-            "SELECT count(*) FROM subtitle_assets
-              WHERE relative_path = '.trss/subtitles/제작자 알 수 없음/Show S01E02.ass'"
-        )
-        .await,
-        1
-    );
-    assert_eq!(s.temps(), Vec::<String>::new());
-    assert_eq!(
-        s.count(
-            "SELECT count(*) FROM subtitle_file_effects
-              WHERE plan_id IS NOT NULL AND state NOT IN ('done', 'abandoned')"
-        )
-        .await,
-        0
-    );
-}
-
-#[tokio::test]
-async fn killed_after_setting_an_earlier_applied_copy_aside_before_its_record_ends_the_replacement()
-{
-    let s = setup().await;
-    let (job, plan) = ass_waiting_beside_srt(&s).await;
-    decide(&s, &job, &plan, true).await;
-    // The new copy published and recorded; the applied `.srt` moved aside
-    // after its protective copy, and nothing recorded the move.
-    let (new, old) = (fake::ass("Show-02"), s.read(SRT));
-    let publish = write(&s, TARGET, &new);
-    let protective = write(&s, ".trss/tmp/r1", &old);
-    std::fs::rename(s.at(SRT), s.at(".trss/tmp/r1.aside")).unwrap();
-    s.sql(format!(
-        "UPDATE subtitle_jobs SET state = 'running' WHERE id = '{job}'"
-    ))
-    .await;
-    cut_and_restart(&s.store, &job).await;
-    left_effect(
-        &s,
-        &plan,
-        "e-apply",
-        "apply",
-        TARGET,
-        "prepared",
-        ".trss/tmp/a1",
-        TARGET,
-        &new,
-        Some(publish.clone()),
-    )
-    .await;
-    left_effect(
-        &s,
-        &plan,
-        "e-remove",
-        "remove",
-        SRT,
-        "prepared",
-        ".trss/tmp/r1",
-        ".trss/tmp/r1.aside",
-        &old,
-        Some(protective),
-    )
-    .await;
-    recorded_applied(&s, &plan, &new, publish).await;
-    run(&s).await;
-    let d = detail(&s, &job).await;
-    assert_eq!(
-        d.row.state,
-        JobState::Done,
-        "{:?} {:?}",
-        d.row.note,
-        d.events
-    );
-    assert_eq!(versions(&s, &job).await[0].1, PlanState::Done);
-    assert!(!s.at(SRT).exists());
-    assert_eq!(s.read(TARGET), new);
-    // The `.srt` is recorded removed, the new copy is the one applied.
-    assert_eq!(
-        s.count("SELECT count(*) FROM subtitle_applied WHERE removed_at IS NULL")
-            .await,
-        1
-    );
+    let rows = s.store.place.plan(job).await.unwrap();
+    assert_eq!(rows[0].outcome, Some(Outcome::Applied));
+    assert_eq!(rows[0].note.as_deref(), Some(ADOPTED));
+    let v = versions(s, job).await;
+    assert_eq!(v.len(), 1, "{v:?}");
+    assert_eq!(v[0].1, PlanState::Stale, "{v:?}");
     assert_eq!(
         s.count(
             "SELECT count(*) FROM subtitle_applied
-              WHERE path = 'Season 01/Show S01E02.srt' AND removed_at IS NOT NULL"
+              WHERE removed_at IS NULL AND path = 'Season 01/Show S01E02.ass'
+                AND id = (SELECT applied_id FROM subtitle_job_plan
+                           WHERE job_id = (SELECT job_id FROM subtitle_replacements))"
         )
         .await,
         1
     );
-    assert_eq!(s.temps(), Vec::<String>::new());
-    assert_eq!(
-        s.count(
-            "SELECT count(*) FROM subtitle_file_effects
-              WHERE plan_id IS NOT NULL AND state NOT IN ('done', 'abandoned')"
-        )
-        .await,
-        0
-    );
 }
 
 #[tokio::test]
-async fn an_old_copy_set_aside_that_is_not_the_one_compared_is_held_with_its_copies() {
+async fn a_replacement_cut_before_its_swap_is_carried_out_anew_and_leaves_old_folders_alone() {
     let s = setup().await;
     let (job, plan) = revision_approved(&s).await;
-    let left = killed(&s, &plan, "prepared", "set_aside").await;
-    // Something else is aside now.
-    std::fs::write(s.at(&left.aside), b"not it").unwrap();
+    let original = inode(&s.at(TARGET));
+    let new = fake::ass("Show-02v2");
+    // What the cut run left: half a staged copy, and its whole copy waiting
+    // in `.trss/aside/` for the swap. An earlier release's set-aside
+    // original in `.trss/tmp/` is there too.
+    write(
+        &s,
+        ".trss/staging/3c9a3f7e-8f0e-4f5a-9d1c-2b6d9e0f1a11",
+        &new[..new.len() / 2],
+    );
+    let waiting = ".trss/aside/7b1e0c55-4f7a-4d38-a0b9-6c2d1e9f3a22";
+    write(&s, waiting, &new);
+    write(&s, ".trss/tmp/r1.aside", b"an earlier release's original");
+    cut(&s, &job).await;
     run(&s).await;
+
     let d = detail(&s, &job).await;
     assert_eq!(
         d.row.state,
-        JobState::Held,
+        JobState::Done,
         "{:?} {:?}",
         d.row.note,
         d.events
     );
-    assert_eq!(versions(&s, &job).await[0].1, PlanState::Held);
-    // Nothing published, every file kept for a person to look at.
-    assert!(!s.at(TARGET).exists());
-    assert_eq!(s.read(&left.removal_temp), fake::ass("Show-02"));
-    assert!(s.at(&left.apply_temp).exists());
-    assert!(s.at(&left.aside).exists());
+    assert_eq!(versions(&s, &job).await[0].1, PlanState::Done);
+    assert_eq!(s.read(TARGET), new);
     assert_eq!(
-        s.count("SELECT count(*) FROM subtitle_file_effects WHERE state = 'held'")
+        s.count("SELECT count(*) FROM subtitle_applied WHERE removed_at IS NULL")
             .await,
-        2
+        1
     );
+    // The staging folder was emptied; what the cut left aside stays and the
+    // run's own files there went; the old release's folder is untouched.
+    assert_eq!(names(&s.at(".trss/staging")), Vec::<String>::new());
+    assert_eq!(asides(&s), [file_name(waiting)]);
+    assert_eq!(s.read(waiting), new);
+    assert!(with_inode(&s.work(), original).is_empty());
+    assert_eq!(names(&s.at(".trss/tmp")), ["r1.aside"]);
+    assert_eq!(
+        s.read(".trss/tmp/r1.aside"),
+        b"an earlier release's original"
+    );
+    let _ = plan;
+}
+
+fn file_name(path: &str) -> String {
+    path.rsplit('/').next().unwrap().to_owned()
 }
 
 #[tokio::test]
-async fn a_job_held_while_its_old_copy_is_aside_holds_the_plan_and_its_effects() {
+async fn a_replacement_cut_after_its_swap_records_the_new_copy_and_keeps_the_original_aside() {
+    let s = setup().await;
+    let (job, _) = revision_approved(&s).await;
+    let original = inode(&s.at(TARGET));
+    let new = fake::ass("Show-02v2");
+    // The swap done, nothing recorded: the new copy at the target and the
+    // original, the same file, in `.trss/aside/`.
+    let aside = ".trss/aside/0e4c2d9b-6a51-4f0e-8b7d-5f3a2c1e9d33";
+    write(&s, ".trss/aside/new", &new);
+    std::fs::create_dir_all(s.at(".trss/aside")).unwrap();
+    std::fs::rename(s.at(TARGET), s.at(aside)).unwrap();
+    std::fs::rename(s.at(".trss/aside/new"), s.at(TARGET)).unwrap();
+    cut(&s, &job).await;
+    run(&s).await;
+
+    adopted_after_the_cut(&s, &job, &new).await;
+    let v = versions(&s, &job).await;
+    assert!(
+        v[0].2
+            .as_deref()
+            .is_some_and(|r| r.contains("기존 자막이 비교한 뒤 바뀌었어요")),
+        "{v:?}"
+    );
+    // The earlier applied copy, whose file is not at its path any more, is
+    // recorded removed; its file stays aside, never removed.
+    assert_eq!(
+        s.count("SELECT count(*) FROM subtitle_applied WHERE removed_at IS NOT NULL")
+            .await,
+        1
+    );
+    assert_eq!(asides(&s), [file_name(aside)]);
+    assert_eq!(inode(&s.at(aside)), original);
+    assert_eq!(s.read(aside), fake::ass("Show-02"));
+}
+
+#[tokio::test]
+async fn a_replacement_cut_after_taking_off_an_earlier_copy_leaves_that_file_aside() {
+    let s = setup().await;
+    let (job, plan) = ass_waiting_beside_srt(&s).await;
+    decide(&s, &job, &plan, true).await;
+    let new = fake::ass("Show-02");
+    let srt = s.read(SRT);
+    let srt_inode = inode(&s.at(SRT));
+    // The new copy published at the target, the applied `.srt` moved
+    // aside; nothing recorded.
+    let aside = ".trss/aside/5a8f1b2c-3d4e-4f60-9a7b-8c9d0e1f2a44";
+    write(&s, TARGET, &new);
+    std::fs::create_dir_all(s.at(".trss/aside")).unwrap();
+    std::fs::rename(s.at(SRT), s.at(aside)).unwrap();
+    cut(&s, &job).await;
+    run(&s).await;
+
+    adopted_after_the_cut(&s, &job, &new).await;
+    let v = versions(&s, &job).await;
+    assert!(
+        v[0].2
+            .as_deref()
+            .is_some_and(|r| r.contains("새 자막을 둘 자리에 파일이 생겼어요")),
+        "{v:?}"
+    );
+    // The `.srt` stays aside as it was, and nothing puts it anywhere else.
+    // Its applied record is not ended: nothing recorded that the cut run
+    // took it off, and the next comparison of the episode plans it.
+    assert!(!s.at(SRT).exists());
+    assert_eq!(
+        s.count(
+            "SELECT count(*) FROM subtitle_applied
+              WHERE path = 'Season 01/Show S01E02.srt' AND removed_at IS NULL"
+        )
+        .await,
+        1
+    );
+    assert_eq!(asides(&s), [file_name(aside)]);
+    assert_eq!(s.read(aside), srt);
+    assert_eq!(inode(&s.at(aside)), srt_inode);
+}
+
+#[tokio::test]
+async fn a_replacement_cut_after_its_records_leaves_its_files_aside() {
+    let s = setup().await;
+    let (job, _) = revision_approved(&s).await;
+    // The swap done and recorded as the run's transaction records it: the
+    // new copy applied, the earlier one removed, the plan done. The run was
+    // cut before it removed the original it moved aside.
+    let aside = ".trss/aside/9d2e3f4a-5b6c-4d7e-8f90-a1b2c3d4e555";
+    std::fs::create_dir_all(s.at(".trss/aside")).unwrap();
+    std::fs::rename(s.at(TARGET), s.at(aside)).unwrap();
+    write(&s, TARGET, &fake::ass("Show-02v2"));
+    let (stored, plan_id) =
+        s.db.run(move |c| {
+            c.query_row("SELECT stored_id, id FROM subtitle_replacements", [], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+            })
+            .map_err(trss_core::DbError::from)
+        })
+        .await
+        .unwrap();
+    s.sql(format!(
+        "UPDATE subtitle_applied SET removed_at = 2 WHERE removed_at IS NULL;
+         INSERT INTO subtitle_applied
+             (id, work_id, stored_id, season, episode, video_path, path, byte_size, sha256,
+              object, job_id, applied_at)
+         SELECT 'ap2', '{WORK}', '{stored}', 1, 2, '{VIDEO}', '{TARGET}', byte_size, sha256, '1:1',
+                '{job}', 2
+           FROM subtitle_assets
+          WHERE id = (SELECT subtitle_asset_id FROM subtitle_stored WHERE id = '{stored}');
+         UPDATE subtitle_job_plan SET outcome = 'applied', applied_id = 'ap2'
+          WHERE job_id = '{job}';
+         UPDATE subtitle_replacements SET state = 'done' WHERE id = '{plan_id}';"
+    ))
+    .await;
+    cut(&s, &job).await;
+    run(&s).await;
+
+    let d = detail(&s, &job).await;
+    assert_eq!(
+        d.row.state,
+        JobState::Done,
+        "{:?} {:?}",
+        d.row.note,
+        d.events
+    );
+    assert_eq!(versions(&s, &job).await[0].1, PlanState::Done);
+    assert_eq!(s.read(TARGET), fake::ass("Show-02v2"));
+    assert_eq!(asides(&s), [file_name(aside)]);
+    assert_eq!(s.read(aside), fake::ass("Show-02"));
+}
+
+#[tokio::test]
+async fn a_job_held_for_its_starts_leaves_its_approved_plan_and_its_files() {
     let s = setup().await;
     let (job, plan) = revision_approved(&s).await;
-    killed(&s, &plan, "prepared", "set_aside").await;
+    // A cut run left the original aside after the swap.
+    let aside = ".trss/aside/1f2e3d4c-5b6a-4978-8a9b-0c1d2e3f4a66";
+    write(&s, ".trss/aside/new", &fake::ass("Show-02v2"));
+    std::fs::rename(s.at(TARGET), s.at(aside)).unwrap();
+    std::fs::rename(s.at(".trss/aside/new"), s.at(TARGET)).unwrap();
     s.store
         .run
         .hold_stuck(&job, "여러 번 끊겼어요".to_owned(), 9)
         .await
         .unwrap();
-    assert_eq!(versions(&s, &job).await[0].1, PlanState::Held);
-    assert_eq!(
-        s.count("SELECT count(*) FROM subtitle_file_effects WHERE state = 'held'")
-            .await,
-        2
-    );
-    assert_eq!(
-        s.store.place.plan(&job).await.unwrap()[0].outcome,
-        Some(Outcome::Held)
-    );
+    // Nothing of the replacement is on record to hold: the plan stays
+    // approved, and its next run checks it again from the start.
+    assert_eq!(versions(&s, &job).await[0].1, PlanState::Approved);
+    assert_eq!(s.store.place.plan(&job).await.unwrap()[0].outcome, None);
+    assert_eq!(detail(&s, &job).await.row.state, JobState::Held);
+    assert_eq!(s.read(aside), fake::ass("Show-02"));
+    let _ = plan;
 }
 
 #[tokio::test]
-async fn killed_then_mounted_again_with_another_device_number_carries_the_replacement_on() {
-    // Each point a killed worker leaves the plan at, the machine restarted
-    // before the next run: every file the plan and its effects recorded has
-    // another device number.
-    for point in [
-        "prepared",
-        "set aside unrecorded",
-        "set aside",
-        "published unrecorded",
-        "done",
-    ] {
-        let s = setup().await;
-        let (job, plan) = revision_approved(&s).await;
-        match point {
-            "prepared" => {
-                killed(&s, &plan, "prepared", "prepared").await;
-            }
-            "set aside unrecorded" => {
-                let left = killed(&s, &plan, "prepared", "prepared").await;
-                std::fs::rename(s.at(TARGET), s.at(&left.aside)).unwrap();
-            }
-            "set aside" => {
-                killed(&s, &plan, "prepared", "set_aside").await;
-            }
-            "published unrecorded" => {
-                let left = killed(&s, &plan, "prepared", "set_aside").await;
-                std::fs::rename(s.at(&left.apply_temp), s.at(TARGET)).unwrap();
-            }
-            _ => {
-                done_before_clean_up(&s, &plan).await;
-            }
-        }
-        mounted_again(&s, &job, &["video", "paths", "effects"]).await;
-        run(&s).await;
-        let d = detail(&s, &job).await;
-        assert_eq!(
-            d.row.state,
-            JobState::Done,
-            "{point}: {:?} {:?}",
-            d.row.note,
-            d.events
-        );
-        replaced_once(&s, &job).await;
-    }
+async fn an_approved_plan_mounted_again_with_another_device_number_is_carried_out() {
+    let s = setup().await;
+    let (job, _) = revision_approved(&s).await;
+    // The machine restarted before the run: the video and the file beside
+    // it have another device number.
+    mounted_again(&s, &job, &["video", "paths"]).await;
+    run(&s).await;
+    let d = detail(&s, &job).await;
+    assert_eq!(
+        d.row.state,
+        JobState::Done,
+        "{:?} {:?}",
+        d.row.note,
+        d.events
+    );
+    assert_eq!(versions(&s, &job).await[0].1, PlanState::Done);
+    assert_eq!(s.read(TARGET), fake::ass("Show-02v2"));
 }
 
 // ---- the comparison a plan is made with (ticket 0069)

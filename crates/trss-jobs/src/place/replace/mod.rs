@@ -17,8 +17,8 @@
 //! `remove`d; any other subtitle stays (`keep`). Not planned, and stored
 //! only: an episode beside whose video the new bytes are already, a row whose
 //! source has a newer revision of the episode stored (that one's job compares
-//! it), an episode whose paths another effect under way is changing, and one
-//! with two files to take off whose names differ in case only.
+//! it), and an episode with two files to take off whose names differ in case
+//! only.
 //!
 //! A row a person chose to apply (`chosen`, [`records::choose_stored`](place_records::choose_stored))
 //! is planned the same way, with two differences. The newer revision of its
@@ -46,47 +46,66 @@
 //!
 //! # Carrying out
 //!
-//! An approved plan ([`Placer::carry_out`]) is checked again first: a change
-//! makes it stale, and the next plan is made. Then:
+//! An approved plan ([`Placer::carry_out`]) records nothing before it
+//! changes a file: every run checks it again from the start ([`Placer::changed`]),
+//! and a change makes it stale, so the next plan is made. Then:
 //!
-//! 1. Its effects are claimed in one transaction (`intended`): the new copy's
-//!    apply and a removal for each path it takes off. Another effect under
-//!    way on one of those paths stops it: the plan goes stale and the row is
-//!    stored only.
-//! 2. The new copy is written to its temporary file (`prepared`); each file
-//!    to take off is copied to its protective copy in `.trss/tmp/` and read
-//!    back as the plan saw it (`prepared`); a file the app did not manage is
-//!    imported from that copy as the stored subtitle of the creator nobody
-//!    named. Nothing beside the video changed yet: a failure (no space) fails
-//!    the plan, a change found makes it stale.
-//! 3. The plan is checked again. The file at the new copy's path is renamed
-//!    aside to `.trss/tmp/<ID>.aside`, replacing nothing, and must be the
-//!    plan's object and bytes there (`set_aside`); one that is not is put
-//!    back and the plan goes stale.
-//! 4. The new copy is published by a rename that replaces nothing and
-//!    recorded applied. A record the database refuses holds the plan, and
-//!    nothing more is done to it.
-//! 5. Each earlier applied copy is set aside the same way and recorded
-//!    removed. One that cannot be holds the plan, the new copy applied: the
-//!    removal is not taken as done, and nothing is rolled back.
-//! 6. The plan is `done`; then the protective copies and the files set aside
-//!    go, and the removals are `done`.
+//! 1. The new copy is written whole to the work folder's staging folder
+//!    ([`files::Staging`]), synced and read back. Nothing beside the video
+//!    changed yet: a failure (no room) fails the plan, the stored copy not
+//!    being the recorded bytes makes it stale.
+//! 2. The plan is checked again.
+//! 3. A plan that `add`s publishes the new copy by a rename that replaces
+//!    nothing; a file there meanwhile makes it stale. A plan that `replace`s
+//!    moves the new copy into `.trss/aside/<ID>` ([`files::ASIDE_DIR`]), by a
+//!    rename that replaces nothing, and swaps it with the file at the path in
+//!    one step ([`aside::swap`]): the path is never empty. The file the swap
+//!    took off, now aside, must be the approved one (its length, SHA-256 and
+//!    inode, as the plan saw it); one that is not is swapped back, so the
+//!    changed file is in its place again, the new copy goes and the plan is
+//!    stale. A path whose name differs in case from the target is renamed to
+//!    the target's name once swapped.
+//! 4. A file the app did not manage is imported from its file aside, as the
+//!    stored subtitle of the creator nobody named, by a store's write
+//!    (staged, then published by a rename that replaces nothing, or found
+//!    there with its bytes). One that cannot be is swapped back and the plan
+//!    fails.
+//! 5. Each earlier applied copy at another path is renamed into
+//!    `.trss/aside/<ID>`, replacing nothing, and checked the same way. One
+//!    that is not the approved file goes back; that one, or one that cannot
+//!    be moved, holds the plan: the new copy stays applied, the removal is not
+//!    taken as done, and nothing is rolled back.
+//! 6. One synced transaction records the new copy applied, the applied
+//!    copies taken off removed, and the plan `done` (or `held`, by 5). A
+//!    record the database refuses holds the plan: the copies of 5 go back to
+//!    their paths, and the file the new copy took the place of stays aside.
+//! 7. The files this run moved aside go. A held plan's stay.
 //!
-//! # Restart
+//! Something this run cannot tell the outcome of (a folder sync that failed,
+//! a swap back that failed) holds the plan with every file where it is.
 //!
-//! An approved plan's unfinished effects are compared with the disk before
-//! anything else of the row ([`Placer::recover_plan`]):
+//! # Doing it again
 //!
-//! | Effects | On disk | Then |
+//! A run cut short (a process stopped, or a run that ended in an error and
+//! that the same process takes up again) leaves the plan approved, and the
+//! next run carries it out again from its first check. What a cut leaves,
+//! by where it fell:
+//!
+//! | Cut | On disk | The next run |
 //! | --- | --- | --- |
-//! | a removal `prepared` | the file at its path, nothing aside | not set aside yet |
-//! | a removal `prepared` | nothing at its path, the plan's object aside | set aside: recorded so |
-//! | the new copy `prepared` | its temporary file gone, its object at its path | published: recorded applied |
-//! | an import `prepared` | its object at its target | published: recorded |
-//! | nothing set aside, the new copy not published | | the temporary files go, the effects are abandoned and the plan is carried out anew, from its check |
-//! | something set aside or the new copy applied | | carried on from there (steps 3 to 6) |
-//! | a `done` plan | | step 6 |
-//! | anything else | | the plan, its effects and its row are held; every file stays |
+//! | before the new copy is aside | a staged copy at most | empties the staging folder and carries the plan out anew |
+//! | after the new copy is aside, before the swap | a copy of the new bytes in `.trss/aside/` | carries the plan out anew; that copy stays |
+//! | after the swap or the `add`'s publish, before the transaction of 6 | the new copy at its path; the file it took the place of in `.trss/aside/` | finds the path changed: the plan is stale, and the comparison records the new copy as applied ([`ADOPTED`]) |
+//! | after an import's publish, before its record | the same, and the import's file, unrecorded, under the name it took | the same; that file is recorded by the next import of its bytes there (`Choice::Adopt`) |
+//! | after an import's record | the same, and the import recorded | the same; the import stays recorded |
+//! | after an earlier applied copy is aside | the same, and that copy in `.trss/aside/` | the same; its applied record is not ended |
+//! | after the transaction of 6 | the plan done, its files in `.trss/aside/` | nothing: the row is applied |
+//!
+//! Nothing removes what a run cut short left in `.trss/aside/`: the file
+//! the swap took off may be a person's only copy of their subtitle (one not
+//! imported yet). A plan stale after a cut leaves the paths it did not reach
+//! to the next comparison of that episode. Releases before 0153 kept a
+//! replacement's files in `.trss/tmp/`, which nothing empties either.
 
 pub mod diff;
 pub mod lines;
@@ -94,35 +113,36 @@ pub mod records;
 
 use std::{
     io,
+    ops::ControlFlow,
     path::{Path, PathBuf},
     time::UNIX_EPOCH,
 };
 
-use trss_core::file_id::same_recorded_file;
+use trss_core::{
+    file_id::same_recorded_file,
+    files::{
+        create_dir_all_synced, rename_exchange_synced, rename_noreplace, rename_noreplace_synced,
+        sync_renamed,
+    },
+};
 
 use super::{
-    aside::{self, Check, Expected, Moved},
+    aside::{self, Check, Expected, Moved, Swapped},
     blocking, files,
     files::{Copied, Published},
     joined,
     package::extension,
     records::{
-        self as place_records, Adopted, Effect, JobFacts, NewApplied, Placed, PlanRow,
-        PublishedCopy,
+        self as place_records, Adopted, JobFacts, NewApplied, Placed, PlanRow, PublishedCopy,
     },
     row_label, video_parts, Choice, Placer, SUBTITLE_EXTENSIONS,
 };
 use crate::{
     area::{object_of, read_facts},
-    model::{
-        AssetKind, Chosen, EffectKind, EffectState, Outcome, PathAction, PlanAction, PlanState,
-        SubtitleFormat,
-    },
+    model::{AssetKind, Chosen, Outcome, PathAction, PlanAction, PlanState, SubtitleFormat},
     store::JobError,
 };
-use records::{
-    Claimed, Compared, Comparison, FileSeen, Imported, ImportedAsset, Plan, PlanPath, VideoSeen,
-};
+use records::{Compared, Comparison, FileSeen, Imported, ImportedAsset, Plan, PlanPath, VideoSeen};
 
 /// The error number of a rename of a file that is not there.
 const ENOENT: i32 = 2;
@@ -149,16 +169,15 @@ enum Scan {
     Unreadable(String),
 }
 
-/// What came of setting a file aside.
-enum Aside {
-    Done,
-    /// Nothing changed beside the video (the file was put back, or was not
-    /// there): why.
-    Untouched(String),
-    /// The rename failed: nothing moved.
-    Failed(io::Error),
-    /// What is on disk is not known: why.
-    Unsure(String),
+/// A file a run took off a path beside the video, into `.trss/aside/`.
+#[derive(Debug, Clone)]
+struct TakenOff {
+    /// The path it was at, relative to the work folder.
+    path: String,
+    /// Where it is now, relative to the work folder.
+    aside: String,
+    /// The applied copy it was.
+    applied_id: Option<String>,
 }
 
 /// The change time of a file, in nanoseconds since the epoch.
@@ -215,11 +234,6 @@ fn expected(seen: &FileSeen) -> Expected<'_> {
         sha256: &seen.sha256,
         object: Some(&seen.object),
     }
-}
-
-/// The same file as the plan saw: its object and bytes.
-fn same_file(found: &Option<(u64, String, String)>, seen: &FileSeen) -> bool {
-    expected(seen).matches(found)
 }
 
 /// The same video as the plan saw: its path, object, length and change time.
@@ -324,6 +338,7 @@ impl Placer {
         facts: &JobFacts,
         row: &PlanRow,
         plan: Plan,
+        staging: &files::Staging,
     ) -> Result<bool, JobError> {
         match plan.state {
             PlanState::Open => match self.changed(facts, &plan).await? {
@@ -331,7 +346,7 @@ impl Placer {
                 // A plan decided meanwhile is the next run's.
                 Some(reason) => Ok(!self.stale(row, &plan, &reason).await?),
             },
-            PlanState::Approved => self.carry_out(facts, row, plan).await,
+            PlanState::Approved => self.carry_out(facts, row, plan, staging).await,
             _ => Ok(true),
         }
     }
@@ -392,14 +407,6 @@ impl Placer {
                 .iter()
                 .position(|p| p.path.to_lowercase() == target.to_lowercase())
         });
-        let busy = {
-            let f = folder.to_owned();
-            self.read(move |c| place_records::busy_targets(c, &f, None))
-                .await?
-        };
-        let changing = std::iter::once(&target)
-            .chain(present.iter().map(|p| &p.path))
-            .find(|p| busy.contains(&p.to_lowercase()));
         // A file beside the video with the stored copy's bytes: the one at the
         // target's name first (the case-only match too), else the first in the
         // order the files were found.
@@ -416,9 +423,9 @@ impl Placer {
             .or_else(|| identical.first().copied());
         let same_note = "이 회차에 같은 자막이 이미 있어 그대로 두고 보관만 했어요";
         let settled = match same {
-            // The revision's own job compares it, and another job's effect
-            // under way may take the path: neither is made the applied copy.
-            Some(_) if newer || changing.is_some() => Some(stored_only(same_note)),
+            // The revision's own job compares it: it is not made the applied
+            // copy.
+            Some(_) if newer => Some(stored_only(same_note)),
             Some(i) => {
                 // The stored copy is what the applied copy is a copy of: it
                 // is read as the comparison reads it, and a file that is gone
@@ -451,13 +458,7 @@ impl Placer {
             None if newer => Some(stored_only(
                 "같은 출처의 새 수정본이 들어와 이 자막은 보관만 했어요",
             )),
-            None => changing.map(|path| {
-                (
-                    "다른 작업이 이 회차의 자막을 바꾸는 중이라 그대로 두고 보관만 했어요"
-                        .to_owned(),
-                    path.clone(),
-                )
-            }),
+            None => None,
         };
         if let Some((note, detail)) = settled {
             self.settle_row(row, Outcome::Existing, note.clone())
@@ -532,8 +533,9 @@ impl Placer {
                 applied_id: p.applied_id.clone(),
             });
         }
-        // Two files to take off whose names differ in case only would be two
-        // removals of what the effects count as one path.
+        // Two files to take off whose names differ in case only are one file
+        // on a file system that does not tell case apart (SMB): which one a
+        // removal takes is not known.
         let mut taken: Vec<String> = paths
             .iter()
             .filter(|p| matches!(p.action, PathAction::Replace | PathAction::Remove))
@@ -784,69 +786,11 @@ impl Placer {
         facts: &JobFacts,
         row: &PlanRow,
         plan: Plan,
+        staging: &files::Staging,
     ) -> Result<bool, JobError> {
         let label = row_label(row);
         if let Some(reason) = self.changed(facts, &plan).await? {
             return Ok(!self.stale(row, &plan, &reason).await?);
-        }
-        let apply = Effect {
-            id: uuid::Uuid::new_v4().to_string(),
-            job_id: plan.job_id.clone(),
-            position: plan.position,
-            kind: EffectKind::Apply,
-            state: EffectState::Intended,
-            folder: plan.folder.clone(),
-            temp: format!("{}/{}", files::TEMP_DIR, uuid::Uuid::new_v4()),
-            target: plan.target.clone(),
-            video: Some(plan.video.path.clone()),
-            size: plan.asset_size,
-            sha256: plan.asset_sha256.clone(),
-            object: None,
-            reason: None,
-            source: None,
-            plan_id: Some(plan.id.clone()),
-        };
-        let removals: Vec<Effect> = plan
-            .taken_off()
-            .filter_map(|path| {
-                let file = path.file.as_ref()?;
-                let id = uuid::Uuid::new_v4().to_string();
-                Some(Effect {
-                    temp: format!("{}/{id}", files::TEMP_DIR),
-                    target: format!("{}/{id}.aside", files::TEMP_DIR),
-                    id,
-                    kind: EffectKind::Remove,
-                    video: None,
-                    size: file.size,
-                    sha256: file.sha256.clone(),
-                    source: Some(path.path.clone()),
-                    ..apply.clone()
-                })
-            })
-            .collect();
-        let mut all = vec![apply.clone()];
-        all.extend(removals.iter().cloned());
-        let (p, now) = (plan.clone(), self.now());
-        match self
-            .write(move |c| records::claim(c, &p, &all, now))
-            .await?
-        {
-            Claimed::Yes => {}
-            Claimed::NotApproved => return Ok(true),
-            Claimed::Busy(path) => {
-                let reason = "다른 작업이 이 회차의 자막을 바꾸는 중이에요";
-                let (id, r, now) = (plan.id.clone(), reason.to_owned(), self.now());
-                self.write(move |c| {
-                    records::move_plan(c, &id, PlanState::Approved, PlanState::Stale, Some(&r), now)
-                })
-                .await?;
-                let note = "다른 작업이 이 회차의 자막을 바꾸는 중이라 그대로 두고 보관만 했어요";
-                self.settle_row(row, Outcome::Existing, note.to_owned())
-                    .await?;
-                self.event(&row.job_id, format!("{label}: {note}"), Some(path))
-                    .await?;
-                return Ok(true);
-            }
         }
         self.event(
             &row.job_id,
@@ -855,83 +799,407 @@ impl Placer {
         )
         .await?;
 
-        // Nothing beside the video changes before every copy is ready.
+        // 1. The new copy, staged: nothing beside the video changed yet.
         let folder = PathBuf::from(&plan.folder);
-        let source = files::within(&folder, &plan.asset_path);
-        let temp = files::within(&folder, &apply.temp);
-        let (size, sha) = (apply.size, apply.sha256.clone());
-        match blocking(move || files::copy_to_temp(&source, &temp, size, &sha)).await {
-            Copied::Ready(object) => self.prepared(&apply.id, object).await?,
-            Copied::SourceChanged(_) => {
-                return self
-                    .back_out(
-                        row,
-                        &plan,
-                        Err("새 자막의 보관 파일이 기록과 달라요".to_owned()),
-                    )
-                    .await
-            }
-            Copied::Failed(err) => {
+        let staged = match self.staged(staging, &plan.folder, true).await {
+            Ok(staged) => files::within(&folder, &staged),
+            Err(err) => {
                 let reason = format!("새 자막을 준비하지 못해 교체하지 않았어요: {err}");
                 return self.back_out(row, &plan, Ok(reason)).await;
             }
+        };
+        let (source, at) = (files::within(&folder, &plan.asset_path), staged.clone());
+        let (size, sha) = (plan.asset_size, plan.asset_sha256.clone());
+        let object = match blocking(move || files::copy_to_temp(&source, &at, size, &sha)).await {
+            Copied::Ready(object) => object,
+            Copied::SourceChanged(_) => {
+                let changed = "새 자막의 보관 파일이 기록과 달라요".to_owned();
+                return self.back_out(row, &plan, Err(changed)).await;
+            }
+            Copied::Failed(err) => {
+                self.discard(&staged).await;
+                let reason = format!("새 자막을 준비하지 못해 교체하지 않았어요: {err}");
+                return self.back_out(row, &plan, Ok(reason)).await;
+            }
+        };
+        // 2. Checked again right before anything beside the video changes.
+        if let Some(changed) = self.changed(facts, &plan).await? {
+            self.discard(&staged).await;
+            return self.back_out(row, &plan, Err(changed)).await;
         }
-        for removal in &removals {
-            let path = removal.source.clone().unwrap_or_default();
-            let source = files::within(&folder, &path);
-            let temp = files::within(&folder, &removal.temp);
-            let (size, sha) = (removal.size, removal.sha256.clone());
-            match blocking(move || files::copy_to_temp(&source, &temp, size, &sha)).await {
-                Copied::Ready(object) => self.prepared(&removal.id, object).await?,
-                Copied::SourceChanged(_) => {
-                    let reason = format!("기존 자막이 비교한 뒤 바뀌었어요 ({path})");
-                    return self.back_out(row, &plan, Err(reason)).await;
-                }
-                Copied::Failed(err) if err.kind() == io::ErrorKind::NotFound => {
-                    let reason = format!("기존 자막이 없어졌어요 ({path})");
-                    return self.back_out(row, &plan, Err(reason)).await;
-                }
-                Copied::Failed(err) => {
-                    let reason = format!("기존 자막을 보호 복사하지 못해 교체하지 않았어요: {err}");
-                    return self.back_out(row, &plan, Ok(reason)).await;
+
+        // 3 and 4. The new copy takes its path.
+        let replaced = plan.paths.iter().find(|p| p.action == PathAction::Replace);
+        let placed = match replaced {
+            None => self.publish_added(row, &plan, &staged, &object).await?,
+            Some(replaced) => {
+                self.swap_in(facts, row, &plan, replaced, &staged, staging)
+                    .await?
+            }
+        };
+        let (path, displaced) = match placed {
+            ControlFlow::Continue(placed) => placed,
+            ControlFlow::Break(settled) => return Ok(settled),
+        };
+
+        // 5. The earlier applied copies at other paths go aside.
+        let mut removed: Vec<TakenOff> = Vec::new();
+        let mut held: Option<String> = None;
+        for old in plan.paths.iter().filter(|p| p.action == PathAction::Remove) {
+            match self.set_aside_removed(&plan, old).await {
+                Ok(taken) => removed.push(taken),
+                Err(reason) => {
+                    held = Some(format!(
+                        "새 자막은 적용했지만 이전 적용본을 지우지 못했어요 ({}): {reason}",
+                        old.path
+                    ));
+                    break;
                 }
             }
-            let unmanaged = plan.path(&path).is_some_and(|p| p.applied_id.is_none());
-            if unmanaged {
-                if let Err(reason) = self.import(facts, &plan, &path, &removal.temp).await? {
-                    let reason =
-                        format!("관리하지 않던 자막을 들이지 못해 교체하지 않았어요: {reason}");
-                    return self.back_out(row, &plan, Ok(reason)).await;
+        }
+
+        // 6. What was done, in one transaction.
+        let published = PublishedCopy {
+            job_id: plan.job_id.clone(),
+            position: plan.position,
+            video: Some(plan.video.path.clone()),
+            path,
+            size: plan.asset_size,
+            sha256: plan.asset_sha256.clone(),
+            object,
+        };
+        let copy = NewApplied {
+            work_id: plan.work_id.clone(),
+            stored_id: plan.stored_id.clone(),
+            season: plan.season,
+            episode: plan.episode,
+        };
+        let taken_off: Vec<String> = displaced
+            .iter()
+            .chain(&removed)
+            .filter_map(|t| t.applied_id.clone())
+            .collect();
+        let (p, h, now) = (plan.clone(), held.clone(), self.now());
+        let note = "기존 자막을 새 자막으로 교체했어요";
+        match self
+            .write(move |c| {
+                records::replaced(
+                    c,
+                    &p,
+                    &published,
+                    &copy,
+                    note,
+                    &taken_off,
+                    h.as_deref(),
+                    now,
+                )
+            })
+            .await
+        {
+            Ok(()) => {}
+            Err(err) if super::is_constraint(&err) => {
+                // Nothing of it is on record: the earlier applied copies go
+                // back, and the file the new copy took the place of stays
+                // aside.
+                let mut reason = format!("공개한 파일을 기록하지 못했어요: {err}");
+                let stuck = self.put_back(&plan, &removed).await;
+                if !stuck.is_empty() {
+                    reason.push_str(&format!(
+                        " (옮겨 둔 이전 적용본을 되돌리지 못했어요: {})",
+                        stuck.join(", ")
+                    ));
                 }
+                self.hold_plan(&plan, &reason).await?;
+                return Ok(true);
             }
+            Err(err) => return Err(err),
         }
-        if let Some(reason) = self.changed(facts, &plan).await? {
-            return self.back_out(row, &plan, Err(reason)).await;
+        if let Some(reason) = held {
+            self.event(
+                &plan.job_id,
+                format!("{}화: 보류했어요", plan.episode),
+                Some(reason),
+            )
+            .await?;
+            return Ok(true);
         }
-        self.finish_replacement(&plan).await?;
+        self.event(
+            &plan.job_id,
+            format!("{}화: 새 자막으로 교체했어요", plan.episode),
+            Some(plan.target.clone()),
+        )
+        .await?;
+
+        // 7. What this run moved aside goes.
+        let asides: Vec<PathBuf> = displaced
+            .iter()
+            .chain(&removed)
+            .map(|t| files::within(&folder, &t.aside))
+            .collect();
+        let gone = blocking(move || {
+            let paths: Vec<&Path> = asides.iter().map(PathBuf::as_path).collect();
+            aside::remove(&paths)
+        })
+        .await;
+        if let Err(err) = gone {
+            self.event(
+                &plan.job_id,
+                format!("{}화: 옮겨 둔 기존 자막을 지우지 못했어요", plan.episode),
+                Some(format!("{}: {err}", files::ASIDE_DIR)),
+            )
+            .await?;
+        }
         Ok(true)
     }
 
-    async fn prepared(&self, effect: &str, object: String) -> Result<(), JobError> {
-        let (id, now) = (effect.to_owned(), self.now());
-        self.write(move |c| place_records::prepared(c, &id, &object, now))
-            .await
+    /// Step 3 of carrying out a plan that `add`s: the new copy, staged at
+    /// `staged` (the file `object`), published at the plan's target. The
+    /// path it is at, or whether the row is settled when the plan ended.
+    async fn publish_added(
+        &self,
+        row: &PlanRow,
+        plan: &Plan,
+        staged: &Path,
+        object: &str,
+    ) -> Result<ControlFlow<bool, (String, Option<TakenOff>)>, JobError> {
+        let target = files::within(Path::new(&plan.folder), &plan.target);
+        let from = staged.to_owned();
+        let ended = match blocking(move || files::publish(&from, &target)).await {
+            Published::Done => return Ok(ControlFlow::Continue((plan.target.clone(), None))),
+            Published::Occupied => {
+                self.discard(staged).await;
+                let changed = format!("새 자막을 둘 자리에 파일이 생겼어요 ({})", plan.target);
+                self.back_out(row, plan, Err(changed)).await?
+            }
+            Published::Failed(err) => {
+                // Nothing moved while the new copy is where it was staged.
+                let at = staged.to_owned();
+                let still = blocking(move || files::facts(&at)).await;
+                if !matches!(&still, Ok(Some((_, _, o))) if same_recorded_file(object, o)) {
+                    let reason = format!("새 자막을 공개한 결과를 확인하지 못했어요: {err}");
+                    self.hold_plan(plan, &reason).await?;
+                    return Ok(ControlFlow::Break(true));
+                }
+                self.discard(staged).await;
+                let reason = format!("새 자막을 공개하지 못해 교체하지 않았어요: {err}");
+                self.back_out(row, plan, Ok(reason)).await?
+            }
+        };
+        Ok(ControlFlow::Break(ended))
     }
 
-    /// Stops a plan before anything beside the video changed: its
-    /// temporary files go and its effects are abandoned; then the plan fails
-    /// (`Ok`, the reason) or goes stale (`Err`, what changed). Whether the
-    /// row is settled for this run.
+    /// Steps 3 and 4 of carrying out a plan that `replace`s `replaced`: the
+    /// new copy, staged at `staged`, swapped with the file there, and that
+    /// file imported when the app did not manage it. The path the new copy is
+    /// at and the file it took off, or whether the row is settled when the
+    /// plan ended.
+    async fn swap_in(
+        &self,
+        facts: &JobFacts,
+        row: &PlanRow,
+        plan: &Plan,
+        replaced: &PlanPath,
+        staged: &Path,
+        staging: &files::Staging,
+    ) -> Result<ControlFlow<bool, (String, Option<TakenOff>)>, JobError> {
+        let ended = |settled| Ok(ControlFlow::Break(settled));
+        let Some(seen) = replaced.file.clone() else {
+            self.discard(staged).await;
+            self.hold_plan(plan, "교체할 기존 자막의 기록이 없어요")
+                .await?;
+            return ended(true);
+        };
+        let folder = PathBuf::from(&plan.folder);
+        let aside = format!("{}/{}", files::ASIDE_DIR, uuid::Uuid::new_v4());
+        let aside_at = files::within(&folder, &aside);
+        let path_at = files::within(&folder, &replaced.path);
+        let shown = replaced.path.clone();
+
+        // The new copy waits where nothing empties: once swapped, the file it
+        // takes off is there.
+        let (from, to) = (staged.to_owned(), aside_at.clone());
+        let moved = blocking(move || -> io::Result<io::Result<()>> {
+            if let Some(parent) = to.parent() {
+                create_dir_all_synced(parent)?;
+            }
+            rename_noreplace(&from, &to)?;
+            Ok(sync_renamed(&from, &to))
+        })
+        .await;
+        match moved {
+            Ok(Ok(())) => {}
+            Ok(Err(err)) => {
+                let reason = format!("새 자막을 옮겨 둔 뒤 폴더를 동기화하지 못했어요: {err}");
+                self.hold_plan(plan, &reason).await?;
+                return ended(true);
+            }
+            Err(err) => {
+                self.discard(staged).await;
+                let reason = format!("새 자막을 옮겨 두지 못해 교체하지 않았어요: {err}");
+                return ended(self.back_out(row, plan, Ok(reason)).await?);
+            }
+        }
+
+        let (a, b) = (aside_at.clone(), path_at.clone());
+        let swapped = blocking(move || aside::swap(&a, &b, &expected(&seen))).await;
+        let unsure = match swapped {
+            Swapped::Expected => None,
+            Swapped::NotSwapped(err) => {
+                self.discard(&aside_at).await;
+                let why = match err.kind() {
+                    io::ErrorKind::NotFound => Err(format!("기존 자막이 없어졌어요 ({shown})")),
+                    _ => Ok(format!(
+                        "기존 자막과 맞바꾸지 못해 교체하지 않았어요: {err}"
+                    )),
+                };
+                return ended(self.back_out(row, plan, why).await?);
+            }
+            Swapped::SwappedBack => {
+                self.discard(&aside_at).await;
+                let changed = format!("기존 자막이 비교한 뒤 바뀌었어요 ({shown})");
+                return ended(self.back_out(row, plan, Err(changed)).await?);
+            }
+            Swapped::Unsynced(err) => Some(format!(
+                "기존 자막과 맞바꾼 뒤 폴더를 동기화하지 못했어요: {err}"
+            )),
+            Swapped::SwappedBackUnsynced(err) => Some(format!(
+                "비교한 것과 다른 기존 자막을 되돌린 뒤 폴더를 동기화하지 못했어요 ({shown}): {err}"
+            )),
+            Swapped::NotSwappedBack(err) => Some(format!(
+                "기존 자막이 비교한 것과 달라 되돌리려 했지만 하지 못했어요 ({shown}): {err}"
+            )),
+        };
+        if let Some(reason) = unsure {
+            self.hold_plan(plan, &reason).await?;
+            return ended(true);
+        }
+
+        // A file the app did not manage is kept as a stored subtitle before
+        // anything removes it; when it cannot be, it goes back.
+        if replaced.applied_id.is_none() {
+            if let Err(reason) = self
+                .import(facts, plan, &replaced.path, &aside, staging)
+                .await?
+            {
+                let (a, b) = (aside_at.clone(), path_at.clone());
+                if let Err(err) = blocking(move || rename_exchange_synced(&a, &b)).await {
+                    let reason = format!(
+                        "관리하지 않던 자막을 들이지 못했고 기존 자막을 되돌리지 못했어요: {reason} ({err})"
+                    );
+                    self.hold_plan(plan, &reason).await?;
+                    return ended(true);
+                }
+                self.discard(&aside_at).await;
+                let reason =
+                    format!("관리하지 않던 자막을 들이지 못해 교체하지 않았어요: {reason}");
+                return ended(self.back_out(row, plan, Ok(reason)).await?);
+            }
+        }
+
+        // The new copy goes by the target's name, which no file has (the
+        // plan would replace that one).
+        let mut path = replaced.path.clone();
+        if path != plan.target {
+            let (from, to) = (path_at, files::within(&folder, &plan.target));
+            let renamed = blocking(move || {
+                rename_noreplace(&from, &to)
+                    .ok()
+                    .map(|()| sync_renamed(&from, &to))
+            })
+            .await;
+            match renamed {
+                // It stays applied under the name it took.
+                None => {}
+                Some(Ok(())) => path = plan.target.clone(),
+                Some(Err(err)) => {
+                    let reason =
+                        format!("새 자막의 이름을 바꾼 뒤 폴더를 동기화하지 못했어요: {err}");
+                    self.hold_plan(plan, &reason).await?;
+                    return ended(true);
+                }
+            }
+        }
+        let displaced = TakenOff {
+            path: replaced.path.clone(),
+            aside,
+            applied_id: replaced.applied_id.clone(),
+        };
+        Ok(ControlFlow::Continue((path, Some(displaced))))
+    }
+
+    /// Step 5 of carrying out: the earlier applied copy at `path` renamed
+    /// into `.trss/aside/`, replacing nothing, and checked to be the one the
+    /// plan saw (`Err`: why not; the file is back on its path then, unless
+    /// the reason says otherwise).
+    async fn set_aside_removed(&self, plan: &Plan, path: &PlanPath) -> Result<TakenOff, String> {
+        let Some(seen) = path.file.clone() else {
+            return Err("옮길 기존 자막의 기록이 없어요".to_owned());
+        };
+        let folder = PathBuf::from(&plan.folder);
+        let aside = format!("{}/{}", files::ASIDE_DIR, uuid::Uuid::new_v4());
+        let (from, to) = (
+            files::within(&folder, &path.path),
+            files::within(&folder, &aside),
+        );
+        let moved = blocking(move || {
+            if let Some(parent) = to.parent() {
+                if let Err(err) = create_dir_all_synced(parent) {
+                    return Moved::refused(err);
+                }
+            }
+            aside::set_aside(&from, &to, &expected(&seen))
+        })
+        .await;
+        let not_put_back = |err: io::Error| {
+            format!("옮긴 기존 자막이 비교한 것과 달라 되돌리려 했지만 하지 못했어요: {err}")
+        };
+        match moved {
+            Moved::Checked(Check::Expected) => Ok(TakenOff {
+                path: path.path.clone(),
+                aside,
+                applied_id: path.applied_id.clone(),
+            }),
+            Moved::Missing => Err("기존 자막이 없어졌어요".to_owned()),
+            Moved::NotMoved(err) => Err(err.to_string()),
+            Moved::Unsynced(err) | Moved::Checked(Check::PutBackUnsynced(err)) => Err(format!(
+                "기존 자막을 옮긴 뒤 폴더를 동기화하지 못했어요: {err}"
+            )),
+            Moved::Checked(Check::PutBack) => Err("기존 자막이 비교한 뒤 바뀌었어요".to_owned()),
+            Moved::Checked(Check::NotPutBack(err)) => Err(not_put_back(err)),
+            // Taken away after the rename: there is nothing to put back.
+            Moved::Checked(Check::Gone) => Err(not_put_back(io::Error::from_raw_os_error(ENOENT))),
+        }
+    }
+
+    /// Puts the earlier applied copies this run took off back on their
+    /// paths, replacing nothing; the paths of those it could not.
+    async fn put_back(&self, plan: &Plan, taken: &[TakenOff]) -> Vec<String> {
+        let mut stuck = Vec::new();
+        for t in taken {
+            let folder = Path::new(&plan.folder);
+            let (from, to) = (
+                files::within(folder, &t.aside),
+                files::within(folder, &t.path),
+            );
+            if blocking(move || rename_noreplace_synced(&from, &to))
+                .await
+                .is_err()
+            {
+                stuck.push(t.path.clone());
+            }
+        }
+        stuck
+    }
+
+    /// Stops a plan before anything beside the video changed (or after it
+    /// was put back): the plan fails (`Ok`, the reason) or goes stale
+    /// (`Err`, what changed). Whether the row is settled for this run.
     async fn back_out(
         &self,
         row: &PlanRow,
         plan: &Plan,
         why: Result<String, String>,
     ) -> Result<bool, JobError> {
-        if let Some(unsure) = self.abandon_all(plan).await? {
-            self.hold_plan(plan, &unsure).await?;
-            return Ok(true);
-        }
         match why {
             Ok(reason) => {
                 let (id, r, now) = (plan.id.clone(), reason.clone(), self.now());
@@ -953,44 +1221,8 @@ impl Placer {
         }
     }
 
-    /// Removes the temporary files of the plan's unfinished effects, none of
-    /// which changed anything beside the video, and abandons them; why not,
-    /// when one cannot be.
-    async fn abandon_all(&self, plan: &Plan) -> Result<Option<String>, JobError> {
-        let id = plan.id.clone();
-        let effects = self.read(move |c| records::unfinished_of(c, &id)).await?;
-        for effect in effects {
-            if effect.state == EffectState::SetAside {
-                return Ok(Some(
-                    "옮겨 둔 기존 자막이 있어 처음부터 다시 할 수 없어요".to_owned(),
-                ));
-            }
-            let temp = files::within(Path::new(&effect.folder), &effect.temp);
-            let object = effect.object.clone();
-            let gone = blocking(move || match files::facts(&temp)? {
-                // Only this effect writes its temporary file; a prepared
-                // one is removed while it is the one recorded.
-                Some((_, _, found))
-                    if object
-                        .as_ref()
-                        .is_some_and(|o| !same_recorded_file(o, &found)) =>
-                {
-                    Err(io::Error::other("임시 파일이 기록과 달라요"))
-                }
-                Some(_) => files::remove_known(&temp),
-                None => Ok(()),
-            })
-            .await;
-            if let Err(err) = gone {
-                return Ok(Some(format!("임시 파일을 지우지 못했어요: {err}")));
-            }
-            let (id, now) = (effect.id.clone(), self.now());
-            self.write(move |c| records::abandon(c, &id, now)).await?;
-        }
-        Ok(None)
-    }
-
-    /// Holds the plan, its unfinished effects and its row with the reason.
+    /// Holds the plan and its row with the reason; every file stays where
+    /// it is.
     async fn hold_plan(&self, plan: &Plan, reason: &str) -> Result<(), JobError> {
         let (p, r, now) = (plan.clone(), reason.to_owned(), self.now());
         self.write(move |c| records::hold_plan(c, &p, &r, now))
@@ -1004,15 +1236,18 @@ impl Placer {
     }
 
     /// Imports the bytes of the file at `path` the app did not manage, from
-    /// its protective copy `protective`, as the stored subtitle of the
-    /// creator nobody named on the plan's episode (`Err`: why not; nothing
-    /// is left of it then).
+    /// the file taken off it, now at `from` (relative to the work folder), as
+    /// the stored subtitle of the creator nobody named on the plan's episode
+    /// (`Err`: why not; nothing of it is left then but, at worst, an
+    /// unrecorded file of its bytes under the name it took, which the next
+    /// import records).
     async fn import(
         &self,
         facts: &JobFacts,
         plan: &Plan,
         path: &str,
-        protective: &str,
+        from: &str,
+        staging: &files::Staging,
     ) -> Result<Result<(), String>, JobError> {
         let Some(seen) = plan.path(path).and_then(|p| p.file.clone()) else {
             return Ok(Err("계획에 없는 파일이에요".to_owned()));
@@ -1024,6 +1259,8 @@ impl Placer {
         let dir = self
             .creator_dir(&unknown, "work", files::SUBTITLES_DIR.to_owned())
             .await?;
+        let folder = PathBuf::from(&plan.folder);
+        let from = files::within(&folder, from);
         let name = file_name(path).to_owned();
         let what = Imported {
             work_id: plan.work_id.clone(),
@@ -1038,7 +1275,7 @@ impl Placer {
                 _ => SubtitleFormat::Other,
             },
             encoding: {
-                let at = files::within(Path::new(&plan.folder), protective);
+                let at = from.clone();
                 blocking(move || std::fs::read(at).ok().and_then(|b| super::encoding_of(&b))).await
             },
         };
@@ -1065,7 +1302,8 @@ impl Placer {
             asset_id: None,
             chosen: None,
         };
-        let mut effect: Option<Effect> = None;
+        // The copy staged for publishing, once written.
+        let mut staged: Option<PathBuf> = None;
         for _ in 0..=super::MAX_RETARGETS {
             let choice = self
                 .choose_name(&unknown, &plan.folder, &dir, &probe)
@@ -1073,10 +1311,8 @@ impl Placer {
             let name = match choice {
                 Choice::New(name) => name,
                 Choice::Reuse(_, asset) => {
-                    if let Some(effect) = &effect {
-                        if let Some(unsure) = self.drop_temp(effect).await? {
-                            return Ok(Err(unsure));
-                        }
+                    if let Some(staged) = &staged {
+                        self.discard(staged).await;
                     }
                     let (w, now) = (what.clone(), self.now());
                     self.write(move |c| {
@@ -1086,337 +1322,111 @@ impl Placer {
                     return Ok(Ok(()));
                 }
                 // An import cut short after publishing left the file: it is
-                // recorded as an import records the file it publishes.
+                // recorded as the file an import publishes is.
                 Choice::Adopt(name) => {
-                    if let Some(effect) = &effect {
-                        if let Some(unsure) = self.drop_temp(effect).await? {
-                            return Ok(Err(unsure));
-                        }
+                    if let Some(staged) = &staged {
+                        self.discard(staged).await;
                     }
-                    let relative = format!("{dir}/{name}");
-                    let (w, at, now) = (what.clone(), relative.clone(), self.now());
-                    let (size, sha256) = (seen.size, seen.sha256.clone());
-                    self.write(move |c| {
-                        let asset = ImportedAsset::Found {
-                            relative_path: &at,
-                            size,
-                            sha256: &sha256,
-                        };
-                        records::imported(c, &w, asset, now)
-                    })
-                    .await?;
-                    self.event(
-                        &plan.job_id,
-                        format!(
-                            "{}화: 관리하지 않던 자막을 '{}' 보관본으로 들였어요",
-                            plan.episode,
-                            super::UNKNOWN_CREATOR
-                        ),
-                        Some(relative),
-                    )
-                    .await?;
-                    return Ok(Ok(()));
+                    return self
+                        .imported(plan, &what, format!("{dir}/{name}"), &seen)
+                        .await
+                        .map(Ok);
                 }
                 Choice::Full => {
                     return self
-                        .import_failed(effect, "보관할 이름을 정하지 못했어요")
+                        .import_failed(staged, "보관할 이름을 정하지 못했어요".to_owned())
                         .await
                 }
                 Choice::Unreadable(err) => {
-                    let reason = format!("보관 폴더를 읽지 못했어요: {err}");
-                    return self.import_failed(effect, &reason).await;
+                    return self
+                        .import_failed(staged, format!("보관 폴더를 읽지 못했어요: {err}"))
+                        .await
                 }
             };
             let target = format!("{dir}/{name}");
-            let current = match effect.take() {
-                Some(mut e) => {
-                    e.target = target;
-                    let (id, t, now) = (e.id.clone(), e.target.clone(), self.now());
-                    self.write(move |c| place_records::retarget(c, &id, &t, now))
-                        .await?;
-                    e
-                }
+            let temp = match staged.take() {
+                Some(temp) => temp,
                 None => {
-                    let id = uuid::Uuid::new_v4().to_string();
-                    let e = Effect {
-                        id: id.clone(),
-                        job_id: plan.job_id.clone(),
-                        position: plan.position,
-                        kind: EffectKind::Import,
-                        state: EffectState::Intended,
-                        folder: plan.folder.clone(),
-                        temp: format!("{}/{id}", files::TEMP_DIR),
-                        target,
-                        video: None,
-                        size: seen.size,
-                        sha256: seen.sha256.clone(),
-                        object: None,
-                        reason: None,
-                        source: Some(path.to_owned()),
-                        plan_id: Some(plan.id.clone()),
+                    let temp = match self.staged(staging, &plan.folder, true).await {
+                        Ok(temp) => files::within(&folder, &temp),
+                        Err(err) => return self.import_failed(None, err.to_string()).await,
                     };
-                    let (copy, now) = (e.clone(), self.now());
-                    self.write(move |c| place_records::intend(c, &copy, now))
-                        .await?;
-                    let from = files::within(Path::new(&plan.folder), protective);
-                    let temp = files::within(Path::new(&plan.folder), &e.temp);
-                    let (size, sha) = (e.size, e.sha256.clone());
-                    match blocking(move || files::copy_to_temp(&from, &temp, size, &sha)).await {
-                        Copied::Ready(object) => {
-                            self.prepared(&e.id, object.clone()).await?;
-                            Effect {
-                                state: EffectState::Prepared,
-                                object: Some(object),
-                                ..e
-                            }
-                        }
+                    let (source, at) = (from.clone(), temp.clone());
+                    let (size, sha) = (seen.size, seen.sha256.clone());
+                    match blocking(move || files::copy_to_temp(&source, &at, size, &sha)).await {
+                        Copied::Ready(_) => temp,
                         Copied::SourceChanged(reason) => {
-                            return self.import_failed(Some(e), &reason).await
+                            return self.import_failed(None, reason).await
                         }
                         Copied::Failed(err) => {
-                            return self.import_failed(Some(e), &err.to_string()).await
+                            return self.import_failed(Some(temp), err.to_string()).await
                         }
                     }
                 }
             };
-            let temp = files::within(Path::new(&plan.folder), &current.temp);
-            let to = files::within(Path::new(&plan.folder), &current.target);
-            match blocking(move || files::publish(&temp, &to)).await {
+            let (at, to) = (temp.clone(), files::within(&folder, &target));
+            match blocking(move || files::publish(&at, &to)).await {
                 Published::Done => {
-                    let (w, e, now) = (what.clone(), current.clone(), self.now());
-                    self.write(move |c| {
-                        records::imported(c, &w, ImportedAsset::Published(&e), now)
-                    })
-                    .await?;
-                    self.event(
-                        &plan.job_id,
-                        format!(
-                            "{}화: 관리하지 않던 자막을 '{}' 보관본으로 들였어요",
-                            plan.episode,
-                            super::UNKNOWN_CREATOR
-                        ),
-                        Some(current.target.clone()),
-                    )
-                    .await?;
-                    return Ok(Ok(()));
+                    return self.imported(plan, &what, target, &seen).await.map(Ok);
                 }
-                Published::Occupied => effect = Some(current),
+                Published::Occupied => staged = Some(temp),
                 Published::Failed(err) => {
                     return self
-                        .import_failed(Some(current), &format!("보관본을 쓰지 못했어요: {err}"))
+                        .import_failed(Some(temp), format!("보관본을 쓰지 못했어요: {err}"))
                         .await
                 }
             }
         }
-        self.import_failed(effect, "보관할 이름이 계속 다른 파일에 먼저 쓰였어요")
-            .await
+        self.import_failed(
+            staged,
+            "보관할 이름이 계속 다른 파일에 먼저 쓰였어요".to_owned(),
+        )
+        .await
     }
 
-    /// An import that did not happen: its temporary file goes (`Err`, why).
+    /// An import that did not happen: its staged copy, if it has one, goes
+    /// (`Err`, why).
     async fn import_failed(
         &self,
-        effect: Option<Effect>,
-        reason: &str,
+        staged: Option<PathBuf>,
+        reason: String,
     ) -> Result<Result<(), String>, JobError> {
-        if let Some(effect) = effect {
-            if let Some(unsure) = self.drop_temp(&effect).await? {
-                return Ok(Err(unsure));
-            }
+        if let Some(staged) = staged {
+            self.discard(&staged).await;
         }
-        Ok(Err(reason.to_owned()))
+        Ok(Err(reason))
     }
 
-    /// Removes an unfinished effect's temporary file and abandons it; why
-    /// not, when the file cannot go.
-    async fn drop_temp(&self, effect: &Effect) -> Result<Option<String>, JobError> {
-        let temp = files::within(Path::new(&effect.folder), &effect.temp);
-        if let Err(err) = blocking(move || files::remove_known(&temp)).await {
-            return Ok(Some(format!("임시 파일을 지우지 못했어요: {err}")));
-        }
-        let (id, now) = (effect.id.clone(), self.now());
-        self.write(move |c| records::abandon(c, &id, now)).await?;
-        Ok(None)
-    }
-
-    /// Steps 3 to 6 of carrying out (see the module docs), from wherever the
-    /// plan's effects are.
-    async fn finish_replacement(&self, plan: &Plan) -> Result<(), JobError> {
-        let id = plan.id.clone();
-        let effects = self.read(move |c| records::effects_of(c, &id)).await?;
-        let removal_of = |path: &str| {
-            effects.iter().find(|e| {
-                e.kind == EffectKind::Remove
-                    && e.source.as_deref() == Some(path)
-                    && e.state != EffectState::Abandoned
-            })
-        };
-        let apply = effects
-            .iter()
-            .find(|e| e.kind == EffectKind::Apply && e.state != EffectState::Abandoned);
-        let Some(apply) = apply else {
-            return self.hold_plan(plan, "교체할 새 자막의 기록이 없어요").await;
-        };
-
-        if apply.state != EffectState::Done {
-            let replaced = plan.paths.iter().find(|p| p.action == PathAction::Replace);
-            if let Some(replaced) = replaced {
-                let Some(removal) = removal_of(&replaced.path) else {
-                    return self
-                        .hold_plan(plan, "교체할 기존 자막의 기록이 없어요")
-                        .await;
-                };
-                if removal.state == EffectState::Prepared {
-                    match self.set_aside(plan, removal, replaced).await? {
-                        Aside::Done => {}
-                        Aside::Untouched(changed) => {
-                            return self.untouched(plan, Err(changed)).await
-                        }
-                        Aside::Failed(err) => {
-                            let reason =
-                                format!("기존 자막을 옮기지 못해 교체하지 않았어요: {err}");
-                            return self.untouched(plan, Ok(reason)).await;
-                        }
-                        Aside::Unsure(reason) => return self.hold_plan(plan, &reason).await,
-                    }
-                }
-            }
-            let folder = PathBuf::from(&plan.folder);
-            let temp = files::within(&folder, &apply.temp);
-            let target = files::within(&folder, &apply.target);
-            let published = blocking(move || files::publish(&temp, &target)).await;
-            match (published, replaced.is_some()) {
-                (Published::Done, _) => {
-                    if !self.replaced(plan, apply).await? {
-                        return Ok(());
-                    }
-                }
-                // Nothing beside the video changed yet.
-                (Published::Occupied, false) => {
-                    let changed = format!("새 자막을 둘 자리에 파일이 생겼어요 ({})", plan.target);
-                    return self.untouched(plan, Err(changed)).await;
-                }
-                (Published::Failed(err), false) => {
-                    // Nothing moved while the temporary file is still there.
-                    let temp = files::within(&folder, &apply.temp);
-                    let still = blocking(move || files::facts(&temp)).await;
-                    let kept = matches!(&still, Ok(Some((_, _, o)))
-                        if apply.object.as_ref().is_some_and(|r| same_recorded_file(r, o)));
-                    if !kept {
-                        let reason = format!("새 자막을 공개한 결과를 확인하지 못했어요: {err}");
-                        return self.hold_plan(plan, &reason).await;
-                    }
-                    let reason = format!("새 자막을 공개하지 못해 교체하지 않았어요: {err}");
-                    return self.untouched(plan, Ok(reason)).await;
-                }
-                (Published::Occupied, true) => {
-                    return self
-                        .hold_plan(plan, "교체할 이름에 다른 파일이 먼저 생겨 보류했어요")
-                        .await
-                }
-                (Published::Failed(err), true) => {
-                    let reason = format!("새 자막을 공개하지 못해 보류했어요: {err}");
-                    return self.hold_plan(plan, &reason).await;
-                }
-            }
-        }
-
-        for removed in plan.paths.iter().filter(|p| p.action == PathAction::Remove) {
-            let Some(removal) = removal_of(&removed.path) else {
-                return self
-                    .hold_plan(plan, "지울 이전 적용본의 기록이 없어요")
-                    .await;
-            };
-            if removal.state != EffectState::Prepared {
-                continue;
-            }
-            let failed = match self.set_aside(plan, removal, removed).await? {
-                Aside::Done => continue,
-                Aside::Untouched(reason) | Aside::Unsure(reason) => reason,
-                Aside::Failed(err) => err.to_string(),
-            };
-            let reason = format!(
-                "새 자막은 적용했지만 이전 적용본을 지우지 못했어요 ({}): {failed}",
-                removed.path
-            );
-            return self.hold_plan(plan, &reason).await;
-        }
-
-        let (id, now) = (plan.id.clone(), self.now());
-        let done = self
-            .write(move |c| {
-                records::move_plan(c, &id, PlanState::Approved, PlanState::Done, None, now)
-            })
-            .await?;
-        if !done {
-            // Held meanwhile: its protective copies stay.
-            return Ok(());
-        }
-        self.event(
-            &plan.job_id,
-            format!("{}화: 새 자막으로 교체했어요", plan.episode),
-            Some(plan.target.clone()),
-        )
-        .await?;
-        self.clean_up(plan).await
-    }
-
-    /// Stops a plan that changed nothing beside the video yet, as
-    /// [`Placer::back_out`] does.
-    async fn untouched(&self, plan: &Plan, why: Result<String, String>) -> Result<(), JobError> {
-        let (job, position) = (plan.job_id.clone(), plan.position);
-        let row = self
-            .read(move |c| place_records::plan_row_at(c, &job, position))
-            .await?;
-        match row {
-            Some(row) => self.back_out(&row, plan, why).await.map(|_| ()),
-            None => Ok(()),
-        }
-    }
-
-    /// Renames `path`'s file aside (to `removal`'s target) and checks it is
-    /// the one the plan saw.
-    async fn set_aside(
+    /// Records an import whose file is at `relative` with the bytes the plan
+    /// saw, and tells the job's log.
+    async fn imported(
         &self,
         plan: &Plan,
-        removal: &Effect,
-        path: &PlanPath,
-    ) -> Result<Aside, JobError> {
-        let Some(seen) = path.file.clone() else {
-            return Ok(Aside::Unsure("옮길 기존 자막의 기록이 없어요".to_owned()));
-        };
-        let folder = PathBuf::from(&plan.folder);
-        let from = files::within(&folder, &path.path);
-        let aside = files::within(&folder, &removal.target);
-        let shown = path.path.clone();
-        let moved = blocking(move || aside::set_aside(&from, &aside, &expected(&seen))).await;
-        let not_put_back = |err: io::Error| {
-            Aside::Unsure(format!(
-                "옮긴 기존 자막이 비교한 것과 달라 되돌리려 했지만 하지 못했어요 ({shown}): {err}"
-            ))
-        };
-        let unsynced = |err: io::Error| {
-            Aside::Unsure(format!(
-                "기존 자막을 옮긴 뒤 폴더를 동기화하지 못했어요: {err}"
-            ))
-        };
-        let moved = match moved {
-            Moved::Missing => Aside::Untouched(format!("기존 자막이 없어졌어요 ({shown})")),
-            Moved::NotMoved(err) => Aside::Failed(err),
-            Moved::Unsynced(err) | Moved::Checked(Check::PutBackUnsynced(err)) => unsynced(err),
-            Moved::Checked(Check::Expected) => Aside::Done,
-            Moved::Checked(Check::PutBack) => {
-                Aside::Untouched(format!("기존 자막이 비교한 뒤 바뀌었어요 ({shown})"))
-            }
-            Moved::Checked(Check::NotPutBack(err)) => not_put_back(err),
-            // Taken away after the rename: there is nothing to put back.
-            Moved::Checked(Check::Gone) => not_put_back(io::Error::from_raw_os_error(ENOENT)),
-        };
-        if let Aside::Done = moved {
-            let (id, applied, now) = (removal.id.clone(), path.applied_id.clone(), self.now());
-            self.write(move |c| records::set_aside(c, &id, applied.as_deref(), now))
-                .await?;
-        }
-        Ok(moved)
+        what: &Imported,
+        relative: String,
+        seen: &FileSeen,
+    ) -> Result<(), JobError> {
+        let (w, at, now) = (what.clone(), relative.clone(), self.now());
+        let (size, sha256) = (seen.size, seen.sha256.clone());
+        self.write(move |c| {
+            let asset = ImportedAsset::New {
+                relative_path: &at,
+                size,
+                sha256: &sha256,
+            };
+            records::imported(c, &w, asset, now)
+        })
+        .await?;
+        self.event(
+            &plan.job_id,
+            format!(
+                "{}화: 관리하지 않던 자막을 '{}' 보관본으로 들였어요",
+                plan.episode,
+                super::UNKNOWN_CREATOR
+            ),
+            Some(relative),
+        )
+        .await
     }
 
     /// Whether the stored copy's file is there with the length and SHA-256
@@ -1494,274 +1504,5 @@ impl Placer {
             Err(err) if super::is_constraint(&err) => Ok(false),
             Err(err) => Err(err),
         }
-    }
-
-    /// Records the plan's new copy, published, as applied; whether it could
-    /// (else the plan is held, and nothing more is done to it).
-    async fn replaced(&self, plan: &Plan, apply: &Effect) -> Result<bool, JobError> {
-        let copy = NewApplied {
-            work_id: plan.work_id.clone(),
-            stored_id: plan.stored_id.clone(),
-            season: plan.season,
-            episode: plan.episode,
-        };
-        let (published, id, now) = (PublishedCopy::of(apply), apply.id.clone(), self.now());
-        let note = Some("기존 자막을 새 자막으로 교체했어요".to_owned());
-        match self
-            .write(move |c| place_records::applied(c, &published, &copy, note, Some(&id), now))
-            .await
-        {
-            Ok(_) => Ok(true),
-            Err(err) if super::is_constraint(&err) => {
-                let reason = format!("공개한 파일을 기록하지 못했어요: {err}");
-                self.hold_plan(plan, &reason).await?;
-                Ok(false)
-            }
-            Err(err) => Err(err),
-        }
-    }
-
-    /// Removes the protective copies and the files set aside of a done plan,
-    /// each while it is the one recorded, and ends its removals `done` (or
-    /// `held`, its files left, when one is not).
-    async fn clean_up(&self, plan: &Plan) -> Result<(), JobError> {
-        let id = plan.id.clone();
-        let effects = self.read(move |c| records::unfinished_of(c, &id)).await?;
-        for effect in effects {
-            let folder = PathBuf::from(&effect.folder);
-            let seen = effect
-                .source
-                .as_deref()
-                .and_then(|s| plan.path(s))
-                .and_then(|p| p.file.clone());
-            let (state, reason) = match (effect.kind, effect.state, seen) {
-                (EffectKind::Remove, EffectState::SetAside, Some(seen)) => {
-                    let aside = files::within(&folder, &effect.target);
-                    let protective = files::within(&folder, &effect.temp);
-                    let object = effect.object.clone();
-                    let gone = blocking(move || -> io::Result<bool> {
-                        let a = files::facts(&aside)?;
-                        let p = files::facts(&protective)?;
-                        let ours_aside = a.is_none() || same_file(&a, &seen);
-                        let ours_copy = p.as_ref().is_none_or(|(_, _, o)| {
-                            object.as_ref().is_some_and(|r| same_recorded_file(r, o))
-                        });
-                        if !(ours_aside && ours_copy) {
-                            return Ok(false);
-                        }
-                        aside::remove(&[&aside, &protective])?;
-                        Ok(true)
-                    })
-                    .await;
-                    match gone {
-                        Ok(true) => (EffectState::Done, None),
-                        Ok(false) => (
-                            EffectState::Held,
-                            Some("정리할 보호 자료가 기록과 달라 남겨 뒀어요".to_owned()),
-                        ),
-                        Err(err) => (
-                            EffectState::Held,
-                            Some(format!("보호 자료를 정리하지 못했어요: {err}")),
-                        ),
-                    }
-                }
-                _ => (
-                    EffectState::Held,
-                    Some("교체를 마친 뒤 끝나지 않은 효과가 남았어요".to_owned()),
-                ),
-            };
-            let (id, now) = (effect.id.clone(), self.now());
-            self.write(move |c| place_records::end_effect(c, &id, state, reason, now))
-                .await?;
-        }
-        Ok(())
-    }
-
-    /// Compares the unfinished effects of a plan an earlier start left with
-    /// the disk (see the module docs).
-    pub(super) async fn recover_plan(&self, plan_id: &str) -> Result<(), JobError> {
-        let id = plan_id.to_owned();
-        let Some(plan) = self.read(move |c| records::plan(c, &id)).await? else {
-            return Ok(());
-        };
-        match plan.state {
-            PlanState::Done => return self.clean_up(&plan).await,
-            PlanState::Approved => {}
-            _ => {
-                // Nothing else leaves effects under way: they are held.
-                let (p, now) = (plan.clone(), self.now());
-                return self
-                    .write(move |c| {
-                        records::hold_plan(c, &p, "이전 작업의 효과가 끝나지 않았어요", now)
-                    })
-                    .await;
-            }
-        }
-        let id = plan.id.clone();
-        let effects = self.read(move |c| records::unfinished_of(c, &id)).await?;
-        let folder = PathBuf::from(&plan.folder);
-        for effect in &effects {
-            let temp = files::within(&folder, &effect.temp);
-            let target = files::within(&folder, &effect.target);
-            let (t, g) = blocking(move || (files::facts(&temp), files::facts(&target))).await;
-            let (Ok(t), Ok(g)) = (t, g) else {
-                return self
-                    .hold_plan(&plan, "이전 작업의 파일을 확인하지 못했어요")
-                    .await;
-            };
-            let ours = |found: &Option<(u64, String, String)>| {
-                found.as_ref().is_some_and(|(n, s, o)| {
-                    *n == effect.size
-                        && *s == effect.sha256
-                        && effect
-                            .object
-                            .as_ref()
-                            .is_some_and(|r| same_recorded_file(r, o))
-                })
-            };
-            match (effect.kind, effect.state) {
-                (EffectKind::Apply | EffectKind::Import, EffectState::Prepared)
-                    if t.is_none() && ours(&g) =>
-                {
-                    // Published before the record.
-                    match effect.kind {
-                        EffectKind::Apply => {
-                            if !self.replaced(&plan, effect).await? {
-                                return Ok(());
-                            }
-                        }
-                        _ => {
-                            let name =
-                                file_name(effect.source.as_deref().unwrap_or_default()).to_owned();
-                            let at = g.clone();
-                            let encoding = {
-                                let target = files::within(&folder, &effect.target);
-                                blocking(move || {
-                                    std::fs::read(target)
-                                        .ok()
-                                        .and_then(|b| super::encoding_of(&b))
-                                })
-                                .await
-                            };
-                            let what = Imported {
-                                work_id: plan.work_id.clone(),
-                                season: plan.season,
-                                episode: plan.episode,
-                                job_id: plan.job_id.clone(),
-                                format: match extension(&name).as_deref() {
-                                    Some("ass") => SubtitleFormat::Ass,
-                                    Some("srt") => SubtitleFormat::Srt,
-                                    Some("smi") => SubtitleFormat::Smi,
-                                    _ => SubtitleFormat::Other,
-                                },
-                                original_name: name,
-                                encoding,
-                            };
-                            debug_assert!(at.is_some());
-                            let (e, now) = (effect.clone(), self.now());
-                            self.write(move |c| {
-                                records::imported(c, &what, ImportedAsset::Published(&e), now)
-                            })
-                            .await?;
-                        }
-                    }
-                }
-                (EffectKind::Import, EffectState::Intended)
-                | (EffectKind::Import, EffectState::Prepared)
-                    if t.is_none() || ours(&t) || effect.state == EffectState::Intended =>
-                {
-                    // Imported anew when the plan is carried out again.
-                    if let Some(unsure) = self.drop_temp(effect).await? {
-                        return self.hold_plan(&plan, &unsure).await;
-                    }
-                }
-                (EffectKind::Remove, EffectState::Prepared) => {
-                    let Some(path) = effect.source.as_deref().and_then(|s| plan.path(s)) else {
-                        return self
-                            .hold_plan(&plan, "옮길 기존 자막의 기록이 없어요")
-                            .await;
-                    };
-                    let Some(seen) = path.file.clone() else {
-                        return self
-                            .hold_plan(&plan, "옮길 기존 자막의 기록이 없어요")
-                            .await;
-                    };
-                    let from = files::within(&folder, &path.path);
-                    let found = blocking(move || files::facts(&from)).await;
-                    let in_place = matches!(&found, Ok(f) if same_file(f, &seen));
-                    let aside = same_file(&g, &seen);
-                    match (in_place, aside, found) {
-                        (true, false, _) => {}
-                        (false, true, Ok(None)) => {
-                            let (id, applied, now) =
-                                (effect.id.clone(), path.applied_id.clone(), self.now());
-                            self.write(move |c| {
-                                records::set_aside(c, &id, applied.as_deref(), now)
-                            })
-                            .await?;
-                        }
-                        _ => {
-                            return self
-                                .hold_plan(
-                                    &plan,
-                                    "이전 작업이 옮기던 기존 자막이 기록과 달라 결과를 확인할 수 없어요",
-                                )
-                                .await
-                        }
-                    }
-                }
-                (EffectKind::Remove, EffectState::SetAside) => {
-                    let seen = effect
-                        .source
-                        .as_deref()
-                        .and_then(|s| plan.path(s))
-                        .and_then(|p| p.file.clone());
-                    if !seen.is_some_and(|s| same_file(&g, &s)) {
-                        return self
-                            .hold_plan(
-                                &plan,
-                                "옮겨 둔 기존 자막이 기록과 달라 결과를 확인할 수 없어요",
-                            )
-                            .await;
-                    }
-                }
-                (EffectKind::Apply | EffectKind::Remove, EffectState::Intended) => {}
-                (EffectKind::Apply, EffectState::Prepared) if ours(&t) => {}
-                _ => {
-                    return self
-                        .hold_plan(
-                            &plan,
-                            "이전 작업이 쓰던 파일이 기록과 달라 결과를 확인할 수 없어요",
-                        )
-                        .await
-                }
-            }
-        }
-
-        let id = plan.id.clone();
-        let effects = self.read(move |c| records::effects_of(c, &id)).await?;
-        let applied = effects
-            .iter()
-            .any(|e| e.kind == EffectKind::Apply && e.state == EffectState::Done);
-        let aside = effects
-            .iter()
-            .any(|e| e.kind == EffectKind::Remove && e.state == EffectState::SetAside);
-        if !applied && !aside {
-            // Nothing beside the video changed: the plan is carried out anew.
-            if let Some(unsure) = self.abandon_all(&plan).await? {
-                return self.hold_plan(&plan, &unsure).await;
-            }
-            return Ok(());
-        }
-        let unprepared = effects.iter().any(|e| {
-            matches!(e.kind, EffectKind::Apply | EffectKind::Remove)
-                && e.state == EffectState::Intended
-        });
-        if unprepared {
-            return self
-                .hold_plan(&plan, "준비하지 않은 효과가 있는데 기존 자막이 바뀌었어요")
-                .await;
-        }
-        self.finish_replacement(&plan).await
     }
 }

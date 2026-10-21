@@ -10,9 +10,9 @@
 //! 1. The received archives not tried yet are unpacked into the receive
 //!    area, the volumes of a split one together ([`unpack`]); one that
 //!    cannot be unpacked stays there with why (풀지 못함).
-//! 2. A replacement an earlier start left under way is compared with the
-//!    disk ([`replace`]). A store or an apply leaves nothing to compare: the
-//!    run does it again (see Doing it again below).
+//! 2. Nothing an earlier start left is compared with the disk: a store, an
+//!    apply or a replacement ([`replace`]) cut short is done again (see Doing
+//!    it again below).
 //! 3. The analysis makes the job's plan ([`records::PlanRow`]) from each
 //!    post's receipts not planned yet ([`package::plan`]), an unpacked
 //!    archive's members in its place: what each file is (a subtitle, a font,
@@ -91,7 +91,9 @@
 //!   the next free name is taken.
 //! - An apply published before its record left the stored subtitle's bytes
 //!   beside the video: the comparison records that file as the applied copy
-//!   ([`replace`]'s `ADOPTED`).
+//!   ([`replace`]'s `ADOPTED`). A replacement cut short is checked again from
+//!   the start, and one cut after its new copy took the old one's place ends
+//!   the same way ([`replace`], Doing it again).
 //!
 //! A file is the recorded object by its inode ([`trss_core::file_id::same_recorded_file`]),
 //! here and in [`replace`]: a machine restarted meanwhile may have mounted
@@ -591,16 +593,9 @@ impl Placer {
         };
         let items = self.views.items(job).await?;
 
-        // A replacement's effects an earlier start left under way are
-        // compared together; a store or an apply is done again.
-        let id = job.to_owned();
-        for plan in self
-            .read(move |c| replace::records::unfinished_plans(c, &id))
-            .await?
-        {
-            self.recover_plan(&plan).await?;
-        }
-        // What this run stages in the work folder ([`files::Staging`]).
+        // Nothing an earlier start left is compared with the disk: a store,
+        // an apply or a replacement cut short is done again. What this run
+        // stages in the work folder ([`files::Staging`]).
         let staging = files::Staging::default();
 
         let mut placement = self.analyse(job, &facts, &work_id, season, &items).await?;
@@ -1823,7 +1818,7 @@ impl Placer {
         // A replacement to decide or carry out goes on; one that went stale
         // leaves the row to be looked at anew.
         if let Some(plan) = self.live_plan(row).await? {
-            if self.go_on(facts, row, plan).await? {
+            if self.go_on(facts, row, plan, staging).await? {
                 return Ok(());
             }
         }
@@ -2075,7 +2070,7 @@ impl Placer {
         };
         let now = self.now();
         match self
-            .write(move |c| records::applied(c, &published, &copy, None, None, now))
+            .write(move |c| records::applied(c, &published, &copy, None, now))
             .await
         {
             Ok(_) => {}

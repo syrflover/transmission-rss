@@ -10,7 +10,9 @@
 //! most a staged copy, which goes when the folder is emptied ([`Staging`] for
 //! a work folder once per run, [`empty_app_temp`] for the app data folder
 //! when `trss` starts), or a published file, which the next run finds by its
-//! bytes ([`super::Placer`]).
+//! bytes ([`super::Placer`]). A replacement stages its new copy and its
+//! imports the same way, and moves the new copy on to [`ASIDE_DIR`] before it
+//! swaps it in ([`super::replace`]).
 
 use std::{
     fs::{self, File},
@@ -30,11 +32,18 @@ use crate::area::{hex, read_facts};
 pub const TRSS_DIR: &str = ".trss";
 /// Where stored subtitles and fonts go, relative to the work folder.
 pub const SUBTITLES_DIR: &str = ".trss/subtitles";
-/// Where a replacement's and a relocation's files are kept for the while
-/// they are taken off or copied ([`super::replace`], [`super::relocate`]),
-/// relative to the work folder. Releases before 0153 also staged stores and
-/// applies there; nothing empties it.
+/// Where a relocation's files are kept for the while they are taken off
+/// ([`super::relocate`]), relative to the work folder. Releases before 0153
+/// also staged stores, applies and replacements there, and kept a
+/// replacement's protective copies and the files it set aside; nothing
+/// empties it.
 pub const TEMP_DIR: &str = ".trss/tmp";
+/// Where a replacement keeps the files it takes off the paths beside a
+/// video, and its new copy for the while before it swaps it in
+/// ([`super::replace`]), relative to the work folder: `<ID>`, a new one each.
+/// A run removes what it put there once its records are written; nothing
+/// else removes anything there, so what a run cut short left stays.
+pub const ASIDE_DIR: &str = ".trss/aside";
 /// Where a store or an apply writes its new copy before publishing it,
 /// relative to the work folder. Only those writes are there, and a run
 /// empties it before its first write into the work folder ([`Staging`]).

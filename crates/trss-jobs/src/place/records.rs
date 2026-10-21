@@ -1,8 +1,7 @@
 //! The records of storing and applying (`migrations/jobs/store_apply.sql` in
 //! `trss-core`). The writes around a file's publishing are synced
-//! ([`durable`]): what a store or an apply published is on record once its
-//! transaction ends, and a replacement's intent is on disk before its effect
-//! ([`crate::place::replace`]).
+//! ([`durable`]): what a store, an apply or a replacement published is on
+//! record once its transaction ends.
 
 use std::collections::{btree_map::Entry, BTreeMap};
 
@@ -11,10 +10,7 @@ use trss_core::{episode::EpisodeNumber, Millis};
 use trss_library::mapping::reason;
 
 use crate::{
-    model::{
-        AssetKind, Chosen, EffectKind, EffectState, Outcome, PlanAction, RemovalState,
-        SubtitleFormat,
-    },
+    model::{AssetKind, Chosen, Outcome, PlanAction, RemovalState, SubtitleFormat},
     place::episode::{Assignment, Basis},
     store::JobError,
 };
@@ -262,148 +258,20 @@ pub fn set_outcome(
 }
 
 // ---------------------------------------------------------------------------
-// Effects
+// Relocations under way
 
-/// One effect on a work folder's file (see the schema's comment).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Effect {
-    pub id: String,
-    pub job_id: String,
-    pub position: i64,
-    pub kind: EffectKind,
-    pub state: EffectState,
-    pub folder: String,
-    pub temp: String,
-    pub target: String,
-    pub video: Option<String>,
-    pub size: u64,
-    pub sha256: String,
-    pub object: Option<String>,
-    pub reason: Option<String>,
-    /// For a replacement's removal or import: the path it takes off or
-    /// imports.
-    pub source: Option<String>,
-    /// The replacement plan it carries out.
-    pub plan_id: Option<String>,
-}
-
-pub(crate) const EFFECT_COLUMNS: &str = "id, job_id, position, kind, state, folder, temp, target, \
-     video, size, sha256, object, reason, source, plan_id";
-
-pub(crate) fn effect(r: &Row<'_>) -> rusqlite::Result<Effect> {
-    Ok(Effect {
-        id: r.get(0)?,
-        job_id: r.get(1)?,
-        position: r.get(2)?,
-        kind: r.get(3)?,
-        state: r.get(4)?,
-        folder: r.get(5)?,
-        temp: r.get(6)?,
-        target: r.get(7)?,
-        video: r.get(8)?,
-        size: r.get::<_, i64>(9)? as u64,
-        sha256: r.get(10)?,
-        object: r.get(11)?,
-        reason: r.get(12)?,
-        source: r.get(13)?,
-        plan_id: r.get(14)?,
-    })
-}
-
-/// Inserts an effect as `intended`, in the caller's transaction.
-pub(crate) fn insert_intended(c: &Connection, e: &Effect, now: Millis) -> rusqlite::Result<()> {
-    c.prepare_cached(&format!(
-        "INSERT INTO subtitle_file_effects ({EFFECT_COLUMNS}, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, 'intended', ?5, ?6, ?7, ?8, ?9, ?10, NULL, NULL, ?11, ?12,
-                     ?13, ?13)"
-    ))?
-    .execute(params![
-        e.id,
-        e.job_id,
-        e.position,
-        e.kind,
-        e.folder,
-        e.temp,
-        e.target,
-        e.video,
-        e.size as i64,
-        e.sha256,
-        e.source,
-        e.plan_id,
-        now
-    ])?;
-    Ok(())
-}
-
-/// Records an effect's intent, before anything is written.
-pub fn intend(c: &mut Connection, e: &Effect, now: Millis) -> Result<(), JobError> {
-    durable(c, |c| Ok(insert_intended(c, e, now)?))
-}
-
-/// The temporary file of an intended effect is written and checked.
-pub fn prepared(c: &mut Connection, id: &str, object: &str, now: Millis) -> Result<(), JobError> {
-    durable(c, |c| {
-        c.prepare_cached(
-            "UPDATE subtitle_file_effects SET state = 'prepared', object = ?2, updated_at = ?3
-             WHERE id = ?1 AND state = 'intended'",
-        )?
-        .execute(params![id, object, now])?;
-        Ok(())
-    })
-}
-
-/// A prepared store's target was taken: it goes to `target` instead.
-pub fn retarget(c: &mut Connection, id: &str, target: &str, now: Millis) -> Result<(), JobError> {
-    durable(c, |c| {
-        c.prepare_cached(
-            "UPDATE subtitle_file_effects SET target = ?2, updated_at = ?3
-             WHERE id = ?1 AND state = 'prepared'",
-        )?
-        .execute(params![id, target, now])?;
-        Ok(())
-    })
-}
-
-/// Ends an effect `held`, `failed` or `abandoned`, with the reason.
-pub fn end_effect(
-    c: &mut Connection,
-    id: &str,
-    state: EffectState,
-    reason: Option<String>,
-    now: Millis,
-) -> Result<(), JobError> {
-    durable(c, |c| {
-        c.prepare_cached(
-            "UPDATE subtitle_file_effects SET state = ?2, reason = ?3, updated_at = ?4
-             WHERE id = ?1",
-        )?
-        .execute(params![id, state, reason, now])?;
-        Ok(())
-    })
-}
-
-/// The targets in `folder`, lower-cased, of the replacements' effects under
-/// way (of any job) but `except`, and the paths a replacement or a relocation
-/// under way takes off ([`crate::place::relocate`]; `except` may be a
-/// removal's ID): names another effect is about to take or change. A store or
-/// an apply records nothing before it publishes, and an effect of one an
-/// earlier release left unfinished keeps no name: jobs run one at a time, and
-/// that job's next run redoes the write.
+/// The paths in `folder`, lower-cased, a relocation's removal under way
+/// takes off ([`crate::place::relocate`]), but the removal `except`: names
+/// another removal is about to change. A store, an apply or a replacement
+/// records nothing before it changes a file, so none of them keeps a name:
+/// jobs run one at a time, and a run cut short is done again by its job.
 pub fn busy_targets(
     c: &Connection,
     folder: &str,
     except: Option<&str>,
 ) -> rusqlite::Result<Vec<String>> {
     let mut stmt = c.prepare_cached(
-        "SELECT lower(target) FROM subtitle_file_effects
-          WHERE folder = ?1 AND plan_id IS NOT NULL
-            AND state IN ('intended', 'prepared', 'set_aside') AND id IS NOT ?2
-         UNION
-         SELECT lower(source) FROM subtitle_file_effects
-          WHERE folder = ?1 AND kind = 'remove' AND plan_id IS NOT NULL
-            AND state IN ('intended', 'prepared', 'set_aside') AND id IS NOT ?2
-         UNION
-         SELECT lower(path) FROM subtitle_relocations
+        "SELECT lower(path) FROM subtitle_relocations
           WHERE folder = ?1 AND state IN ('intended', 'set_aside') AND id IS NOT ?2",
     )?;
     let rows = stmt.query_map(params![folder, except], |r| r.get::<_, String>(0))?;
@@ -1005,100 +873,92 @@ pub struct PublishedCopy {
     pub object: String,
 }
 
-impl PublishedCopy {
-    /// The copy a replacement's apply effect published.
-    pub fn of(effect: &Effect) -> PublishedCopy {
-        PublishedCopy {
-            job_id: effect.job_id.clone(),
-            position: effect.position,
-            video: effect.video.clone(),
-            path: effect.target.clone(),
-            size: effect.size,
-            sha256: effect.sha256.clone(),
-            object: effect.object.clone().unwrap_or_default(),
-        }
-    }
-}
-
 /// Records the published copy as applied, and the row as `applied` on the
-/// copy's episode; the replacement's effect that published it (`effect`),
-/// if one did, is `done`. One synced transaction, which also plans the copy's
-/// relocation when the stored subtitle is on another episode by then.
-/// Returns the applied copy's ID.
+/// copy's episode ([`applied_in`]). One synced transaction. Returns the
+/// applied copy's ID.
 pub fn applied(
     c: &mut Connection,
     published: &PublishedCopy,
     copy: &NewApplied,
     note: Option<String>,
-    effect: Option<&str>,
     now: Millis,
 ) -> Result<String, JobError> {
     durable(c, |c| {
         let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        // The rename replaced nothing, so an earlier copy recorded at this
-        // path is gone: a person removed it.
-        tx.prepare_cached(
-            "UPDATE subtitle_applied SET removed_at = ?3
-              WHERE work_id = ?1 AND path = ?2 AND removed_at IS NULL",
-        )?
-        .execute(params![copy.work_id, published.path, now])?;
-        let id = uuid::Uuid::new_v4().to_string();
-        tx.prepare_cached(
-            "INSERT INTO subtitle_applied
-                 (id, work_id, stored_id, season, episode, video_path, path, byte_size, sha256,
-                  object, job_id, applied_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
-        )?
-        .execute(params![
-            id,
-            copy.work_id,
-            copy.stored_id,
-            copy.season,
-            copy.episode,
-            published.video,
-            published.path,
-            published.size as i64,
-            published.sha256,
-            published.object,
-            published.job_id,
-            now
-        ])?;
-        if let Some(effect) = effect {
-            tx.prepare_cached(
-                "UPDATE subtitle_file_effects SET state = 'done', updated_at = ?2 WHERE id = ?1",
-            )?
-            .execute(params![effect, now])?;
-        }
-        tx.prepare_cached(
-            "UPDATE subtitle_job_plan
-                SET outcome = 'applied', applied_id = ?3, note = ?4, episode = ?6, updated_at = ?5
-              WHERE job_id = ?1 AND position = ?2",
-        )?
-        .execute(params![
-            published.job_id,
-            published.position,
-            id,
-            note,
-            now,
-            copy.episode
-        ])?;
-        // A mapping change committed after the run looked at the row's
-        // episode moved the stored subtitle: the copy is on its old episode,
-        // and the source's relocation plans to move it.
-        let moved: Option<String> = tx
-            .prepare_cached(
-                "SELECT source_id FROM subtitle_stored
-                  WHERE id = ?1 AND episode IS NOT ?2 AND assignment = 'mapped'
-                    AND source_id IS NOT NULL",
-            )?
-            .query_row(params![copy.stored_id, copy.episode], |r| r.get(0))
-            .optional()?;
-        if let Some(source) = moved {
-            crate::place::relocate::sync_in(&tx, &copy.work_id, copy.season, &source, now)?;
-        }
+        let id = applied_in(&tx, published, copy, note, now)?;
         tx.commit()?;
         Ok(id)
     })
+}
+
+/// Records the published copy as applied, and the row as `applied` on the
+/// copy's episode, in the open transaction `tx`, which also plans the copy's
+/// relocation when the stored subtitle is on another episode by then. An
+/// earlier copy recorded at the copy's path ends removed. Returns the applied
+/// copy's ID.
+pub fn applied_in(
+    tx: &rusqlite::Transaction,
+    published: &PublishedCopy,
+    copy: &NewApplied,
+    note: Option<String>,
+    now: Millis,
+) -> rusqlite::Result<String> {
+    // The rename replaced nothing, so an earlier copy recorded at this
+    // path is gone: a person removed it.
+    tx.prepare_cached(
+        "UPDATE subtitle_applied SET removed_at = ?3
+          WHERE work_id = ?1 AND path = ?2 AND removed_at IS NULL",
+    )?
+    .execute(params![copy.work_id, published.path, now])?;
+    let id = uuid::Uuid::new_v4().to_string();
+    tx.prepare_cached(
+        "INSERT INTO subtitle_applied
+             (id, work_id, stored_id, season, episode, video_path, path, byte_size, sha256,
+              object, job_id, applied_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+    )?
+    .execute(params![
+        id,
+        copy.work_id,
+        copy.stored_id,
+        copy.season,
+        copy.episode,
+        published.video,
+        published.path,
+        published.size as i64,
+        published.sha256,
+        published.object,
+        published.job_id,
+        now
+    ])?;
+    tx.prepare_cached(
+        "UPDATE subtitle_job_plan
+            SET outcome = 'applied', applied_id = ?3, note = ?4, episode = ?6, updated_at = ?5
+          WHERE job_id = ?1 AND position = ?2",
+    )?
+    .execute(params![
+        published.job_id,
+        published.position,
+        id,
+        note,
+        now,
+        copy.episode
+    ])?;
+    // A mapping change committed after the run looked at the row's
+    // episode moved the stored subtitle: the copy is on its old episode,
+    // and the source's relocation plans to move it.
+    let moved: Option<String> = tx
+        .prepare_cached(
+            "SELECT source_id FROM subtitle_stored
+              WHERE id = ?1 AND episode IS NOT ?2 AND assignment = 'mapped'
+                AND source_id IS NOT NULL",
+        )?
+        .query_row(params![copy.stored_id, copy.episode], |r| r.get(0))
+        .optional()?;
+    if let Some(source) = moved {
+        crate::place::relocate::sync_in(tx, &copy.work_id, copy.season, &source, now)?;
+    }
+    Ok(id)
 }
 
 /// A file beside a video whose bytes are a stored subtitle's, to be recorded

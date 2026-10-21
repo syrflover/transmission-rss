@@ -556,7 +556,7 @@ async fn one_episode_that_cannot_be_carried_out_fails_alone_and_the_job_is_parti
     let decided = decide_all(&s, &job, decisions(&plans, true)).await;
     assert_eq!(decided, vec![Decided::Done(PlanState::Approved); 12]);
     // The folder of episode 12's video no longer takes a file out: its
-    // subtitle can be read, but not moved aside.
+    // subtitle can be read, but not swapped with the new copy.
     let apart = s.work().join("Season 01/Apart");
     std::fs::set_permissions(&apart, std::fs::Permissions::from_mode(0o555)).unwrap();
     run(&s).await;
@@ -575,7 +575,7 @@ async fn one_episode_that_cannot_be_carried_out_fails_alone_and_the_job_is_parti
         match episode == failing {
             true => {
                 assert_eq!(state, PlanState::Failed);
-                assert!(reason.is_some_and(|r| r.contains("기존 자막을 옮기지 못해")));
+                assert!(reason.is_some_and(|r| r.contains("기존 자막과 맞바꾸지 못해")));
             }
             false => assert_eq!(
                 (state, reason),
@@ -593,7 +593,7 @@ async fn one_episode_that_cannot_be_carried_out_fails_alone_and_the_job_is_parti
                 assert!(row
                     .note
                     .as_deref()
-                    .is_some_and(|n| n.contains("옮기지 못해")));
+                    .is_some_and(|n| n.contains("맞바꾸지 못해")));
             }
             false => assert_ne!(row.outcome, Some(Outcome::Failed), "episode {episode}"),
         }

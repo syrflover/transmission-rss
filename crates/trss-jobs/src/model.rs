@@ -201,34 +201,6 @@ codes! {
 }
 
 codes! {
-    /// An effect on a work folder's file.
-    EffectKind {
-        Store = "store",
-        Apply = "apply",
-        /// A replacement takes an existing file off its path.
-        Remove = "remove",
-        /// A replacement keeps a subtitle the app did not manage as a stored
-        /// one before it changes it.
-        Import = "import",
-    }
-}
-
-codes! {
-    /// Where an effect on a file is (see the schema's comment).
-    EffectState {
-        Intended = "intended",
-        Prepared = "prepared",
-        /// A removal's file is renamed aside, into the work folder's
-        /// `.trss/tmp/`.
-        SetAside = "set_aside",
-        Done = "done",
-        Held = "held",
-        Failed = "failed",
-        Abandoned = "abandoned",
-    }
-}
-
-codes! {
     /// Where a replacement plan is (see the schema's comment).
     PlanState {
         Open = "open",

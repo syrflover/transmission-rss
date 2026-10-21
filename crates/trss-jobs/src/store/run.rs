@@ -8,7 +8,7 @@ use trss_subtitles::FailureKind;
 use super::{rows::steps, JobError, JobRun, StepRow};
 use crate::{
     model::{ItemState, JobState, StepKind, StepState, Wait},
-    place::{relocate, replace},
+    place::relocate,
 };
 
 /// The note of a job a decision on its replacement put back in line
@@ -440,10 +440,10 @@ impl JobRun {
                      WHERE job_id = ?1 AND state = 'current'",
                 )?
                 .execute(params![id, note, now])?;
-                // Its file effects under way are not known to have ended: each
-                // feature holds its own, a replacement's with its rows and
-                // plans, a relocation's removals.
-                replace::records::hold_under_way(&tx, &id, &note, now)?;
+                // A relocation's removals under way are not known to have
+                // ended: it holds them. A replacement records nothing before
+                // it changes a file: its approved plans stay approved, and the
+                // job's next run checks them again from the start.
                 relocate::hold_under_way(&tx, &id, &note, now)?;
                 tx.prepare_cached(
                     "UPDATE subtitle_jobs

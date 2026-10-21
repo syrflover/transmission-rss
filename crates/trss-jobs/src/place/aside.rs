@@ -1,13 +1,17 @@
-//! Renaming a file aside, checking it is the expected one, and putting it
-//! back or removing it: what a replacement ([`super::replace`]) does to the
-//! subtitle it takes the place of and a relocation ([`super::relocate`]) to
-//! an applied copy it takes off. Blocking, like [`super::files`]: the caller
-//! runs them off the runtime. Nothing here writes a record; each caller
-//! records what an outcome means to it and words it.
+//! Renaming a file aside, or swapping a new file with it, checking it is the
+//! expected one, and putting it back or removing it: what a replacement
+//! ([`super::replace`]) does to the subtitle it takes the place of and to an
+//! earlier applied copy it takes off, and a relocation ([`super::relocate`])
+//! to an applied copy it takes off. Blocking, like [`super::files`]: the
+//! caller runs them off the runtime. Nothing here writes a record; each
+//! caller records what an outcome means to it and words it.
 //!
 //! 1. [`set_aside`] renames the file to the aside path, replacing nothing,
 //!    syncs the two folders ([`trss_core::files::sync_renamed`]) and
-//!    [`check`]s what is there.
+//!    [`check`]s what is there. [`swap`] instead swaps the file with a new
+//!    one waiting at the aside path, in one step
+//!    ([`trss_core::files::rename_exchange`]), so the path is never empty,
+//!    and swaps them back when the file it took off is not the expected one.
 //! 2. [`check`] looks at the aside file ([`look`]). The expected file stays;
 //!    anything else goes back where it was, and nothing is changed when the
 //!    file is gone.
@@ -28,7 +32,7 @@ use std::{io, path::Path};
 
 use trss_core::{
     file_id::same_recorded_file,
-    files::{rename_noreplace, sync_dir, sync_renamed},
+    files::{rename_exchange, rename_noreplace, sync_dir, sync_renamed},
 };
 
 use super::files;
@@ -146,6 +150,51 @@ pub fn set_aside(from: &Path, aside: &Path, expected: &Expected) -> Moved {
         return Moved::Unsynced(err);
     }
     Moved::Checked(check(aside, from, expected))
+}
+
+/// What came of swapping a new file with the file at a path ([`swap`]).
+#[derive(Debug)]
+pub enum Swapped {
+    /// The swap failed, `NotFound` when either file is not there: nothing
+    /// moved.
+    NotSwapped(io::Error),
+    /// Swapped, and the folders could not be synced: the new file is at the
+    /// path and the other at the aside path, not checked.
+    Unsynced(io::Error),
+    /// Swapped: the new file is at the path, and the expected file at the
+    /// aside path.
+    Expected,
+    /// The file the swap took off was not the expected one (or could not be
+    /// read): swapped back, both folders synced. The file is at its path
+    /// again and the new file at the aside path.
+    SwappedBack,
+    /// Swapped back, and the folders could not be synced.
+    SwappedBackUnsynced(io::Error),
+    /// Not the expected file, and the swap back failed: the new file is at
+    /// the path, the other at the aside path.
+    NotSwappedBack(io::Error),
+}
+
+/// Swaps the new file at `aside` with the file at `path` in one step,
+/// syncs the two folders and looks at the file now at `aside`: one that is
+/// not the expected file is swapped back.
+pub fn swap(aside: &Path, path: &Path, expected: &Expected) -> Swapped {
+    if let Err(err) = rename_exchange(aside, path) {
+        return Swapped::NotSwapped(err);
+    }
+    if let Err(err) = sync_renamed(aside, path) {
+        return Swapped::Unsynced(err);
+    }
+    match look(aside, expected) {
+        Look::Expected => Swapped::Expected,
+        Look::Gone | Look::Differs | Look::Unreadable(_) => match rename_exchange(aside, path) {
+            Ok(()) => match sync_renamed(aside, path) {
+                Ok(()) => Swapped::SwappedBack,
+                Err(err) => Swapped::SwappedBackUnsynced(err),
+            },
+            Err(err) => Swapped::NotSwappedBack(err),
+        },
+    }
 }
 
 /// Removes each of `paths` (one that is not there is removed already), then
@@ -408,6 +457,90 @@ mod tests {
         assert!(matches!(look(&s.aside, &s.expected()), Look::Gone));
         fs::write(&s.aside, b"other bytes").unwrap();
         assert!(matches!(look(&s.aside, &s.expected()), Look::Differs));
+    }
+
+    /// [`Setup`] with a new file of `NEW` waiting at the aside path.
+    const NEW: &[u8] = b"[Script Info]\nnew\n";
+
+    fn with_new() -> Setup {
+        let s = setup();
+        fs::write(&s.aside, NEW).unwrap();
+        s
+    }
+
+    fn inode(path: &std::path::Path) -> u64 {
+        use std::os::unix::fs::MetadataExt;
+        fs::metadata(path).unwrap().ino()
+    }
+
+    #[test]
+    fn a_swap_puts_the_new_file_in_place_and_the_expected_one_aside() {
+        let s = with_new();
+        let (old, new) = (inode(&s.from), inode(&s.aside));
+        let swapped = swap(&s.aside, &s.from, &s.expecting(Some(&s.object)));
+        assert!(matches!(swapped, Swapped::Expected), "{swapped:?}");
+        assert_eq!(fs::read(&s.from).unwrap(), NEW);
+        assert_eq!(fs::read(&s.aside).unwrap(), BYTES);
+        assert_eq!((inode(&s.from), inode(&s.aside)), (new, old));
+        assert_eq!((syncs_of(&s.folder), syncs_of(&s.tmp)), (1, 1));
+    }
+
+    #[test]
+    fn a_file_changed_after_approval_is_swapped_back_and_stays_in_its_place() {
+        // Other bytes in the same file, and the expected bytes in another
+        // file: neither is the file approved.
+        for change in ["bytes", "file"] {
+            let s = with_new();
+            let expected = s.expecting(Some(&s.object));
+            let changed: &[u8] = match change {
+                "bytes" => b"changed one!!",
+                _ => BYTES,
+            };
+            match change {
+                "bytes" => fs::write(&s.from, changed).unwrap(),
+                // Made while the file is there, so it has an inode of its
+                // own.
+                _ => {
+                    let copy = s.folder.join("copy");
+                    fs::write(&copy, changed).unwrap();
+                    fs::rename(&copy, &s.from).unwrap();
+                }
+            }
+            let inode_before = inode(&s.from);
+            let swapped = swap(&s.aside, &s.from, &expected);
+            assert!(
+                matches!(swapped, Swapped::SwappedBack),
+                "{change}: {swapped:?}"
+            );
+            assert_eq!(fs::read(&s.from).unwrap(), changed, "{change}");
+            assert_eq!(inode(&s.from), inode_before, "{change}");
+            assert_eq!(fs::read(&s.aside).unwrap(), NEW, "{change}");
+            // Both folders once for the swap and once for the swap back.
+            assert_eq!((syncs_of(&s.folder), syncs_of(&s.tmp)), (2, 2));
+        }
+    }
+
+    #[test]
+    fn a_swap_with_nothing_at_the_path_moves_nothing() {
+        let s = with_new();
+        fs::remove_file(&s.from).unwrap();
+        let swapped = swap(&s.aside, &s.from, &s.expected());
+        let Swapped::NotSwapped(err) = swapped else {
+            panic!("{swapped:?}");
+        };
+        assert_eq!(err.kind(), io::ErrorKind::NotFound);
+        assert!(!s.from.exists());
+        assert_eq!(fs::read(&s.aside).unwrap(), NEW);
+    }
+
+    #[test]
+    fn a_failed_sync_after_the_swap_leaves_the_files_swapped_unchecked() {
+        let s = with_new();
+        let _failing = fail_syncs_of(&s.tmp);
+        let swapped = swap(&s.aside, &s.from, &s.expected());
+        assert!(matches!(swapped, Swapped::Unsynced(_)), "{swapped:?}");
+        assert_eq!(fs::read(&s.from).unwrap(), NEW);
+        assert_eq!(fs::read(&s.aside).unwrap(), BYTES);
     }
 
     #[test]

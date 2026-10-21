@@ -1,6 +1,6 @@
 //! The records of replacements (`migrations/jobs/replacement.sql` in
 //! `trss-core`): the plans, their paths, and what a person decided. The
-//! writes that come before or after a file effect are synced
+//! writes that record what a replacement did to the files are synced
 //! ([`durable`]).
 
 use rusqlite::{params, Connection, OptionalExtension, Row, TransactionBehavior};
@@ -9,10 +9,10 @@ use trss_core::Millis;
 pub use trss_subtitles::compare::{Diff, Encoding, Format, Item, NotCompared, Side};
 
 use crate::{
-    model::{EffectState, PathAction, PlanState, SubtitleFormat},
+    model::{PathAction, PlanState, SubtitleFormat},
     place::{
         episode::{Assignment, Basis},
-        records::{self as place_records, durable, Effect, EFFECT_COLUMNS},
+        records::{self as place_records, durable, NewApplied, PublishedCopy},
     },
     store::{JobError, DECIDED},
 };
@@ -602,135 +602,49 @@ pub fn decide_all(
     })
 }
 
-/// What came of claiming the paths of an approved plan ([`claim`]).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Claimed {
-    /// Its effects are recorded `intended`.
-    Yes,
-    /// Another effect under way aims at one of its paths: that one.
-    Busy(String),
-    /// The plan is not approved any more.
-    NotApproved,
-}
-
-/// Records the approved plan's effects as `intended` in one synced
-/// transaction, unless another plan's effect under way, or a relocation's
-/// removal, aims at or takes off one of their paths
-/// ([`place_records::busy_targets`]): the paths beside the video change one
-/// replacement at a time.
-pub fn claim(
+/// Records what carrying out the approved plan did, in one synced
+/// transaction: the new copy `published` applied, and the row `applied`
+/// ([`place_records::applied_in`]), each applied copy in `removed` ended
+/// removed, and the plan `done`. With `held`, the plan and its row are held
+/// with that reason instead ([`hold_plan`]): an applied copy it was to take
+/// off is still there.
+#[allow(clippy::too_many_arguments)]
+pub fn replaced(
     c: &mut Connection,
     plan: &Plan,
-    effects: &[Effect],
-    now: Millis,
-) -> Result<Claimed, JobError> {
-    durable(c, |c| {
-        let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let state: Option<PlanState> = tx
-            .prepare_cached("SELECT state FROM subtitle_replacements WHERE id = ?1")?
-            .query_row([&plan.id], |r| r.get(0))
-            .optional()?;
-        if state != Some(PlanState::Approved) {
-            return Ok(Claimed::NotApproved);
-        }
-        let busy = place_records::busy_targets(&tx, &plan.folder, None)?;
-        let ours: Vec<String> = {
-            let mut stmt = tx.prepare_cached(
-                "SELECT lower(target) FROM subtitle_file_effects
-                  WHERE plan_id = ?1 AND state IN ('intended', 'prepared', 'set_aside')
-                 UNION
-                 SELECT lower(source) FROM subtitle_file_effects
-                  WHERE plan_id = ?1 AND kind = 'remove'
-                    AND state IN ('intended', 'prepared', 'set_aside')",
-            )?;
-            let rows = stmt.query_map([&plan.id], |r| r.get::<_, String>(0))?;
-            rows.collect::<rusqlite::Result<_>>()?
-        };
-        let wanted = effects
-            .iter()
-            .flat_map(|e| [Some(&e.target), e.source.as_ref()])
-            .flatten();
-        for path in wanted {
-            let lower = path.to_lowercase();
-            if busy.contains(&lower) && !ours.contains(&lower) {
-                return Ok(Claimed::Busy(path.clone()));
-            }
-        }
-        for effect in effects {
-            place_records::insert_intended(&tx, effect, now)?;
-        }
-        tx.commit()?;
-        Ok(Claimed::Yes)
-    })
-}
-
-/// The plans of the job with effects that did not end (`intended`,
-/// `prepared` or `set_aside`), in the order their first effect was recorded:
-/// what an earlier start left under way.
-pub fn unfinished_plans(c: &Connection, job_id: &str) -> rusqlite::Result<Vec<String>> {
-    let mut stmt = c.prepare_cached(
-        "SELECT plan_id FROM subtitle_file_effects
-          WHERE job_id = ?1 AND plan_id IS NOT NULL
-            AND state IN ('intended', 'prepared', 'set_aside')
-          GROUP BY plan_id
-          ORDER BY min(created_at), min(id)",
-    )?;
-    let rows = stmt.query_map([job_id], |r| r.get(0))?;
-    rows.collect()
-}
-
-/// The plan's effects that did not end.
-pub fn unfinished_of(c: &Connection, plan_id: &str) -> rusqlite::Result<Vec<Effect>> {
-    let mut stmt = c.prepare_cached(&format!(
-        "SELECT {EFFECT_COLUMNS} FROM subtitle_file_effects
-          WHERE plan_id = ?1 AND state IN ('intended', 'prepared', 'set_aside')
-          ORDER BY created_at, id"
-    ))?;
-    let rows = stmt.query_map([plan_id], place_records::effect)?;
-    rows.collect()
-}
-
-/// The plan's effects, every state.
-pub fn effects_of(c: &Connection, plan_id: &str) -> rusqlite::Result<Vec<Effect>> {
-    let mut stmt = c.prepare_cached(&format!(
-        "SELECT {EFFECT_COLUMNS} FROM subtitle_file_effects WHERE plan_id = ?1
-          ORDER BY created_at, id"
-    ))?;
-    let rows = stmt.query_map([plan_id], place_records::effect)?;
-    rows.collect()
-}
-
-/// A removal's file is renamed aside: the effect is `set_aside`, and the
-/// applied copy it was (for a removal of one) is recorded as removed, in one
-/// synced transaction. Nothing is written of an effect that is not
-/// `prepared` any more (held meanwhile).
-pub fn set_aside(
-    c: &mut Connection,
-    effect_id: &str,
-    removed: Option<&str>,
+    published: &PublishedCopy,
+    copy: &NewApplied,
+    note: &str,
+    removed: &[String],
+    held: Option<&str>,
     now: Millis,
 ) -> Result<(), JobError> {
     durable(c, |c| {
         let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let moved = tx
-            .prepare_cached(
-                "UPDATE subtitle_file_effects SET state = 'set_aside', updated_at = ?2
-              WHERE id = ?1 AND state = 'prepared'",
-            )?
-            .execute(params![effect_id, now])?;
-        if let Some(applied) = removed.filter(|_| moved == 1) {
+        place_records::applied_in(&tx, published, copy, Some(note.to_owned()), now)?;
+        for id in removed {
             tx.prepare_cached(
                 "UPDATE subtitle_applied SET removed_at = ?2 WHERE id = ?1 AND removed_at IS NULL",
             )?
-            .execute(params![applied, now])?;
+            .execute(params![id, now])?;
+        }
+        match held {
+            None => {
+                tx.prepare_cached(
+                    "UPDATE subtitle_replacements SET state = 'done', updated_at = ?2
+                      WHERE id = ?1 AND state = 'approved'",
+                )?
+                .execute(params![plan.id, now])?;
+            }
+            Some(reason) => hold_in(&tx, plan, reason, now)?,
         }
         tx.commit()?;
         Ok(())
     })
 }
 
-/// Ends the plan `held`, its effects that did not end too, and its row,
-/// with the reason; one synced transaction.
+/// Ends the approved plan `held`, and its row, with the reason; one synced
+/// transaction.
 pub fn hold_plan(
     c: &mut Connection,
     plan: &Plan,
@@ -739,66 +653,30 @@ pub fn hold_plan(
 ) -> Result<(), JobError> {
     durable(c, |c| {
         let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        tx.prepare_cached(
-            "UPDATE subtitle_replacements SET state = 'held', reason = ?2, updated_at = ?3
-              WHERE id = ?1 AND state = 'approved'",
-        )?
-        .execute(params![plan.id, reason, now])?;
-        tx.prepare_cached(
-            "UPDATE subtitle_file_effects SET state = 'held', reason = ?2, updated_at = ?3
-              WHERE plan_id = ?1 AND state IN ('intended', 'prepared', 'set_aside')",
-        )?
-        .execute(params![plan.id, reason, now])?;
-        tx.prepare_cached(
-            "UPDATE subtitle_job_plan SET outcome = 'held', note = ?3, updated_at = ?4
-              WHERE job_id = ?1 AND position = ?2",
-        )?
-        .execute(params![plan.job_id, plan.position, reason, now])?;
+        hold_in(&tx, plan, reason, now)?;
         tx.commit()?;
         Ok(())
     })
 }
 
-/// Holds a job's file effects under way, with their rows and replacement
-/// plans, in the open transaction `tx`, so their targets are free again and
-/// the plans are not carried on. A done plan's removals only wait for their
-/// clean-up: the replacement stays done, and the clean-up runs when the job
-/// runs again.
-pub(crate) fn hold_under_way(
+/// [`hold_plan`] in the open transaction `tx`.
+fn hold_in(
     tx: &rusqlite::Transaction,
-    job_id: &str,
-    note: &str,
+    plan: &Plan,
+    reason: &str,
     now: Millis,
 ) -> rusqlite::Result<()> {
-    let under_way = "SELECT * FROM subtitle_file_effects
-                      WHERE job_id = ?1
-                        AND state IN ('intended', 'prepared', 'set_aside')
-                        AND (plan_id IS NULL OR plan_id NOT IN
-                             (SELECT id FROM subtitle_replacements
-                               WHERE state = 'done'))";
-    tx.prepare_cached(&format!(
-        "UPDATE subtitle_job_plan SET outcome = 'held', note = ?2, updated_at = ?3
-             WHERE job_id = ?1 AND position IN
-                   (SELECT position FROM ({under_way}))"
-    ))?
-    .execute(params![job_id, note, now])?;
-    tx.prepare_cached(&format!(
+    tx.prepare_cached(
         "UPDATE subtitle_replacements SET state = 'held', reason = ?2, updated_at = ?3
-             WHERE state = 'approved' AND id IN
-                   (SELECT plan_id FROM ({under_way}) WHERE plan_id IS NOT NULL)"
-    ))?
-    .execute(params![job_id, note, now])?;
-    tx.prepare_cached(&format!(
-        "UPDATE subtitle_file_effects SET state = 'held', reason = ?2, updated_at = ?3
-             WHERE id IN (SELECT id FROM ({under_way}))"
-    ))?
-    .execute(params![job_id, note, now])?;
+          WHERE id = ?1 AND state = 'approved'",
+    )?
+    .execute(params![plan.id, reason, now])?;
+    tx.prepare_cached(
+        "UPDATE subtitle_job_plan SET outcome = 'held', note = ?3, updated_at = ?4
+          WHERE job_id = ?1 AND position = ?2",
+    )?
+    .execute(params![plan.job_id, plan.position, reason, now])?;
     Ok(())
-}
-
-/// Ends the effect, which left nothing behind, `abandoned`.
-pub fn abandon(c: &mut Connection, effect_id: &str, now: Millis) -> Result<(), JobError> {
-    place_records::end_effect(c, effect_id, EffectState::Abandoned, None, now)
 }
 
 /// A newer stored subtitle than `stored_id` of the same source and episode
@@ -881,12 +759,11 @@ pub struct Imported {
 /// The asset an import records ([`imported`]).
 #[derive(Debug, Clone, Copy)]
 pub enum ImportedAsset<'a> {
-    /// The file the import's effect published, which is `done` with it.
-    Published(&'a Effect),
     /// A file at `relative_path` with the import's bytes that no asset
-    /// names: an import cut short between publishing and recording left it,
-    /// and it is recorded instead of copied again.
-    Found {
+    /// names: the one the import published, or one an import cut short
+    /// between publishing and recording left, which is recorded instead of
+    /// copied again.
+    New {
         relative_path: &'a str,
         size: u64,
         sha256: &'a str,
@@ -920,20 +797,11 @@ pub fn imported(
         };
         let asset_id = match asset {
             ImportedAsset::Reused(id) => id.to_owned(),
-            ImportedAsset::Found {
+            ImportedAsset::New {
                 relative_path,
                 size,
                 sha256,
             } => new_asset(relative_path, size, sha256)?,
-            ImportedAsset::Published(effect) => {
-                let id = new_asset(&effect.target, effect.size, &effect.sha256)?;
-                tx.prepare_cached(
-                    "UPDATE subtitle_file_effects SET state = 'done', updated_at = ?2
-                      WHERE id = ?1",
-                )?
-                .execute(params![effect.id, now])?;
-                id
-            }
         };
         let same: Option<String> = tx
             .prepare_cached(

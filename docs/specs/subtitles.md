@@ -478,9 +478,9 @@ Tistory 게시물은 첨부를 모두 받아서 회차 하나를 골라도 파�
 - 묶음 안의 하위 폴더와 원래 이름은 묶음의 `entries`로 DB에 남겨요.
   자막·폰트·첨부·구성 파일 어느 것도 아닌 멤버(실행 파일 같은 것)는 보관하지 않고, 이름과 버린 이유를 작업 상세에 적어요.
 - 수신 영역의 원 수신물은 그 묶음의 보관을 확인한 뒤 지워요. 압축 파일은 뒤 조각과 푼 폴더도 함께 지워요. 풀지 못한 압축 파일만 남겨, 나중에 풀 수 있게 되면 다시 받지 않고 분석해요.
-- 보관본·적용본을 쓰는 동안의 임시 파일과 보호 복사본은 작품 폴더의 `.trss/` 안에 둬요.
+- 보관본·적용본을 쓰는 동안의 임시 파일과 교체가 옮겨 둔 파일은 작품 폴더의 `.trss/` 안에 둬요.
   앱 데이터 폴더와 미디어 디스크는 다른 파일시스템이라, 덮어쓰지 않는 이름 바꾸기로 공개하려면 임시 파일이 목적지와 같은 파일시스템에 있어야 해요. 숨김 폴더라 재생기가 쓰는 도중의 파일을 자막으로 집지 않아요.
-  작업이 끝나면 남기지 않으므로, [작품 폴더 배치 ADR](../adr/0008-trss-folder-and-app-data-files.md)이 `.trss/`에 자막과 폰트만 둔다는 것은 남는 파일의 배치로 읽어요.
+  작업이 끝나면 남기지 않으므로, [작품 폴더 배치 ADR](../adr/0008-trss-folder-and-app-data-files.md)이 `.trss/`에 자막과 폰트만 둔다는 것은 남는 파일의 배치로 읽어요. 끊긴 교체가 `.trss/aside/`에 남긴 파일은 예외로, 사람이 지울 때까지 남아요([교체 계획과 반영](#교체-계획과-반영)).
 - 작품 폴더에 복원용 목록이나 사이드카 매니페스트를 상시 저장하지 않아요.
   경로를 변경하는 경우 DB와 이후 내보내는 정보의 파일 참조를 실제 경로에 맞춰 갱신해요.
 - 적용본(Applied Subtitle)은 선택한 보관본을 영상 옆에 같은 파일명 줄기로 복사한 독립된 파일이에요.
@@ -511,10 +511,10 @@ Tistory 게시물은 첨부를 모두 받아서 회차 하나를 골라도 파�
   사람이 고른 보관본과 작업이 받아 처음 적용하는 보관본 모두 그래요. 교체 비교와 승인은 거치지 않고, 줄은 `이 회차에 같은 자막이 이미 있어 그 파일을 적용본으로 기록했어요`로 끝나요. 그 회차의 작업 화면은 이 설명을 그 회차의 줄에 보여주고, 다른 회차의 지난 설명을 적용 단계에 보여주지 않아요.
   - 바이트가 같은 파일이 여럿이면 새 적용본이 갈 경로의 파일(영상 이름 줄기와 형식의 확장자, 대소문자만 다른 이름 포함)을 먼저 고르고, 없으면 영상 폴더에서 이름순으로 처음 찾은 파일을 골라요.
   - 그 파일이 이미 같은 보관본의 적용본이면 그대로 두고 보관만 한 줄로 끝내요. 다른 보관본의 적용본이면(같은 바이트를 다른 출처로 받은 보관본이 그래요) 사람이 고른 보관본이 그 파일을 이어받고 이전 보관본은 적용본을 잃어요. 작업이 받아 처음 적용하는 보관본은 이어받지 않고 보관만 해요.
-  - 같은 출처의 더 새 수정본이 보관돼 있는 줄(사람이 고르지 않은 줄)과, 다른 작업이 끝내지 못한 파일 효과가 그 회차의 경로를 쓰고 있는 줄은 기록하지 않고 보관만 해요.
+  - 같은 출처의 더 새 수정본이 보관돼 있는 줄(사람이 고르지 않은 줄)은 기록하지 않고 보관만 해요.
   - 아직 고르지 않은 보관본은 화면을 그릴 때 영상 옆 자막과 견주지 않아요. 라이브러리가 영상 옆 자막의 해시를 갖고 있지 않아서, 견주려면 화면마다 파일을 읽어야 해요(사용자 결정, 2026-10-07). 사람이 한 번 고르면 그 보관본의 `교체 비교`가 없어져요.
 - 정리는 앱이 만들고 소유가 확인된 보관 파일로 제한하고, 남은 보관본·진행 또는 보류·복구 중인 작업의 참조가 없어졌는지 확인한 다음 수행해요.
-  불명확한 임시 파일이나 미등록 파일을 이름만 보고 지우지 않아요.
+  불명확한 임시 파일이나 미등록 파일을 이름만 보고 지우지 않아요. 앱만 쓰는 임시 폴더(작품 폴더의 `.trss/staging/`, 앱 데이터 폴더의 `receive/.partial/`·`subtitle-files/.tmp/`)만 예외로 비우고([체크포인트와 중단 복구](jobs.md#체크포인트와-중단-복구)), 교체가 옮겨 둔 `.trss/aside/`의 파일은 지우지 않아요.
 - 적용 위치와 보관 위치를 구분해 보여주고, 적용됐다는 사실을 재생기가 그 트랙을 실제로 선택했다는 뜻으로 표시하지 않아요.
   숨김 폴더명을 접근 권한 보호로 안내하지 않아요.
 
@@ -638,7 +638,7 @@ trss가 관리하지 않는 기존 자막은, 승인을 반영하면서 지우�
 - 계획은 새 적용본이 갈 경로(영상 이름 줄기와 형식의 확장자)에 파일이 있으면 그 파일을, 없으면 대소문자만 다른 파일을 `교체`로 두고, 둘 다 없으면 `추가`로 둬요. 새 적용본은 언제나 그 경로의 이름으로 공개해요.
   다른 경로의 앱 적용본(적용한 바이트 그대로인 것)은 `제거`로, 그 밖의 자막은 `유지`로 둬요. 관리하지 않는 다른 경로의 자막은 추측해서 정리하지 않으므로, 승인하면 새 자막 옆에 그대로 남아요.
 - 다음 경우에는 계획을 만들지 않고 보관만 해요.
-  새 자막과 같은 바이트가 이미 영상 옆에 있을 때(그 파일을 [적용본으로 기록해요](#보관본과-적용본)), 같은 출처·같은 회차에 더 새로 받은 보관본(수정본)이 있을 때(그 수정본의 작업이 비교해요), 다른 작업이 끝내지 못한 파일 효과가 그 회차의 경로를 쓰고 있을 때, 떼어낼 파일 가운데 이름이 대소문자만 다른 것이 있을 때예요.
+  새 자막과 같은 바이트가 이미 영상 옆에 있을 때(그 파일을 [적용본으로 기록해요](#보관본과-적용본)), 같은 출처·같은 회차에 더 새로 받은 보관본(수정본)이 있을 때(그 수정본의 작업이 비교해요), 떼어낼 파일 가운데 이름이 대소문자만 다른 것이 있을 때예요.
   사람이 [고른](#보관본과-적용본) 줄은 더 새 수정본이 있어도 계획을 만들어요. 추가 적용으로 고른 줄의 계획은 다른 경로의 자막을 모두 `유지`로 둬요.
 - 계획의 증거는 바뀌지 않고(DB 트리거가 거절해요), 다시 계획하면 줄마다 판이 올라요.
   작업이 다시 돌 때마다, 승인을 반영하기 직전에 한 번 더 검사해요. 작품 폴더, 줄과 보관본의 회차 대응, 새 자막의 보관 기록과 보관 파일의 바이트, 같은 출처의 새 수정본(사람이 고른 줄은 빼요), 영상(일반 파일·객체·크기·변경 시각)과 그 영상이 회차의 유일한 영상인지, 영상 옆 자막(경로마다 크기·SHA-256·객체와 앱 적용본인지, 추가할 경로의 빈자리, 새로 생긴 자막)이 계획과 다르면 그 판을 `다시 비교 필요`로 닫고 지금 상태로 다음 판을 만들어요.
@@ -652,21 +652,27 @@ trss가 관리하지 않는 기존 자막은, 승인을 반영하면서 지우�
   - 이 작업의 계획이 아닌 것이 하나라도 있으면 아무것도 적지 않아요(`404`).
 - `현재 유지`는 영상 옆 파일을 그대로 두고 그 줄을 `보관만 함`으로 끝내요. 새 보관본은 남아요.
   남은 보관본은 그 회차에 자막이 있는 동안 [회차 줄](library.md#할-일과-회차-목록)에 다시 내놓지 않고, `자막` 카드에서 골라요(사용자 결정, 2026-10-08).
-- 승인한 계획은 다음 순서로 반영해요.
-  1. 새 적용본과, 떼어낼 경로마다 제거를 파일 효과로 한 트랜잭션에 `의도`로 적어요. 다른 효과가 그 경로를 쓰고 있으면 그 판을 닫고 보관만 해요.
-  2. 새 자막을 `.trss/tmp/`의 임시 파일에 쓰고, 떼어낼 파일마다 그 바이트를 보호 복사본으로 쓴 뒤 다시 읽어 계획의 바이트인지 확인해요(`준비`). 관리하지 않던 파일은 보호 복사본에서 `제작자 알 수 없음` 보관본으로 들여요. 여기까지는 영상 옆이 바뀌지 않으므로, 공간 부족 같은 실패는 계획의 실패로, 찾은 변화는 다시 비교로 끝내고 임시 파일을 지워요.
-  3. 다시 검사한 뒤, 교체할 파일을 덮어쓰지 않는 이름 바꾸기로 `.trss/tmp/<ID>.aside`에 옮기고 옮긴 파일이 계획의 객체·바이트인지 확인해요(`옮겨 둠`). 아니면 제자리로 되돌리고 다시 비교해요.
-  4. 새 적용본을 덮어쓰지 않는 이름 바꾸기로 공개하고 적용본으로 기록해요. DB가 그 기록을 거절하면 그 계획을 보류하고 더 진행하지 않아요.
-  5. 다른 경로의 이전 적용본을 같은 방식으로 옮기고 지운 것으로 기록해요. 옮기지 못하면 새 자막은 적용한 채 그 계획을 보류해요.
-  6. 계획을 완료로 적은 뒤 보호 복사본과 옮겨 둔 파일을 지워요. 기록과 다른 파일은 남기고 그 효과를 보류해요.
+- 승인한 계획은 다음 순서로 반영해요. 파일을 바꾸기 전에는 아무것도 기록하지 않아요(0153).
+  1. 계획을 다시 검사한 뒤, 새 자막을 작품 폴더의 `.trss/staging/`에 끝까지 쓰고 다시 읽어 계획의 바이트인지 확인해요. 여기까지는 영상 옆이 바뀌지 않으므로, 공간 부족 같은 실패는 계획의 실패로, 보관 파일이 기록과 다르면 다시 비교로 끝내요.
+  2. 한 번 더 검사한 뒤, `추가`면 새 적용본을 덮어쓰지 않는 이름 바꾸기로 공개해요. `교체`면 새 자막을 덮어쓰지 않는 이름 바꾸기로 `.trss/aside/<새 ID>`에 옮기고, 지금 파일과 `RENAME_EXCHANGE`로 한 번에 맞바꿔요. 그래서 그 경로가 비는 순간이 없어요. 밀려나 `.trss/aside/`로 간 파일의 크기·SHA-256·inode가 승인한 파일과 다르면 다시 맞바꿔 바뀐 파일을 제자리에 두고, 새 자막을 지운 뒤 다시 비교해요. 대소문자만 다른 이름의 파일을 교체했으면 새 적용본의 이름을 대상 경로의 이름으로 바꿔요.
+  3. 관리하지 않던 파일은 밀려난 그 파일에서 `제작자 알 수 없음` 보관본으로 들여요. 들이지 못하면 다시 맞바꿔 원래 파일을 제자리에 두고, 새 자막을 지운 뒤 계획을 실패로 끝내요.
+  4. 다른 경로의 이전 적용본은 덮어쓰지 않는 이름 바꾸기로 `.trss/aside/<새 ID>`에 옮기고 승인한 파일인지 확인해요. 다르면 제자리로 되돌려요. 옮기지 못하거나 되돌린 경로가 있으면 새 자막은 적용한 채 그 계획을 보류해요. 그 제거를 완료로 보지 않고, 앞의 반영을 되돌리지도 않아요.
+  5. 새 적용본, 떼어낸 이전 적용본의 제거, 계획의 완료(4에서 보류하면 보류)를 한 트랜잭션에 기록해요. DB가 그 기록을 거절하면 4에서 옮긴 파일을 제자리로 되돌리고 그 계획을 보류해요. 밀려난 파일은 `.trss/aside/`에 남아요.
+  6. 이 실행이 `.trss/aside/`에 옮긴 파일을 지워요. 보류한 계획의 파일은 남겨요.
+
+  결과를 알 수 없는 실패(폴더 동기화 실패, 다시 맞바꾸지 못함)는 파일을 그대로 두고 계획을 보류해요.
+- 끊긴 반영은 기록과 디스크를 대조하지 않아요. 사람이 `다시 시작`한 실행도, 오류로 끝난 실행 뒤 같은 프로세스가 다시 집은 실행도 계획을 처음부터 다시 검사해요.
+  새 자막을 맞바꾸거나 공개한 뒤 5의 기록 전에 끊겼으면 영상 옆 경로가 계획과 달라 계획은 `다시 비교 필요`가 되고, 그 자리의 새 자막은 보관본과 바이트가 같으므로 [적용본으로 기록해요](#보관본과-적용본). 밀려난 원래 파일과 4에서 옮긴 이전 적용본은 `.trss/aside/`에 남아요. 그 실행이 다루지 못한 경로는 그 회차의 다음 비교가 다뤄요.
+  trss는 `.trss/aside/`의 파일을 자동으로 지우지 않아요. 사용자 자막의 하나뿐인 사본일 수 있어서예요. 끊긴 지점마다 남는 것은 `trss-jobs`의 `place::replace` 모듈 문서에 표로 있어요.
 - 보관본은 지우지 않아요. 교체해도 이전 보관본과 들인 보관본은 그 회차의 지난 자막으로 남아요.
 - 작품 상세의 회차 줄에는 승인을 기다리는 새 자막에 `교체 승인` 배지를 두고, 펼친 자리에 그 보관본과 작업으로 가는 링크를 둬요. 그 보관본에는 `적용`을 두지 않아요.
 
 한계는 이래요.
 
 - 계획이 세는 줄 수는 형식의 표지(ASS·SSA `Dialogue:` 줄, SRT·WebVTT 시간 줄, SMI `<SYNC>`)만 세요. [내용 비교](#내용-비교)를 한 계획은 버전 줄에 비교가 읽은 대사 수를 보여줘요. SMI의 빈 `<SYNC>`처럼 대사가 아닌 표지는 그 수에 들지 않아요.
-- 다른 작업이 끝내지 못한 효과 때문에 보관만 한 줄은 다시 비교하지 않아요. 작업은 하나씩 돌아서 그런 효과는 멈춘 worker가 남긴 것뿐이에요. 그 보관본은 `자막` 카드에서 골라 다시 비교할 수 있어요(0072).
-- 교체할 파일을 옮겨 둔 뒤 새 적용본을 공개하지 못하면, 옮긴 파일을 제자리로 되돌리지 않고 그 계획을 보류해요. 옮겨 둔 파일과 보호 복사본은 남아요. 이 실패는 시험으로 일으키지 못했어요.
+- 끊긴 반영이 `.trss/aside/`에 남긴 파일은 화면에 보이지 않아, 사람이 작품 폴더에서 직접 지워야 해요.
+- 관리하지 않던 자막을 맞바꾼 뒤 들이기 전에 끊기면, 다시 한 실행은 새 자막을 적용본으로 기록할 뿐 그 자막을 들이지 않아요. 그 자막은 `.trss/aside/`에만 남아요.
+- 이전 적용본을 4에서 옮긴 뒤 기록 전에 끊기면, 그 적용본의 기록은 끝나지 않은 채 남아요. 파일은 `.trss/aside/`에 있어요.
 - 같은 출처의 새 수정본이 앞 작업의 계획이 기다리는 동안 들어오면, 앞 계획은 그 작업이 다시 돌 때(사람이 결정할 때) `새 수정본 발견`으로 닫혀요. 그때까지 두 작업이 모두 `교체 승인`에 있어요.
 
 #### 내용 비교
@@ -988,7 +994,7 @@ worker를 다시 시작하면 기다리는 작업을 한 번 다시 살펴보고
 | 앱 데이터 폴더의 첨부·구성 파일 | 참고(가짜 출처): 2026-10-05 개발(서버 DB 사본)에서 `readme.txt`가 `subtitle-files/<작품 ID>/가짜 출처/`에 놓였어요 ([0064]) | `trss-jobs` `tests/it/place.rs` `another_seasons_file_and_an_executable_are_told_apart` | 첨부 확장자는 `.TXT`와 `.docx`만 입력으로 썼어요. 이미지와 `hwp` 같은 나머지는 확인하지 않았어요. |
 | 묶음의 `entries`와 보관하지 않는 멤버 | 2026-10-07 서버: ZIP 안 `__MACOSX/`의 `._*.ko.ass` 12개가 "받은 바이트는 ASS 형식이 아니에요"라는 까닭으로 보관되지 않았어요 ([0083]) | `trss-jobs` `tests/it/unpack.rs` `members_in_folders_are_placed_and_one_that_is_no_file_is_dropped_with_why` | `entries` 표의 내용을 직접 단언한 테스트가 없어요(행 수 1개와 계획의 멤버 경로만 봐요). |
 | 수신 영역 원 수신물의 삭제 | 2026-10-04 개발(서버 DB 사본): 보관·적용을 마친 작업 `d0c42b4b`의 원 수신물이 수신 영역에서 지워졌어요 ([0063]) | `trss-jobs` `tests/it/place.rs` `a_received_subtitle_is_stored_applied_beside_its_video_and_leaves_the_receive_area` | 서버에서 수신물이 지워진 것을 직접 본 기록이 없어요. |
-| 임시 파일과 보호 복사본의 자리 | 2026-10-07 서버: 작품 폴더의 `.trss/tmp/`가 비어 있었어요 ([0081]) | `trss-jobs` `place/files.rs` `a_copy_is_checked_and_published_without_replacing` | 같은 파일시스템에 있어야 하는 이유는 테스트하지 않았어요. 재생기가 `.trss/` 아래의 쓰는 도중 파일을 집지 않는지는 본 적이 없어요. 2026-10-07의 관찰은 보관·적용의 임시 파일이 `.trss/tmp/`에 있던 0153 전 코드예요. |
+| 임시 파일과 교체가 옮겨 둔 파일의 자리 | 2026-10-07 서버: 작품 폴더의 `.trss/tmp/`가 비어 있었어요 ([0081]) | `trss-jobs` `place/files.rs` `a_copy_is_checked_and_published_without_replacing`<br>`trss-jobs` `tests/it/replace.rs` `a_replacement_cut_after_its_swap_records_the_new_copy_and_keeps_the_original_aside` | 같은 파일시스템에 있어야 하는 이유는 테스트하지 않았어요. 재생기가 `.trss/` 아래의 쓰는 도중 파일을 집지 않는지는 본 적이 없어요. 2026-10-07의 관찰은 보관·적용·교체의 임시 파일이 `.trss/tmp/`에 있던 0153 전 코드예요. |
 | 사이드카 없음과 경로 변경 때의 참조 갱신 | 2026-10-07 서버: 배포 뒤 디스크에서 바뀐 것은 자막 작업이 만든 8개 경로뿐이었어요 ([0081]) | 없음 | (1) 사이드카를 만들지 않는다는 점을 겨눈 테스트가 없고, 서버<br>(2) 경로가 바뀔 때 DB와 내보내는 정보의 파일 참조를 맞추는 동작은 테스트도 실제 사용 기록도 없어요. |
 | 적용본은 독립된 복사 | 2026-10-07 서버: Kurumi-chan 1화의 보관본과 적용본의 SHA-256이 같았어요 ([0083]) | `trss-jobs` `tests/it/place.rs` `a_received_subtitle_is_stored_applied_beside_its_video_and_leaves_the_receive_area` | 서버에서 적용본을 고치거나 지운 뒤 보관본이 남는지, inode가 다른지는 본 기록이 없어요. 하드 링크·심볼릭 링크를 쓰지 않는 점은 inode 단언으로만 막아요. |
 | 최초 적용 | 2026-10-07 서버: 구독 제작자의 자동 작업이 1화 SMI를 확인 없이 보관·적용하고 3초 만에 끝났어요 ([0083]) | `trss-jobs` `tests/it/place.rs` `a_received_subtitle_is_stored_applied_beside_its_video_and_leaves_the_receive_area` | 파일 처리 실패가 실패로 보이는 쪽을 겨눈 테스트는 이 항목에 없어요. 서버에서는 대안이 구분되지 않는 묶음을 본 적이 없어요. |
@@ -1049,7 +1055,7 @@ worker를 다시 시작하면 기다리는 작업을 한 번 다시 살펴보고
 | 요구 | 실제 사용에서 본 것 | 테스트로 확인한 것 | 확인하지 않은 것 |
 | --- | --- | --- | --- |
 | 승인 기록이 바뀌지 않는 계획에 묶임 | 2026-10-06 개발(서버 DB 사본): 연결이 달라 낡은 v1–v3 뒤에 새 계획 v4를 승인하자 적용됐어요 ([0076]) | (1) `trss-core` `db.rs` `the_remade_package_and_effect_tables_keep_their_rows_and_references`<br>(2) `trss` `web/jobs_api/replacement/tests.rs` `a_decision_names_the_version_it_saw`<br>(3) `trss-jobs` `tests/it/replace.rs` `a_decision_on_a_plan_that_is_not_the_rows_to_decide_is_refused` | 기록이 가리키는 열(영상 식별 정보, 기존 파일의 크기·SHA-256, 새 보관 자산의 ID·경로·크기·SHA-256, 동작)이 모두 들어 있는지는 한 번에 겨눈 테스트가 없어요. 작업 ID에 붙인 포괄적 승인 표시만으로 실행하지 않는 점도 테스트가 없어요. |
-| 영상 식별 정보와 옛 inode·장치 번호 | 2026-10-06 개발(btrfs): 재부팅 뒤 같은 파일(inode 6574705)의 장치 번호가 47에서 46으로 바뀌어 계획이 낡았어요, 다시 만든 계획을 승인하자 반영됐어요 ([0076]) | `trss-jobs` `tests/it/replace.rs`: (1) `a_video_replaced_after_approval_asks_to_compare_again` (2) `killed_then_mounted_again_with_another_device_number_carries_the_replacement_on` (3) `the_existing_subtitle_changed_to_other_bytes_of_its_size_asks_to_compare_again` | (1) 전체 영상 해시를 계산하지 않는 점과, 식별 정보를 못 믿거나 읽는 도중 달라질 때 보류하는 점은 테스트가 없어요.<br>(2) 고침 뒤 실제 재부팅에서 다시 재현해 본 기록이 없어요.<br>(3) 마운트마다 inode를 새로 매기는 FUSE와 백업에서 되살린 폴더는 입력으로 쓰지 않았어요. 지운 파일의 inode를 새 파일이 받는 경우와 영상 수정본 대체 뒤 재비교도 테스트가 없어요. |
+| 영상 식별 정보와 옛 inode·장치 번호 | 2026-10-06 개발(btrfs): 재부팅 뒤 같은 파일(inode 6574705)의 장치 번호가 47에서 46으로 바뀌어 계획이 낡았어요, 다시 만든 계획을 승인하자 반영됐어요 ([0076]) | `trss-jobs` `tests/it/replace.rs`: (1) `a_video_replaced_after_approval_asks_to_compare_again` (2) `an_approved_plan_mounted_again_with_another_device_number_is_carried_out` (3) `the_existing_subtitle_changed_to_other_bytes_of_its_size_asks_to_compare_again` | (1) 전체 영상 해시를 계산하지 않는 점과, 식별 정보를 못 믿거나 읽는 도중 달라질 때 보류하는 점은 테스트가 없어요.<br>(2) 고침 뒤 실제 재부팅에서 다시 재현해 본 기록이 없어요.<br>(3) 마운트마다 inode를 새로 매기는 FUSE와 백업에서 되살린 폴더는 입력으로 쓰지 않았어요. 지운 파일의 inode를 새 파일이 받는 경우와 영상 수정본 대체 뒤 재비교도 테스트가 없어요. |
 | 운영 조건과 겹치는 경로의 직렬화 | 없음 | `trss-jobs` `tests/it/relocate.rs` `a_path_a_removal_is_taking_off_is_busy_for_other_effects`<br>`trss-jobs` `tests/it/replace.rs` `of_two_approved_jobs_on_one_path_the_later_compares_again` | 긴 다운로드·해시 계산 중에 SQLite 쓰기 트랜잭션을 잡아두지 않는 점, 검사와 `rename`·삭제 사이의 경쟁을 원자적이라고 안내하지 않는 문구, 외부 프로그램의 동시 수정, 운영 조건을 못 지킬 때 파괴적 반영을 하지 않는 쪽은 테스트도 관찰도 없어요. |
 | 반영 직전 검사 항목별 보류·재확인 | 2026-10-06 개발(서버 DB 사본): 가짜 작업이 같은 회차에 다른 자막을 만들자 올리기 3화의 첫 계획이 낡았어요 ([0076]) | `trss-jobs` `tests/it/replace.rs`: (영상 식별 정보) `a_video_replaced_after_approval_asks_to_compare_again` (보관 자산) `a_stored_asset_changed_after_approval_is_not_applied` (회차 대응) `a_mapping_changed_after_approval_is_not_applied` (추가 예정 경로) `a_file_at_the_path_to_add_after_approval_asks_to_compare_again` (같은 경로의 두 작업) `of_two_approved_jobs_on_one_path_the_later_compares_again` | 서버에서는 이 가운데 어느 것도 일어난 적이 없어요. 운영 조건 밖의 외부 쓰기와 메타데이터로 안 보이는 변경을 탐지했다고 과장하지 않는 점은 테스트가 없어요. |
 
@@ -1061,17 +1067,17 @@ worker를 다시 시작하면 기다리는 작업을 한 번 다시 살펴보고
 | --- | --- | --- | --- |
 | 자막이 있는 회차는 덮어쓰지 않고 `교체 승인`에서 멈춤 | 2026-10-07 서버: 에루샤 1–8화가 `교체 비교`로 남았고 1화는 `교체 승인`을 거쳐 승인됐어요 ([0083]) | `trss-jobs` `tests/it/place.rs` `an_episode_with_a_subtitle_waits_for_approval_and_one_without_a_video_for_it` | 영상 대기 뒤의 적용과 공개 직전 적용은 서버에서 보지 못했어요. 회차의 자막으로 세는 세 종류(영상 줄기 이름, 라이브러리 기록, 앱 적용본)를 한 입력에서 모두 겨눈 테스트는 없어요. |
 | 계획 줄의 동작 `교체`·`추가`·`제거`·`유지` | 2026-10-05 개발(서버 DB 사본): 손으로 고친 2화 `S01E02.ass`의 덮어쓰기 경고를 봤어요 ([0068]) | `trss-jobs` `tests/it/replace.rs` `another_creators_ass_removes_the_applied_srt_and_keeps_its_stored_copy`, `approving_a_plan_with_a_kept_file_adds_beside_it` | 서버에서 `추가`·`제거`를 담은 계획을 승인한 기록이 없어요. |
-| 보관만 하고 계획을 만들지 않는 경우 | 2026-10-07 서버: 2화가 "이 회차에 같은 자막이 이미 있어 그대로 두고 보관만 했어요"로 끝났어요. 이 동작은 바이트가 같으면 적용본으로 기록하도록 바뀌었어요 ([0083], [0121]) | `trss-jobs` `tests/it/replace.rs`: (같은 바이트) `a_jobs_first_apply_beside_the_same_bytes_records_that_file_as_the_applied_copy`<br>`trss-jobs` `tests/it/choose.rs` (더 새 수정본) `a_newer_revision_still_keeps_a_row_nobody_chose_stored_only` (사람이 고른 줄) `a_past_revision_is_restored_over_the_newer_one_which_stays_stored` | 다른 작업이 끝내지 못한 파일 효과가 그 회차의 경로를 쓰는 경우는 겨눈 테스트가 없어요. 0153 전에는 다른 작업이 적용하려는 경우로 겨눴지만, 보관과 적용은 이제 효과를 기록하지 않아 교체와 재배치의 효과만 남았어요. |
+| 보관만 하고 계획을 만들지 않는 경우 | 2026-10-07 서버: 2화가 "이 회차에 같은 자막이 이미 있어 그대로 두고 보관만 했어요"로 끝났어요. 이 동작은 바이트가 같으면 적용본으로 기록하도록 바뀌었어요 ([0083], [0121]) | `trss-jobs` `tests/it/replace.rs`: (같은 바이트) `a_jobs_first_apply_beside_the_same_bytes_records_that_file_as_the_applied_copy`<br>`trss-jobs` `tests/it/choose.rs` (더 새 수정본) `a_newer_revision_still_keeps_a_row_nobody_chose_stored_only` (사람이 고른 줄) `a_past_revision_is_restored_over_the_newer_one_which_stays_stored` | 없음 |
 | 계획의 증거는 바뀌지 않고 반영 직전에 한 번 더 검사함 | 2026-10-06 개발(서버 DB 사본): 연결이 달라 v1–v3이 낡은 뒤 v4가 승인됐어요 ([0076]) | `trss-core` `db.rs` `the_remade_package_and_effect_tables_keep_their_rows_and_references`<br>`trss-jobs` `tests/it/replace.rs` `a_video_replaced_after_approval_asks_to_compare_again` | 작품 폴더가 바뀐 경우를 입력으로 쓴 테스트를 찾지 못했어요. 다시 계획할 때 줄마다 판이 올라가는 점은 `trss` `web/jobs_api/replacement/tests.rs` `a_plan_compared_again_says_why`가 두 번째 판의 까닭으로만 겨눠요. |
 | 결정은 그 판이 마지막 판일 때만 받음 | 2026-10-07 서버: 1화를 13:52:30에 승인하자 원래 자막을 들이고 교체했어요 ([0083]) | `trss-jobs` `tests/it/replace.rs` `a_decision_on_a_plan_that_is_not_the_rows_to_decide_is_refused` | 서버에서 `409`를 본 기록이 없어요. 이미 정한 판의 결정을 거절하는 쪽은 다른 판 번호의 `409`로만 겨눠요. |
 | 계획이 여럿이면 회차 목록이 주 영역 | 2026-10-05 개발(서버 DB 사본): 열린 계획이 둘인 작업에서 `모두 교체`와 폭 375 px 화면을 봤어요 ([0070]) | `web` `src/screens/todo/replacementView.test.ts` `several plans to decide are an episode list; one keeps its decision card`, `모두 교체 and 모두 유지 decide each plan the list shows, at the version it shows` | 목록 머리가 PC에서 따라오는 것과 휴대폰에서 버튼을 고정하지 않는 것은 CSS라서 일부만 겨눠요. 요청이 실패할 때 까닭을 목록 머리에 한 번만 보이는 점은 테스트가 없어요. |
 | `현재 유지` | 2026-10-08 서버: 들인 1화 보관본의 교체 비교에서 사용자가 `현재 유지`를 골랐고 보관본과 `교체 비교`가 남았어요 ([0122])<br>2026-10-08 서버: 0.6.2 배포 뒤 API의 1화 줄에는 보관본이 없고 `자막` 카드에는 남아 있었어요 ([0124]) | `trss-jobs` `tests/it/replace.rs` `keeping_the_current_subtitle_leaves_the_file_and_ends_the_job`, `a_copy_kept_off_the_episode_leaves_its_row_until_chosen_again_or_the_subtitle_goes` | `자막` 카드에서 다시 골라 회차 줄에 `교체 승인`으로 돌아오는 쪽은 서버에서 해 본 기록이 없어요. |
-| 승인한 계획의 반영 순서(1)–(6) | (1)~(6) 2026-10-07 서버: 1화 승인으로 원래 자막이 `제작자 알 수 없음` 보관본으로 들어가고 새 자막으로 교체됐어요 ([0083]) | `trss-jobs` `tests/it/replace.rs`: (1)(2) `no_room_for_the_copies_stops_before_anything_beside_the_video_changes` (3) `killed_after_setting_the_old_copy_aside_publishes_the_new_one` (4) `a_new_copy_published_but_not_recorded_holds_the_plan_and_removes_nothing_more` (5) `killed_after_setting_an_earlier_applied_copy_aside_before_its_record_ends_the_replacement` (6) `killed_after_the_plan_was_done_cleans_up` | (5)에서 이전 적용본을 옮기지 못해 새 자막만 적용하고 계획을 보류하는 갈래는 중단 지점에서 이어 가는 쪽만 겨눠요. 서버에서 단계별 중단은 없었어요. |
+| 승인한 계획의 반영 순서(1)–(6) | 2026-10-07 서버: 1화 승인으로 원래 자막이 `제작자 알 수 없음` 보관본으로 들어가고 새 자막으로 교체됐어요. 보호 복사본을 두고 옮긴 뒤 공개하던 0153 전 코드예요 ([0083]) | `trss-jobs` `tests/it/replace.rs`: (1) `no_room_for_the_new_copy_stops_before_anything_beside_the_video_changes` (2) `a_revision_waits_for_approval_then_replaces_and_the_earlier_stored_copy_stays`, `a_file_at_the_path_to_add_after_approval_asks_to_compare_again` (3) `an_unmanaged_subtitle_is_imported_as_the_unknown_creators_before_it_is_replaced`, `an_unmanaged_subtitle_that_cannot_be_imported_is_swapped_back_and_the_plan_fails` (4)(5) `another_creators_ass_removes_the_applied_srt_and_keeps_its_stored_copy`, `a_new_copy_published_but_not_recorded_holds_the_plan_and_removes_nothing_more` (6) `a_revision_waits_for_approval_then_replaces_and_the_earlier_stored_copy_stays`<br>`trss-jobs` `place/aside.rs` (2) `a_file_changed_after_approval_is_swapped_back_and_stays_in_its_place`<br>`trss-core` `files.rs` (2) `an_exchange_swaps_the_two_files_and_syncs_both_folders` | (2) 승인한 뒤 바뀐 파일을 다시 맞바꾸는 갈래는 검사와 맞바꾸기 사이의 경쟁이라 단위 테스트로만 겨눠요. 대소문자만 다른 이름을 교체하는 갈래는 테스트가 없어요. (4) 이전 적용본을 옮기지 못해 새 자막만 적용하고 계획을 보류하는 갈래는 테스트가 없어요. 결과를 알 수 없는 실패(동기화 실패, 다시 맞바꾸지 못함)도 겨눈 테스트가 없어요. 서버의 미디어 파일시스템에서 `RENAME_EXCHANGE`는 [0151](../tickets/0151-probe-rename-exchange.md)이 확인했고, 맞바꾸는 반영을 서버에서 돌린 기록은 아직 없어요. |
+| 끊긴 반영은 처음부터 다시 검사하고 `.trss/aside/`의 파일은 지우지 않음 | 없음 | `trss-jobs` `tests/it/replace.rs`: (맞바꾸기 전) `a_replacement_cut_before_its_swap_is_carried_out_anew_and_leaves_old_folders_alone` (맞바꾼 뒤 기록 전) `a_replacement_cut_after_its_swap_records_the_new_copy_and_keeps_the_original_aside` (이전 적용본을 옮긴 뒤) `a_replacement_cut_after_taking_off_an_earlier_copy_leaves_that_file_aside` (기록한 뒤) `a_replacement_cut_after_its_records_leaves_its_files_aside` (시작 횟수로 보류) `a_job_held_for_its_starts_leaves_its_approved_plan_and_its_files` | 끊기는 지점은 디스크와 DB를 그 상태로 만들어 흉내 냈고, 프로세스를 실제로 죽인 관찰은 없어요. 들이기를 공개한 뒤 기록 전에 끊기는 경우는 맞바꾼 뒤 끊긴 경우와 같은 길이라 따로 겨누지 않았어요. |
 | 보관본은 지우지 않음 | 2026-10-07 서버: 1화 승인 뒤 교체된 원래 자막이 `제작자 알 수 없음` 보관본으로 남았어요 ([0083]) | `trss-jobs` `tests/it/replace.rs` `a_revision_waits_for_approval_then_replaces_and_the_earlier_stored_copy_stays` | 없음 |
 | 회차 줄의 `교체 승인` 배지 | 없음 | `trss` `web/library_work_api/tests.rs` `a_stored_subtitle_waiting_for_a_replacement_names_its_job` | 배지 글자 `교체 승인`을 서버에서 본 기록이 없어요. 보관본에 `적용`을 두지 않는 쪽은 칸을 나누는 것으로만 겨눠요. |
 | 한계: 줄 수는 형식의 표지만 셈 | 없음 | `trss-jobs` `place/replace/lines.rs` `each_format_counts_its_dialogue_lines`, `what_is_not_its_format_is_not_counted` | 없음 |
-| 한계: 끝내지 못한 효과 때문에 보관만 한 줄은 다시 비교하지 않음 | 없음 | 없음 | 멈춘 worker가 남긴 효과 때문에 보관만 한 줄은 서버에서 본 적이 없어요. 0153 전의 시험은 다른 작업의 적용 효과로 겨눴고, 그 효과가 없어져 남은 교체·재배치 효과로 겨눈 시험은 없어요. |
-| 한계: 옮긴 뒤 공개 실패는 되돌리지 않고 보류 | 없음 | `trss-jobs` `tests/it/replace.rs` `a_new_copy_published_but_not_recorded_holds_the_plan_and_removes_nothing_more` | 옮겨 둔 뒤 새 적용본을 공개하지 못하는 실패는 시험으로 일으키지 못했어요([교체 계획과 반영](#교체-계획과-반영)). |
+| 한계: 끊긴 반영이 남긴 파일과 기록 | 없음 | `trss-jobs` `tests/it/replace.rs` `a_replacement_cut_after_its_swap_records_the_new_copy_and_keeps_the_original_aside`, `a_replacement_cut_after_taking_off_an_earlier_copy_leaves_that_file_aside` | 관리하지 않던 자막을 맞바꾼 뒤 들이기 전에 끊기는 경우는 테스트가 없어요. |
 | 한계: 같은 출처의 새 수정본이 앞 계획이 기다리는 동안 들어옴 | 없음 | `trss-jobs` `tests/it/choose.rs` `a_newer_revision_still_keeps_a_row_nobody_chose_stored_only` | 없음 |
 
 #### 내용 비교

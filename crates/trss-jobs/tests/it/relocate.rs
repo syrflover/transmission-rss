@@ -1275,7 +1275,7 @@ async fn a_copy_recorded_after_a_mapping_change_moved_its_subtitle_is_planned_to
                 season: 1,
                 episode: 2,
             };
-            records::applied(c, &published, &copy, None, None, 2_100_000)
+            records::applied(c, &published, &copy, None, 2_100_000)
         })
         .await
         .unwrap();
