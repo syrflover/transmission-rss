@@ -95,11 +95,11 @@ impl ReceiveArea {
         format!("{PARTIAL_DIR}/{attempt_id}")
     }
 
-    /// Removes everything in `.partial/`: what receive attempts a process
-    /// left when it stopped. `trss` calls it when it starts, before any job
-    /// runs, so no attempt is writing there. `.tmp/` is not touched. Returns
-    /// how many entries it removed.
-    pub fn empty_partial(&self) -> io::Result<usize> {
+    /// Removes everything in `.partial/` it can ([`trss_core::files::empty_dir`]):
+    /// what receive attempts a process left when it stopped. `trss` calls it
+    /// when it starts, before any job runs, so no attempt is writing there.
+    /// `.tmp/` is not touched.
+    pub fn empty_partial(&self) -> io::Result<trss_core::files::Emptied> {
         trss_core::files::empty_dir(&self.root.join(PARTIAL_DIR))
     }
 

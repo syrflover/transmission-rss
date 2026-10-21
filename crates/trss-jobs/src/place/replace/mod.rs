@@ -808,13 +808,7 @@ impl Placer {
 
         // 1. The new copy, staged: nothing beside the video changed yet.
         let folder = PathBuf::from(&plan.folder);
-        let staged = match self.staged(staging, &plan.folder, true).await {
-            Ok(staged) => files::within(&folder, &staged),
-            Err(err) => {
-                let reason = format!("새 자막을 준비하지 못해 교체하지 않았어요: {err}");
-                return self.back_out(row, &plan, Ok(reason)).await;
-            }
-        };
+        let staged = files::within(&folder, &self.staged(staging, &plan.folder, true).await);
         let (source, at) = (files::within(&folder, &plan.asset_path), staged.clone());
         let (size, sha) = (plan.asset_size, plan.asset_sha256.clone());
         let object = match blocking(move || files::copy_to_temp(&source, &at, size, &sha)).await {
@@ -1333,10 +1327,8 @@ impl Placer {
             let temp = match staged.take() {
                 Some(temp) => temp,
                 None => {
-                    let temp = match self.staged(staging, &plan.folder, true).await {
-                        Ok(temp) => files::within(&folder, &temp),
-                        Err(err) => return self.import_failed(None, Ok(err.to_string())).await,
-                    };
+                    let temp =
+                        files::within(&folder, &self.staged(staging, &plan.folder, true).await);
                     let (source, at) = (from.clone(), temp.clone());
                     let (size, sha) = (seen.size, seen.sha256.clone());
                     // The file the plan saw, or the plan is stale.

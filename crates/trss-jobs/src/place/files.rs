@@ -59,6 +59,12 @@ pub use trss_core::app_data::{
 /// written, and a copy staged in this run is never removed by it. Jobs run
 /// one at a time, so no other run is writing there. Cheap to clone: the
 /// clones share what was emptied.
+///
+/// The emptying removes what it can: an entry that cannot be removed (its
+/// permissions on a share, say) is left there and told on the standard
+/// error, and the folder counts as emptied. Every new copy has a new name,
+/// so nothing left there is in a write's way; only the room it takes is
+/// lost.
 #[derive(Debug, Clone, Default)]
 pub struct Staging {
     emptied: std::sync::Arc<std::sync::Mutex<Vec<PathBuf>>>,
@@ -68,20 +74,31 @@ impl Staging {
     /// A new file's path in `folder`'s staging folder, relative to `folder`;
     /// the staging folder is emptied first unless this run did that already.
     /// Blocking.
-    pub fn new_file(&self, folder: &Path) -> io::Result<String> {
+    pub fn new_file(&self, folder: &Path) -> String {
         let mut emptied = self.emptied.lock().unwrap_or_else(|e| e.into_inner());
         if !emptied.iter().any(|f| f == folder) {
-            trss_core::files::empty_dir(&within(folder, STAGING_DIR))?;
+            let staging = within(folder, STAGING_DIR);
+            match trss_core::files::empty_dir(&staging) {
+                Ok(done) => {
+                    for (path, err) in done.left {
+                        eprintln!(
+                            "trss: cannot remove {} while staging: {err}",
+                            path.display()
+                        );
+                    }
+                }
+                Err(err) => eprintln!("trss: cannot empty {}: {err}", staging.display()),
+            }
             emptied.push(folder.to_owned());
         }
-        Ok(format!("{STAGING_DIR}/{}", uuid::Uuid::new_v4()))
+        format!("{STAGING_DIR}/{}", uuid::Uuid::new_v4())
     }
 }
 
-/// Removes everything in the app data folder's `subtitle-files/.tmp/`: the
-/// new copies of stores a process left when it stopped. `trss` calls it when
-/// it starts, before any job runs. Returns how many entries it removed.
-pub fn empty_app_temp(app_data: &Path) -> io::Result<usize> {
+/// Removes everything in the app data folder's `subtitle-files/.tmp/` it can
+/// ([`trss_core::files::empty_dir`]): the new copies of stores a process left
+/// when it stopped. `trss` calls it when it starts, before any job runs.
+pub fn empty_app_temp(app_data: &Path) -> io::Result<trss_core::files::Emptied> {
     trss_core::files::empty_dir(&within(app_data, APP_TEMP_DIR))
 }
 

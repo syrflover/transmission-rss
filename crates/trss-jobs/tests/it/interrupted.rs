@@ -561,7 +561,7 @@ async fn the_start_empties_the_receive_attempts_folder_and_leaves_the_rest_of_th
         made("job/a.ass"),
     ];
 
-    assert_eq!(base.area.empty_partial().unwrap(), 3);
+    assert_eq!(base.area.empty_partial().unwrap().removed, 3);
     assert!(crate::world::tree(&base.area.at(".partial")).is_empty());
     let mut left = crate::world::tree(base.area.root());
     left.sort();
@@ -569,7 +569,7 @@ async fn the_start_empties_the_receive_attempts_folder_and_leaves_the_rest_of_th
     kept.sort();
     assert_eq!(left, kept);
     // An empty or missing folder is nothing to remove.
-    assert_eq!(base.area.empty_partial().unwrap(), 0);
+    assert_eq!(base.area.empty_partial().unwrap().removed, 0);
     std::fs::remove_dir(base.area.at(".partial")).unwrap();
-    assert_eq!(base.area.empty_partial().unwrap(), 0);
+    assert_eq!(base.area.empty_partial().unwrap().removed, 0);
 }

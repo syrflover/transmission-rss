@@ -12,7 +12,7 @@ use std::{
     fs::{File, OpenOptions},
     io,
     os::{fd::AsFd, unix::fs::OpenOptionsExt},
-    path::Path,
+    path::{Path, PathBuf},
 };
 
 use rustix::fs::{renameat_with, OFlags, RenameFlags, CWD};
@@ -188,26 +188,48 @@ pub fn occupied(path: &Path) -> io::Result<bool> {
     }
 }
 
-/// Removes everything in the folder `dir`, which stays: a folder with what is
-/// in it, anything else (a link too) as itself, never followed. A folder that
-/// is not there holds nothing. Returns how many entries it removed. Only for
-/// a folder the app alone writes into, while nothing writes there.
-pub fn empty_dir(dir: &Path) -> io::Result<usize> {
+/// What [`empty_dir`] came to.
+#[derive(Debug, Default)]
+pub struct Emptied {
+    /// How many entries it removed.
+    pub removed: usize,
+    /// The entries it could not remove (the folder itself when it could not
+    /// read on), with why.
+    pub left: Vec<(PathBuf, io::Error)>,
+}
+
+/// Removes everything in the folder `dir` it can, the folder staying: a
+/// folder with what is in it, anything else (a link too) as itself, never
+/// followed. Every entry is tried: one that cannot be removed is left, and
+/// the others still go. A folder that is not there holds nothing; one that
+/// cannot be read is the error. Only for a folder the app alone writes into,
+/// while nothing writes there.
+pub fn empty_dir(dir: &Path) -> io::Result<Emptied> {
     let entries = match std::fs::read_dir(dir) {
         Ok(entries) => entries,
-        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(0),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(Emptied::default()),
         Err(err) => return Err(err),
     };
-    let mut removed = 0;
+    let mut emptied = Emptied::default();
     for entry in entries {
-        let entry = entry?;
-        match entry.file_type()?.is_dir() {
-            true => std::fs::remove_dir_all(entry.path())?,
-            false => std::fs::remove_file(entry.path())?,
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(err) => {
+                emptied.left.push((dir.to_path_buf(), err));
+                break;
+            }
+        };
+        let path = entry.path();
+        let removed = entry.file_type().and_then(|kind| match kind.is_dir() {
+            true => std::fs::remove_dir_all(&path),
+            false => std::fs::remove_file(&path),
+        });
+        match removed {
+            Ok(()) => emptied.removed += 1,
+            Err(err) => emptied.left.push((path, err)),
         }
-        removed += 1;
     }
-    Ok(removed)
+    Ok(emptied)
 }
 
 /// `bytes` as lowercase hex, two digits each.
@@ -640,6 +662,35 @@ mod tests {
         assert_eq!(text(&to.join("b")), "bytes");
         // The folder the file went to was synced before the failing one.
         assert_eq!(testing::syncs_of(&to), 1);
+    }
+
+    #[test]
+    fn emptying_a_folder_removes_every_entry_it_can_and_names_the_rest() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        put(&root.join("a"), "a");
+        std::fs::create_dir_all(root.join("b/c")).unwrap();
+        put(&root.join("b/c/d"), "d");
+        std::fs::create_dir(root.join("stuck")).unwrap();
+        put(&root.join("stuck/e"), "e");
+        put(&root.join("z"), "z");
+        std::fs::set_permissions(root.join("stuck"), std::fs::Permissions::from_mode(0o555))
+            .unwrap();
+        let emptied = empty_dir(root).unwrap();
+        std::fs::set_permissions(root.join("stuck"), std::fs::Permissions::from_mode(0o755))
+            .unwrap();
+        assert_eq!(emptied.removed, 3);
+        let left: Vec<_> = emptied.left.iter().map(|(path, _)| path.clone()).collect();
+        assert_eq!(left, [root.join("stuck")]);
+        let mut names: Vec<_> = std::fs::read_dir(root)
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        names.sort();
+        assert_eq!(names, ["stuck"]);
+        // A folder that is not there holds nothing.
+        assert_eq!(empty_dir(&root.join("none")).unwrap().removed, 0);
     }
 
     #[test]

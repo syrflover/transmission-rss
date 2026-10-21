@@ -746,6 +746,39 @@ async fn a_store_cut_before_publishing_is_done_again_once_after_its_staging_fold
 }
 
 #[tokio::test]
+async fn an_entry_of_the_staging_folder_that_cannot_be_removed_stays_and_the_store_goes_on() {
+    use std::os::unix::fs::PermissionsExt;
+    let s = setup().await;
+    let id = make(&s, "c1", "2", "/ok/Show-02", false).await;
+    cut_before_its_records(&s, &id).await;
+    // Something in the staging folder this user cannot remove: a folder
+    // whose entries it may not delete.
+    let staging = s.work().join(".trss/staging");
+    let stuck = staging.join("left-by-something");
+    std::fs::create_dir_all(&stuck).unwrap();
+    std::fs::write(stuck.join("inner"), b"x").unwrap();
+    std::fs::write(staging.join("removable"), b"half a copy").unwrap();
+    std::fs::set_permissions(&stuck, std::fs::Permissions::from_mode(0o555)).unwrap();
+    run(&s).await;
+    std::fs::set_permissions(&stuck, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    // Stored and applied as ever: the new copies have names of their own.
+    let d = detail(&s, &id).await;
+    assert_eq!(
+        d.row.state,
+        JobState::Done,
+        "{:?} {:?}",
+        d.row.note,
+        d.events
+    );
+    assert_eq!(names(&s.stored_dir()), ["Show-02.ass"]);
+    assert!(s.work().join("Season 01/Show S01E02.ass").exists());
+    // The rest of the folder was emptied; the entry stays as it was.
+    assert_eq!(names(&staging), ["left-by-something"]);
+    assert_eq!(names(&stuck), ["inner"]);
+}
+
+#[tokio::test]
 async fn a_store_cut_after_publishing_records_the_file_it_left_without_writing_it_again() {
     let s = setup().await;
     let id = make_pack(&s, "c1", "pick", "2", &["Show - 02.ass", "readme.txt"]).await;

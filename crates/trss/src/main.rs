@@ -117,15 +117,39 @@ async fn run() -> Result<(), String> {
     // never writes into another's folder, so one that cannot be emptied only
     // takes room.
     match receive.empty_partial() {
-        Ok(0) => {}
-        Ok(removed) => println!("trss: removed {removed} unfinished receive attempts"),
+        Ok(emptied) => {
+            if emptied.removed > 0 {
+                println!(
+                    "trss: removed {} unfinished receive attempts",
+                    emptied.removed
+                );
+            }
+            for (path, e) in emptied.left {
+                eprintln!(
+                    "trss: cannot remove the receive attempt {}: {e}",
+                    path.display()
+                );
+            }
+        }
         Err(e) => eprintln!("trss: cannot empty the receive attempts' folder: {e}"),
     }
     // The same for the new copies of the stores into the app data folder: a
     // run writes such a copy again, and never into another's file.
     match trss_jobs::place::files::empty_app_temp(app_data.root()) {
-        Ok(0) => {}
-        Ok(removed) => println!("trss: removed {removed} unfinished stored-file copies"),
+        Ok(emptied) => {
+            if emptied.removed > 0 {
+                println!(
+                    "trss: removed {} unfinished stored-file copies",
+                    emptied.removed
+                );
+            }
+            for (path, e) in emptied.left {
+                eprintln!(
+                    "trss: cannot remove the stored-file copy {}: {e}",
+                    path.display()
+                );
+            }
+        }
         Err(e) => eprintln!("trss: cannot empty the stored files' temporary folder: {e}"),
     }
 

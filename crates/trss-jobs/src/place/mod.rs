@@ -1101,14 +1101,7 @@ impl Placer {
             }
         };
 
-        let temp = match self.staged(staging, folder, in_work).await {
-            Ok(temp) => temp,
-            Err(err) => {
-                return self
-                    .fail_row(row, format!("보관본을 쓰지 못했어요: {err}"))
-                    .await
-            }
-        };
+        let temp = self.staged(staging, folder, in_work).await;
         let at = files::within(Path::new(folder), &temp);
         let (size, sha) = (row.size, row.sha256.clone());
         match blocking(move || files::copy_to_temp(&source, &at, size, &sha)).await {
@@ -1147,14 +1140,9 @@ impl Placer {
     /// in the work folder's staging folder, emptied first in this run
     /// ([`files::Staging`]), or in the app data folder's
     /// `subtitle-files/.tmp/` (`in_work` false), emptied when `trss` starts.
-    async fn staged(
-        &self,
-        staging: &files::Staging,
-        folder: &str,
-        in_work: bool,
-    ) -> io::Result<String> {
+    async fn staged(&self, staging: &files::Staging, folder: &str, in_work: bool) -> String {
         if !in_work {
-            return Ok(format!("{}/{}", files::APP_TEMP_DIR, uuid::Uuid::new_v4()));
+            return format!("{}/{}", files::APP_TEMP_DIR, uuid::Uuid::new_v4());
         }
         let (staging, folder) = (staging.clone(), PathBuf::from(folder));
         blocking(move || staging.new_file(&folder)).await
@@ -1890,14 +1878,7 @@ impl Placer {
                 .await;
         };
         self.begin(job, StepKind::Apply).await?;
-        let temp = match self.staged(staging, folder, true).await {
-            Ok(temp) => temp,
-            Err(err) => {
-                return self
-                    .fail_row(row, format!("적용본을 쓰지 못했어요: {err}"))
-                    .await
-            }
-        };
+        let temp = self.staged(staging, folder, true).await;
         let source = files::within(Path::new(folder), &asset.relative_path);
         let at = files::within(Path::new(folder), &temp);
         let (size, sha) = (asset.size, asset.sha256.clone());
