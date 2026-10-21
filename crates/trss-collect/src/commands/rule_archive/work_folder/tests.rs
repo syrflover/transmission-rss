@@ -2,7 +2,7 @@
 //! step against the fake Transmission (`trss_transmission::fake`): which
 //! torrents move, what stops the move, and how it waits for Transmission. The
 //! command around the move is in `run_tests.rs`, and the interplay with the
-//! cycle and the commands' turns in trss-worker's `tests/it/archive_move.rs`.
+//! cycle and the commands' turns in trss's `tests/it/archive_move.rs`.
 
 use std::{
     fs,

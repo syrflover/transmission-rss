@@ -5,7 +5,7 @@
 //! the subscribed creators' mappings, the library's videos and the failed
 //! receipts), grouped by work, summed (a `교체 승인` card's [`Changes`]) and
 //! put in order ([`list`]); the web only serializes them. Each kind's fields
-//! are documented where the web answers with them (`todo_api` of `trss-web`).
+//! are documented where the web answers with them (`trss::web::todo_api`).
 //!
 //! - [`Todo`]: one to-do, whatever its kind.
 //! - [`badges_by_work`]: each work's kinds of to-do, which the library list

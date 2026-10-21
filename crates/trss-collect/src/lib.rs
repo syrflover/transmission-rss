@@ -2,7 +2,7 @@
 //! decisions about what to receive, the commands that receive or move videos,
 //! and the subscriptions to airing anime (`docs/specs/collection.md`).
 //!
-//! The loop that runs the cycles and the commands is in `trss-worker`; the web
+//! The loop that runs the cycles and the commands is in `trss::worker`; the web
 //! calls the checks and the requests here. The crate holds:
 //!
 //! - [`store`]: the queries and rules of the collection's tables;

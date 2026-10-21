@@ -19,7 +19,7 @@ export interface PolicyOverride {
 }
 
 /**
- * The common policy (`crates/trss-web/src/policy_api.rs`): the order of the
+ * The common policy (`crates/trss/src/web/policy_api.rs`): the order of the
  * subtitle formats and the server browser's idle time and concurrent jobs, one
  * `version` for all three. `saved_at` is Unix milliseconds, `null` (and
  * `version` 0) while the defaults are in use. A save is sent against the

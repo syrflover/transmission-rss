@@ -229,7 +229,7 @@
 
 ## 결과
 
-2026-10-21에 [0144](0144-lighter-structure-baseline.md)에서 기준값을 측정했어요. 나머지 티켓은 아직 시작하지 않았어요.
+2026-10-21에 [0144](0144-lighter-structure-baseline.md)에서 기준값을 측정하고, [0145](0145-merge-web-and-worker-crates.md)에서 `trss-web`과 `trss-worker` 크레이트를 `trss` 크레이트 하나로 합쳤어요. 바이너리는 아직 둘이에요. 나머지 티켓은 아직 시작하지 않았어요.
 
 ### 기준값
 

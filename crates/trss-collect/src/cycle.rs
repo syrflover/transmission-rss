@@ -1,8 +1,8 @@
 //! What a collection cycle decides, item by item: which items of a feed a rule
 //! takes, which of them a video revision replacement keeps for itself, and how
 //! one selected item goes to Transmission and into history. The cycle itself
-//! (its order, its report, its tasks and the removal's gate) is `trss-worker`'s
-//! `run_cycle`, which calls these.
+//! (its order, its report, its tasks and the removal's gate) is
+//! `trss::worker::cycle::run_cycle`, which calls these.
 
 use std::{
     collections::{HashMap, HashSet},
@@ -915,8 +915,8 @@ async fn rename_mode(ctx: &CollectContext, kind: AddKind, hash: &str) -> Option<
 /// `kept` (held for this cycle's items), not in history for a channel in
 /// `unread_channels` or an item in `present`, not held by a replacement under
 /// way, and not labelled for such an item. The caller runs it with the
-/// torrent gate held, only when the whole picture is in (see `trss-worker`'s
-/// `run_cycle`). A history that cannot be read removes nothing.
+/// torrent gate held, only when the whole picture is in (see
+/// `trss::worker::cycle::run_cycle`). A history that cannot be read removes nothing.
 ///
 /// - A torrent that history records as coming from a channel whose feed was
 ///   not read this cycle stays: that feed may have dropped it, or may just

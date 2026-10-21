@@ -1,6 +1,6 @@
 /**
  * The shapes of a job's placements and its 배치 확인 (`placements` and `confirm` of the job read,
- * `crates/trss-web/src/jobs_api.rs`, `jobs_api/placement.rs`). They have no imports so the logic that reads them
+ * `crates/trss/src/web/jobs_api.rs`, `jobs_api/placement.rs`). They have no imports so the logic that reads them
  * (`placementTable.ts`) runs under `node --test`; `api.ts` re-exports them.
  */
 

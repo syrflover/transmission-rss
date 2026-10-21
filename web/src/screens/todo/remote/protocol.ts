@@ -1,5 +1,5 @@
 /**
- * The messages of a job's remote screen socket (`screen_api.rs` in `trss-web`
+ * The messages of a job's remote screen socket (`web/screen_api.rs` in `trss`
  * is the contract). Everything here is pure: the screen's component only
  * moves these between the socket and the page.
  */

@@ -2,7 +2,7 @@
 //! the same files runs one after the other and the rest runs side by side.
 //!
 //! The worker runs its collection cycle, the web's commands and the readings
-//! its folder watches ask for at the same time (see the `trss-worker` crate).
+//! its folder watches ask for at the same time (see `trss::worker`).
 //! Each piece of work that looks at or changes files names the folders it
 //! touches as a [`Section`] and waits for its turn at them ([`FolderLocks`]):
 //!

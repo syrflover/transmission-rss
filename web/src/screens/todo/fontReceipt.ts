@@ -5,7 +5,7 @@
  * keeping one copy of the same bytes is not a skipped download. No imports, so `node --test` runs it.
  */
 
-/** What a kept font's receipt came to (`font_receipt` of a placement, `crates/trss-web/src/jobs_api.rs`). */
+/** What a kept font's receipt came to (`font_receipt` of a placement, `crates/trss/src/web/jobs_api.rs`). */
 export type FontReceipt = "unchanged" | "same" | "new";
 
 /** The words for each, as the job detail writes them beside the font. */

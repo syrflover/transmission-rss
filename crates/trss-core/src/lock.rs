@@ -143,7 +143,7 @@ impl CycleLock {
 /// taken for as long as any work of this one runs. Two workers therefore
 /// never work at the same time, as before, and one worker runs its pieces of
 /// work side by side; what keeps those from treading on each other is the
-/// worker's business (see the `trss-worker` crate).
+/// worker's business (see `trss::worker`).
 ///
 /// The heartbeat beats from the moment the lock is taken until the last
 /// handle is let go, which writes the last beat (clearing the hold) before the

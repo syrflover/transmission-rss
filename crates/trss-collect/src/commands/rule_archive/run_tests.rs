@@ -3,7 +3,7 @@
 //! folder in place, what the command ends with, when the rule is turned on,
 //! and what a move that Transmission does not finish in time leaves for the
 //! next look. The move itself is in `work_folder/tests.rs`, and the web's part
-//! and the order of the commands in trss-worker's `tests/it/archive_move.rs`.
+//! and the order of the commands in trss's `tests/it/archive_move.rs`.
 //! Every case runs through [`World::archive_of`] against the fake Transmission
 //! and real temporary folders.
 

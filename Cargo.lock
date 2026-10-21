@@ -2898,6 +2898,47 @@ dependencies = [
 ]
 
 [[package]]
+name = "trss"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "bytes",
+ "crc32fast",
+ "dotenv",
+ "futures",
+ "http-body-util",
+ "image",
+ "percent-encoding",
+ "regex",
+ "reqwest 0.12.28",
+ "reqwest 0.13.5",
+ "rusqlite",
+ "rustix",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tokio-tungstenite",
+ "tokio-util",
+ "tower",
+ "tower-http 0.7.1",
+ "transmission-rpc",
+ "trss-anilist",
+ "trss-anissia",
+ "trss-archive",
+ "trss-browser",
+ "trss-collect",
+ "trss-core",
+ "trss-import",
+ "trss-jobs",
+ "trss-library",
+ "trss-subtitles",
+ "trss-transmission",
+ "url",
+]
+
+[[package]]
 name = "trss-anilist"
 version = "0.1.0"
 dependencies = [
@@ -3129,74 +3170,6 @@ dependencies = [
  "serde_json",
  "tokio",
  "transmission-rpc",
- "url",
-]
-
-[[package]]
-name = "trss-web"
-version = "0.1.0"
-dependencies = [
- "axum",
- "bytes",
- "dotenv",
- "futures",
- "http-body-util",
- "image",
- "percent-encoding",
- "regex",
- "rusqlite",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror",
- "tokio",
- "tokio-tungstenite",
- "tokio-util",
- "tower",
- "tower-http 0.7.1",
- "trss-anilist",
- "trss-anissia",
- "trss-archive",
- "trss-browser",
- "trss-collect",
- "trss-core",
- "trss-import",
- "trss-jobs",
- "trss-library",
- "trss-subtitles",
- "url",
-]
-
-[[package]]
-name = "trss-worker"
-version = "0.1.0"
-dependencies = [
- "axum",
- "crc32fast",
- "dotenv",
- "futures",
- "http-body-util",
- "reqwest 0.12.28",
- "reqwest 0.13.5",
- "rusqlite",
- "rustix",
- "serde_json",
- "tempfile",
- "thiserror",
- "tokio",
- "tokio-util",
- "tower",
- "transmission-rpc",
- "trss-anilist",
- "trss-anissia",
- "trss-browser",
- "trss-collect",
- "trss-core",
- "trss-jobs",
- "trss-library",
- "trss-subtitles",
- "trss-transmission",
- "trss-web",
  "url",
 ]
 

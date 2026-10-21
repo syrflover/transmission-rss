@@ -3,7 +3,7 @@
 //! shows the check is bound to the job, the worker watches it for the file,
 //! and a run that ends leaves the job waiting with no run. The browser is a
 //! fake; the real one is tested by `trss-subtitles`'s ignored `auth_sample`
-//! and `trss-web`'s ignored `remote_screen_docker`.
+//! and `trss`'s ignored `remote_screen_docker`.
 
 use crate::{world::Base, Handles};
 use std::{

@@ -4,7 +4,7 @@
 //! `start` command keeps (move first, turn on after). The move's checks and
 //! renames are in `work_folder/tests.rs`; the command around the move with
 //! Transmission is in `run_tests.rs`, and a cycle running beside it, with the
-//! order of the commands, in trss-worker.
+//! order of the commands, in trss's `tests/it/archive_move.rs`.
 
 use std::{
     collections::BTreeSet,

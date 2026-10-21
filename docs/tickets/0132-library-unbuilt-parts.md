@@ -10,7 +10,7 @@
 여섯째인 극장판의 `본편`은 2026-10-11에 사용자가 극장판 지원을 정하면서 [0139](0139-movie-only-works.md)와 [0140](0140-movies-in-season-00.md)으로 옮겼어요. 이 티켓에는 다섯 가지가 남아요.
 
 - **감시 폴더 줄의 `연결한 작품 수`**: 명세는 폴더마다 작품 수와 함께 연결한 작품 수를 보여준다고 해요.
-  trss-web `watch_folders_api.rs`는 `linked_works`를 늘 `0`으로 보내요. 모듈 주석은 작품을 Anissia에 이을 수 있을 때까지 `0`이라고 적었지만, 시즌마다 Anissia에 잇는 길은 [0034](../archive/tickets/3-subtitle-candidates-and-receiving/0034-season-anissia-link.md)부터 있어요.
+  trss `web/watch_folders_api.rs`는 `linked_works`를 늘 `0`으로 보내요. 모듈 주석은 작품을 Anissia에 이을 수 있을 때까지 `0`이라고 적었지만, 시즌마다 Anissia에 잇는 길은 [0034](../archive/tickets/3-subtitle-candidates-and-receiving/0034-season-anissia-link.md)부터 있어요.
   시즌 하나라도 이은 작품을 셀지처럼 무엇을 셀지 이 티켓에서 정하고 명세에 적어요.
 - **회차 목록의 방영 전 회차**: 명세의 회차 목록 표는 방영 전 회차에 영상 `방영 전`과 `자막 대기`를 조용하게 둔다고 해요.
   `web/src/screens/library/detail/EpisodeList.tsx`는 방영 요일만 보여주고, `방영 전`·`자막 대기`는 이번 주 편성의 카드에만 있어요.

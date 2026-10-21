@@ -1,0 +1,56 @@
+[package]
+name = "trss"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+trss-core.workspace = true
+trss-anissia.workspace = true
+trss-anilist.workspace = true
+trss-library.workspace = true
+trss-collect.workspace = true
+trss-import.workspace = true
+trss-transmission.workspace = true
+trss-subtitles.workspace = true
+trss-jobs.workspace = true
+# The server browser's runs, and the remote screens of the jobs that wait for a
+# site's check: a DevTools connection to a run through the launcher's proxy
+# (`web::screen_api`).
+trss-browser.workspace = true
+
+axum = { workspace = true, features = ["multipart", "ws"] }
+bytes.workspace = true
+dotenv.workspace = true
+futures.workspace = true
+percent-encoding.workspace = true
+regex.workspace = true
+reqwest.workspace = true
+reqwest012.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "signal", "time", "sync"] }
+tower-http.workspace = true
+tokio-util.workspace = true
+transmission-rpc.workspace = true
+url.workspace = true
+
+[dev-dependencies]
+trss-core = { workspace = true, features = ["test-support"] }
+trss-anissia = { workspace = true, features = ["test-support"] }
+trss-anilist = { workspace = true, features = ["test-support"] }
+trss-library = { workspace = true, features = ["test-support"] }
+# The fake tracker of the past episode search tests (`trss_collect::fake`).
+trss-collect = { workspace = true, features = ["test-support"] }
+trss-transmission = { workspace = true, features = ["test-support"] }
+trss-subtitles = { workspace = true, features = ["test-support"] }
+# The sample ZIPs of the upload tests (`trss_archive::testing`).
+trss-archive = { workspace = true, features = ["test-support"] }
+crc32fast.workspace = true
+http-body-util.workspace = true
+image.workspace = true
+rusqlite.workspace = true
+rustix.workspace = true
+tempfile.workspace = true
+tower.workspace = true
+tokio-tungstenite.workspace = true

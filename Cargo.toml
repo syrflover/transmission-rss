@@ -20,7 +20,6 @@ trss-subtitles = { path = "crates/trss-subtitles" }
 trss-jobs = { path = "crates/trss-jobs" }
 trss-archive = { path = "crates/trss-archive" }
 trss-browser = { path = "crates/trss-browser" }
-trss-web = { path = "crates/trss-web" }
 
 # trname = { path = "../trname" }
 trname = { git = "https://github.com/syrflover/trname", rev = "ee46f04" }
