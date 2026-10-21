@@ -308,5 +308,8 @@ async fn an_undo_announces_its_command_as_its_files_are_recorded() {
     // Accepted, started, the two files recorded (once when the undo began
     // and once for each file renamed), and ended.
     assert_eq!(ids.len(), 2 + 1 + 2 + 1, "{ids:?}");
-    assert!(ids.iter().all(|id| id == "undo-0003-a"), "{ids:?}");
+    assert!(
+        ids.iter().all(|id| id.as_deref() == Some("undo-0003-a")),
+        "{ids:?}"
+    );
 }

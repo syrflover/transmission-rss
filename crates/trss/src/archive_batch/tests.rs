@@ -195,7 +195,7 @@ impl Scene {
     fn announced(&mut self, id: &str) -> usize {
         let mut count = 0;
         while let Ok(change) = self.listener.try_recv() {
-            if change.kind == ChangeKind::Command && change.id == id {
+            if change.kind == ChangeKind::Command && change.id.as_deref() == Some(id) {
                 count += 1;
             }
         }

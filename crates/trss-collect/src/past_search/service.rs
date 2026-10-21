@@ -704,7 +704,7 @@ mod tests {
         let mut ids = Vec::new();
         while let Ok(change) = listener.try_recv() {
             assert_eq!(change.kind, ChangeKind::PastSearch);
-            ids.push(change.id);
+            ids.push(change.id.expect("a past search change has an ID"));
         }
         ids
     }

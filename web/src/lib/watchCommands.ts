@@ -19,7 +19,11 @@ export type Reread = () => void | Promise<void>;
 /** How long to wait before reading again a command whose last read failed, in milliseconds. */
 export const RETRY_MS = 3000;
 
-/** Whether `change` is about the command `id`. */
+/**
+ * Whether `change` is about the command `id`. A command always has an ID, so a
+ * change with none (`null`) is about no command in particular and is not
+ * about this one.
+ */
 export function isCommand(change: Change, id: string): boolean {
   return change.kind === "command" && change.id === id;
 }

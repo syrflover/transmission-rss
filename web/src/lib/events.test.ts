@@ -22,7 +22,7 @@ class FakeSource implements EventSourceLike {
     for (const listener of this.listeners.get(type) ?? []) listener({ data });
   }
 
-  change(kind: string, id: string) {
+  change(kind: string, id: string | null) {
     this.say("change", JSON.stringify({ kind, id }));
   }
 }
@@ -85,7 +85,7 @@ function setup(options: { hidden?: boolean } = {}) {
 }
 
 /** A subscriber that notes what it was told to read again. */
-function listener(accepts: (kind: string, id: string) => boolean = () => true) {
+function listener(accepts: (kind: string, id: string | null) => boolean = () => true) {
   const rereads: number[] = [];
   const subscriber: Subscriber = {
     match: (change) => accepts(change.kind, change.id),
@@ -104,6 +104,25 @@ test("nothing is opened until somebody listens, and one connection serves every 
   events.subscribe(b.subscriber);
 
   assert.equal(sources.length, 1);
+});
+
+test("a change with no ID is passed on with a null ID, and its listener decides what it is about", () => {
+  const { events, sources } = setup();
+  const seen: (string | null)[] = [];
+  const ofOneJob = listener((kind, id) => {
+    seen.push(id);
+    return kind === "subtitle_job" && (id === "j1" || id === null);
+  });
+  const ofAnotherJob = listener((kind, id) => kind === "subtitle_job" && id === "j2");
+  events.subscribe(ofOneJob.subscriber);
+  events.subscribe(ofAnotherJob.subscriber);
+
+  sources[0].change("subtitle_job", null);
+  sources[0].change("subtitle_job", "j1");
+
+  assert.deepEqual(seen, [null, "j1"]);
+  assert.equal(ofOneJob.rereads.length, 2);
+  assert.equal(ofAnotherJob.rereads.length, 0);
 });
 
 test("the last listener to leave closes the connection, and the next one opens a new one", () => {

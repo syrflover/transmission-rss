@@ -383,7 +383,11 @@ async fn change_of(
 ) {
     loop {
         match heard.recv().await {
-            Ok(change) if change.kind == ChangeKind::Command && change.id == id => return,
+            Ok(change)
+                if change.kind == ChangeKind::Command && change.id.as_deref() == Some(id) =>
+            {
+                return
+            }
             Ok(_) => {}
             Err(RecvError::Lagged(_)) => return,
             Err(RecvError::Closed) => std::future::pending::<()>().await,

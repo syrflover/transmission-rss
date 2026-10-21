@@ -8,7 +8,10 @@ import type { Change } from "./api-types";
  * is the hook the screens use.
  *
  * The stream only says *that* something changed (a kind and an ID); a screen
- * reads again through the route it always read from. A screen that listens
+ * reads again through the route it always read from. The ID is `null` when the
+ * changed row names no target of that kind: anything of the kind may have
+ * changed, so a screen that shows the kind and decides by ID reads again for a
+ * `null` one too. A screen that listens
  * registers a {@link Subscriber}:
  *
  * - `match(change)` says whether a change is about what the screen shows, and

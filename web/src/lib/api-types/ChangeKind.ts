@@ -2,8 +2,10 @@
 
 /**
  * What kind of thing changed, which says which routes a screen reads it
- * through and what the ID in [`Change`] names. The list grows with the
- * screens that move from reading on a timer to hearing of changes; nothing
- * may depend on it being complete.
+ * through and what the ID in [`Change`] names. A kind of a database table is
+ * a group of tables that screens read together; a table that is written
+ * often and read by few screens has a kind of its own, so only those screens
+ * read again when it changes. The list grows with the tables and the screens;
+ * nothing may depend on it being complete.
  */
-export type ChangeKind = "command" | "past_search";
+export type ChangeKind = "command" | "past_search" | "subtitle_job" | "subtitle_screen" | "subtitle_store" | "subtitle_mapping" | "library" | "artwork" | "season_info" | "anissia" | "rules" | "history" | "collect_status" | "settings";

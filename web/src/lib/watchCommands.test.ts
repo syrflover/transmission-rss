@@ -16,7 +16,7 @@ class FakeSource implements EventSourceLike {
   say(type: string, data = "{}") {
     for (const listener of this.listeners.get(type) ?? []) listener({ data });
   }
-  change(kind: string, id: string) {
+  change(kind: string, id: string | null) {
     this.say("change", JSON.stringify({ kind, id }));
   }
 }
@@ -68,6 +68,8 @@ test("a command is read as soon as it is followed, and again for each change of 
   await settle();
   sources[0].change("command", "other");
   sources[0].change("past_search", "c1");
+  // A change that names no ID is about no command in particular.
+  sources[0].change("command", null);
   await settle();
   assert.deepEqual(reads, ["c1", "c1"]);
 });
@@ -220,4 +222,7 @@ test("a change is about a command when its kind and ID are", () => {
   assert.equal(isCommand({ kind: "command", id: "c1" }, "c1"), true);
   assert.equal(isCommand({ kind: "command", id: "c2" }, "c1"), false);
   assert.equal(isCommand({ kind: "past_search", id: "c1" }, "c1"), false);
+  // A change with no ID says that anything of its kind changed, which is no
+  // command in particular.
+  assert.equal(isCommand({ kind: "command", id: null }, "c1"), false);
 });

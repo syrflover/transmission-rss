@@ -596,7 +596,7 @@ impl Listener {
         let mut ids = Vec::new();
         while let Ok(change) = self.0.try_recv() {
             assert_eq!(change.kind, ChangeKind::Command);
-            ids.push(change.id);
+            ids.push(change.id.expect("a command change has an ID"));
         }
         ids
     }
@@ -774,7 +774,7 @@ async fn a_subscription_hears_what_the_store_announces() {
 
     let change = heard.try_recv().expect("the accept was announced");
     assert_eq!(
-        (change.kind, change.id.as_str()),
-        (ChangeKind::Command, "cmd-1")
+        (change.kind, change.id.as_deref()),
+        (ChangeKind::Command, Some("cmd-1"))
     );
 }

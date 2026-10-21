@@ -6,6 +6,9 @@ import type { ChangeKind } from "./ChangeKind";
  */
 export type Change = { kind: ChangeKind, 
 /**
- * The ID of what changed, in the kind's own ID space.
+ * The ID of what changed, in the kind's own ID space. `null` when the
+ * changed row names no such target: anything of the kind may have
+ * changed, and a screen that shows the kind reads again whichever it
+ * shows.
  */
-id: string, };
+id: string | null, };

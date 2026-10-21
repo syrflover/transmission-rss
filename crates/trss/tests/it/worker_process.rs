@@ -666,6 +666,33 @@ async fn a_client_of_the_event_stream_hears_a_command_accepted_run_and_ended_don
 }
 
 #[tokio::test]
+async fn a_client_of_the_event_stream_hears_what_the_workers_write_changed_in_the_database() {
+    let h = harness_with_channel_a().await;
+    h.tr.reject_adds(Some(REFUSAL));
+    let worker = Proc::spawn(&h, "w", &[("TRSS_WORKER_INTERVAL_SECS", "3600")]);
+    wait_until("the first cycle", || cycle_finished(&h)).await;
+    assert_eq!(count_result(&h, HistoryResult::AddFailed).await, 3);
+    let items = h.history_items().await;
+    let addr = worker.web_addr().await;
+    let mut events = EventStream::open(&addr).await;
+    events.ready().await;
+
+    // The web only accepts the command; the worker part of the process adds
+    // the torrent and records the item as received, through its own database
+    // connection. Nothing in that code announces: the connection tells which
+    // history item its commit changed, as `history`, not as the command.
+    h.tr.reject_adds(None);
+    let status = post_receive_once(&addr, "cmd-history", items[0].id).await;
+    assert_eq!(status, 202, "{}", worker.output());
+    events
+        .changes_of("history", &items[0].id.to_string(), 1)
+        .await;
+    // The change came after the commit: the screen's own route shows it.
+    let item = get_json(&addr, &format!("/api/history/{}", items[0].id)).await;
+    assert_ne!(item["result"], "add_failed", "{item}");
+}
+
+#[tokio::test]
 async fn a_client_of_the_event_stream_hears_a_past_search_start_get_further_and_end() {
     let h = Harness::without_collect_folder().await;
     let media = h.dir.path().join("media");

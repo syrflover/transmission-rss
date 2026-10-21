@@ -3,11 +3,15 @@
 //! The database is a local SQLite file (WAL mode) that both binaries open.
 //! It must not live on a network share (see ADR 0005).
 
+use std::panic::{self, AssertUnwindSafe};
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use rusqlite::{Connection, OpenFlags, TransactionBehavior};
+
+use crate::changes::{tables, Changes};
 
 /// Environment variable naming the database file. Deployment configuration,
 /// deliberately not part of the app settings.
@@ -220,9 +224,26 @@ pub enum DbError {
 /// connection, so calls through them are serialized. Another handle opened
 /// with [`Db::open`] (the web's in `trss`, or another process) has its own
 /// connection and waits on SQLite's lock.
+///
+/// A handle opened with [`Db::open_announcing`] also tells a [`Changes`]
+/// channel what its writes changed: after a [`Db::run`] that wrote and left no
+/// transaction open, once per table kind and target ID that the writes of the
+/// transaction touched (`changes::tables` holds which tables and how). That
+/// covers the rows a trigger or a foreign key action changed too, and nothing
+/// of a rolled back transaction.
 #[derive(Clone)]
 pub struct Db {
     conn: Arc<Mutex<Connection>>,
+    announcing: Option<Announcing>,
+}
+
+/// Where a [`Db`] tells what its writes changed.
+#[derive(Clone)]
+struct Announcing {
+    changes: Changes,
+    /// Writes were made and no commit followed yet. Set and read only while
+    /// the connection is held.
+    pending: Arc<AtomicBool>,
 }
 
 impl Db {
@@ -241,7 +262,26 @@ impl Db {
 
     /// Blocking variant of [`Db::open`], for code outside a runtime.
     pub fn open_blocking(path: impl AsRef<Path>) -> Result<Db, DbError> {
-        let path = path.as_ref();
+        Db::open_with(path.as_ref(), None)
+    }
+
+    /// [`Db::open`] for a handle that announces the changes of its writes on
+    /// `changes`.
+    pub async fn open_announcing(path: impl AsRef<Path>, changes: Changes) -> Result<Db, DbError> {
+        let path = path.as_ref().to_owned();
+        tokio::task::spawn_blocking(move || Db::open_blocking_announcing(path, changes)).await?
+    }
+
+    /// [`Db::open_blocking`] for a handle that announces the changes of its
+    /// writes on `changes`.
+    pub fn open_blocking_announcing(
+        path: impl AsRef<Path>,
+        changes: Changes,
+    ) -> Result<Db, DbError> {
+        Db::open_with(path.as_ref(), Some(changes))
+    }
+
+    fn open_with(path: &Path, changes: Option<Changes>) -> Result<Db, DbError> {
         #[cfg(any(test, feature = "test-support"))]
         template::place(path);
         let mut conn = Connection::open_with_flags(
@@ -258,13 +298,30 @@ impl Db {
         #[cfg(any(test, feature = "test-support"))]
         template::fill(path, &mut conn)?;
         migrate(&mut conn)?;
+        let announcing = match changes {
+            Some(changes) => {
+                tables::install(&conn)?;
+                Some(Announcing {
+                    changes,
+                    pending: Arc::new(AtomicBool::new(false)),
+                })
+            }
+            None => None,
+        };
         Ok(Db {
             conn: Arc::new(Mutex::new(conn)),
+            announcing,
         })
     }
 
     /// Runs `f` with the connection on a blocking thread, so async callers do
     /// not stall the runtime.
+    ///
+    /// A handle that announces ([`Db::open_announcing`]) announces what `f`
+    /// wrote once it is committed: when `f` returns, or panics, with no
+    /// transaction open, or else when a later call ends the transaction `f`
+    /// left open. What `f` committed before it began that transaction waits
+    /// for its end too, even when the transaction is rolled back.
     pub async fn run<T, E, F>(&self, f: F) -> Result<T, E>
     where
         F: FnOnce(&mut Connection) -> Result<T, E> + Send + 'static,
@@ -272,14 +329,47 @@ impl Db {
         E: From<DbError> + Send + 'static,
     {
         let conn = Arc::clone(&self.conn);
+        let announcing = self.announcing.clone();
         tokio::task::spawn_blocking(move || {
             // A panic in an earlier call rolled its transaction back on unwind,
             // so the connection itself is still usable.
             let mut guard = conn.lock().unwrap_or_else(|e| e.into_inner());
-            f(&mut guard)
+            let Some(announcing) = announcing else {
+                return f(&mut guard);
+            };
+            // A call that only reads changes nothing, so it never looks at
+            // what the triggers noted.
+            let before = guard.total_changes();
+            // A panic rolls back the transaction it unwinds out of, but what
+            // `f` committed before it is announced before the panic goes on.
+            let result = panic::catch_unwind(AssertUnwindSafe(|| f(&mut guard)));
+            announcing.after_call(&guard, before);
+            result.unwrap_or_else(|payload| panic::resume_unwind(payload))
         })
         .await
         .map_err(|e| E::from(DbError::Task(e)))?
+    }
+}
+
+impl Announcing {
+    /// Tells the channel what the call that began with `before` total changes
+    /// wrote, when it is committed: right after the call, or after the call
+    /// that ends a transaction an earlier one began.
+    fn after_call(&self, conn: &Connection, before: u64) {
+        if conn.total_changes() != before {
+            self.pending.store(true, Ordering::Relaxed);
+        }
+        if !self.pending.load(Ordering::Relaxed) || !conn.is_autocommit() {
+            return;
+        }
+        // A failed read leaves what was noted for the next call that writes.
+        let Ok(noted) = tables::take(conn) else {
+            return;
+        };
+        self.pending.store(false, Ordering::Relaxed);
+        for (kind, id) in noted {
+            self.changes.announce_target(kind, id);
+        }
     }
 }
 

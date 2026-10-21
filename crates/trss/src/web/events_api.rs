@@ -10,7 +10,7 @@
 //! | event     | `data`                              | meaning                                              |
 //! | --------- | ----------------------------------- | ---------------------------------------------------- |
 //! | `ready`   | `{}`                                | sent first, once, after the stream listens to the changes; the screen reads again what it shows, so what changed before the stream listened is not lost |
-//! | `change`  | `{"kind":"command","id":"…"}`       | the thing `id` of `kind` changed ([`trss_core::changes::Change`]) |
+//! | `change`  | `{"kind":"command","id":"…"}`       | the thing `id` of `kind` changed ([`trss_core::changes::Change`]); `id` is `null` when the changed row names no such thing, which says that anything of `kind` may have changed |
 //! | `lagged`  | `{}`                                | the stream fell behind and missed changes; the screen reads again everything it shows |
 //! | `alive`   | `{}`                                | sent every [`KEEP_ALIVE`] while nothing else is; the screen reads nothing again, and opens the stream anew if it hears nothing at all for three intervals (45 s) on its side (`web/src/lib/events.ts`) |
 //!

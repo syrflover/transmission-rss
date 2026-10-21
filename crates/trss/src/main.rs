@@ -86,12 +86,19 @@ async fn run() -> Result<(), String> {
     // renames that outlive their command), not when this function returns.
     std::mem::forget(instance);
     remove_files_of_earlier_releases(&db_path);
+    // What changes is told to the screens' event stream through this one
+    // channel: both database connections announce on it what their writes
+    // changed, and the stores that keep their state elsewhere announce on it
+    // themselves.
+    let changes = Changes::default();
     let open = || async {
-        Db::open(&db_path).await.map_err(|e| {
-            format!(
+        Db::open_announcing(&db_path, changes.clone())
+            .await
+            .map_err(|e| {
+                format!(
                 "cannot open the app database (set {DB_PATH_ENV} to a file on a local volume): {e}"
             )
-        })
+            })
     };
     let db = open().await?;
     // Before the web serves and before any job is claimed: one process runs
@@ -193,9 +200,6 @@ async fn run() -> Result<(), String> {
     // What the web stores for the worker part starts at once: the web rings
     // the loop that runs it.
     let wakes = Wakes::default();
-    // What changes is told to the screens' event stream through this one
-    // channel: the web's stores and the worker's announce on it.
-    let changes = Changes::default();
     let state = AppState::new(web_db.clone())
         .with_artwork(Artwork::new(
             web_db.clone(),
