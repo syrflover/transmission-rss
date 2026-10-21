@@ -415,6 +415,11 @@ pub fn stored(
                 id
             }
         };
+        // The row's store made the asset when the file is new to the library:
+        // one it published, or an unrecorded one it adopted. A row that made
+        // its asset stays so when its store is done again, which finds that
+        // asset kept.
+        let made = matches!(kept, Kept::New { .. });
         let asset_id = match &kept {
             Kept::Reused(id) => id.clone(),
             Kept::New { relative_path } => {
@@ -450,10 +455,11 @@ pub fn stored(
         .execute(params![package, entry, asset_id, row.name])?;
         if row.kind != AssetKind::Subtitle {
             tx.prepare_cached(
-                "UPDATE subtitle_job_plan SET asset_id = ?3, outcome = 'stored', updated_at = ?4
+                "UPDATE subtitle_job_plan
+                    SET asset_id = ?3, outcome = 'stored', updated_at = ?4, made = max(made, ?5)
                   WHERE job_id = ?1 AND position = ?2",
             )?
-            .execute(params![row.job_id, row.position, asset_id, now])?;
+            .execute(params![row.job_id, row.position, asset_id, now, made])?;
             tx.commit()?;
             return Ok(asset_id);
         }
@@ -504,11 +510,11 @@ pub fn stored(
         // A row only stored is settled by its store.
         tx.prepare_cached(
             "UPDATE subtitle_job_plan
-                SET stored_id = ?3, updated_at = ?4,
+                SET stored_id = ?3, updated_at = ?4, made = max(made, ?5),
                     outcome = CASE action WHEN 'store' THEN 'stored' ELSE outcome END
               WHERE job_id = ?1 AND position = ?2",
         )?
-        .execute(params![row.job_id, row.position, stored, now])?;
+        .execute(params![row.job_id, row.position, stored, now, made])?;
         tx.commit()?;
         Ok(stored)
     })
@@ -1044,41 +1050,18 @@ pub struct RowPaths {
     pub video: Option<String>,
     pub in_app_data: bool,
     /// The row's own store made its asset: a new file, not one kept before
-    /// with the same bytes (nor a font it did not receive).
+    /// with the same bytes (nor a font it did not receive). Recorded by the
+    /// store ([`stored`]).
     pub made: bool,
 }
 
 /// [`RowPaths`] of each row of the job's plan, by position. A file a cleanup
 /// removed ([`crate::place::cleanup`]) is in none.
-///
-/// A row made its asset ([`RowPaths::made`]) when the asset is no older than
-/// the row's package (the job's package of the row's post, [`stored`], made
-/// by the first store of that post in any run) and the first entry of the
-/// asset in that package, in the order the stores entered them, has the
-/// row's name. The store that makes an asset enters it in the same
-/// transaction, so a row that made its asset always reads as new. A row that
-/// reused an asset reads as new too when that asset was made after the
-/// row's package by anything else (another job, or this job for another
-/// post) and no earlier row of the package entered it. The stores of one
-/// package can span runs, so this needs no cut: a run cut between two
-/// stores, or a row stored in a later run (an unchanged Drive font that went
-/// away and is received again), after another job stored the same bytes in
-/// between. A row whose name and bytes are an earlier row's of the package
-/// reads as new as well. Telling these apart exactly would need the store to
-/// record whether it made the asset.
 pub fn row_paths(c: &Connection, job_id: &str) -> rusqlite::Result<Vec<(i64, RowPaths)>> {
     let mut stmt = c.prepare_cached(
         "SELECT p.position, coalesce(s.work_id, k.work_id), coalesce(a.relative_path, k.relative_path),
                 ap.path, ap.video_path, coalesce(k.base = 'app_data', 0),
-                EXISTS (SELECT 1 FROM subtitle_assets m
-                          JOIN subtitle_job_items i ON i.id = p.item_id
-                          JOIN subtitle_packages pk
-                               ON pk.job_id = p.job_id AND pk.source_page IS i.post_url
-                         WHERE m.id = coalesce(s.subtitle_asset_id, p.asset_id)
-                           AND m.created_at >= pk.created_at
-                           AND (SELECT e.original_name FROM subtitle_package_entries e
-                                 WHERE e.package_id = pk.id AND e.asset_id = m.id
-                                 ORDER BY e.position LIMIT 1) = p.name)
+                p.made
            FROM subtitle_job_plan p
            LEFT JOIN subtitle_stored s ON s.id = p.stored_id
            LEFT JOIN subtitle_assets a

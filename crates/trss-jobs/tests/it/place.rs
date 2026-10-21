@@ -840,6 +840,18 @@ async fn a_store_cut_after_publishing_records_the_file_it_left_without_writing_i
         std::fs::read(s.work().join("Season 01/Show S01E02.ass")).unwrap(),
         fake::bytes_of("Show - 02.ass")
     );
+    // A file the library did not have before is one the row's store made,
+    // adopted or not.
+    let made: Vec<bool> = s
+        .store
+        .place
+        .plan_paths(&id)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|(_, at)| at.made)
+        .collect();
+    assert_eq!(made, [true, true]);
 }
 
 #[tokio::test]

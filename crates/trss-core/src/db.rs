@@ -3744,6 +3744,83 @@ mod tests {
         .unwrap();
     }
 
+    // A row's `made` (its store made its file) is what the row's `done`
+    // `store` effect told, read before the effects go; the other effects of
+    // the row say nothing of it.
+    #[tokio::test]
+    async fn a_plan_row_made_its_file_when_it_had_a_done_store_effect() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("app.db");
+        {
+            let conn = database_at(&path, BEFORE_NO_EFFECT_RECORDS);
+            conn.execute_batch(
+                "INSERT INTO subtitle_jobs (id, command_id, request, origin, work_id, season, state, stage,
+                                           created_at, updated_at, state_at)
+                    VALUES ('j1', 'c1', '{}', 'pick', 'w', 1, 'done', NULL, 0, 0, 0),
+                           ('j2', 'c2', '{}', 'pick', 'w', 1, 'done', NULL, 0, 0, 0);
+                INSERT INTO subtitle_job_items (id, job_id, position, episode, post_url, found_at, state,
+                                                updated_at)
+                    VALUES (1, 'j1', 0, '1', 'https://example.org/1', 0, 'done', 0),
+                           (2, 'j2', 0, '1', 'https://example.org/1', 0, 'done', 0);
+                INSERT INTO subtitle_job_files (id, job_id, item_id, file_key, name, state, size, sha256,
+                                                path, created_at, updated_at)
+                    VALUES ('f1', 'j1', 1, 'k1', 'a.ass', 'done', 1, printf('%064d', 1), 'j1/a.ass', 0, 0),
+                           ('f2', 'j2', 2, 'k1', 'a.ass', 'done', 1, printf('%064d', 1), 'j2/a.ass', 0, 0);
+                INSERT INTO subtitle_job_plan (job_id, position, file_id, name, kind, format, size, sha256,
+                                               action, updated_at)
+                    VALUES ('j1', 0, 'f1', 'a.ass', 'subtitle', 'ass', 1, printf('%064d', 1), 'store', 0),
+                           ('j1', 1, 'f1', 'b.ass', 'subtitle', 'ass', 1, printf('%064d', 1), 'store', 0),
+                           ('j1', 2, 'f1', 'c.ass', 'subtitle', 'ass', 1, printf('%064d', 1), 'apply', 0),
+                           ('j1', 3, 'f1', 'd.ass', 'subtitle', 'ass', 1, printf('%064d', 1), 'store', 0),
+                           ('j1', 4, 'f1', 'e.ass', 'subtitle', 'ass', 1, printf('%064d', 1), 'store', 0),
+                           ('j2', 0, 'f2', 'a.ass', 'subtitle', 'ass', 1, printf('%064d', 1), 'store', 0);
+                INSERT INTO subtitle_file_effects (id, job_id, position, kind, state, folder, temp, target,
+                                                   video, size, sha256, created_at, updated_at)
+                    VALUES ('e0', 'j1', 0, 'store', 'done', '/w', '.trss/tmp/e0', '.trss/subtitles/a.ass',
+                            NULL, 1, printf('%064d', 1), 0, 0),
+                           ('e1', 'j1', 1, 'store', 'intended', '/w', '.trss/tmp/e1', '.trss/subtitles/b.ass',
+                            NULL, 1, printf('%064d', 1), 0, 0),
+                           ('e2', 'j1', 2, 'apply', 'done', '/w', '.trss/tmp/e2', 'v.ass', 'v.mkv', 1,
+                            printf('%064d', 1), 0, 0),
+                           ('e3', 'j1', 3, 'store', 'abandoned', '/w', '.trss/tmp/e3', '.trss/subtitles/d.ass',
+                            NULL, 1, printf('%064d', 1), 0, 0),
+                           ('e4', 'j1', 4, 'store', 'abandoned', '/w', '.trss/tmp/e4', '.trss/subtitles/e.ass',
+                            NULL, 1, printf('%064d', 1), 0, 0),
+                           ('e5', 'j1', 4, 'store', 'done', '/w', '.trss/tmp/e5', '.trss/subtitles/e (2).ass',
+                            NULL, 1, printf('%064d', 1), 0, 0),
+                           ('e6', 'j2', 0, 'apply', 'done', '/w', '.trss/tmp/e6', 'w.ass', 'w.mkv', 1,
+                            printf('%064d', 1), 0, 0);",
+            )
+            .unwrap();
+        }
+
+        let db = Db::open(&path).await.unwrap();
+
+        db.run::<_, DbError, _>(move |c| {
+            let made: Vec<String> = c
+                .prepare(
+                    "SELECT job_id || '/' || position || ':' || made FROM subtitle_job_plan
+                      ORDER BY job_id, position",
+                )?
+                .query_map([], |r| r.get(0))?
+                .collect::<rusqlite::Result<_>>()?;
+            assert_eq!(
+                made,
+                ["j1/0:1", "j1/1:0", "j1/2:0", "j1/3:0", "j1/4:1", "j2/0:0"]
+            );
+            // A row made its file or did not.
+            assert!(c
+                .execute(
+                    "UPDATE subtitle_job_plan SET made = 2 WHERE position = 0",
+                    []
+                )
+                .is_err());
+            Ok(())
+        })
+        .await
+        .unwrap();
+    }
+
     #[tokio::test]
     async fn newer_schema_than_the_build_is_refused() {
         let dir = tempfile::tempdir().unwrap();

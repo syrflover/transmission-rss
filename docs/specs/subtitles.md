@@ -535,7 +535,7 @@ Tistory 게시물은 첨부를 모두 받아서 회차 하나를 골라도 파�
   `HEAD`가 실패하거나 `Last-Modified`가 없거나 값이 다르면 받아요. 받지 않은 기록은 파일 경로 없이 쓸 폰트 자산을 가리키고, 다음 회차는 그 기록과 비교해요.
   받지 않은 폰트는 보관할 때 다시 확인해요. 그사이 폰트가 정리됐거나 파일이 바뀌었거나 없어지면, 그 게시물을 받은 항목을 대기로 돌려 폰트를 다시 받아요. 없는 폰트로 자막을 잇지 않아요.
   작업 상세는 폰트마다 `받지 않음(바뀌지 않음)`·`받아서 같음`·`새로 받음`을 적고, 압축 파일에는 `묶음 전체를 받음 · 새로 보관한 파일 N개`를 적어요.
-  `받아서 같음`과 `새로 받음`은 보관본·자산 기록에서 셈해요(0153). 그래서 한 게시물의 줄을 여러 실행에 걸쳐 보관하는 동안(실행이 끊기거나, 바뀌지 않아 받지 않은 Drive 폰트가 없어져 다음 실행에서 다시 받을 때) 다른 작업이 같은 바이트를 먼저 보관하면, 그 바이트를 다시 쓴 줄도 `새로 받음`으로 보여요. 한 묶음에 이름과 바이트가 같은 줄이 둘이면 뒤의 줄도 `새로 받음`으로 보여요.
+  `새로 받음`은 그 줄의 보관이 보관본에 없던 새 파일을 만든 경우예요. 끊긴 실행이 공개하고 기록하지 못한 같은 바이트의 파일을 기록한 경우도 그래요. 이미 보관한 같은 내용의 파일을 쓴 줄은 `받아서 같음`이에요. 보관이 자산을 기록하는 같은 트랜잭션에서 줄에 적어 두고(0153), 화면은 그 값을 읽어요.
 - Naver·Tistory 첨부는 미리 읽을 수 있는 정보가 크기뿐이라 아래 규칙대로 다시 받아 내용으로 비교해요.
   개별 파일을 받을 수 있지만 변경 여부를 사전에 확인할 신뢰할 만한 정보가 없으면 필요한 해당 파일만 받아 내용으로 비교해요.
   동일하면 기존 자산을 재사용하고, 갱신된 내용이면 별도 자산으로 보관하며, 확인 목적의 재수신을 표시해요.
@@ -1015,7 +1015,7 @@ worker를 다시 시작하면 기다리는 작업을 한 번 다시 살펴보고
 | 폰트를 자막과 한 묶음으로 둠 | 2026-10-05 개발(서버 DB 사본): 수퍼소닉EX 묶음의 폰트 3개가 자막과 같은 `.trss/subtitles/수퍼소닉EX/`에 놓였어요 ([0064]) | `trss-jobs` `tests/it/place.rs` `fonts_are_kept_beside_their_subtitle_and_linked_to_it` | 두 제작자가 같은 폰트를 쓸 때 각 제작자 폴더에 한 벌씩 두는 쪽은 테스트도 관찰도 없어요. |
 | 자막과 폰트의 관계와 정리 | 없음 | `trss-jobs` `tests/it/cleanup.rs` `cleaning_one_of_two_revisions_sharing_a_font_keeps_the_font_for_the_other`, `cleaning_a_revision_alone_with_its_font_and_attachment_removes_all_three` | 구성 파일이 이름 줄기가 같은 자막에만 이어지는 쪽과, 자막이 실제로 어느 폰트를 부르는지 읽지 않는다는 점은 테스트가 없어요. 진행 중인 작업의 참조 보호와 정리의 경쟁은 [체크포인트와 중단 복구](jobs.md#체크포인트와-중단-복구)가 맡아요. |
 | 파일별 수신과 `HEAD` 비교 | (7) 2026-10-05 개발(서버 DB 사본): 작업 상세가 Naver 폰트 3개마다 `폰트 · 새로 받음`을 보였어요 ([0074]). 데스크톱 너비에서만 봤어요 | `trss-jobs` `tests/it/drive_fonts.rs`: (1)(2) `the_next_episodes_unchanged_drive_font_is_not_received_and_its_font_is_used` (3) `a_font_whose_kept_file_is_missing_is_received_with_no_head` (4) `a_font_is_received_when_its_head_fails_or_has_no_last_modified` (5) `a_font_not_received_whose_kept_file_changed_meanwhile_is_received`<br>(7) `web` `src/screens/todo/fontReceipt.test.ts` `each font receipt has its own words, and a file that is no kept font has none` | 개발 데이터의 Drive 게시물에는 폰트가 따로 없어 두 번째 받기에서 폰트를 받지 않는 것은 실제로 보지 못했어요([0074]). 파일명만으로 변경 없음을 판단하지 않는 점은 이름이 같아도 기록과 파일이 맞지 않으면 받는 입력으로만 겨눠요. |
-| Naver·Tistory 첨부의 내용 비교 | 2026-10-05 개발(서버 DB 사본): Naver 폰트 3개를 받은 작업 상세가 폰트마다 `새로 받음`을 보였어요 ([0074]) | `trss-jobs` `tests/it/drive_fonts.rs` `a_naver_font_is_received_compared_and_not_kept_twice` | Tistory 첨부는 입력도 관찰도 없어요. 이미 같다고 확인한 다른 폰트를 다시 받지 않는 점은 위 테스트가 한 폰트만 다뤄서 겨누지 못했어요. |
+| Naver·Tistory 첨부의 내용 비교 | 2026-10-05 개발(서버 DB 사본): Naver 폰트 3개를 받은 작업 상세가 폰트마다 `새로 받음`을 보였어요 ([0074]) | `trss-jobs` `tests/it/drive_fonts.rs` `a_naver_font_is_received_compared_and_not_kept_twice`, `a_reused_font_is_not_new_whenever_its_asset_was_made`, `a_second_font_of_a_post_with_the_name_and_bytes_of_the_first_is_not_new` | Tistory 첨부는 입력도 관찰도 없어요. 이미 같다고 확인한 다른 폰트를 다시 받지 않는 점은 위 테스트가 한 폰트만 다뤄서 겨누지 못했어요. |
 | 통째 묶음으로만 받는 출처 | 2026-10-05 개발(서버 DB 사본): Drive ZIP 작업이 `묶음 전체를 받음 · 새로 보관한 파일 0개`를 보였어요 ([0074]) | `trss-jobs` `tests/it/drive_fonts.rs` `a_zip_whose_font_is_kept_is_received_whole_and_adds_no_font` | 로컬 중복 제거만 확인하고 네트워크 재수신도 막았다고 보고하지 않는 점은 `묶음 전체를 받음` 문구로만 겨눠요. |
 | 폰트 보관과 실제 재생기의 사용 구분 | 없음 | 없음 | 화면이 폰트 보관과 재생기의 사용을 구분해서 말하는지, 폰트가 없다고 기기에 폰트가 없다고 판정하지 않는지는 테스트가 없어요. 어떤 재생기에서도 폰트를 쓴 자막을 본 적이 없어요([0084]). |
 

@@ -539,6 +539,66 @@ async fn a_zip_whose_font_is_kept_is_received_whole_and_adds_no_font() {
     assert_eq!(new_assets(&plan, &made).get(archive.id.as_str()), Some(&0));
 }
 
+// Whether a row's store made its file is recorded by the store (ticket 0153),
+// not derived from the records' dates and names: a second font of one post
+// with the first one's name and bytes uses the file the first made.
+#[tokio::test]
+async fn a_second_font_of_a_post_with_the_name_and_bytes_of_the_first_is_not_new() {
+    let s = setup().await;
+    s.font(font_file(FONT));
+    s.server.drive("1theSameFontAgain", font_file(FONT));
+    s.server.drive(
+        "1subtitleOfEpisode1",
+        vec![DriveAnswer::File {
+            name: "Show - 01.ass".to_owned(),
+            bytes: fake::ass("Show - 01"),
+        }],
+    );
+    let url = s.post(
+        "2026/07/twice.html",
+        &[
+            ("1화", "1subtitleOfEpisode1"),
+            ("폰트", FONT_ID),
+            ("폰트", "1theSameFontAgain"),
+        ],
+    );
+    let id = s.make("c1", "1", url).await;
+    s.run().await;
+    let d = s.detail(&id).await;
+    assert_eq!(d.row.state, JobState::Done, "{:?}", d.row.note);
+    assert_eq!(s.fonts_kept().await, 1);
+    assert_eq!(
+        s.font_receipts(&id).await,
+        [
+            ("Font.ttf".to_owned(), "new"),
+            ("Font.ttf".to_owned(), "same")
+        ]
+    );
+}
+
+// A font a job's row reused reads as received and the same whenever its
+// asset was made, also after the row's package was (as it is when the
+// stores of one package span runs and another job's store comes between).
+#[tokio::test]
+async fn a_reused_font_is_not_new_whenever_its_asset_was_made() {
+    let s = setup().await;
+    let first = s.make("n1", "1", naver_post(&s, 1)).await;
+    s.run().await;
+    let second = s.make("n2", "2", naver_post(&s, 2)).await;
+    s.run().await;
+    assert_eq!(s.detail(&second).await.row.state, JobState::Done);
+    s.sql("UPDATE subtitle_assets SET created_at = created_at + 1000000".to_owned())
+        .await;
+    assert_eq!(
+        s.font_receipts(&first).await,
+        [("Font.ttf".to_owned(), "new")]
+    );
+    assert_eq!(
+        s.font_receipts(&second).await,
+        [("Font.ttf".to_owned(), "same")]
+    );
+}
+
 #[tokio::test]
 async fn a_font_is_received_when_its_head_fails_or_has_no_last_modified() {
     let s = setup().await;

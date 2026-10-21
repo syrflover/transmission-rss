@@ -14,6 +14,21 @@
 -- refer to what they delete themselves. The states' CHECKs stay as they
 -- are: no row is left in a state nothing writes any more.
 
+-- Whether a row's store made its file (`made`: a new file, 0 for one kept
+-- before with the same bytes, which the job's detail tells `새로 받음` from
+-- `받아서 같음` by) is what the records of a store's effect told: a `done`
+-- `store` effect of the row. The store records it from now on in the
+-- transaction that records its asset. The effects' rows are read here, before
+-- they go.
+ALTER TABLE subtitle_job_plan ADD COLUMN made INTEGER NOT NULL DEFAULT 0
+    CHECK (made IN (0, 1));
+UPDATE subtitle_job_plan
+   SET made = 1
+ WHERE EXISTS (SELECT 1 FROM subtitle_file_effects e
+                WHERE e.job_id = subtitle_job_plan.job_id
+                  AND e.position = subtitle_job_plan.position
+                  AND e.kind = 'store' AND e.state = 'done');
+
 -- The effects of storing, applying and replacing (`store_apply.sql`,
 -- `replacement.sql`), with their indexes. Their temporary files stay where
 -- they are.
