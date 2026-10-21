@@ -197,6 +197,8 @@ const MIGRATIONS: &[Migration] = &[
     Migration::Sql(include_str!("../migrations/status/no_heartbeat.sql")),
     // 65: a job the process stopped in the middle of a step is `interrupted` until a person restarts it
     Migration::Remake(include_str!("../migrations/jobs/interrupted.sql")),
+    // 66: a subtitle job records no file effect before it makes it, and a step cut short is done again
+    Migration::Remake(include_str!("../migrations/jobs/no_effect_records.sql")),
 ];
 
 #[derive(Debug, thiserror::Error)]
@@ -373,19 +375,24 @@ mod template {
 /// no [`Migration::Remake`] in one, each remake in one of its own with
 /// foreign keys off.
 fn migrate(conn: &mut Connection) -> Result<(), DbError> {
-    let supported = MIGRATIONS.len();
+    migrate_until(conn, MIGRATIONS.len())
+}
+
+/// [`migrate`] up to migration `last`, which a test of an earlier migration
+/// stops at.
+fn migrate_until(conn: &mut Connection, last: usize) -> Result<(), DbError> {
     loop {
         let current = user_version(conn)?;
-        if current == supported {
+        check_supported(current, MIGRATIONS.len())?;
+        if current >= last {
             return Ok(());
         }
-        check_supported(current, supported)?;
         let remake = MIGRATIONS[current].remakes();
         // A no-op inside a transaction, so it is set before one begins.
         if remake {
             conn.pragma_update(None, "foreign_keys", false)?;
         }
-        let ran = migrate_run(conn, remake);
+        let ran = migrate_run(conn, remake, last);
         if remake {
             conn.pragma_update(None, "foreign_keys", true)?;
         }
@@ -393,15 +400,14 @@ fn migrate(conn: &mut Connection) -> Result<(), DbError> {
     }
 }
 
-/// One transaction of [`migrate`]: the pending migrations from the first
-/// on that are remakes (`remake`, one of them) or are not.
-fn migrate_run(conn: &mut Connection, remake: bool) -> Result<(), DbError> {
-    let supported = MIGRATIONS.len();
+/// One transaction of [`migrate_until`]: the pending migrations up to `last`
+/// from the first on that are remakes (`remake`, one of them) or are not.
+fn migrate_run(conn: &mut Connection, remake: bool, last: usize) -> Result<(), DbError> {
     let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
     // Another process may have migrated while this one waited for the lock.
     let current = user_version(&tx)?;
-    check_supported(current, supported)?;
-    for (index, migration) in MIGRATIONS.iter().enumerate().skip(current) {
+    check_supported(current, MIGRATIONS.len())?;
+    for (index, migration) in MIGRATIONS.iter().enumerate().take(last).skip(current) {
         if migration.remakes() != remake {
             break;
         }
@@ -2771,8 +2777,8 @@ mod tests {
     /// Migration 51's database: replacements and their records come after it.
     const BEFORE_REPLACEMENT: usize = 51;
 
-    #[tokio::test]
-    async fn the_remade_package_and_effect_tables_keep_their_rows_and_references() {
+    #[test]
+    fn the_remade_package_and_effect_tables_keep_their_rows_and_references() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("app.db");
         {
@@ -2814,10 +2820,14 @@ mod tests {
             .unwrap();
         }
 
-        let db = Db::open(&path).await.unwrap();
+        // Up to the remake only: a later migration drops the effects.
+        let mut conn = Connection::open(&path).unwrap();
+        conn.pragma_update(None, "foreign_keys", true).unwrap();
+        migrate_until(&mut conn, BEFORE_REPLACEMENT + 1).unwrap();
 
-        assert_eq!(version_of(&db).await, MIGRATIONS.len());
-        db.run::<_, DbError, _>(|c| {
+        assert_eq!(user_version(&conn).unwrap(), BEFORE_REPLACEMENT + 1);
+        let c = &conn;
+        (|| -> Result<(), DbError> {
             // The rows and what refers to them are as they were.
             let package: (String, Option<String>, Option<i64>) = c.query_row(
                 "SELECT source_kind, source_page, received_at FROM subtitle_packages
@@ -2900,8 +2910,7 @@ mod tests {
                              printf('%064d', 1), 'v.ass', 0, 0)"
             ));
             Ok(())
-        })
-        .await
+        })()
         .unwrap();
     }
 
@@ -3317,8 +3326,8 @@ mod tests {
     // The remake of `subtitle_jobs` keeps the rows, the tables that refer to
     // them, the indexes and the number `seq` has reached, and allows the new
     // state.
-    #[tokio::test]
-    async fn the_interrupted_migration_keeps_the_jobs_their_children_and_their_indexes() {
+    #[test]
+    fn the_interrupted_migration_keeps_the_jobs_their_children_and_their_indexes() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("app.db");
         let before = {
@@ -3340,10 +3349,14 @@ mod tests {
             schema_objects(&conn)
         };
 
-        let db = Db::open(&path).await.unwrap();
+        // Up to the remake only: a later migration drops other tables' indexes.
+        let mut conn = Connection::open(&path).unwrap();
+        conn.pragma_update(None, "foreign_keys", true).unwrap();
+        migrate_until(&mut conn, BEFORE_INTERRUPTED + 1).unwrap();
 
-        assert_eq!(version_of(&db).await, MIGRATIONS.len());
-        db.run::<_, DbError, _>(move |c| {
+        assert_eq!(user_version(&conn).unwrap(), BEFORE_INTERRUPTED + 1);
+        let c = &conn;
+        (|| -> Result<(), DbError> {
             let count = |c: &Connection, sql: &str| c.query_row(sql, [], |r| r.get::<_, i64>(0));
             assert_eq!(count(c, "SELECT count(*) FROM subtitle_jobs")?, 2);
             assert_eq!(
@@ -3388,8 +3401,7 @@ mod tests {
                 4
             );
             Ok(())
-        })
-        .await
+        })()
         .unwrap();
     }
 
@@ -3503,6 +3515,229 @@ mod tests {
                     ("w3".to_owned(), 0, 4, None),
                 ]
             );
+            Ok(())
+        })
+        .await
+        .unwrap();
+    }
+
+    const BEFORE_NO_EFFECT_RECORDS: usize = 65;
+
+    /// The names of `table`'s columns.
+    fn columns(c: &Connection, table: &str) -> rusqlite::Result<Vec<String>> {
+        let mut stmt = c.prepare(&format!("PRAGMA table_info({table})"))?;
+        let names = stmt.query_map([], |r| r.get(1))?;
+        names.collect()
+    }
+
+    // A database a release before ticket 0153 left with a job running: its
+    // file effects, receipts and relocation removals under way. The job's
+    // interruption at the start is `trss-jobs`' (`interrupted` tests).
+    #[tokio::test]
+    async fn the_effect_records_go_and_what_an_earlier_release_left_under_way_ends() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("app.db");
+        let before = {
+            let conn = database_at(&path, BEFORE_NO_EFFECT_RECORDS);
+            conn.execute_batch(
+                "INSERT INTO subtitle_jobs (id, command_id, request, origin, work_id, season, state, stage,
+                                           created_at, updated_at, state_at)
+                    VALUES ('j1', 'c1', '{}', 'pick', 'w', 1, 'running', 'apply', 0, 0, 0),
+                           ('j2', 'c2', '{}', 'relocate', 'w', 1, 'running', 'apply', 0, 0, 0),
+                           ('j3', 'c3', '{}', 'pick', 'w', 1, 'held', NULL, 0, 0, 0);
+                INSERT INTO subtitle_job_items (id, job_id, position, episode, post_url, found_at, state,
+                                                updated_at)
+                    VALUES (1, 'j1', 0, '1', 'https://example.org/1', 0, 'running', 0);
+                INSERT INTO subtitle_job_files (id, job_id, item_id, file_key, name, state, same_as,
+                                                temp_dir, expected_size, size, sha256, object, path,
+                                                created_at, updated_at)
+                    VALUES ('f1', 'j1', 1, 'k1', 'a.ass', 'done', NULL, NULL, NULL, 1, printf('%064d', 1),
+                            '1:1', 'j1/a.ass', 0, 0),
+                           ('f2', 'j1', 1, 'k2', 'b.ass', 'intended', NULL, '.tmp/f2', 5, NULL, NULL, NULL,
+                            NULL, 0, 0),
+                           ('f3', 'j1', 1, 'k3', 'c.zip', 'fetched', NULL, '.tmp/f3', 5, 5,
+                            printf('%064d', 3), '1:3', 'j1/c.zip', 0, 0),
+                           ('f4', 'j1', 1, 'k4', 'd.ass', 'failed', NULL, NULL, NULL, 2, printf('%064d', 4),
+                            NULL, 'j1/d.ass', 0, 0),
+                           ('f5', 'j1', 1, 'k5', 'e.ass', 'fetched', NULL, '.tmp/f5', 2, 2,
+                            printf('%064d', 5), '1:5', 'j1/e.ass', 0, 0),
+                           ('f6', 'j1', 1, 'k5', 'e.ass', 'done', 'f5', NULL, NULL, 2, printf('%064d', 5),
+                            NULL, 'j1/e.ass', 0, 0);
+                INSERT INTO subtitle_job_members (file_id, position, path, size, sha256, format)
+                    VALUES ('f3', 0, 'j1/.unpack/f3/x.ass', 1, printf('%064d', 6), 'ass');
+                INSERT INTO subtitle_packages (id, work_id, job_id, source_kind, created_at)
+                    VALUES ('p1', 'w', 'j1', 'post', 0);
+                INSERT INTO subtitle_assets (id, work_id, kind, base, relative_path, byte_size, sha256,
+                                             created_at)
+                    VALUES ('a1', 'w', 'subtitle', 'work', '.trss/subtitles/x/a.ass', 1,
+                            printf('%064d', 1), 0);
+                INSERT INTO subtitle_package_entries (package_id, position, asset_id, original_name)
+                    VALUES ('p1', 0, 'a1', 'a.ass');
+                INSERT INTO subtitle_stored (id, work_id, season, package_id, subtitle_asset_id, assignment,
+                                             episode, format, stored_at)
+                    VALUES ('s1', 'w', 1, 'p1', 'a1', 'explicit', 1, 'ass', 0);
+                INSERT INTO subtitle_job_plan (job_id, position, file_id, name, kind, format, size, sha256,
+                                               assignment, episode, action, stored_id, updated_at)
+                    VALUES ('j1', 0, 'f1', 'a.ass', 'subtitle', 'ass', 1, printf('%064d', 1), 'explicit', 1,
+                            'apply', 's1', 0);
+                INSERT INTO subtitle_applied (id, work_id, stored_id, season, episode, video_path, path,
+                                              byte_size, sha256, object, job_id, applied_at)
+                    VALUES ('ap1', 'w', 's1', 1, 1, 'v1.mkv', 'v1.ass', 1, printf('%064d', 1), '1:7',
+                            'j1', 0),
+                           ('ap2', 'w', 's1', 1, 2, 'v2.mkv', 'v2.ass', 1, printf('%064d', 1), '1:8',
+                            'j1', 0),
+                           ('ap3', 'w', 's1', 1, 3, 'v3.mkv', 'v3.ass', 1, printf('%064d', 1), '1:9',
+                            'j1', 0),
+                           ('ap4', 'w', 's1', 1, 4, 'v4.mkv', 'v4.ass', 1, printf('%064d', 1), '1:10',
+                            'j1', 0),
+                           ('ap5', 'w', 's1', 1, 5, 'v5.mkv', 'v5.ass', 1, printf('%064d', 1), '1:11',
+                            'j1', 0);
+                INSERT INTO subtitle_replacements
+                    (id, job_id, position, version, state, reason, work_id, season, episode, assignment,
+                     folder, video_path, video_object, video_size, video_mtime, stored_id, asset_id,
+                     asset_path, asset_size, asset_sha256, target, created_at, updated_at)
+                    VALUES ('r1', 'j1', 0, 1, 'held', '확인할 수 없어요', 'w', 1, 1, 'explicit', '/w',
+                            'v1.mkv', '1:2', 10, 11, 's1', 'a1', '.trss/subtitles/x/a.ass', 1,
+                            printf('%064d', 1), 'v1.ass', 0, 0),
+                           ('r2', 'j1', 0, 2, 'approved', NULL, 'w', 1, 1, 'explicit', '/w', 'v1.mkv',
+                            '1:2', 10, 11, 's1', 'a1', '.trss/subtitles/x/a.ass', 1, printf('%064d', 1),
+                            'v1.ass', 0, 0);
+                INSERT INTO subtitle_replacement_paths (plan_id, path, action, byte_size, sha256, object)
+                    VALUES ('r2', 'v1.ass', 'replace', 2, printf('%064d', 2), '1:4');
+                INSERT INTO subtitle_file_effects (id, job_id, position, kind, state, folder, temp, target,
+                                                   video, source, plan_id, size, sha256, object, created_at,
+                                                   updated_at)
+                    VALUES ('e1', 'j1', 0, 'store', 'intended', '/w', '.trss/tmp/e1',
+                            '.trss/subtitles/x/a.ass', NULL, NULL, NULL, 1, printf('%064d', 1), NULL, 0, 0),
+                           ('e2', 'j1', 0, 'apply', 'prepared', '/w', '.trss/tmp/e2', 'v1.ass', 'v1.mkv',
+                            NULL, NULL, 1, printf('%064d', 1), '1:12', 0, 0),
+                           ('e3', 'j1', 0, 'import', 'done', '/w', '.trss/tmp/e3',
+                            '.trss/subtitles/y/v1.ass', NULL, 'v1.ass', 'r2', 2, printf('%064d', 2), '1:13',
+                            0, 0),
+                           ('e4', 'j1', 0, 'remove', 'set_aside', '/w', '.trss/tmp/e4', '.trss/tmp/e4.aside',
+                            NULL, 'v1.ass', 'r2', 2, printf('%064d', 2), '1:4', 0, 0);
+                INSERT INTO subtitle_relocations (id, job_id, position, applied_id, episode, path, state,
+                                                  folder, aside, reason, created_at, updated_at)
+                    VALUES ('x1', 'j2', NULL, 'ap2', 2, 'v2.ass', 'intended', '/w', '.trss/tmp/x1.aside',
+                            NULL, 0, 0),
+                           ('x2', 'j2', NULL, 'ap3', 3, 'v3.ass', 'set_aside', '/w', '.trss/tmp/x2.aside',
+                            NULL, 0, 0),
+                           ('x3', 'j2', NULL, 'ap4', 4, 'v4.ass', 'held', NULL, NULL, '지울 수 없어요', 0, 0),
+                           ('x4', 'j2', NULL, 'ap5', 5, 'v5.ass', 'planned', NULL, NULL, NULL, 0, 0),
+                           ('x5', 'j2', NULL, 'ap1', 1, 'v1.ass', 'done', NULL, NULL, NULL, 0, 0);",
+            )
+            .unwrap();
+            schema_objects(&conn)
+        };
+
+        let db = Db::open(&path).await.unwrap();
+
+        assert_eq!(version_of(&db).await, MIGRATIONS.len());
+        db.run::<_, DbError, _>(move |c| {
+            let strings = |sql: &str| -> rusqlite::Result<Vec<String>> {
+                let mut stmt = c.prepare(sql)?;
+                let rows = stmt.query_map([], |r| r.get(0))?;
+                rows.collect()
+            };
+            // The effects go with their indexes; the other indexes stay.
+            assert_eq!(
+                strings("SELECT name FROM sqlite_master WHERE name LIKE 'subtitle_file_effects%'")?,
+                Vec::<String>::new()
+            );
+            let expected: Vec<(String, String)> = before
+                .into_iter()
+                .filter(|(_, name)| !name.starts_with("subtitle_file_effects"))
+                .collect();
+            assert_eq!(schema_objects(c), expected);
+            for (table, gone) in [
+                (
+                    "subtitle_job_files",
+                    ["temp_dir", "expected_size", "object"].as_slice(),
+                ),
+                ("subtitle_applied", &["object"]),
+                ("subtitle_relocations", &["folder", "aside"]),
+            ] {
+                let kept = columns(c, table)?;
+                assert!(
+                    gone.iter().all(|g| !kept.iter().any(|k| k == g)),
+                    "{table}: {kept:?}"
+                );
+            }
+
+            // Receipts under way go with their members; one named by another
+            // receipt stays, `abandoned`; a failed one names no bytes.
+            assert_eq!(
+                strings(
+                    "SELECT id || ':' || state || ':' || coalesce(path, '-')
+                       FROM subtitle_job_files ORDER BY id"
+                )?,
+                [
+                    "f1:done:j1/a.ass",
+                    "f4:failed:-",
+                    "f5:abandoned:j1/e.ass",
+                    "f6:done:j1/e.ass"
+                ]
+            );
+            assert_eq!(
+                strings("SELECT file_id FROM subtitle_job_members")?,
+                Vec::<String>::new()
+            );
+
+            // Removals under way or held end kept; the others stay.
+            let cut = "이전 버전에서 지우다 끊겨 그대로 뒀어요";
+            assert_eq!(
+                strings(
+                    "SELECT id || ':' || state || ':' || coalesce(reason, '-')
+                       FROM subtitle_relocations ORDER BY id"
+                )?,
+                [
+                    format!("x1:kept:{cut}"),
+                    format!("x2:kept:{cut}"),
+                    "x3:kept:지울 수 없어요".to_owned(),
+                    "x4:planned:-".to_owned(),
+                    "x5:done:-".to_owned()
+                ]
+            );
+
+            // The jobs (the start interrupts the running ones), the plans and
+            // what was stored and applied are as they were.
+            assert_eq!(
+                strings("SELECT id || ':' || state FROM subtitle_jobs ORDER BY id")?,
+                ["j1:running", "j2:running", "j3:held"]
+            );
+            assert_eq!(
+                strings("SELECT id || ':' || state FROM subtitle_replacements ORDER BY id")?,
+                ["r1:held", "r2:approved"]
+            );
+            assert_eq!(
+                strings(
+                    "SELECT (SELECT count(*) FROM subtitle_replacement_paths) || ':'
+                         || (SELECT count(*) FROM subtitle_job_plan) || ':'
+                         || (SELECT count(*) FROM subtitle_stored) || ':'
+                         || (SELECT count(*) FROM subtitle_package_entries) || ':'
+                         || (SELECT count(*) FROM subtitle_applied WHERE removed_at IS NULL)"
+                )?,
+                ["1:1:1:1:5"]
+            );
+            let foreign: bool = c.query_row("PRAGMA foreign_keys", [], |r| r.get(0))?;
+            assert!(foreign, "foreign keys are on again");
+            assert!(c
+                .prepare("PRAGMA foreign_key_check")?
+                .query([])?
+                .next()?
+                .is_none());
+
+            // The remade table still holds one removal under way per copy,
+            // and a kept removal a reason.
+            let refused = |sql: &str| c.execute(sql, []).is_err();
+            assert!(refused(
+                "INSERT INTO subtitle_relocations (id, job_id, applied_id, episode, path, state,
+                                                   created_at, updated_at)
+                     VALUES ('x6', 'j2', 'ap5', 5, 'v5.ass', 'planned', 0, 0)"
+            ));
+            assert!(refused(
+                "UPDATE subtitle_relocations SET state = 'kept' WHERE id = 'x4'"
+            ));
             Ok(())
         })
         .await

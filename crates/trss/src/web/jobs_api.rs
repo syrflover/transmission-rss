@@ -111,7 +111,7 @@
 //!   folder, the `position` of the row that applies its stored subtitle on
 //!   the new episode (`null`: applied there already), `state` (`planned`
 //!   until confirmed and until the copy is taken off, then `done`, `kept`
-//!   or `held`; one an earlier release left under way is `kept`) and
+//!   or `held`) and
 //!   `reason` (why a `kept` or `held` copy is where it is).
 //! - `POST /api/subtitle-jobs/{id}/placement` `{ "rows": [{ "position",
 //!   "episode", "apply" }], "removals": [<id>] }` the person's 배치 확인

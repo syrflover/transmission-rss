@@ -39,9 +39,8 @@
 //! ([`JobRun::claim_next`]). Nothing such a run left is compared with the
 //! disk. Before a job receives ([`Receiver::start_over`]):
 //!
-//! - its receipts still `intended` (or `fetched`, which releases before 0153
-//!   wrote) are removed with their attempts' folders, and their files are
-//!   received from the start;
+//! - its receipts still `intended` are removed with their attempts' folders,
+//!   and their files are received from the start;
 //! - every file in the job's folder that no receipt names is removed: a
 //!   rename done before its `done` was recorded leaves one. The members of
 //!   unpacked archives (`.unpack/`) are the unpacking's, and stay.
@@ -350,7 +349,6 @@ impl Receiver {
                 same_as: None,
                 size: Some(kept.size),
                 sha256: Some(kept.sha256.clone()),
-                object: None,
                 path: None,
                 reason: None,
                 created_at: now,
@@ -422,7 +420,6 @@ impl Receiver {
                 same_as: None,
                 size: None,
                 sha256: None,
-                object: None,
                 path: None,
                 reason: None,
                 created_at: now,

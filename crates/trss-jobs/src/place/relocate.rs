@@ -88,13 +88,6 @@
 //! the removal then brings the source's relocation up to date ([`sync_in`]),
 //! which plans to apply the subtitle there again.
 //!
-//! Releases before ticket 0153 recorded a removal `intended` before the
-//! rename and `set_aside` after it, the file in `.trss/tmp/<removal>.aside`.
-//! Such a removal is not taken off and reads as `kept`
-//! ([`LEFT_BY_AN_EARLIER_RELEASE`]); its copy is not planned again, since
-//! the table keeps one such removal of a copy at a time. Nothing here looks
-//! in `.trss/tmp/`.
-//!
 //! A held removal holds the rows it touches, with its files as they are: its
 //! own row (the copy may still be on its old episode) and every row applied
 //! on its copy's episode (the copy may still be there). The other rows are
@@ -405,10 +398,8 @@ struct Move {
 /// mapped stored subtitle that is on another episode than the stored
 /// subtitle, but one another relocation than `waiting` (the source's job
 /// that waits for its confirmation) plans or is taking off, or one whose
-/// removal is held. A removal an earlier release left `intended` or
-/// `set_aside` keeps its copy out too: the table's unique index counts it as
-/// the copy's one removal under way (see the module docs). A stored subtitle
-/// no job row names (there is nothing to apply it from) is left out.
+/// removal is held. A stored subtitle no job row names (there is nothing to
+/// apply it from) is left out.
 fn wanted(
     c: &Connection,
     work_id: &str,
@@ -429,7 +420,7 @@ fn wanted(
             AND NOT EXISTS (
                 SELECT 1 FROM subtitle_relocations r
                  WHERE r.applied_id = a.id
-                   AND (r.state IN ('intended', 'set_aside', 'held')
+                   AND (r.state = 'held'
                         OR (r.state = 'planned' AND r.job_id IS NOT ?4)))
           ORDER BY s.episode, s.id, a.id",
     )?;
@@ -727,20 +718,13 @@ pub struct Removal {
     pub reason: Option<String>,
 }
 
-/// Why a removal an earlier release left under way (`intended` or
-/// `set_aside`) reads as `kept` (see the module docs).
-pub const LEFT_BY_AN_EARLIER_RELEASE: &str = "이전 버전에서 지우다 끊겨 그대로 뒀어요";
-
-/// The job's removals, by the episode they take a copy off. One an earlier
-/// release left under way is `kept` ([`LEFT_BY_AN_EARLIER_RELEASE`]).
+/// The job's removals, by the episode they take a copy off.
 pub fn removals(c: &Connection, job_id: &str) -> rusqlite::Result<Vec<Removal>> {
     let mut stmt = c.prepare_cached(
-        "SELECT id, job_id, position, applied_id, episode, path,
-                CASE WHEN state IN ('intended', 'set_aside') THEN 'kept' ELSE state END,
-                CASE WHEN state IN ('intended', 'set_aside') THEN ?2 ELSE reason END
+        "SELECT id, job_id, position, applied_id, episode, path, state, reason
            FROM subtitle_relocations WHERE job_id = ?1 ORDER BY episode, path, id",
     )?;
-    let rows = stmt.query_map(params![job_id, LEFT_BY_AN_EARLIER_RELEASE], |r| {
+    let rows = stmt.query_map([job_id], |r| {
         Ok(Removal {
             id: r.get(0)?,
             job_id: r.get(1)?,
@@ -837,10 +821,10 @@ fn done(c: &mut Connection, removal: &Removal, now: Millis) -> Result<(), JobErr
 }
 
 impl Applied {
-    /// The file the copy is: the applied bytes. Its object is not compared: a
-    /// file system mounted again may give the same file another device
-    /// number, and a file of the applied bytes loses nothing when removed,
-    /// since its stored subtitle keeps them.
+    /// The file the copy is: the applied bytes. No object is compared (the
+    /// record keeps none): a file system mounted again may give the same
+    /// file another device number, and a file of the applied bytes loses
+    /// nothing when removed, since its stored subtitle keeps them.
     fn expected(&self) -> Expected<'_> {
         Expected {
             size: self.size,
@@ -1161,13 +1145,11 @@ pub fn look_again(c: &mut Connection, job_id: &str, now: Millis) -> Result<(), J
 /// What a relocation job came to, for its last note: how many copies it took
 /// off and how many it left where they are, and whether it applied any on
 /// the new episodes (one whose new episodes had them already only took off).
-/// A removal an earlier release left under way counts as left where it is,
-/// as [`removals`] reads it.
 pub fn outcome_note(c: &Connection, job_id: &str) -> rusqlite::Result<Option<String>> {
     let (done, kept, applied): (i64, i64, bool) = c
         .prepare_cached(
             "SELECT count(*) FILTER (WHERE state = 'done'),
-                count(*) FILTER (WHERE state IN ('kept', 'intended', 'set_aside')),
+                count(*) FILTER (WHERE state = 'kept'),
                 EXISTS (SELECT 1 FROM subtitle_job_plan
                          WHERE job_id = ?1 AND outcome = 'applied' AND note IS NOT ?2)
            FROM subtitle_relocations WHERE job_id = ?1",

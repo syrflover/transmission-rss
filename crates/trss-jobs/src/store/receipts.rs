@@ -176,12 +176,15 @@ impl JobRun {
     }
 
     /// Records that a file is being received, before anything is fetched:
-    /// the job's detail shows it as `받는 중` while its episode runs.
+    /// the job's detail shows it as `받는 중` while its episode runs. Not
+    /// synced: the next run removes such a receipt before it receives
+    /// ([`JobRun::forget_unfinished`]), and nothing else reads it after a
+    /// stop.
     pub async fn file_intend(&self, file: FileRow) -> Result<(), JobError> {
         self.db
             .run(move |c| {
-                durable(c, |c| {
-                    c.prepare_cached(
+                let rows = c
+                    .prepare_cached(
                         "INSERT INTO subtitle_job_files
                          (id, job_id, item_id, file_key, name, state, snapshot, created_at,
                           updated_at, folder)
@@ -196,19 +199,19 @@ impl JobRun {
                         file.created_at,
                         file.snapshot,
                         file.folder
-                    ])
-                })
-                .and_then(|rows| match rows {
+                    ])?;
+                match rows {
                     1 => Ok(()),
                     _ => Err(JobError::Missing("the item of a file to receive")),
-                })
+                }
             })
             .await
     }
 
     /// The answer the bytes come in: its status and media type, what it
     /// added to the snapshot (`None` keeps it), and the name it gave the file
-    /// when the post gave none (`None` keeps the post's).
+    /// when the post gave none (`None` keeps the post's). Written on an
+    /// `intended` receipt, so not synced either ([`Self::file_intend`]).
     pub async fn file_answer(
         &self,
         id: &str,
@@ -221,24 +224,22 @@ impl JobRun {
         let id = id.to_owned();
         self.db
             .run(move |c| {
-                durable(c, |c| {
-                    c.prepare_cached(
-                        "UPDATE subtitle_job_files
-                         SET http_status = ?2, content_type = ?3,
-                             snapshot = coalesce(?4, snapshot), name = coalesce(?6, name),
-                             updated_at = ?5
-                         WHERE id = ?1",
-                    )?
-                    .execute(params![
-                        id,
-                        kept_status(status),
-                        content_type,
-                        snapshot,
-                        now,
-                        name
-                    ])
-                })
-                .map(|_| ())
+                c.prepare_cached(
+                    "UPDATE subtitle_job_files
+                     SET http_status = ?2, content_type = ?3,
+                         snapshot = coalesce(?4, snapshot), name = coalesce(?6, name),
+                         updated_at = ?5
+                     WHERE id = ?1",
+                )?
+                .execute(params![
+                    id,
+                    kept_status(status),
+                    content_type,
+                    snapshot,
+                    now,
+                    name
+                ])?;
+                Ok(())
             })
             .await
     }
@@ -337,8 +338,7 @@ impl JobRun {
     }
 
     /// Forgets the receipts of the job's files that an earlier run left
-    /// being received (`intended`, or `fetched` from a release before 0153):
-    /// their files are received anew. Returns their IDs, which name their
+    /// being received (`intended`): their files are received anew. Returns their IDs, which name their
     /// attempts' folders ([`crate::area::ReceiveArea::partial_dir`]).
     pub async fn forget_unfinished(&self, job_id: &str) -> Result<Vec<String>, JobError> {
         let id = job_id.to_owned();
@@ -346,7 +346,7 @@ impl JobRun {
             .run(move |c| {
                 let mut stmt = c.prepare_cached(
                     "DELETE FROM subtitle_job_files
-                     WHERE job_id = ?1 AND state IN ('intended', 'fetched')
+                     WHERE job_id = ?1 AND state = 'intended'
                      RETURNING id",
                 )?;
                 let rows = stmt

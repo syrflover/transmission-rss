@@ -126,9 +126,6 @@ codes! {
         /// Being received: its bytes are not published yet. A run that
         /// begins receiving removes the ones an earlier run left.
         Intended = "intended",
-        /// Written by releases before 0153 only: the bytes were complete and
-        /// recorded. Removed like `intended`.
-        Fetched = "fetched",
         Done = "done",
         Held = "held",
         Failed = "failed",
@@ -219,9 +216,6 @@ codes! {
     RemovalState {
         /// Waiting for the person's confirmation of the relocation, and
         /// until the copy is taken off (nothing is recorded before that).
-        /// Releases before ticket 0153 also wrote `intended` and
-        /// `set_aside`; [`crate::place::relocate::removals`] reads those as
-        /// `kept`.
         Planned = "planned",
         Done = "done",
         /// The copy stays where it is (`reason` says why).

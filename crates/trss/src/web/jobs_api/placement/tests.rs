@@ -290,9 +290,9 @@ async fn waiting_relocation(state: &crate::web::AppState) -> String {
              VALUES ('j0', 0, 'f14', 'Show - 14.ass', 'subtitle', 'ass', 1, printf('%064d', 14), 1,
                      '14', 'mapped', 'anissia', 2, 'apply', 's14', 'applied', 0);
          INSERT INTO subtitle_applied (id, work_id, stored_id, season, episode, video_path, path,
-                                       byte_size, sha256, object, job_id, applied_at)
+                                       byte_size, sha256, job_id, applied_at)
              VALUES ('ap14', 'w1', 's14', 1, 2, 'Season 01/Show S01E02.mkv',
-                     'Season 01/Show S01E02.ass', 1, printf('%064d', 14), '1:2', 'j0', 0);
+                     'Season 01/Show S01E02.ass', 1, printf('%064d', 14), 'j0', 0);
          INSERT INTO subtitle_episode_mappings
              (work_id, season, source_id, kind, episode_offset, evidence, decided_at)
              VALUES ('w1', 1, 'src', 'user', -11, '시험', 0);",

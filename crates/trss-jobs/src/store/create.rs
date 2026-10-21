@@ -145,7 +145,6 @@ pub struct UploadedFile {
     pub path: String,
     pub size: u64,
     pub sha256: String,
-    pub object: String,
     pub format: Format,
     pub kind: Kind,
     /// Which archive format an `archive` is.
@@ -406,9 +405,9 @@ fn create_upload(c: &mut Connection, up: &NewUpload, now: Millis) -> Result<Crea
     for file in &up.files {
         tx.prepare_cached(
             "INSERT INTO subtitle_job_files
-                 (id, job_id, item_id, file_key, name, state, size, sha256, object, path,
-                  created_at, updated_at, format, kind, archive_type)
-             VALUES (?1, ?2, ?3, ?4, ?5, 'done', ?6, ?7, ?8, ?9, ?10, ?10, ?11, ?12, ?13)",
+                 (id, job_id, item_id, file_key, name, state, size, sha256, path, created_at,
+                  updated_at, format, kind, archive_type)
+             VALUES (?1, ?2, ?3, ?4, ?5, 'done', ?6, ?7, ?8, ?9, ?9, ?10, ?11, ?12)",
         )?
         .execute(params![
             file.id,
@@ -418,7 +417,6 @@ fn create_upload(c: &mut Connection, up: &NewUpload, now: Millis) -> Result<Crea
             file.name,
             i64::try_from(file.size).unwrap_or(i64::MAX),
             file.sha256,
-            file.object,
             file.path,
             now,
             file.format.code(),

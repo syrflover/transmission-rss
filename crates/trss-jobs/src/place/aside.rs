@@ -246,7 +246,7 @@ mod tests {
         let folder = dir.path().canonicalize().unwrap();
         let from = folder.join("a.ass");
         fs::write(&from, BYTES).unwrap();
-        let tmp = folder.join(".trss/tmp");
+        let tmp = folder.join(".trss/aside");
         fs::create_dir_all(&tmp).unwrap();
         let aside = tmp.join("e1.aside");
         let (_, sha256, object) = read_facts(&from).unwrap();

@@ -1103,27 +1103,6 @@ async fn a_copy_a_cut_run_moved_aside_is_applied_again_when_its_episode_came_bac
 }
 
 #[tokio::test]
-async fn a_copy_whose_device_number_changed_since_it_was_applied_is_taken_off() {
-    // A file system mounted again (after a restart of the machine) may give
-    // the same file another device number; its bytes are what say it is the
-    // applied copy.
-    let s = setup().await;
-    applied(&s, "c1", 14).await;
-    s.sql("UPDATE subtitle_applied SET object = '999999:' || object".to_owned())
-        .await;
-    remap(&s, -11).await;
-    let job = s.relocation().await;
-    queued(confirm(&s, &job).await);
-
-    run(&s).await;
-
-    let off = removals(&s, &job).await;
-    assert_eq!(off[0].state, RemovalState::Done, "{:?}", off[0].reason);
-    assert_eq!(s.read(&copy(2)), None);
-    assert_eq!(s.read(&copy(3)), Some(fake::ass("Show-14")));
-}
-
-#[tokio::test]
 async fn a_shift_by_one_episode_moves_every_copy_with_no_approval() {
     let s = setup().await;
     applied(&s, "c1", 14).await;
@@ -1294,7 +1273,6 @@ async fn a_copy_recorded_after_a_mapping_change_moved_its_subtitle_is_planned_to
             use sha2::{Digest, Sha256};
             trss_jobs::area::hex(&Sha256::digest(&bytes))
         },
-        object: trss_jobs::area::object_of(&std::fs::metadata(s.at(&copy(2))).unwrap()),
     };
     let copy_id =
         s.db.run(move |c| -> Result<String, JobError> {
@@ -1361,25 +1339,6 @@ async fn hold_removal(s: &Setup, removal: &Removal) {
         removal.path, removal.id
     ))
     .await;
-}
-
-/// The removal left as a release before 0153 left one cut short: `state`
-/// (`intended` or `set_aside`) with the folder and the place aside it
-/// recorded.
-async fn leave_as_an_earlier_release(s: &Setup, removal: &Removal, state: &str) {
-    let folder = s.work().to_string_lossy().into_owned();
-    s.sql(format!(
-        "UPDATE subtitle_relocations
-            SET state = '{state}', folder = '{folder}', aside = '.trss/tmp/{}.aside'
-          WHERE id = '{}'",
-        removal.id, removal.id
-    ))
-    .await;
-}
-
-/// Where a release before 0153 renamed the removal's copy aside.
-fn earlier_aside(s: &Setup, removal: &Removal) -> PathBuf {
-    s.at(&format!(".trss/tmp/{}.aside", removal.id))
 }
 
 #[tokio::test]
@@ -1480,80 +1439,6 @@ async fn a_removal_cut_after_its_rename_or_its_removal_ends_done_and_leaves_what
             _ => None,
         };
         assert_eq!(std::fs::read(&aside).ok(), kept, "{left}");
-    }
-}
-
-#[tokio::test]
-async fn a_removal_an_earlier_release_left_under_way_is_kept_and_not_planned_again() {
-    for state in ["intended", "set_aside"] {
-        let s = setup().await;
-        let (job, removal) = confirmed(&s).await;
-        // An earlier release recorded the removal and was cut short, before
-        // the rename (`intended`) or after it (`set_aside`), and the job was
-        // interrupted when it started again.
-        leave_as_an_earlier_release(&s, &removal, state).await;
-        if state == "set_aside" {
-            std::fs::create_dir_all(s.at(".trss/tmp")).unwrap();
-            std::fs::rename(s.at(&copy(2)), earlier_aside(&s, &removal)).unwrap();
-        }
-        cut(&s, &job).await;
-
-        run(&s).await;
-
-        let d = detail(&s, &job).await;
-        assert_eq!(
-            d.row.state,
-            JobState::Done,
-            "{state}: {:?} {:?}",
-            d.row.note,
-            d.events
-        );
-        assert_eq!(
-            d.row.note.as_deref(),
-            Some("옛 회차의 적용본 1개를 그대로 뒀어요"),
-            "{state}"
-        );
-        let off = removals(&s, &job).await;
-        assert_eq!(
-            (off[0].state, off[0].reason.as_deref()),
-            (
-                RemovalState::Kept,
-                Some(relocate::LEFT_BY_AN_EARLIER_RELEASE)
-            ),
-            "{state}"
-        );
-        // Its record and its files are as the earlier release left them.
-        assert_eq!(
-            s.count("SELECT count(*) FROM subtitle_relocations WHERE state IN ('intended', 'set_aside')")
-                .await,
-            1,
-            "{state}"
-        );
-        let (on_path, aside) = match state {
-            "intended" => (Some(fake::ass("Show-14")), None),
-            _ => (None, Some(fake::ass("Show-14"))),
-        };
-        assert_eq!(s.read(&copy(2)), on_path, "{state}");
-        assert_eq!(
-            std::fs::read(earlier_aside(&s, &removal)).ok(),
-            aside,
-            "{state}"
-        );
-        assert_eq!(s.read(&copy(3)), Some(fake::ass("Show-14")), "{state}");
-
-        // A later mapping change does not plan its copy again.
-        remap(&s, -10).await;
-        let later = s.relocations().await.pop().unwrap();
-        assert_ne!(later, job);
-        assert_eq!(
-            removals(&s, &later)
-                .await
-                .iter()
-                .map(|r| r.episode)
-                .collect::<Vec<_>>(),
-            [3],
-            "{state}"
-        );
     }
 }
 

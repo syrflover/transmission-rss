@@ -764,8 +764,8 @@ impl Library {
                 c.execute(
                     "INSERT INTO subtitle_applied
                          (id, work_id, stored_id, season, episode, video_path, path, byte_size,
-                          sha256, object, applied_at, removed_at)
-                     VALUES (?1, ?2, ?3, 1, 1, 'v.mkv', ?4, 1, printf('%064d', 1), 'o', 300, ?5)",
+                          sha256, applied_at, removed_at)
+                     VALUES (?1, ?2, ?3, 1, 1, 'v.mkv', ?4, 1, printf('%064d', 1), 300, ?5)",
                     rusqlite::params![id, work, format!("s-{id}"), path, removed.then_some(400)],
                 )?;
                 c.execute_batch("PRAGMA foreign_keys = ON")?;

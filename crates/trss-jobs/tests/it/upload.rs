@@ -143,13 +143,12 @@ async fn an_upload_is_a_received_job_that_waits_for_the_worker() {
         ASS
     );
     // The SHA-256 is of the bytes that came.
-    let (size, sha256, object) =
+    let (size, sha256, _) =
         trss_jobs::area::read_facts(&s.area.at(file.path.as_deref().unwrap())).unwrap();
     assert_eq!(
         (Some(size), file.sha256.as_deref()),
         (file.size, Some(sha256.as_str()))
     );
-    assert_eq!(file.object.as_deref(), Some(object.as_str()));
     assert_eq!(tmp_entries(&s.area), 0);
     assert_eq!(
         s.store

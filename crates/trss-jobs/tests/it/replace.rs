@@ -1650,8 +1650,8 @@ async fn a_replacement_cut_after_its_records_leaves_its_files_aside() {
         "UPDATE subtitle_applied SET removed_at = 2 WHERE removed_at IS NULL;
          INSERT INTO subtitle_applied
              (id, work_id, stored_id, season, episode, video_path, path, byte_size, sha256,
-              object, job_id, applied_at)
-         SELECT 'ap2', '{WORK}', '{stored}', 1, 2, '{VIDEO}', '{TARGET}', byte_size, sha256, '1:1',
+              job_id, applied_at)
+         SELECT 'ap2', '{WORK}', '{stored}', 1, 2, '{VIDEO}', '{TARGET}', byte_size, sha256,
                 '{job}', 2
            FROM subtitle_assets
           WHERE id = (SELECT subtitle_asset_id FROM subtitle_stored WHERE id = '{stored}');

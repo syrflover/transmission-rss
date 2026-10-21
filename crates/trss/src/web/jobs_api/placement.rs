@@ -143,8 +143,8 @@ pub(super) struct RelocationView {
     episode: i64,
     path: String,
     /// `planned` until the person confirms the relocation and until the
-    /// copy is taken off; then `done` (taken off), `kept` (left where it is,
-    /// as one an earlier release left under way is) or `held`.
+    /// copy is taken off; then `done` (taken off), `kept` (left where it is)
+    /// or `held`.
     state: &'static str,
     /// Why a `kept` or `held` copy is where it is.
     reason: Option<String>,

@@ -235,7 +235,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let source = dir.path().join("a.ass");
         fs::write(&source, b"[Script Info]\n").unwrap();
-        let temp = dir.path().join(".trss/tmp/e1");
+        let temp = dir.path().join(".trss/staging/e1");
         let Copied::Ready(object) = copy_to_temp(&source, &temp, 14, &sha(b"[Script Info]\n"))
         else {
             panic!("copied");
@@ -247,7 +247,7 @@ mod tests {
         assert!(!temp.exists());
 
         // A second copy to the same name is not published over the first.
-        let temp = dir.path().join(".trss/tmp/e2");
+        let temp = dir.path().join(".trss/staging/e2");
         assert!(matches!(
             copy_to_temp(&source, &temp, 14, &sha(b"[Script Info]\n")),
             Copied::Ready(_)
@@ -261,7 +261,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let source = dir.path().join("a.ass");
         fs::write(&source, b"changed").unwrap();
-        let temp = dir.path().join(".trss/tmp/e1");
+        let temp = dir.path().join(".trss/staging/e1");
         assert!(matches!(
             copy_to_temp(&source, &temp, 14, &sha(b"[Script Info]\n")),
             Copied::SourceChanged(_)

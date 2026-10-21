@@ -493,7 +493,6 @@ async fn a_restart_receives_a_file_that_came_whole_anew_under_its_folder() {
             same_as: None,
             size: None,
             sha256: None,
-            object: None,
             path: None,
             reason: None,
             created_at: 970,

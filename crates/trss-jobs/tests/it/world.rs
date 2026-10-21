@@ -135,7 +135,12 @@ pub struct Base {
 
 impl Base {
     pub async fn new() -> Base {
-        let dir = tempfile::tempdir().unwrap();
+        Base::open(tempfile::tempdir().unwrap()).await
+    }
+
+    /// The base over the database at `dir/app.db`, which a test may have
+    /// left as an earlier release did: opening it migrates it.
+    pub async fn open(dir: TempDir) -> Base {
         let db = Db::open(dir.path().join("app.db")).await.unwrap();
         let store = Handles::new(db.clone());
         let area = ReceiveArea::in_app_data(dir.path());

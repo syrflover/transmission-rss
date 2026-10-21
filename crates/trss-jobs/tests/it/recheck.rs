@@ -1057,7 +1057,6 @@ async fn an_upload_of_the_subscribed_creator_is_never_read_again() {
                     path: "up1/Show 05.srt".to_owned(),
                     size: SRT_A.len() as u64,
                     sha256: sha(SRT_A),
-                    object: "Show 05.srt".to_owned(),
                     format: verify::Format::Srt,
                     kind: trss_subtitles::upload::Kind::Subtitle,
                     archive: None,

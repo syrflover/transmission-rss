@@ -839,8 +839,7 @@ pub struct NewApplied {
 }
 
 /// A copy published beside a video, for [`applied`]: the plan row it
-/// settles, the video, its path (relative to the work folder), its bytes and
-/// its object.
+/// settles, the video, its path (relative to the work folder) and its bytes.
 #[derive(Debug, Clone)]
 pub struct PublishedCopy {
     pub job_id: String,
@@ -849,7 +848,6 @@ pub struct PublishedCopy {
     pub path: String,
     pub size: u64,
     pub sha256: String,
-    pub object: String,
 }
 
 /// Records the published copy as applied, and the row as `applied` on the
@@ -893,8 +891,8 @@ pub fn applied_in(
     tx.prepare_cached(
         "INSERT INTO subtitle_applied
              (id, work_id, stored_id, season, episode, video_path, path, byte_size, sha256,
-              object, job_id, applied_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+              job_id, applied_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
     )?
     .execute(params![
         id,
@@ -906,7 +904,6 @@ pub fn applied_in(
         published.path,
         published.size as i64,
         published.sha256,
-        published.object,
         published.job_id,
         now
     ])?;
@@ -954,7 +951,6 @@ pub struct Adopted {
     pub path: String,
     pub size: u64,
     pub sha256: String,
-    pub object: String,
     /// The plan row it settles.
     pub job_id: String,
     pub position: i64,
@@ -1002,8 +998,8 @@ pub fn adopt(
         tx.prepare_cached(
             "INSERT INTO subtitle_applied
                  (id, work_id, stored_id, season, episode, video_path, path, byte_size, sha256,
-                  object, job_id, applied_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                  job_id, applied_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
         )?
         .execute(params![
             id,
@@ -1015,7 +1011,6 @@ pub fn adopt(
             what.path,
             what.size as i64,
             what.sha256,
-            what.object,
             what.job_id,
             now
         ])?;

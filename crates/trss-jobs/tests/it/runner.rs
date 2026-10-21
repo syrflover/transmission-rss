@@ -363,7 +363,6 @@ async fn intended(s: &Setup, item: i64, key: &str, name: &str, bytes: Option<&[u
         same_as: None,
         size: None,
         sha256: None,
-        object: None,
         path: None,
         reason: None,
         created_at: 970,
@@ -459,17 +458,14 @@ async fn a_cut_attempt_is_forgotten_and_its_file_received_anew_whatever_bytes_it
 
 /// Leaves the receipt of `job`'s file `key`, which a run published, as a run
 /// cut between the publishing rename and its `done` leaves it: `intended`,
-/// naming no path. `legacy` leaves it as a release before 0153 did:
-/// `fetched`, naming the path it was published at.
-async fn cut_before_done(s: &Setup, job: &str, key: &str, legacy: bool) {
-    let set = match legacy {
-        true => "state = 'fetched', format = NULL",
-        false => "state = 'intended', path = NULL, size = NULL, sha256 = NULL, format = NULL",
-    };
+/// naming no path.
+async fn cut_before_done(s: &Setup, job: &str, key: &str) {
     sql(
         s,
         format!(
-            "UPDATE subtitle_job_files SET {set} WHERE job_id = '{job}' AND file_key = '{key}';
+            "UPDATE subtitle_job_files
+                SET state = 'intended', path = NULL, size = NULL, sha256 = NULL, format = NULL
+              WHERE job_id = '{job}' AND file_key = '{key}';
              UPDATE subtitle_job_items SET state = 'running'
               WHERE id = (SELECT item_id FROM subtitle_job_files
                            WHERE job_id = '{job}' AND file_key = '{key}');
@@ -483,49 +479,43 @@ async fn cut_before_done(s: &Setup, job: &str, key: &str, legacy: bool) {
 #[cfg(unix)]
 #[tokio::test]
 async fn a_file_published_before_its_record_is_removed_and_received_anew_under_its_name() {
-    for legacy in [false, true] {
-        let s = setup().await;
-        let id = make(&s, "c1", &[("1", "/ok/a"), ("2", "/ok/b")]).await;
-        run(&s).await;
-        assert_eq!(detail(&s, &id).await.row.state, JobState::Done);
-        // The second item's file was renamed into place, and the worker died
-        // before its `done`. An unpacking's folder is there too.
-        cut_before_done(&s, &id, "ok/b", legacy).await;
-        let unpacked = s.area.at(&format!("{id}/.unpack/x/1"));
-        std::fs::create_dir_all(unpacked.parent().unwrap()).unwrap();
-        std::fs::write(&unpacked, b"member").unwrap();
-        let a = s.area.at(&format!("{id}/a.ass"));
-        let (a_before, b_before) = (inode(&a), inode(&s.area.at(&format!("{id}/b.ass"))));
-        cut_and_restart(&s.store, &id).await;
-        run(&s).await;
+    let s = setup().await;
+    let id = make(&s, "c1", &[("1", "/ok/a"), ("2", "/ok/b")]).await;
+    run(&s).await;
+    assert_eq!(detail(&s, &id).await.row.state, JobState::Done);
+    // The second item's file was renamed into place, and the worker died
+    // before its `done`. An unpacking's folder is there too.
+    cut_before_done(&s, &id, "ok/b").await;
+    let unpacked = s.area.at(&format!("{id}/.unpack/x/1"));
+    std::fs::create_dir_all(unpacked.parent().unwrap()).unwrap();
+    std::fs::write(&unpacked, b"member").unwrap();
+    let a = s.area.at(&format!("{id}/a.ass"));
+    let (a_before, b_before) = (inode(&a), inode(&s.area.at(&format!("{id}/b.ass"))));
+    cut_and_restart(&s.store, &id).await;
+    run(&s).await;
 
-        let d = detail(&s, &id).await;
-        assert_eq!(d.row.state, JobState::Done, "legacy {legacy}");
-        // The file no receipt named was removed and received again at its
-        // name: no `b (2).ass` beside it.
-        assert_eq!(
-            files_in(&s.area.at(&id)),
-            [".unpack", "a.ass", "b.ass"],
-            "legacy {legacy}"
-        );
-        let b = &d.items[1].files;
-        assert_eq!(b.len(), 1, "legacy {legacy}");
-        assert_eq!(b[0].state, FileState::Done);
-        assert_eq!(b[0].path.as_deref(), Some(format!("{id}/b.ass").as_str()));
-        assert_eq!(
-            std::fs::read(s.area.at(&format!("{id}/b.ass"))).unwrap(),
-            fake::ass("b")
-        );
-        assert_ne!(inode(&s.area.at(&format!("{id}/b.ass"))), b_before);
-        // What receipts name, and the unpacking's folder, stay as they were.
-        assert_eq!(inode(&a), a_before);
-        assert_eq!(std::fs::read(&unpacked).unwrap(), b"member");
-        assert!(d
-            .events
-            .iter()
-            .any(|e| e.message == "끊긴 받기를 처음부터 다시 해요"
-                && e.detail.as_deref() == Some("받던 파일 1개 · 기록에 없는 파일 1개 지움")));
-    }
+    let d = detail(&s, &id).await;
+    assert_eq!(d.row.state, JobState::Done);
+    // The file no receipt named was removed and received again at its
+    // name: no `b (2).ass` beside it.
+    assert_eq!(files_in(&s.area.at(&id)), [".unpack", "a.ass", "b.ass"]);
+    let b = &d.items[1].files;
+    assert_eq!(b.len(), 1);
+    assert_eq!(b[0].state, FileState::Done);
+    assert_eq!(b[0].path.as_deref(), Some(format!("{id}/b.ass").as_str()));
+    assert_eq!(
+        std::fs::read(s.area.at(&format!("{id}/b.ass"))).unwrap(),
+        fake::ass("b")
+    );
+    assert_ne!(inode(&s.area.at(&format!("{id}/b.ass"))), b_before);
+    // What receipts name, and the unpacking's folder, stay as they were.
+    assert_eq!(inode(&a), a_before);
+    assert_eq!(std::fs::read(&unpacked).unwrap(), b"member");
+    assert!(d
+        .events
+        .iter()
+        .any(|e| e.message == "끊긴 받기를 처음부터 다시 해요"
+            && e.detail.as_deref() == Some("받던 파일 1개 · 기록에 없는 파일 1개 지움")));
 }
 
 #[tokio::test]

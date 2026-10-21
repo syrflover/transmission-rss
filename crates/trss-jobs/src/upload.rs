@@ -923,7 +923,6 @@ pub fn sort_arrival(
     if let Some(folder) = job_dir.parent() {
         trss_core::files::sync_dir(folder)?;
     }
-    let meta = std::fs::symlink_metadata(&target)?;
     Ok(Arrived::Kept(UploadedFile {
         id: format!("{job_id}.{n:04}"),
         file_key: name.clone(),
@@ -931,7 +930,6 @@ pub fn sort_arrival(
         path: format!("{rel_dir}/{flat}"),
         size,
         sha256,
-        object: area::object_of(&meta),
         format: kept.format,
         kind: kept.kind,
         archive: kept.archive,
@@ -1009,7 +1007,6 @@ fn keep_the_files(
             let flat = first_free(last, &mut used);
             let target = job_dir.join(&flat);
             trss_core::files::rename_noreplace(&staged_dir.join(&file.temp), &target)?;
-            let meta = std::fs::symlink_metadata(&target)?;
             out.push(UploadedFile {
                 // Sorts in the order the files came: the job lists them so.
                 id: format!("{job_id}.{n:04}"),
@@ -1018,7 +1015,6 @@ fn keep_the_files(
                 path: format!("{rel_dir}/{flat}"),
                 size: file.size,
                 sha256: file.sha256,
-                object: area::object_of(&meta),
                 format: kept.format,
                 kind: kept.kind,
                 archive: kept.archive,

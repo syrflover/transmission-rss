@@ -224,7 +224,6 @@ pub struct FileRow {
     pub same_as: Option<String>,
     pub size: Option<u64>,
     pub sha256: Option<String>,
-    pub object: Option<String>,
     pub path: Option<String>,
     pub reason: Option<String>,
     pub created_at: Millis,
@@ -292,10 +291,8 @@ impl FileRow {
         match self.state {
             // Under way only while its episode runs; a held or stopped episode
             // left it unconfirmed.
-            FileState::Intended | FileState::Fetched if item == ItemState::Running => {
-                Some(FileShown::Receiving)
-            }
-            FileState::Intended | FileState::Fetched => Some(FileShown::Held),
+            FileState::Intended if item == ItemState::Running => Some(FileShown::Receiving),
+            FileState::Intended => Some(FileShown::Held),
             FileState::Done => Some(FileShown::Done),
             FileState::Held => Some(FileShown::Held),
             FileState::Failed => Some(FileShown::Failed),
@@ -508,8 +505,8 @@ pub(super) fn upload_summary(c: &Connection, id: &str) -> Result<UploadSummary, 
 }
 
 pub(super) const FILE_COLUMNS: &str = "
-    SELECT id, item_id, file_key, name, state, same_as, size, sha256, object, path, reason,
-           created_at, format, failure, http_status, content_type, response_size, snapshot,
+    SELECT id, item_id, file_key, name, state, same_as, size, sha256, path, reason, created_at,
+           format, failure, http_status, content_type, response_size, snapshot,
            kind, archive_type, folder, cleared_at, volume_of, unpacked_at, unpack_error,
            unchanged_asset, unpack_tries, unpack_failure, unpack_retry_at
     FROM subtitle_job_files";
@@ -555,29 +552,28 @@ pub(super) fn file_row(r: &Row<'_>) -> rusqlite::Result<FileRow> {
             .get::<_, Option<i64>>(6)?
             .and_then(|s| u64::try_from(s).ok()),
         sha256: r.get(7)?,
-        object: r.get(8)?,
-        path: r.get(9)?,
-        reason: r.get(10)?,
-        created_at: r.get(11)?,
-        format: format_at(r, 12)?,
-        failure: failure_at(r, 13)?,
-        http_status: r.get(14)?,
-        content_type: r.get(15)?,
+        path: r.get(8)?,
+        reason: r.get(9)?,
+        created_at: r.get(10)?,
+        format: format_at(r, 11)?,
+        failure: failure_at(r, 12)?,
+        http_status: r.get(13)?,
+        content_type: r.get(14)?,
         response_size: r
-            .get::<_, Option<i64>>(16)?
+            .get::<_, Option<i64>>(15)?
             .and_then(|s| u64::try_from(s).ok()),
-        snapshot: r.get(17)?,
-        kind: kind_at(r, 18)?,
-        archive: archive_at(r, 19)?,
-        folder: r.get(20)?,
-        cleared_at: r.get(21)?,
-        volume_of: r.get(22)?,
-        unpacked_at: r.get(23)?,
-        unpack_error: r.get(24)?,
-        unchanged_asset: r.get(25)?,
-        unpack_tries: r.get(26)?,
-        unpack_failure: r.get(27)?,
-        unpack_retry_at: r.get(28)?,
+        snapshot: r.get(16)?,
+        kind: kind_at(r, 17)?,
+        archive: archive_at(r, 18)?,
+        folder: r.get(19)?,
+        cleared_at: r.get(20)?,
+        volume_of: r.get(21)?,
+        unpacked_at: r.get(22)?,
+        unpack_error: r.get(23)?,
+        unchanged_asset: r.get(24)?,
+        unpack_tries: r.get(25)?,
+        unpack_failure: r.get(26)?,
+        unpack_retry_at: r.get(27)?,
     })
 }
 
@@ -672,7 +668,6 @@ pub(crate) fn blank_file(state: FileState) -> FileRow {
         same_as: None,
         size: None,
         sha256: None,
-        object: None,
         path: None,
         reason: None,
         created_at: 0,
@@ -802,10 +797,9 @@ mod tests {
         // (file state, item state, shown)
         let cases = [
             (FileState::Intended, ItemState::Running, Some(Receiving)),
-            (FileState::Fetched, ItemState::Running, Some(Receiving)),
             (FileState::Intended, ItemState::Held, Some(Held)),
-            (FileState::Fetched, ItemState::Waiting, Some(Held)),
-            (FileState::Fetched, ItemState::Failed, Some(Held)),
+            (FileState::Intended, ItemState::Waiting, Some(Held)),
+            (FileState::Intended, ItemState::Failed, Some(Held)),
             (FileState::Intended, ItemState::Pending, Some(Held)),
             (FileState::Done, ItemState::Running, Some(Done)),
             (FileState::Done, ItemState::Done, Some(Done)),

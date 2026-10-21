@@ -257,9 +257,9 @@ async fn a_subtitle_file_tells_whether_it_is_an_applied_copy_and_of_whom() {
         .run(move |c| {
             c.execute(
                 "INSERT INTO subtitle_applied (id, work_id, stored_id, season, episode, video_path,
-                                               path, byte_size, sha256, object, job_id, applied_at)
+                                               path, byte_size, sha256, job_id, applied_at)
                      VALUES ('ap1', ?1, 's1', 1, 1, 'Season 01/S01E01.mkv',
-                             'Season 01/S01E01.ko.ass', 1, printf('%064d', 1), '1:1', 'j1', 400)",
+                             'Season 01/S01E01.ko.ass', 1, printf('%064d', 1), 'j1', 400)",
                 [work],
             )?;
             Ok::<_, trss_jobs::JobError>(())
@@ -977,9 +977,9 @@ async fn more_on_episode_two(state: &AppState, work: &str) {
         .run(move |c| {
             c.execute_batch(&format!(
                 "INSERT INTO subtitle_applied (id, work_id, stored_id, season, episode, video_path,
-                                               path, byte_size, sha256, object, job_id, applied_at)
+                                               path, byte_size, sha256, job_id, applied_at)
                      VALUES ('ap2', '{work}', 's2', 1, 2, 'Season 01/S01E02.mkv',
-                             'Season 01/S01E02.ass', 1, printf('%064d', 2), '1:2', 'j1', 400);"
+                             'Season 01/S01E02.ass', 1, printf('%064d', 2), 'j1', 400);"
             ))?;
             let more = [
                 ("s2s", "srt", "하느", "Show - 02.srt", 7),

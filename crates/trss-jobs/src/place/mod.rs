@@ -2066,7 +2066,6 @@ impl Placer {
             path: write.target.clone(),
             size: write.size,
             sha256: write.sha256.clone(),
-            object: write.object.clone(),
         };
         let now = self.now();
         match self

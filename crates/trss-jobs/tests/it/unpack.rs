@@ -239,12 +239,12 @@ fn fixtures() -> PathBuf {
 async fn replace_bytes(s: &Setup, file: &FileRow, bytes: &[u8]) {
     let path = s.area.at(file.path.as_deref().unwrap());
     std::fs::write(&path, bytes).unwrap();
-    let (size, sha256, object) = trss_jobs::area::read_facts(&path).unwrap();
+    let (size, sha256, _) = trss_jobs::area::read_facts(&path).unwrap();
     let id = file.id.clone();
     s.db.run(move |c| {
         c.execute(
-            "UPDATE subtitle_job_files SET size = ?2, sha256 = ?3, object = ?4 WHERE id = ?1",
-            params![id, size as i64, sha256, object],
+            "UPDATE subtitle_job_files SET size = ?2, sha256 = ?3 WHERE id = ?1",
+            params![id, size as i64, sha256],
         )
         .map_err(trss_core::DbError::from)
     })

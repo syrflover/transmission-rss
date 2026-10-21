@@ -866,7 +866,6 @@ impl Placer {
             path,
             size: plan.asset_size,
             sha256: plan.asset_sha256.clone(),
-            object,
         };
         let copy = NewApplied {
             work_id: plan.work_id.clone(),
@@ -1480,7 +1479,6 @@ impl Placer {
             path: file.path.clone(),
             size: file.file.size,
             sha256: file.file.sha256.clone(),
-            object: file.file.object.clone(),
             job_id: row.job_id.clone(),
             position: row.position,
             take_over: row.chosen.is_some(),

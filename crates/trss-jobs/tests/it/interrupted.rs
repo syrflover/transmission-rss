@@ -220,6 +220,123 @@ async fn attempts(base: &Base, id: &str) -> i64 {
         .unwrap()
 }
 
+/// The migrations of a release before ticket 0153, which recorded file
+/// effects (`subtitle_file_effects`) and compared them with the disk.
+const BEFORE_NO_EFFECT_RECORDS: usize = 65;
+
+#[tokio::test]
+async fn a_job_an_earlier_release_left_running_with_its_effects_is_interrupted_by_the_upgrade() {
+    // What the migration makes of each record is trss-core's rule (`db.rs`
+    // tests); this is the upgrade a person sees: the job waits for a restart
+    // and no file is touched.
+    let dir = tempfile::tempdir().unwrap();
+    let file = |relative: &str, bytes: &[u8]| {
+        let path = dir.path().join(relative);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, bytes).unwrap();
+        path
+    };
+    // What that release left on disk: a received file, a fetched one not yet
+    // recorded, a store's temporary file and a removal's copy moved aside.
+    let left = [
+        (
+            file("receive/j1/a.ass", b"received"),
+            b"received".as_slice(),
+        ),
+        (file("receive/j1/b.ass", b"fetched"), b"fetched".as_slice()),
+        (file("work/.trss/tmp/e1", b"store"), b"store".as_slice()),
+        (
+            file("work/.trss/tmp/x1.aside", b"applied"),
+            b"applied".as_slice(),
+        ),
+    ];
+    {
+        let conn = trss_core::db::database_at(&dir.path().join("app.db"), BEFORE_NO_EFFECT_RECORDS);
+        conn.execute_batch(
+            "INSERT INTO subtitle_jobs (id, command_id, request, origin, work_id, season, state,
+                                        stage, attempts, created_at, updated_at, state_at)
+                 VALUES ('j1', 'c1', '{}', 'pick', 'w', 1, 'running', 'store', 1, 0, 0, 0),
+                        ('j2', 'c2', '{}', 'relocate', 'w', 1, 'running', 'apply', 1, 0, 0, 0);
+             INSERT INTO subtitle_job_items (id, job_id, position, episode, post_url, found_at,
+                                             state, updated_at)
+                 VALUES (1, 'j1', 0, '1', 'https://example.org/1', 0, 'running', 0);
+             INSERT INTO subtitle_job_files (id, job_id, item_id, file_key, name, state, temp_dir,
+                                             expected_size, size, sha256, object, path, format,
+                                             created_at, updated_at)
+                 VALUES ('f1', 'j1', 1, 'k1', 'a.ass', 'done', NULL, NULL, 8,
+                         printf('%064d', 1), '1:1', 'j1/a.ass', 'ass', 0, 0),
+                        ('f2', 'j1', 1, 'k2', 'b.ass', 'fetched', '.tmp/f2', 7, 7,
+                         printf('%064d', 2), '1:2', 'j1/b.ass', NULL, 1, 1);
+             INSERT INTO subtitle_job_plan (job_id, position, file_id, name, kind, format, size,
+                                            sha256, assignment, episode, action, updated_at)
+                 VALUES ('j1', 0, 'f1', 'a.ass', 'subtitle', 'ass', 8, printf('%064d', 1),
+                         'explicit', 1, 'apply', 0);
+             INSERT INTO subtitle_file_effects (id, job_id, position, kind, state, folder, temp,
+                                                target, size, sha256, created_at, updated_at)
+                 VALUES ('e1', 'j1', 0, 'store', 'intended', 'work', '.trss/tmp/e1',
+                         '.trss/subtitles/x/a.ass', 8, printf('%064d', 1), 0, 0);
+             INSERT INTO subtitle_packages (id, work_id, job_id, source_kind, created_at)
+                 VALUES ('p1', 'w', 'j2', 'post', 0);
+             INSERT INTO subtitle_assets (id, work_id, kind, base, relative_path, byte_size,
+                                          sha256, created_at)
+                 VALUES ('a1', 'w', 'subtitle', 'work', '.trss/subtitles/y/a.ass', 7,
+                         printf('%064d', 3), 0);
+             INSERT INTO subtitle_package_entries (package_id, position, asset_id, original_name)
+                 VALUES ('p1', 0, 'a1', 'a.ass');
+             INSERT INTO subtitle_stored (id, work_id, season, package_id, subtitle_asset_id,
+                                          assignment, episode, format, stored_at)
+                 VALUES ('s1', 'w', 1, 'p1', 'a1', 'explicit', 3, 'ass', 0);
+             INSERT INTO subtitle_applied (id, work_id, stored_id, season, episode, video_path,
+                                           path, byte_size, sha256, object, applied_at)
+                 VALUES ('ap1', 'w', 's1', 1, 2, 'v2.mkv', 'v2.ass', 7, printf('%064d', 3),
+                         '1:4', 0);
+             INSERT INTO subtitle_relocations (id, job_id, applied_id, episode, path, state,
+                                               folder, aside, created_at, updated_at)
+                 VALUES ('x1', 'j2', 'ap1', 2, 'v2.ass', 'set_aside', 'work',
+                         '.trss/tmp/x1.aside', 0, 0);",
+        )
+        .unwrap();
+    }
+
+    // The start of the process: the database is migrated as it is opened,
+    // then the jobs left running are interrupted.
+    let base = Base::open(dir).await;
+    assert_eq!(base.store.run.interrupt_running(7_000).await.unwrap(), 2);
+
+    let d = detail(&base, "j1").await;
+    assert_eq!(
+        (d.row.state, d.row.stage),
+        (JobState::Interrupted, Some(StepKind::Store))
+    );
+    assert_eq!(d.events.first().unwrap().message, INTERRUPTED);
+    // The receipt the release left fetched is received anew after a restart.
+    assert_eq!(
+        d.items[0]
+            .files
+            .iter()
+            .map(|f| (f.id.as_str(), f.state))
+            .collect::<Vec<_>>(),
+        [("f1", FileState::Done)]
+    );
+    let d = detail(&base, "j2").await;
+    assert_eq!(d.row.state, JobState::Interrupted);
+    let removals = base
+        .db
+        .run(|c| trss_jobs::place::relocate::removals(c, "j2").map_err(trss_core::DbError::from))
+        .await
+        .unwrap();
+    assert_eq!(
+        (removals[0].state, removals[0].reason.as_deref()),
+        (
+            trss_jobs::model::RemovalState::Kept,
+            Some("이전 버전에서 지우다 끊겨 그대로 뒀어요")
+        )
+    );
+    for (path, bytes) in left {
+        assert_eq!(std::fs::read(&path).unwrap(), bytes, "{path:?}");
+    }
+}
+
 #[tokio::test]
 async fn a_restart_takes_only_an_interrupted_job_back_to_running_in_its_step() {
     let base = Base::new().await;
