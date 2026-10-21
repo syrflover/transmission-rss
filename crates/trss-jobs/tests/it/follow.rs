@@ -3,7 +3,7 @@
 //! (`docs/specs/subtitles.md`, 구독 제작자 자동 수신).
 
 use crate::{
-    world::{ticking_from, Base, TodoStores},
+    world::{ticking_from, told, Base, TodoStores},
     Handles,
 };
 
@@ -107,7 +107,10 @@ fn post(path: &str) -> String {
 
 impl World {
     async fn new(sub: Sub) -> World {
-        let base = Base::new().await;
+        World::over(Base::new().await, sub).await
+    }
+
+    async fn over(base: Base, sub: Sub) -> World {
         let dir = &base.dir;
         let db = base.db.clone();
         let (season, count) = (sub.season, sub.count);
@@ -1965,6 +1968,37 @@ async fn an_episode_the_user_does_not_receive_is_left_while_the_others_follow_th
     assert!(w.follow.episode_checks().await.unwrap().is_empty());
     assert_eq!(w.mapping(1, "에루샤").await, saved);
     assert_eq!(w.job_count().await, 3);
+}
+
+// 화면 알림(0155): 회차 확인 필요(`episode_check`)는 읽을 때 매핑과 충돌에서 셈하므로, 충돌을
+// 적는 `evaluate`와 사람의 매핑 저장이 `subtitle_mapping` 이벤트를 그 작품 ID로 보내야 할 일
+// 목록이 다시 읽어요.
+#[tokio::test]
+async fn an_episode_check_that_arises_and_the_mapping_that_ends_it_are_announced_for_the_work() {
+    let (base, mut heard) = Base::announcing().await;
+    let w = World::over(base, Sub::aired(FIRST, 12)).await;
+    for (episode, k) in [("1", 1), ("2", 2)] {
+        w.observe_at(
+            "에루샤",
+            episode,
+            &format!("/ok/ep{episode}"),
+            Some(at(FIRST, k, 3_600)),
+        )
+        .await;
+    }
+    w.observe_at("에루샤", "13.5", "/ok/ep13_5", Some(at(FIRST, 3, 3_600)))
+        .await;
+    heard.drain();
+
+    w.evaluate().await;
+
+    assert_eq!(w.follow.episode_checks().await.unwrap().len(), 1);
+    assert!(heard.drain().contains(&told("subtitle_mapping", WORK)));
+
+    user_sets(&w, 1, "에루샤", 0, &[("13.5", None)]).await;
+
+    assert!(w.follow.episode_checks().await.unwrap().is_empty());
+    assert!(heard.drain().contains(&told("subtitle_mapping", WORK)));
 }
 
 #[tokio::test]

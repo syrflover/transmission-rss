@@ -7,7 +7,7 @@
 //! the crates and tests that own them (`todo.rs`, `cleanup.rs`, `choose.rs`,
 //! `follow.rs`, `place.rs`).
 
-use crate::world::{cut_and_restart, Base};
+use crate::world::{cut_and_restart, set, told, Base};
 
 use tokio_util::sync::CancellationToken;
 use trss_jobs::{
@@ -191,6 +191,34 @@ async fn a_job_left_running_in_any_step_is_interrupted_there_and_one_that_waits_
             "{stage}"
         );
     }
+}
+
+// 화면 알림(0155): 프로세스를 시작하며 끊긴 작업이 `중단됨`이 되는 것과 사람의 `다시 시작`은
+// 작업의 상태가 바뀌는 것이므로, 작업 목록과 작업 상세가 읽는 `subtitle_job` 이벤트가 그
+// 작업 ID로 가요.
+#[tokio::test]
+async fn an_interrupted_job_and_its_restart_are_announced_for_the_job() {
+    let (base, mut heard) = Base::announcing().await;
+    let id = make(&base, "c1", "pick").await;
+    sql(
+        &base,
+        format!("UPDATE subtitle_jobs SET state = 'running', stage = 'receive' WHERE id = '{id}'"),
+    )
+    .await;
+    heard.drain();
+
+    assert_eq!(base.store.run.interrupt_running(7_000).await.unwrap(), 1);
+
+    assert_eq!(detail(&base, &id).await.row.state, JobState::Interrupted);
+    assert_eq!(heard.drain(), set([told("subtitle_job", &id)]));
+
+    assert_eq!(
+        base.store.requests.restart(&id, 7_100).await.unwrap(),
+        Restarted::Restarted
+    );
+
+    assert_eq!(detail(&base, &id).await.row.state, JobState::Running);
+    assert_eq!(heard.drain(), set([told("subtitle_job", &id)]));
 }
 
 async fn rows_of(

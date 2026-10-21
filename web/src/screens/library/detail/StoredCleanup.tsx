@@ -3,10 +3,13 @@ import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { ApiError } from "@/lib/api";
 import { forget } from "@/lib/cached";
+import { createRereader } from "@/lib/rereads";
+import { sharedEvents } from "@/lib/sharedEvents";
 import { cn } from "@/lib/utils";
 
 import { btnDanger, btnDangerSolid, btnNeutral } from "../../collect/channels/styles";
 import { cleanStored, STORAGE_KEY, type Cleaning } from "../api";
+import { cleanupChanged } from "./listens";
 import {
   CHANGED_NOTICE,
   canClean,
@@ -29,8 +32,8 @@ import {
 } from "../storage.ts";
 import { sizeText } from "../../../lib/size.ts";
 
-/** How often the page reads the work while a clean is waiting for the worker. */
-const POLL_MS = 3000;
+/** How long to wait before reading the work again after a read that failed, while a clean is waiting for trss. */
+const RETRY_MS = 3000;
 
 /** At least 44px tall on a phone. */
 const touch = "max-[720px]:min-h-11";
@@ -46,8 +49,8 @@ interface Confirming {
 /**
  * The `정리할 수 있는 파일` part of the 파일 card: the work's stored size, then the stored subtitles that can be
  * cleaned, by kind. A clean is one file at a time and asked in place, naming every file it deletes and the linked
- * files that stay; nothing selects several entries. The page reads the work again while the worker has a clean to
- * carry out.
+ * files that stay; nothing selects several entries. While trss has a clean to carry out, the page reads the work
+ * again when the server says the work's stored files changed.
  */
 export function StoredCleanup({
   workId,
@@ -84,22 +87,26 @@ export function StoredCleanup({
     }
   };
 
-  // A clean that the worker has not finished: read the work again now and then.
+  // A clean that trss has not finished: the work is read again when the server says its stored files changed
+  // (`listens.ts`). Listening starts before the first read, so a clean that ends meanwhile is not missed.
   const asked = isCleaning(storage);
   useEffect(() => {
     if (!asked) return;
-    let stopped = false;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const tick = async () => {
-      if (!document.hidden) await quietRefresh();
-      if (!stopped) timer = setTimeout(() => void tick(), POLL_MS);
-    };
-    timer = setTimeout(() => void tick(), POLL_MS);
+    const rereader = createRereader({
+      read: () => refresh.current(),
+      retryMs: () => RETRY_MS,
+      hidden: () => document.hidden,
+    });
+    const stopListening = sharedEvents().subscribe({
+      match: (change) => cleanupChanged(change, workId),
+      reread: () => rereader.request(),
+    });
+    rereader.start();
     return () => {
-      stopped = true;
-      clearTimeout(timer);
+      stopListening();
+      rereader.stop();
     };
-  }, [asked]);
+  }, [asked, workId]);
 
   // The settings list shows the same sizes and counts: it is read again when they change.
   const signature = storageSignature(storage);

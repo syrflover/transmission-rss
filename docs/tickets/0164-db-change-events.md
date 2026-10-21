@@ -64,7 +64,7 @@
 | `collect_status` | 없음 | 0 | 6 |
 | `settings` | 없음 | 0 | 3 |
 
-알리지 않는 10개는 `commands`, `anilist_pace`, `anissia_pace`, `search_pace`, `anissia_caption_poll`, `artwork_files`, `library_generation`, `subtitle_mapping_clock`, `transmission_listing`, `transmission_torrents`예요. `commands`는 `CommandStore`가 알려요. 두 counter는 그것이 따라가는 표가 알리고, 나머지는 화면이 읽지 않거나 지난 회차 검색만 읽어요.
+알리지 않는 10개는 `commands`, `anilist_pace`, `anissia_pace`, `search_pace`, `anissia_caption_poll`, `artwork_files`, `library_generation`, `subtitle_mapping_clock`, `transmission_listing`, `transmission_torrents`예요. `commands`는 `CommandStore`가 알려요. 두 counter는 그것이 따라가는 표가 알리고, 나머지는 화면이 읽지 않거나 지난 회차 검색만 읽어요. 다만 `anissia_caption_poll`은 자막 후보 화면이 Anissia를 마지막으로 읽은 시각(`read_at`)으로 보여 주므로, 이 분류는 틀렸어요. [0155](0155-events-for-jobs-todos-candidates.md)에서 `anissia`로 알리게 고쳤어요.
 
 ### 행 하나를 쓸 때 더 드는 시간
 

@@ -3,8 +3,8 @@
  * (`POST …/screen`): once per opening of the page, on the first read of the
  * job that comes from the server. The job shown first may be cached from an
  * earlier visit, so it is not the reason to ask. Only a job that has a screen
- * asks. Every later read (polling the job, and the reads a reconnecting
- * socket makes) never asks; the person's own `다시 열기` is the only other
+ * asks. Every later read (the job read again on a change, and the reads a
+ * reconnecting socket makes) never asks; the person's own `다시 열기` is the only other
  * request.
  */
 export interface PrepareGate {

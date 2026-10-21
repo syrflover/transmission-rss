@@ -2,6 +2,7 @@ import { useEffect, useId } from "react";
 
 import { setTodoCount } from "@/app/todo-count";
 import type { ArchiveSuggestion, TitleCandidate } from "@/lib/api-types";
+import { useRead } from "@/lib/useRead";
 
 import { EmptyState, ScreenFrame } from "./ScreenFrame";
 import { KEYS as COLLECT_KEYS } from "./collect/cache";
@@ -17,38 +18,53 @@ import {
 } from "./todo/api";
 import { CountChip } from "./todo/badges";
 import { JobGroupsView } from "./todo/JobList";
-import { KEYS, TODOS_MS, usePolled } from "./todo/poll";
+import { KEYS } from "./todo/keys";
+import {
+  JOBS_RETRY_MS,
+  TODOS_RETRY_MS,
+  jobListChanged,
+  suggestionsChanged,
+  todosChanged,
+} from "./todo/listens";
 import { SuggestionRows, suggestionRows } from "./todo/Suggestions";
 import { TodoCards } from "./todo/TodoCards";
-
-/** How often the jobs are read while the screen is visible. */
-const JOBS_MS = 2000;
 
 /**
  * The 할 일 screen: what needs the user (`처리 필요`, red kinds first), the
  * suggestions that may wait (`제안`), and the subtitle jobs the worker carries
  * out (`자막 작업`: `실패`, `대기 중`, `진행 중`, `최근 완료`). A section with
- * nothing in it is not drawn.
+ * nothing in it is not drawn. Each part is read again when the server says what
+ * it shows changed (`todo/listens.ts`), not on a timer.
  */
 export function TodoScreen() {
-  const todos = usePolled<TodoList>(KEYS.todos, fetchTodos, TODOS_MS, "할 일을 불러오지 못했어요.");
-  const jobs = usePolled<JobGroups>(KEYS.jobs, fetchJobs, JOBS_MS, "자막 작업을 불러오지 못했어요.");
-  const candidates = usePolled<TitleCandidate[]>(
+  const todos = useRead<TodoList>(
+    KEYS.todos,
+    fetchTodos,
+    { match: todosChanged, retryMs: TODOS_RETRY_MS },
+    "할 일을 불러오지 못했어요.",
+  );
+  const jobs = useRead<JobGroups>(
+    KEYS.jobs,
+    fetchJobs,
+    { match: jobListChanged, retryMs: JOBS_RETRY_MS },
+    "자막 작업을 불러오지 못했어요.",
+  );
+  const candidates = useRead<TitleCandidate[]>(
     COLLECT_KEYS.candidates,
     fetchCandidates,
-    TODOS_MS,
+    { match: suggestionsChanged, retryMs: TODOS_RETRY_MS },
     "제목 후보를 불러오지 못했어요.",
   );
-  const archives = usePolled<ArchiveSuggestion[]>(
+  const archives = useRead<ArchiveSuggestion[]>(
     COLLECT_KEYS.archiveSuggestions,
     fetchArchiveSuggestions,
-    TODOS_MS,
+    { match: suggestionsChanged, retryMs: TODOS_RETRY_MS },
     "보관 제안을 불러오지 못했어요.",
   );
-  const follows = usePolled<FollowSuggestion[]>(
+  const follows = useRead<FollowSuggestion[]>(
     KEYS.follow,
     fetchFollowSuggestions,
-    TODOS_MS,
+    { match: suggestionsChanged, retryMs: TODOS_RETRY_MS },
     "자막 구독 제안을 불러오지 못했어요.",
   );
 

@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { store } from "@/lib/cached";
 import { when } from "@/lib/time";
 import { cn } from "@/lib/utils";
+import { useRead } from "@/lib/useRead";
 
 import { EmptyState, usePageTitle } from "../ScreenFrame";
 import { btnNeutral } from "../collect/channels/styles";
@@ -12,7 +13,7 @@ import { coverOf } from "../library/model";
 import { Cover } from "../library/WorkItem";
 import { fetchJob, jobPath, type JobDetail, type JobRow, type JobScreen } from "./api";
 import { CountChip, FailureTag, OriginTags, StateBadge, Tag, originSentence } from "./badges";
-import { ended, episodeName, shownState } from "./format";
+import { episodeName, shownState } from "./format";
 import { FindFinish } from "./FindFinish";
 import { canRestart, interruptedText } from "./interrupted";
 import { RestartJob } from "./RestartJob";
@@ -25,12 +26,10 @@ import { ReplacementDecisions, ReplacementPaths } from "./Replacement";
 import { cardLayout, openOnes } from "./replacementView";
 import { JobSteps } from "./JobSteps";
 import { UploadResults } from "./UploadResults";
-import { KEYS, usePolled } from "./poll";
+import { KEYS } from "./keys";
+import { JOB_RETRY_MS, jobChanged } from "./listens";
 import { TargetLine } from "./TargetLine";
 import { useScreenPrepare, type ScreenPrepare } from "./useScreenPrepare";
-
-/** How often a job that is still going is read while the page is visible. */
-const JOB_MS = 2000;
 
 const LOAD_FAILED = "작업을 불러오지 못했어요.";
 
@@ -52,7 +51,8 @@ function BackLink() {
  * of each episode, the path and the log, in one column. A find job (직접 찾기)
  * puts its remote screen first, with `받기 끝내기` under it, and lists the files
  * it received instead of episodes. It reads the job again
- * every two seconds while the page is visible and the job has not ended. Opening
+ * when the server says the job (its state, steps, files, remote screen) or its work changed
+ * (`listens.ts`), not on a timer. Opening
  * the page asks once for the job's server browser screen to be prepared;
  * reading the job again never does.
  */
@@ -63,10 +63,13 @@ export function JobDetailScreen() {
 }
 
 function JobPage({ jobId }: { jobId: string }) {
-  const job = usePolled<JobDetail>(
+  const job = useRead<JobDetail>(
     KEYS.job(jobId),
     (signal) => fetchJob(jobId, signal),
-    (data) => (data !== undefined && ended(data.state) ? null : JOB_MS),
+    {
+      match: (change, data) => jobChanged(change, jobId, data === undefined ? undefined : (data.work?.id ?? null)),
+      retryMs: JOB_RETRY_MS,
+    },
     LOAD_FAILED,
   );
   usePageTitle(job.data?.title ?? "작업");

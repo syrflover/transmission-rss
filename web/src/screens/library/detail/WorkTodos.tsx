@@ -4,6 +4,7 @@ import { Link } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { when } from "@/lib/time";
 import { cn } from "@/lib/utils";
+import { useRead } from "@/lib/useRead";
 
 import { btnAction } from "../../collect/channels/styles";
 import {
@@ -22,15 +23,16 @@ import { kindTone, OriginTags, Tag, TodoBadge } from "../../todo/badges";
 import { receivedLine, todoTags } from "../../todo/changes";
 import { LockIcon } from "../../todo/icons";
 import { todosOfWork } from "../../todo/kinds";
-import { KEYS, TODOS_MS, usePolled } from "../../todo/poll";
+import { KEYS } from "../../todo/keys";
+import { TODOS_RETRY_MS, todosChanged } from "../../todo/listens";
 import { TargetLine } from "../../todo/TargetLine";
 import { episodeCheckPath, episodeCheckReason, receiveFailedAction, receiveFailedPath } from "../../todo/TodoCards";
 import { VideoCheckActions } from "../../todo/VideoCheck";
 
 /**
  * The work's `할 일` (`docs/specs/library.md`, 할 일과 회차 목록): its to-dos that need the person, as cards with a
- * coloured border, above the 자막 후보. They are the 할 일 screen's (`KEYS.todos`, read again while the page is
- * visible), so one handled anywhere is gone at the next read. A work with none, or before the list is read, has no
+ * coloured border, above the 자막 후보. They are the 할 일 screen's (`KEYS.todos`, read again when the server says the to-dos
+ * changed), so one handled anywhere is gone at the next read. A work with none, or before the list is read, has no
  * heading, list or space.
  *
  * A card has no cover and no title: the page is the work's. Its first line is what it is about (episodes, creator,
@@ -48,7 +50,12 @@ export function WorkTodos({
   seasonCount: number;
   onRefresh?: () => Promise<void>;
 }) {
-  const todos = usePolled<TodoList>(KEYS.todos, fetchTodos, TODOS_MS, "할 일을 불러오지 못했어요.");
+  const todos = useRead<TodoList>(
+    KEYS.todos,
+    fetchTodos,
+    { match: todosChanged, retryMs: TODOS_RETRY_MS },
+    "할 일을 불러오지 못했어요.",
+  );
   const mine = todosOfWork(todos.data?.needs ?? [], workId);
   if (mine.length === 0) return null;
   // The season is said only where the work has several, and not for a movie (it is named `본편`).

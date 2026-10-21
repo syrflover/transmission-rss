@@ -15,7 +15,7 @@ import { CountChip, FailureTag, OriginTags, StateBadge, originSentence } from ".
 import { episodeList, shownState, uploadKept } from "./format";
 import { ChevronIcon } from "./icons";
 import { canRestart, interruptedText } from "./interrupted";
-import { KEYS } from "./poll";
+import { KEYS } from "./keys";
 import { RestartJob } from "./RestartJob";
 import { TargetLine } from "./TargetLine";
 

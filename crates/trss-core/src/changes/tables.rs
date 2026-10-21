@@ -75,10 +75,10 @@ pub(crate) const TABLES: &[(&str, Announced)] = &[
         Not("when AniList may be asked next; no screen shows it"),
     ),
     ("anissia_anime", row(Anissia, "anime_no")),
-    (
-        "anissia_caption_poll",
-        Not("when the caption lines are read next; no screen shows it"),
-    ),
+    // The work page's candidates say when Anissia was last read
+    // (`last_read_at`), which a reading `trss` makes on its own moves even
+    // when it finds no new line.
+    ("anissia_caption_poll", any(Anissia)),
     (
         "anissia_pace",
         Not("when Anissia may be asked next; no screen shows it"),

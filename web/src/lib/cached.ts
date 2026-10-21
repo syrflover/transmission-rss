@@ -30,7 +30,8 @@ const entries = new Map<string, unknown>();
 const versions = new Map<string, number>();
 const listeners = new Set<() => void>();
 
-const versionOf = (key: string) => versions.get(key) ?? 0;
+/** How many times `key` was written: a read that began at another count answers older than what is cached. */
+export const versionOf = (key: string) => versions.get(key) ?? 0;
 
 function changed(key: string) {
   versions.set(key, versionOf(key) + 1);

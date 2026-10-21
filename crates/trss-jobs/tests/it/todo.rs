@@ -8,7 +8,7 @@
 
 use std::{future::Future, pin::Pin};
 
-use crate::world::{Base, Shows, Unplaced};
+use crate::world::{set, told, Base, Shows, Unplaced};
 
 use tokio_util::sync::CancellationToken;
 use trss_collect::store::history::{HistoryResult, HistoryStore, Observation};
@@ -35,7 +35,10 @@ struct Setup {
 /// A library with the work `Show` (season 1, videos of episodes 2 and 3) linked
 /// to Anissia's anime 3424, titled `작품`.
 async fn setup() -> Setup {
-    let base = Base::new().await;
+    setup_over(Base::new().await).await
+}
+
+async fn setup_over(base: Base) -> Setup {
     base.library(&Shows {
         episodes: vec![2, 3],
         ..Shows::default()
@@ -886,4 +889,106 @@ async fn a_video_whose_name_gives_no_episode_is_a_card_newest_first_until_it_is_
         [card(SECOND, 2, 1_800_000_000_999, "7:1800000000999999999")]
     );
     assert_eq!(list.count, 1);
+}
+
+// 화면 알림(0155): 할 일 목록과 메뉴의 배지(`GET /api/todo`, `/api/todo/count`)는 할 일이
+// 생기거나 끝나게 하는 쓰기의 이벤트에 다시 읽어요. 할 일의 출처마다 한 곳씩 보여요. 작업이
+// 사람을 기다리는 할 일(인증, 교체 승인, 배치 확인)은 같은 `subtitle_job` 쓰기이므로 인증과 교체
+// 승인으로 대표하고, 회차 확인 필요는 매핑과 영상으로 나눠 보여요.
+
+#[tokio::test]
+async fn a_job_that_waits_for_a_check_raises_a_to_do_announced_for_the_job() {
+    let (base, mut heard) = Base::announcing().await;
+    let s = setup_over(base).await;
+    heard.drain();
+
+    let job = s.make("c1", &[("1", "/auth/1")]).await;
+    s.run().await;
+
+    assert_eq!(s.state(&job).await, (JobState::Waiting, Some(Wait::Auth)));
+    assert_eq!(s.base.todo().await.count, 1);
+    assert_eq!(heard.drain(), set([told("subtitle_job", &job)]));
+}
+
+#[tokio::test]
+async fn a_replacement_to_decide_and_the_decision_that_ends_it_are_announced_for_the_job() {
+    let (base, mut heard) = Base::announcing().await;
+    let s = setup_over(base).await;
+    heard.drain();
+
+    let (job, plan) = s.revision_waiting().await;
+
+    assert_eq!(s.base.todo().await.count, 1);
+    assert!(heard.drain().contains(&told("subtitle_job", &job)));
+
+    s.base
+        .store
+        .place
+        .decide_replacement(&job, &plan.id, plan.version, true, 5_000_000)
+        .await
+        .unwrap();
+
+    assert_eq!(s.base.todo().await.count, 0);
+    assert!(heard.drain().contains(&told("subtitle_job", &job)));
+}
+
+#[tokio::test]
+async fn a_receive_failure_a_rule_recorded_is_announced_as_a_history_change() {
+    let (base, mut heard) = Base::announcing().await;
+    heard.drain();
+
+    HistoryStore::new(base.db.clone())
+        .record(
+            500_000,
+            vec![Observation {
+                channel_id: "c1".into(),
+                channel_label: "https://feed.test/".into(),
+                identity_key: "k".into(),
+                title: "[Group] Show - 03".into(),
+                link: "https://feed.test/x".into(),
+                result: HistoryResult::AddFailed,
+                rule_id: Some("r1".into()),
+                torrent_hash: None,
+                reason: Some("Transmission에 연결하지 못했어요".into()),
+            }],
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(base.todo().await.count, 1);
+    let told = heard.drain();
+    assert!(
+        told.iter()
+            .any(|(kind, id)| *kind == "history" && id.is_some()),
+        "{told:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_video_check_the_person_answers_is_announced_for_its_work() {
+    let (base, mut heard) = Base::announcing().await;
+    const PATH: &str = "Season 01/[Group] Show - 03 (1080p).mkv";
+    let seen = SeenFile {
+        size: 5,
+        mtime_ns: 1_700_000_000_123_456_789,
+    };
+    base.library(&Shows {
+        unplaced: vec![Unplaced {
+            path: PATH,
+            reason: Reason::NoEpisode,
+            seen: Some(seen),
+        }],
+        ..Shows::default()
+    })
+    .await;
+    assert_eq!(base.todo().await.count, 1);
+    heard.drain();
+
+    LibraryStore::new(base.db.clone())
+        .check_video("w1", PATH, seen, 2_000)
+        .await
+        .unwrap();
+
+    assert_eq!(base.todo().await.count, 0);
+    assert_eq!(heard.drain(), set([told("library", "w1")]));
 }

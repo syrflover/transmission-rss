@@ -8,7 +8,7 @@ import { cn } from "@/lib/utils";
 
 import { btnPrimary } from "../collect/channels/styles";
 import { confirmPlacement, fetchJob, type ConfirmView, type JobDetail, type Placement } from "./api";
-import { KEYS } from "./poll";
+import { KEYS } from "./keys";
 import { MOVIE_LABEL } from "../library/detail/movie";
 import {
   REPLACES,
@@ -45,7 +45,7 @@ export function useConfirm(jobId: string) {
     try {
       store(KEYS.job(jobId), await fetchJob(jobId));
     } catch {
-      // The polling reads it again.
+      // The job's change event reads it again.
     }
   };
 

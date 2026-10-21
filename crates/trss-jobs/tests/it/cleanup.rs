@@ -4,7 +4,7 @@
 //! worker leaves.
 
 use crate::{
-    world::{Base, Shows},
+    world::{told, Base, Shows},
     Handles,
 };
 use std::path::{Path, PathBuf};
@@ -164,7 +164,10 @@ impl Setup {
 
 /// A library with the work `Show` (season 1) whose episode 2 has a video.
 async fn setup() -> Setup {
-    let base = Base::new().await;
+    setup_over(Base::new().await).await
+}
+
+async fn setup_over(base: Base) -> Setup {
     base.library(&Shows {
         episodes: vec![2],
         ..Shows::default()
@@ -481,6 +484,25 @@ async fn cleaning_a_revision_alone_with_its_font_and_attachment_removes_all_thre
     assert_eq!(storage.len(), 1);
     assert_eq!(storage[0].total, size(&["Show - 02 [v2].ass"]));
     assert_eq!(storage[0].cleanable, 0);
+}
+
+// 화면 알림(0155): 작품 상세의 보관 파일 정리는 그 작품의 `subtitle_store` 이벤트에 작품을
+// 다시 읽어요. 사람이 정리를 맡길 때(`asked`)와 trss가 파일을 지우고 끝낼 때가 모두 그
+// 작품의 ID로 가요.
+#[tokio::test]
+async fn a_clean_that_is_asked_for_and_the_removal_that_ends_it_are_announced_for_the_work() {
+    let (base, mut heard) = Base::announcing().await;
+    let s = setup_over(base).await;
+    past_alone(&s, "Solo.ttf").await;
+    heard.drain();
+
+    let cleanup = s.ask("Show - 02.ass").await;
+    assert_eq!(s.cleanup(&cleanup).await, ("asked".to_owned(), None));
+    assert!(heard.drain().contains(&told("subtitle_store", WORK)));
+
+    s.clean_all().await;
+    assert_eq!(s.cleanup(&cleanup).await, ("done".to_owned(), None));
+    assert!(heard.drain().contains(&told("subtitle_store", WORK)));
 }
 
 // 완료 기준: 진행 중이거나 보류하거나 중단된 작업이 참조하는 보관본은 정리할 수 없고

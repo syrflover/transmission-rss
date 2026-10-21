@@ -22,8 +22,8 @@ export interface ScreenPrepare {
  * Prepares a job's remote screen when its page is opened: one request per
  * page, on the first read of the job that comes from the server (the job
  * cached from an earlier visit may be out of date), and only for a job that
- * has a screen ({@link asksOnRead}). Polling the job and reconnecting never
- * ask again.
+ * has a screen ({@link asksOnRead}). Reading the job again on a change and
+ * reconnecting never ask again.
  */
 export function useScreenPrepare(jobId: string, job: JobDetail | undefined): ScreenPrepare {
   /** Decided by the first read from the server; the first render's job is possibly cached. */

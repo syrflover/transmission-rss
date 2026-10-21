@@ -12,7 +12,10 @@ use std::{
 
 use serde_json::Value;
 use trss_anissia::{fake::Fake, Anissia};
-use trss_core::{Clock, Db};
+use trss_core::{
+    changes::{Change, ChangeKind, Changes},
+    Clock, Db,
+};
 
 use crate::{
     anissia::captions::*,
@@ -35,7 +38,19 @@ struct Env {
 impl Env {
     /// An observer with no spacing between requests and a clock the test sets.
     async fn new() -> Env {
-        let db = Db::open_blocking(":memory:").unwrap();
+        Env::over(Db::open_blocking(":memory:").unwrap()).await
+    }
+
+    /// [`Env::new`] over a database that announces its committed writes, and
+    /// the listener that hears them.
+    async fn announcing() -> (Env, tokio::sync::broadcast::Receiver<Change>) {
+        let changes = Changes::default();
+        let heard = changes.subscribe();
+        let db = Db::open_blocking_announcing(":memory:", changes).unwrap();
+        (Env::over(db).await, heard)
+    }
+
+    async fn over(db: Db) -> Env {
         let fake = Fake::start().await;
         let now = Arc::new(AtomicI64::new(START));
         let clock: Clock = {
@@ -126,6 +141,37 @@ async fn a_reading_takes_every_page_to_the_empty_one_and_observes_every_anime() 
     // The reading is on record.
     let (next_at, last_read_at) = env.store.caption_poll().await.unwrap().unwrap();
     assert_eq!((next_at, last_read_at), (START + 30 * MIN, Some(START)));
+}
+
+#[tokio::test]
+async fn a_reading_is_announced_as_an_anissia_change_even_when_it_finds_no_new_line() {
+    let (env, mut heard) = Env::announcing().await;
+    env.fake.set_recent(env.many(2));
+    env.observer.run_due().await.unwrap();
+    let mut told = Vec::new();
+    while let Ok(change) = heard.try_recv() {
+        told.push(change);
+    }
+    // The candidates list shows when Anissia was last read, so the record of
+    // the reading is announced with the lines it found.
+    assert!(
+        told.iter().any(|c| c.kind == ChangeKind::Anissia),
+        "{told:?}"
+    );
+
+    // A reading that finds nothing new still moves the time of the last reading.
+    env.advance(31 * MIN);
+    env.observer.run_due().await.unwrap();
+    let mut told = Vec::new();
+    while let Ok(change) = heard.try_recv() {
+        told.push(change);
+    }
+    assert!(
+        told.iter().any(|c| c.kind == ChangeKind::Anissia),
+        "{told:?}"
+    );
+    let (_, last_read_at) = env.store.caption_poll().await.unwrap().unwrap();
+    assert_eq!(last_read_at, Some(START + 31 * MIN));
 }
 
 #[tokio::test]

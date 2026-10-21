@@ -38,8 +38,8 @@ type LinesState =
 
 /**
  * The dialogue and timing lines of a plan, read from the server once the first time `enabled` turns true and kept for
- * the life of the page: the job is polled, and the lines of a whole-file change can be hundreds of KB, so they never
- * come with it. A plan's comparison does not change, so the kept lines are not read again.
+ * the life of the page: the job is read again on every change to it, and the lines of a whole-file change can be
+ * hundreds of KB, so they never come with it. A plan's comparison does not change, so the kept lines are not read again.
  */
 function useLines(jobId: string, planId: string, enabled: boolean): { state: LinesState; retry: () => void } {
   const key = `todo:replacement-lines:${planId}`;
@@ -309,7 +309,7 @@ function MoreButton({ more, onClick }: { more: number; onClick: () => void }) {
   );
 }
 
-/** The page polls the job; the rows of a whole file's lines are made once, not on every refresh. */
+/** The page reads the job again on every change; the rows of a whole file's lines are made once, not on every read. */
 function DialogueList({ lines }: { lines: readonly DialogueLine[] }) {
   const rows = useMemo(() => dialogueRows(lines), [lines]);
   const { visible, more, showMore } = useCut(rows.length);

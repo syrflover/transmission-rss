@@ -3,9 +3,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ApiError } from "@/lib/api";
 import { patch, store } from "@/lib/cached";
 import { newCommandId } from "@/lib/commands";
+import { useRead } from "@/lib/useRead";
 
 import { createSubtitleJob } from "../../todo/api";
-import { usePolled } from "../../todo/poll";
+import { candidatesChanged } from "./listens";
 import {
   candidatesKey,
   loadCandidates,
@@ -295,15 +296,20 @@ export function updatedText(c: SubtitleCandidate, now: Date = new Date()): strin
 
 // --- reading --------------------------------------------------------------------------------
 
-/** How often the list is read while a job or a refresh is going on, and otherwise. */
+/**
+ * How long to wait before reading the list again after a read that failed,
+ * while a job or a refresh is going on, and otherwise (the intervals the list was
+ * read at on a timer).
+ */
 const FAST_MS = 3000;
 const SLOW_MS = 60_000;
 
 /**
- * The season's candidates, read while the page is shown: often while a job of
- * a candidate or a refresh goes on, otherwise now and then (the worker reads
- * Anissia on its own every 30 minutes). A season or a movie with no Anissia link
- * is not read. `reload` reads at once, after an action of this page.
+ * The season's candidates, read again when the server says they changed
+ * (`listens.ts`): a job of a candidate or a refresh going on, and the worker's
+ * own reading of Anissia every 30 minutes, which announces what it wrote. A
+ * season or a movie with no Anissia link is not read again. `reload` reads at
+ * once, after an action of this page.
  */
 export function useCandidates(workId: string, season: number, animeNo: number | null, movie: number | null = null) {
   const target = useMemo<AnissiaTarget>(
@@ -311,10 +317,13 @@ export function useCandidates(workId: string, season: number, animeNo: number | 
     [season, movie],
   );
   const key = candidatesKey(workId, target, animeNo);
-  const polled = usePolled<CandidateList | null>(
+  const polled = useRead<CandidateList | null>(
     key,
     (signal) => (animeNo === null ? Promise.resolve(null) : loadCandidates(workId, target, signal)),
-    (data) => (animeNo === null ? null : data && active(data) ? FAST_MS : SLOW_MS),
+    {
+      match: (change) => candidatesChanged(change, workId, animeNo),
+      retryMs: (data) => (animeNo === null ? null : data && active(data) ? FAST_MS : SLOW_MS),
+    },
     "자막 후보를 불러오지 못했어요.",
   );
   const reload = useCallback(async () => {
@@ -322,7 +331,7 @@ export function useCandidates(workId: string, season: number, animeNo: number | 
     try {
       store(key, await loadCandidates(workId, target));
     } catch {
-      // The polling reads it again.
+      // The next change of the candidates reads it again.
     }
   }, [key, animeNo, workId, target]);
   /** Shows the candidates as taken by a job at once, before the next reading says so. */

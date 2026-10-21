@@ -1,9 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 
+import { createRereader } from "@/lib/rereads";
+import { sharedEvents } from "@/lib/sharedEvents";
+
 import { fetchJob, jobPath } from "../../todo/api";
 import { loadWork } from "../api";
-import { applyProgress, appliedShown, waitOver } from "./subtitles.ts";
+import { applyChanged } from "./listens";
+import { APPLY_WAIT_MS, applyProgress, appliedShown, waitOver } from "./subtitles.ts";
 
 /**
  * What the status says once the wait stopped: the job ended and the work shows it, the job stops for a person, or the
@@ -11,8 +15,8 @@ import { applyProgress, appliedShown, waitOver } from "./subtitles.ts";
  */
 type Stopped = { kind: "done" } | { kind: "waiting"; text: string } | { kind: "over" } | { kind: "unseen" };
 
-/** How often the job is read, in milliseconds. */
-const POLL_MS = 2000;
+/** How long to wait before reading the job again after a read that failed, in milliseconds. */
+const RETRY_MS = 2000;
 
 const OVER_TEXT = "아직 끝나지 않았어요.";
 const SHOWING_TEXT = "적용했어요. 라이브러리에 보이기를 기다려요.";
@@ -20,12 +24,12 @@ const UNSEEN_TEXT = "적용했어요. 라이브러리에는 아직 보이지 않
 
 /**
  * The line a stored copy shows after its apply was handed to the job (`적용을 맡겼어요`). The job's answer only says
- * it took the apply, so this reads the job (`GET /api/subtitle-jobs/{id}`, as the job page does) every
- * `POLL_MS` until it is no longer on its way, the way the app's other waits for the worker do (`web-app.md`,
+ * it took the apply, so this reads the job (`GET /api/subtitle-jobs/{id}`, as the job page does) when the server says
+ * the job changed, until it is no longer on its way, the way the app's other waits for trss do (`web-app.md`,
  * 웹 명령과 상태 갱신):
  *
- * - the next read is scheduled when the previous one has answered, nothing is read while the page is hidden, and it is
- *   read at once when the page is shown again; a read that fails is tried again;
+ * - changes that come while a read is under way make one more read after it, nothing is read while the page is
+ *   hidden, and everything is read when it is shown again; a read that fails is tried again after `RETRY_MS`;
  * - when the job ends `done`, the work is read the same way until it shows the apply (`appliedShown`): the job's
  *   record has the copy applied at once, but the episodes list the file only once the worker's reading of the watch
  *   folder found it, a few seconds later. Reading the work for the screen before that would take the stored copy off
@@ -64,17 +68,8 @@ export function ApplyStatus({
     const startedAt = Date.now();
     let gone = false;
     let finished = false;
-    let pending = false;
     let jobDone = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
-    let controller: AbortController | undefined;
-
-    const schedule = () => {
-      clearTimeout(timer);
-      timer = undefined;
-      if (gone || finished || document.hidden) return;
-      timer = setTimeout(run, POLL_MS);
-    };
 
     const finish = async (then: Stopped | { kind: "failed"; text: string }) => {
       finished = true;
@@ -89,59 +84,57 @@ export function ApplyStatus({
       else setStopped(then);
     };
 
-    function run() {
-      if (gone || finished || pending || document.hidden) return;
+    // The wait ran out while the job was on its way, or while the work did not show the finished apply yet.
+    const expire = () => {
+      finished = true;
       clearTimeout(timer);
-      timer = undefined;
-      if (waitOver(startedAt, Date.now())) {
-        finished = true;
-        setStopped({ kind: jobDone ? "unseen" : "over" });
-        return;
-      }
-      pending = true;
-      const mine = new AbortController();
-      controller = mine;
-      const read = jobDone
-        ? loadWork(workId, mine.signal).then((work) => {
-            if (gone || finished) return;
-            if (work === null || appliedShown(work, storedId)) void finish({ kind: "done" });
-          })
-        : fetchJob(job, mine.signal).then((detail) => {
-            if (gone || finished) return;
-            const progress = applyProgress(detail);
-            if (progress.kind === "done") {
-              jobDone = true;
-              setApplied(true);
-            } else if (progress.kind !== "running") {
-              void finish(progress);
-            }
-          });
-      read
-        .then(undefined, () => {
-          // Not read this time (a dropped connection, a restart): the state is unknown, not failed.
-        })
-        .finally(() => {
-          pending = false;
-          schedule();
-        });
-    }
-
-    const onVisibility = () => {
-      if (document.hidden) {
-        clearTimeout(timer);
-        timer = undefined;
-      } else {
-        run();
-      }
+      rereader.stop();
+      setStopped({ kind: jobDone ? "unseen" : "over" });
     };
 
-    document.addEventListener("visibilitychange", onVisibility);
-    run();
+    const rereader = createRereader({
+      read: async (signal) => {
+        if (gone || finished) return;
+        if (waitOver(startedAt, Date.now())) {
+          expire();
+          return;
+        }
+        if (!jobDone) {
+          const detail = await fetchJob(job, signal);
+          if (gone || finished) return;
+          const progress = applyProgress(detail);
+          if (progress.kind === "running") return;
+          if (progress.kind !== "done") {
+            void finish(progress);
+            return;
+          }
+          jobDone = true;
+          setApplied(true);
+        }
+        const work = await loadWork(workId, signal);
+        if (gone || finished) return;
+        if (work === null || appliedShown(work, storedId)) void finish({ kind: "done" });
+      },
+      // Not read this time (a dropped connection, a restart): the state is unknown, not failed.
+      retryMs: () => RETRY_MS,
+      hidden: () => document.hidden,
+    });
+
+    // Listening starts before the first read, so a change during it is heard.
+    const stopListening = sharedEvents().subscribe({
+      match: (change) => applyChanged(change, job, workId),
+      reread: () => rereader.request(),
+    });
+    // The wait is a clock of the page, not a read of the server: it ends when `APPLY_WAIT_MS` has passed whatever is heard.
+    timer = setTimeout(() => {
+      if (!gone && !finished) expire();
+    }, APPLY_WAIT_MS);
+    rereader.start();
     return () => {
       gone = true;
       clearTimeout(timer);
-      controller?.abort();
-      document.removeEventListener("visibilitychange", onVisibility);
+      stopListening();
+      rereader.stop();
     };
   }, [job, workId, storedId]);
 

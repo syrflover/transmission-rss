@@ -2,7 +2,7 @@
 //! worker leaves.
 
 use crate::{
-    world::{cut_and_restart, Base},
+    world::{cut_and_restart, set, told, Base},
     Handles,
 };
 use std::{path::Path, time::Duration};
@@ -26,7 +26,10 @@ struct Setup {
 }
 
 async fn setup() -> Setup {
-    let base = Base::new().await;
+    setup_over(Base::new().await)
+}
+
+fn setup_over(base: Base) -> Setup {
     let runner = base.runner(Sources::none().with_fake(FakeSource));
     Setup {
         _dir: base.dir,
@@ -136,6 +139,36 @@ async fn a_job_goes_from_found_to_receive_and_leaves_its_files_in_the_receive_ar
     let bytes = std::fs::read(s.area.at(file.path.as_deref().unwrap())).unwrap();
     assert_eq!(bytes, fake::ass("ep1"));
     assert_eq!(file.size, Some(bytes.len() as u64));
+}
+
+// 화면 알림(0155): 할 일 화면의 자막 작업 목록과 작업 상세는 그 작업이 만들어질 때와
+// 단계·상태가 바뀔 때의 `subtitle_job` 이벤트에 다시 읽어요. 단계, 항목, 파일의 쓰기가
+// 모두 같은 종류와 작업 ID로 알려져요.
+#[tokio::test]
+async fn a_job_is_announced_when_it_is_made_and_at_each_change_of_its_run() {
+    let (base, mut heard) = Base::announcing().await;
+    let s = setup_over(base);
+    heard.drain();
+
+    let id = make(&s, "c1", &[("1", "/ok/ep1"), ("2", "/ok/ep2")]).await;
+    assert_eq!(heard.drain(), set([told("subtitle_job", &id)]));
+
+    // Its steps, items and files are written while it runs: the screens hear
+    // of the job by its ID, and of nothing they do not read.
+    run(&s).await;
+    assert_eq!(detail(&s, &id).await.row.state, JobState::Done);
+    assert_eq!(heard.drain(), set([told("subtitle_job", &id)]));
+
+    // A job that waits for a person is announced as well.
+    let waiting = make(&s, "c2", &[("1", "/auth/1")]).await;
+    heard.drain();
+    run(&s).await;
+    assert_eq!(
+        detail(&s, &waiting).await.row.wait,
+        Some(Wait::Auth),
+        "the job waits for a site's check"
+    );
+    assert_eq!(heard.drain(), set([told("subtitle_job", &waiting)]));
 }
 
 #[tokio::test]

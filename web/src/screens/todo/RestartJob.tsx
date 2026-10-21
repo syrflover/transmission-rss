@@ -32,7 +32,7 @@ export function RestartJob({ jobId, reload }: { jobId: string; reload: () => Pro
     try {
       await reload();
     } catch {
-      // The polling reads it again.
+      // The job's change event reads it again.
     }
     setSending(false);
   };

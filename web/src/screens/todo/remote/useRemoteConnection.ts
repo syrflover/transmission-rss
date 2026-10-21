@@ -3,7 +3,7 @@ import { useCallback, useEffect, useRef, useState, type RefObject } from "react"
 import { store } from "@/lib/cached";
 
 import { fetchJob, type JobDetail } from "../api";
-import { KEYS } from "../poll";
+import { KEYS } from "../keys";
 import { deviceViewport, sameViewport } from "./geometry";
 import { MOVE_LIMIT_MS, nextMove, type Move, type MoveEvent } from "./move";
 import {

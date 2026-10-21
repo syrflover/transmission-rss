@@ -5,7 +5,10 @@
 //! fake; the real one is tested by `trss-subtitles`'s ignored `auth_sample`
 //! and `trss`'s ignored `remote_screen_docker`.
 
-use crate::{world::Base, Handles};
+use crate::{
+    world::{set, told, Base},
+    Handles,
+};
 use std::{
     collections::HashSet,
     path::Path,
@@ -253,7 +256,10 @@ struct Setup {
 }
 
 async fn setup(with_browser: bool) -> Setup {
-    let base = Base::new().await;
+    setup_over(Base::new().await, with_browser)
+}
+
+fn setup_over(base: Base, with_browser: bool) -> Setup {
     let browser = FakeBrowser::new();
     let mut runner = base.runner(Sources::none().with_fake(FakeSource));
     if with_browser {
@@ -415,6 +421,43 @@ async fn a_check_post_waits_with_its_run_bound_and_a_passed_check_brings_its_fil
         .at(&format!(".tmp/check-{id}-{}", d.items[0].id))
         .exists());
     assert_eq!(*s.browser.released.lock().unwrap(), vec![id.clone()]);
+}
+
+// 화면 알림(0155): 작업 상세의 원격 화면은 `subtitle_screen`에 다시 읽어요. 화면의 쓰기는
+// 자주 있어서 작업 목록이 듣는 `subtitle_job`과 따로 알려요.
+#[tokio::test]
+async fn the_remote_screen_of_a_job_is_announced_when_it_is_bound_ended_and_asked_again() {
+    let (base, mut heard) = Base::announcing().await;
+    let s = setup_over(base, true);
+    let id = make(&s, &[POST]).await;
+    heard.drain();
+
+    // A run is bound to the job that waits for the check.
+    run(&s).await;
+    let told_bound = heard.drain();
+    assert!(
+        told_bound.contains(&told("subtitle_screen", &id)),
+        "{told_bound:?}"
+    );
+    assert!(
+        told_bound.contains(&told("subtitle_job", &id)),
+        "{told_bound:?}"
+    );
+
+    // The run ends and leaves the screen closed.
+    tend(&s).await;
+    s.browser.give(Next::Ended);
+    until(|| async { s.screens.screen(&id).await.unwrap().unwrap().state == ScreenState::Closed })
+        .await;
+    assert!(heard.drain().contains(&told("subtitle_screen", &id)));
+
+    // A person opens the job's page, which asks for the screen again.
+    s.screens
+        .request_prepare(&id, 5_000)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(heard.drain(), set([told("subtitle_screen", &id)]));
 }
 
 #[tokio::test]

@@ -604,7 +604,7 @@ export function fetchJob(id: string, signal?: AbortSignal): Promise<JobDetail> {
  * check again if its server browser is gone, and counts as use of a live one.
  * Answers the screen as it is now, or `null` when the job has none. Only the
  * opening of the page (and the person's `다시 열기`) sends this; reading the
- * job, polling and reconnecting never do.
+ * job, again on a change or after reconnecting, never does.
  */
 export function prepareScreen(id: string): Promise<JobScreen | null> {
   return api<JobScreen | null>(`/subtitle-jobs/${encodeURIComponent(id)}/screen`, { method: "POST" });

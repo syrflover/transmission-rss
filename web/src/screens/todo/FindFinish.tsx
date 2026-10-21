@@ -6,7 +6,7 @@ import { patch } from "@/lib/cached";
 
 import { btnAction } from "../collect/channels/styles";
 import { finishJob, type JobDetail } from "./api";
-import { KEYS } from "./poll";
+import { KEYS } from "./keys";
 
 const FINISH_FAILED = "받기를 끝내지 못했어요. 잠시 뒤 다시 시도해 주세요.";
 

@@ -1,4 +1,4 @@
-import type { FailureClass, FileFormat, JobRow, JobState, ItemState, UploadSummary, Wait } from "./api";
+import type { FailureClass, FileFormat, JobRow, ItemState, UploadSummary, Wait } from "./api";
 import { sizeText } from "../../lib/size.ts";
 import { MOVIE_LABEL } from "../library/detail/movie.ts";
 import { findShown } from "./findState.ts";
@@ -104,9 +104,4 @@ export function shownItem(state: ItemState, wait: Wait | null): Shown | "item-pe
     default:
       return state;
   }
-}
-
-/** A job that has ended: its detail stops polling. */
-export function ended(state: JobState): boolean {
-  return state === "done" || state === "failed" || state === "partial";
 }

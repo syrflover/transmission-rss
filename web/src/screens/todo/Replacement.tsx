@@ -11,7 +11,7 @@ import { decideReplacement, decideReplacements, fetchJob, type JobDetail, type R
 import { Badge, Tag } from "./badges";
 import { ChangesSection } from "./Changes";
 import { ChevronIcon, WarningIcon } from "./icons";
-import { KEYS } from "./poll";
+import { KEYS } from "./keys";
 import {
   againNotice,
   asEpisodeList,
@@ -61,7 +61,7 @@ function useDecision(jobId: string) {
     try {
       store(KEYS.job(jobId), await fetchJob(jobId));
     } catch {
-      // The polling reads it again.
+      // The job's change event reads it again.
     }
   };
 

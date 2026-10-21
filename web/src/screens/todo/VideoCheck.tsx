@@ -9,7 +9,7 @@ import { store } from "@/lib/cached";
 import { btnAction } from "../collect/channels/styles";
 import { filesPath } from "../library/storage";
 import { checkVideo, fetchTodos, type VideoCheckTodo } from "./api";
-import { KEYS } from "./poll";
+import { KEYS } from "./keys";
 
 /** Where a video's `회차 확인 필요` card goes: the work's 파일 card, which lists the video. */
 export function videoCheckPath(todo: VideoCheckTodo): string {
@@ -40,7 +40,7 @@ export function VideoCheckActions({ todo, onRefresh }: { todo: VideoCheckTodo; o
     try {
       store(KEYS.todos, await fetchTodos());
     } catch {
-      // The screen's polling reads the list again.
+      // The check's change event reads the list again.
     }
     refreshTodoCount();
     try {

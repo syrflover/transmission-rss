@@ -4,16 +4,24 @@
 //! files under a folder.
 
 use crate::Handles;
-use std::sync::{
-    atomic::{AtomicI64, Ordering},
-    Arc,
+use std::{
+    collections::BTreeSet,
+    sync::{
+        atomic::{AtomicI64, Ordering},
+        Arc,
+    },
 };
 
 use tempfile::TempDir;
+use tokio::sync::broadcast::{error::TryRecvError, Receiver};
 use trss_collect::store::{
     channels::ChannelStore, history::HistoryStore, revisions::RevisionStore,
 };
-use trss_core::{settings::SettingsStore, Clock, Db, DbError, Millis};
+use trss_core::{
+    changes::{Change, Changes},
+    settings::SettingsStore,
+    Clock, Db, DbError, Millis,
+};
 use trss_jobs::{
     area::ReceiveArea,
     todo::{self, TodoError, TodoList},
@@ -43,6 +51,40 @@ pub async fn cut_and_restart(store: &Handles, id: &str) {
     );
     let row = store.views.detail(id).await.unwrap().unwrap().row;
     assert_eq!((row.state, row.stage), (JobState::Running, stage));
+}
+
+/// What a database that announces its writes has announced
+/// ([`Base::announcing`]).
+pub struct Heard(Receiver<Change>);
+
+/// A change as the event stream names it: the kind and the ID, `None` for
+/// "no ID".
+pub type Told = (&'static str, Option<String>);
+
+impl Heard {
+    /// What was announced since the last call, once each.
+    pub fn drain(&mut self) -> BTreeSet<Told> {
+        let mut told = BTreeSet::new();
+        loop {
+            match self.0.try_recv() {
+                Ok(change) => {
+                    told.insert((change.kind.name(), change.id));
+                }
+                Err(TryRecvError::Lagged(_)) => continue,
+                Err(_) => return told,
+            }
+        }
+    }
+}
+
+/// `(kind, Some(id))`.
+pub fn told(kind: &'static str, id: &str) -> Told {
+    (kind, Some(id.to_owned()))
+}
+
+/// The changes in `items`, to compare with what [`Heard::drain`] gave.
+pub fn set<const N: usize>(items: [Told; N]) -> BTreeSet<Told> {
+    BTreeSet::from(items)
 }
 
 /// A clock that starts at 1_000 and ticks 10 ms at every call, the first call
@@ -138,10 +180,26 @@ impl Base {
         Base::open(tempfile::tempdir().unwrap()).await
     }
 
+    /// [`Base::new`] over a database whose writes are announced, and what it
+    /// announces from now on. The screens listen to those (`docs/tickets/0155`).
+    pub async fn announcing() -> (Base, Heard) {
+        let changes = Changes::default();
+        let heard = Heard(changes.subscribe());
+        let dir = tempfile::tempdir().unwrap();
+        let db = Db::open_announcing(dir.path().join("app.db"), changes)
+            .await
+            .unwrap();
+        (Base::over(dir, db), heard)
+    }
+
     /// The base over the database at `dir/app.db`, which a test may have
     /// left as an earlier release did: opening it migrates it.
     pub async fn open(dir: TempDir) -> Base {
         let db = Db::open(dir.path().join("app.db")).await.unwrap();
+        Base::over(dir, db)
+    }
+
+    fn over(dir: TempDir, db: Db) -> Base {
         let store = Handles::new(db.clone());
         let area = ReceiveArea::in_app_data(dir.path());
         Base {
