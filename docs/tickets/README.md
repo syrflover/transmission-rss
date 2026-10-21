@@ -193,7 +193,7 @@
 | [0148](0148-one-instance-lock-and-cycle-stall.md) | 잠금을 단일 실행 잠금 하나로 바꾸고 수집 멈춤을 수집 주기만으로 판정해요 | 완료 | 0147 |
 | [0149](0149-no-worker-in-texts.md) | 화면과 서버가 보내는 문구에서 worker를 빼요 | 완료 | 0146 |
 | [0150](0150-trss-crate-tests-by-adr-0015.md) | `trss` 크레이트의 테스트를 테스트 나눔 ADR에 맞춰요 | 완료 | 0148 |
-| [0151](0151-probe-rename-exchange.md) | 서버의 미디어 파일시스템이 `RENAME_EXCHANGE`를 지원하는지 `trss-probe`로 확인해요 | 대기 | 0144 |
+| [0151](0151-probe-rename-exchange.md) | 서버의 미디어 파일시스템이 `RENAME_EXCHANGE`를 지원하는지 `trss-probe`로 확인해요 | 진행 중 | 0144 |
 | [0152](0152-interrupted-jobs-stop.md) | 실행 도중 끊긴 자막 작업을 `중단됨`으로 멈추고 사람이 다시 시작하게 해요 | 완료 | 0145 |
 | [0153](0153-no-effect-records.md) | 자막 작업의 효과별 기록을 없애고 단계를 기록 없이 다시 해도 안전하게 해요 | 대기 | 0151, 0152 |
 | [0154](0154-change-events-and-command-reads.md) | 바뀜을 알리는 SSE 경로를 만들고 명령과 지난 회차 검색의 주기 조회를 바꿔요 | 대기 | 0147 |
