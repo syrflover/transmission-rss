@@ -177,7 +177,7 @@
 - web과 worker를 한 프로세스로 합쳐요([한 프로세스 ADR](../adr/0019-one-process-for-web-and-worker.md)).
 - 실행 도중 끊긴 자막 작업은 멈춰 두고 사람이 다시 시작해요([끊긴 작업 ADR](../adr/0020-interrupted-jobs-wait-for-a-restart.md)).
 - 화면의 TypeScript 타입을 Rust 응답 구조체에서 생성 도구로 만들어요([모듈 구성](../specs/web-app.md#공통-라이브러리의-모듈-구성)).
-- 기능 크레이트를 묶을지는 합친 뒤 테스트 빌드 시간을 다시 측정하고 정해요. 2026-10-21 `5cdae9e`에서 `trss-core`를 건드린 뒤 `cargo test --workspace --no-run -j 4`가 94초였고, 그중 `trss-worker`의 단위가 64.1초였어요.
+- 기능 크레이트를 묶을지는 합친 뒤 테스트 빌드 시간을 다시 측정하고 정해요. 2026-10-21 `d8432c8a`에서 `trss-core`를 고친 뒤 `cargo test --workspace --no-run -j 4`가 증분 캐시를 다시 쓰면 13.7초, 증분 컴파일을 끄면 81.2초였어요([기준값](lighter-structure.md#기준값)).
 
 이 일은 0.7.0 피드백의 남은 티켓(0140·0143), [리팩터링 뒤의 명세 차이 수정](#리팩터링-뒤의-명세-차이-수정)의 대기 티켓, 목표 6보다 먼저 해요(사용자 결정, 2026-10-21). 남은 티켓을 새 구조에서 만들려는 거예요.
 요구와 완료 기준, 순서, 결정은 [구조 가볍게 하기 명세](lighter-structure.md)에 있어요.
@@ -186,7 +186,7 @@
 
 | 티켓 | 제목 | 상태 | 막는 티켓 |
 | --- | --- | --- | --- |
-| [0144](0144-lighter-structure-baseline.md) | 구조를 바꾸기 전의 테스트·빌드 시간과 인계 코드 줄 수를 측정해요 | 대기 | 없음 |
+| [0144](0144-lighter-structure-baseline.md) | 구조를 바꾸기 전의 테스트·빌드 시간과 인계 코드 줄 수를 측정해요 | 완료 | 없음 |
 | [0145](0145-merge-web-and-worker-crates.md) | `trss-web`과 `trss-worker` 크레이트를 `trss` 크레이트 하나로 합쳐요 | 대기 | 0144 |
 | [0146](0146-one-trss-process-and-container.md) | web과 worker를 `trss` 프로세스 하나와 컨테이너 하나로 돌려요 | 대기 | 0145 |
 | [0147](0147-commands-start-at-once.md) | 명령과 자막 작업을 적은 곳에서 바로 실행을 시작해요 | 대기 | 0146 |

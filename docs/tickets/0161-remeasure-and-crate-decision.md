@@ -8,13 +8,15 @@
 
 코드를 바꾸는 마지막 티켓을 마친 커밋에서, [0144](0144-lighter-structure-baseline.md)와 같은 명령과 스크립트로 다시 측정해요. 견준 값을 사용자에게 보이고, 기능 크레이트를 묶을지 사용자 결정을 받아요. 묶는 일은 이 명세의 범위 밖이에요.
 
+빌드 시간은 [명세의 기준값에서 `trss-core`를 고친 뒤의 빌드 시간](lighter-structure.md#trss-core를-고친-뒤의-빌드-시간)처럼 warm은 warm끼리, cold는 cold끼리 견줘요. 증분 캐시를 얼마나 다시 쓰는지에 따라 같은 고침의 빌드가 11.9초에서 99.2초까지 달라졌기 때문이에요.
+
 인계 코드의 줄 수는 `trss-core`의 같은 파일들과 `trss` 크레이트를 세어, 0144의 `trss-core` 파일들과 `trss-web`·`trss-worker` 크레이트에 견줘요.
 
 ## 완료 기준
 
 - [ ] 0144와 같은 명령, 스크립트, 빌드 상태로 측정한 값이 커밋과 날짜와 함께 이 티켓의 결과와 [명세의 결과](lighter-structure.md#결과)에 있어요.
   - `cargo test --workspace -j 4`를 빌드 뒤 다시 실행했을 때의 테스트 바이너리 시간 합과 테스트 수
-  - `trss-core`를 건드린 뒤 `cargo test --workspace --no-run -j 4`의 빌드 시간과, 크레이트별 빌드 시간
+  - `dev/measure/core-edit-build.sh`로 측정한, `trss-core`를 고친 뒤 `cargo test --workspace --no-run -j 4`의 warm·cold 빌드 시간과 크레이트별 빌드 시간
   - 인계 코드의 줄 수
 - [ ] 0144의 값과 견준 표가 결과에 있어요.
 - [ ] 측정하는 동안 다른 빌드나 테스트가 기계를 함께 쓰지 않았는지 확인해 결과에 적어요.

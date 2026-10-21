@@ -8,7 +8,7 @@
 - 자막 작업은 단계와 효과마다 기록을 남겨, 다시 시작할 때 디스크와 대조해 이어 해요. 이 기록을 담는 테이블이 `jobs/store_apply.sql`에만 9개예요. 서버에서 이 재개가 일어난 것을 본 기록은 없어요([끊긴 작업 ADR](../adr/0020-interrupted-jobs-wait-for-a-restart.md)).
 - 화면의 TypeScript 타입은 Rust 응답과 손으로 맞춰요. `trss-web`에는 `Serialize`를 붙인 구조체·열거형이 206개, 테스트 밖의 `json!` 호출이 75곳 있어요.
 - 화면은 서버 상태를 18곳에서 주기적으로 다시 읽어요. 간격은 0.7초에서 60초예요.
-- 2026-10-21 `5cdae9e`에서 `trss-core`를 건드린 뒤 `cargo test --workspace --no-run -j 4`가 94초 걸렸고, 그중 `trss-worker` 단위의 빌드가 64.1초였어요.
+- 2026-10-21 `5cdae9e`에서 `cargo test --workspace --no-run -j 4`가 94초 걸렸고, 그중 `trss-worker` 단위의 빌드가 64.1초였어요. 이 빌드는 외부 크레이트도 다시 빌드해서 `trss-core`만 고친 빌드가 아니었어요. `trss-core`를 고친 뒤의 빌드는 [기준값](#기준값)에서 다시 측정했어요.
 - 같은 날 같은 코드에서 `cargo test --workspace -j 4`를 빌드 뒤 다시 실행하니, 테스트 바이너리 31개의 시간 합이 43.2초였고 테스트는 3,086개였어요. 기본 실행에서 테스트가 하나도 돌지 않는 `remote_screen_docker`가 빌드에 15.6초를 써요.
 - 테스트 코드는 Rust 코드의 약 55%예요. 테스트가 139k줄, 제품 코드가 114k줄이에요. 파일 이름과 `mod tests`로 나눈 어림값이에요.
 
@@ -133,7 +133,7 @@
 
 - [ ] 첫 티켓을 시작하는 커밋과 코드를 바꾸는 마지막 티켓을 마친 커밋에서 같은 명령으로 측정하고, 이 명세의 결과에 커밋과 날짜를 붙여 적어요.
   - `cargo test --workspace -j 4`를 빌드 뒤 다시 실행했을 때의 테스트 바이너리 시간 합과 테스트 수
-  - `trss-core`를 건드린 뒤 `cargo test --workspace --no-run -j 4`의 빌드 시간과, 크레이트별 빌드 시간
+  - `trss-core`를 고친 뒤 `cargo test --workspace --no-run -j 4`의 빌드 시간과, 크레이트별 빌드 시간. [`trss-core`를 고친 뒤의 빌드 시간](#trss-core를-고친-뒤의-빌드-시간)처럼 warm과 cold를 따로 측정해요.
   - 위에서 센 인계 코드의 줄 수
 - [ ] 측정 결과를 사용자에게 보이고, 기능 크레이트를 묶을지 사용자 결정을 받아요. 묶는 일은 이 명세의 범위 밖이에요.
 
@@ -229,4 +229,110 @@
 
 ## 결과
 
-아직 시작하지 않았어요.
+2026-10-21에 [0144](0144-lighter-structure-baseline.md)에서 기준값을 측정했어요. 나머지 티켓은 아직 시작하지 않았어요.
+
+### 기준값
+
+2026-10-21에 `d8432c8a`를 측정했어요. 코드는 [목표와 범위](#목표와-범위)의 값을 측정한 `5cdae9e`와 같고, 그 뒤의 커밋은 문서만 바꿨어요.
+개발 PC(Ryzen 5 5600X, 12 스레드, RAM 32 GB, glibc, rustc 1.99.1)에서 측정했고, 측정마다 시작할 때 다른 cargo 빌드나 테스트는 돌고 있지 않았어요. 원자료는 이 PC의 `dev/local/measure/0144/`에 있어요.
+
+#### 테스트 시간
+
+- 명령은 `cargo test --locked --workspace -j 4`예요.
+- 빌드 상태는 같은 명령에 `--no-run`을 붙여 한 번 빌드한 뒤, 바꾸지 않고 다시 돈 것이에요. 이 상태로 두 번 측정했어요.
+- 처음 빌드는 ``Finished `test` profile [unoptimized + debuginfo] target(s) in 0.16s``였어요. 이미 빌드해 둔 `target/`이라 다시 컴파일한 것이 없었어요.
+
+| | 1회 | 2회 |
+| --- | ---: | ---: |
+| cargo의 `Finished … in` | 0.11s | 0.11s |
+| 테스트 바이너리 31개의 `finished in` 합 | 43.0초 | 43.0초 |
+| 통과·실패·무시 | 3,086·0·14 | 3,086·0·14 |
+
+- `5cdae9e`에서 측정한 43.2초, 3,086개와 같은 코드이고, 합의 차이는 0.2초예요.
+- doc test는 13개 크레이트에서 돌지만 테스트가 0개예요.
+
+테스트 바이너리마다의 `finished in`이에요. `dev/measure/test-times.py`로 모았어요.
+
+| 바이너리 | 1회 | 2회 |
+| --- | ---: | ---: |
+| trss-web lib | 7.00초 | 7.00초 |
+| trss-worker `tests/it` | 6.59초 | 6.58초 |
+| trss-jobs `tests/it` | 3.47초 | 3.45초 |
+| trss-browser `tests/it` | 3.15초 | 3.16초 |
+| trss-web `tests/subtitle_upload_peak.rs` | 2.92초 | 2.93초 |
+| trss-jobs `tests/extract_process.rs` | 2.72초 | 2.72초 |
+| trss-collect lib | 2.66초 | 2.67초 |
+| trss-library lib | 2.08초 | 2.07초 |
+| trss-archive `tests/it` | 2.08초 | 2.03초 |
+| trss-collect `tests/revision_crc_peak.rs` | 1.91초 | 1.91초 |
+| trss-jobs lib | 1.77초 | 1.77초 |
+| trss-browser lib | 1.50초 | 1.50초 |
+| trss-web `tests/artwork_serving_peak.rs` | 1.44초 | 1.43초 |
+| trss-core lib | 1.34초 | 1.35초 |
+| trss-subtitles lib | 1.07초 | 1.07초 |
+| trss-anilist lib | 0.69초 | 0.69초 |
+| trss-anissia lib | 0.21초 | 0.21초 |
+| trss-library `tests/artwork_header_check.rs` | 0.16초 | 0.16초 |
+| trss-web `tests/artwork_upload_peak.rs` | 0.11초 | 0.11초 |
+| trss-probe main | 0.08초 | 0.08초 |
+| trss-worker lib | 0.08초 | 0.08초 |
+| trss-transmission lib | 0.01초 | 0.01초 |
+| trss-import lib | 0.01초 | 0.01초 |
+| 나머지 8개 | 각 0.00초 | 각 0.00초 |
+
+나머지 8개는 trss-archive lib, trss-subtitles `tests/it`, trss-web `tests/remote_screen_docker.rs`, trss-jobs의 `trss-extract`, trss-web·trss-worker·trss-browser의 main, trss-browser의 `fake_chromium`이에요.
+
+#### `trss-core`를 고친 뒤의 빌드 시간
+
+`dev/measure/core-edit-build.sh`로 측정했어요. 스크립트는 `crates/trss-core/src/lib.rs` 끝에 값이 매번 다른 공개 상수를 더하고 `cargo test --locked --workspace --no-run -j 4 --timings`로 빌드하기를 세 번 해요. 파일을 건드리기만 하면 kache가 캐시한 컴파일 결과를 돌려줘 2.3초에 끝나서, 내용을 바꿔요.
+
+- prime은 첫 번째 고침이에요. 증분 캐시를 채우는 빌드이고, 그 전에 무엇을 빌드했는지에 따라 달라져서 견주지 않아요.
+- warm은 두 번째 고침이에요. 첫 번째의 증분 캐시를 다시 써서, 고치고 다시 빌드하는 평소 작업과 같아요.
+- cold는 세 번째 고침을 `CARGO_INCREMENTAL=0`으로 빌드한 것이에요. `trss-core`에 기대는 크레이트를 모두 처음부터 컴파일해요. cargo가 이 설정을 fingerprint에 넣어서, 고치지 않은 상태로 같은 설정의 빌드를 먼저 해 두고 측정해요.
+
+| | prime | warm | cold |
+| --- | ---: | ---: | ---: |
+| wall time | 12.7초 | 13.7초 | 81.2초 |
+| 빌드한 단위 | 43개 | 43개 | 43개 |
+| 단위 시간의 합 | 49.0초 | 50.7초 | 306.6초 |
+
+단위 시간은 cargo가 적은 단위마다의 시작부터 끝까지라, 함께 돈 단위의 합은 wall time보다 길어요. 크레이트마다 단위 시간의 합이에요. `dev/measure/build-units.py`로 `--timings` 결과에서 읽었어요.
+
+| 크레이트 | warm | cold |
+| --- | ---: | ---: |
+| trss-web | 14.5초 | 95.9초 |
+| trss-worker | 7.8초 | 61.3초 |
+| trss-jobs | 7.2초 | 44.3초 |
+| trss-collect | 5.5초 | 38.5초 |
+| trss-library | 3.8초 | 19.3초 |
+| trss-browser | 4.3초 | 16.2초 |
+| trss-subtitles | 2.7초 | 11.0초 |
+| trss-core | 1.4초 | 10.7초 |
+| trss-anilist | 1.3초 | 4.0초 |
+| trss-anissia | 1.4초 | 3.4초 |
+| trss-import | 0.8초 | 2.1초 |
+
+cold에서 오래 걸린 단위는 trss-web 단위 테스트(51.8초), trss-collect 단위 테스트(29.4초), trss-jobs `tests/it`(28.8초), trss-worker `tests/it`(24.8초), trss-web lib(22.8초), trss-worker bin(19.6초), trss-web `tests/remote_screen_docker.rs`(15.0초), trss-worker 단위 테스트(14.7초)예요.
+
+[목표와 범위](#목표와-범위)의 94초 빌드는 단위 67개를 빌드했어요. `trss-core`에 기대는 단위 43개의 합은 306.8초로 cold와 거의 같았고, 외부 크레이트의 단위 18개(22.5초)와 trss-archive·trss-transmission·trss-probe의 단위 6개(7.8초)를 더 빌드했어요. 그래서 그 값은 견주는 데 쓰지 않아요.
+
+#### 인계 코드의 줄 수
+
+`dev/measure/handoff-lines.sh d8432c8a`로 셌어요. 커밋된 `.rs` 파일의 모든 줄을 세서, 주석과 빈 줄도 들어가요. `5cdae9e`에서 센 값과 같아요.
+
+| `trss-core`의 파일 | 줄 수 |
+| --- | ---: |
+| `commands/` | 1,198 |
+| `queue.rs` | 558 |
+| `wake.rs` | 89 |
+| `heartbeat.rs` | 727 |
+| `lock.rs` | 770 |
+| `folder_locks.rs` | 531 |
+| 합 | 3,873 |
+
+| 크레이트 | `src`의 테스트 파일 밖 | `src`의 테스트 파일 | `tests/` | 합 |
+| --- | ---: | ---: | ---: | ---: |
+| `trss-web` | 23,602 | 22,441 | 1,784 | 47,827 |
+| `trss-worker` | 3,444 | 0 | 7,059 | 10,503 |
+
+`src`의 테스트 파일은 `tests.rs`와 `tests/` 폴더 아래의 파일이에요. 다른 파일 안의 `mod tests`는 테스트 파일 밖으로 세요.
