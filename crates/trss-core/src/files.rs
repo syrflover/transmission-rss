@@ -1,6 +1,6 @@
 //! File tools several features share: the rename that never replaces, the
-//! folder sync that makes a rename outlast a power loss, and the writes built
-//! on them.
+//! exchange that swaps two files in one step, the folder sync that makes a
+//! rename outlast a power loss, and the writes built on them.
 //!
 //! A write that must survive a power loss goes through a new file (written
 //! and synced), a rename that replaces nothing, and a sync of the folders the
@@ -123,6 +123,23 @@ pub fn sync_renamed(from: &Path, to: &Path) -> io::Result<()> {
 pub fn rename_noreplace_synced(from: &Path, to: &Path) -> io::Result<()> {
     rename_noreplace(from, to)?;
     sync_renamed(from, to)
+}
+
+/// Swaps the files (or folders) at `a` and `b` in one step, with
+/// `renameat2(RENAME_EXCHANGE)`: each name holds the other's file after it,
+/// and at no moment is either name empty. Both must be there (`NotFound`
+/// otherwise, and nothing moves). There is no fallback: a filesystem without
+/// the flag answers `InvalidInput` or `Unsupported`.
+pub fn rename_exchange(a: &Path, b: &Path) -> io::Result<()> {
+    renameat_with(CWD, a, CWD, b, RenameFlags::EXCHANGE).map_err(io::Error::from)
+}
+
+/// [`rename_exchange`], then [`sync_renamed`] of the two folders. An error
+/// from the sync leaves the files swapped: the swap is not known to outlast a
+/// power loss.
+pub fn rename_exchange_synced(a: &Path, b: &Path) -> io::Result<()> {
+    rename_exchange(a, b)?;
+    sync_renamed(a, b)
 }
 
 /// Makes the new file `path`, lets `fill` write it, and syncs it, so what
@@ -583,6 +600,74 @@ mod tests {
         assert_eq!(text(&to.join("b")), "bytes");
         // The folder the file went to was synced before the failing one.
         assert_eq!(testing::syncs_of(&to), 1);
+    }
+
+    #[test]
+    fn an_exchange_swaps_the_two_files_and_syncs_both_folders() {
+        let dir = tempfile::tempdir().unwrap();
+        let (aside, beside) = (dir.path().join("aside"), dir.path().join("beside"));
+        std::fs::create_dir(&aside).unwrap();
+        std::fs::create_dir(&beside).unwrap();
+        let (new, current) = (aside.join("n1"), beside.join("a.ass"));
+        put(&new, "new");
+        put(&current, "current");
+        let inode = |path: &Path| {
+            use std::os::unix::fs::MetadataExt;
+            std::fs::metadata(path).unwrap().ino()
+        };
+        let (new_inode, current_inode) = (inode(&new), inode(&current));
+        rename_exchange_synced(&new, &current).unwrap();
+        assert_eq!(text(&current), "new");
+        assert_eq!(text(&new), "current");
+        // The files moved, each keeping its inode.
+        assert_eq!((inode(&current), inode(&new)), (new_inode, current_inode));
+        assert_eq!(testing::syncs_of(&aside), 1);
+        assert_eq!(testing::syncs_of(&beside), 1);
+
+        // Swapped again, each is back where it was.
+        rename_exchange(&new, &current).unwrap();
+        assert_eq!(
+            (text(&current), text(&new)),
+            ("current".into(), "new".into())
+        );
+    }
+
+    #[test]
+    fn an_exchange_within_a_folder_syncs_it_once() {
+        let dir = tempfile::tempdir().unwrap();
+        put(&dir.path().join("a"), "one");
+        put(&dir.path().join("b"), "two");
+        rename_exchange_synced(&dir.path().join("a"), &dir.path().join("b")).unwrap();
+        assert_eq!(text(&dir.path().join("a")), "two");
+        assert_eq!(text(&dir.path().join("b")), "one");
+        assert_eq!(testing::syncs_of(dir.path()), 1);
+    }
+
+    #[test]
+    fn an_exchange_with_a_name_that_is_not_there_moves_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        put(&dir.path().join("a"), "one");
+        for (a, b) in [("a", "none"), ("none", "a")] {
+            let err = rename_exchange_synced(&dir.path().join(a), &dir.path().join(b)).unwrap_err();
+            assert_eq!(err.kind(), io::ErrorKind::NotFound, "{a} with {b}");
+        }
+        assert_eq!(text(&dir.path().join("a")), "one");
+        assert!(!occupied(&dir.path().join("none")).unwrap());
+        assert_eq!(testing::syncs_of(dir.path()), 0);
+    }
+
+    #[test]
+    fn an_exchange_whose_sync_fails_is_an_error_though_the_files_are_swapped() {
+        let dir = tempfile::tempdir().unwrap();
+        let (from, to) = (dir.path().join("from"), dir.path().join("to"));
+        std::fs::create_dir(&from).unwrap();
+        std::fs::create_dir(&to).unwrap();
+        put(&from.join("a"), "one");
+        put(&to.join("b"), "two");
+        let _failing = testing::fail_syncs_of(&from);
+        assert!(rename_exchange_synced(&from.join("a"), &to.join("b")).is_err());
+        assert_eq!(text(&to.join("b")), "one");
+        assert_eq!(text(&from.join("a")), "two");
     }
 
     #[test]
