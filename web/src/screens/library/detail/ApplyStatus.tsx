@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 
-import { POLL_MS } from "../../collect/history/useRetry";
 import { fetchJob, jobPath } from "../../todo/api";
 import { loadWork } from "../api";
 import { applyProgress, appliedShown, waitOver } from "./subtitles.ts";
@@ -11,6 +10,9 @@ import { applyProgress, appliedShown, waitOver } from "./subtitles.ts";
  * wait ran out while the job was on its way (`over`) or while the work did not show the finished apply yet (`unseen`).
  */
 type Stopped = { kind: "done" } | { kind: "waiting"; text: string } | { kind: "over" } | { kind: "unseen" };
+
+/** How often the job is read, in milliseconds. */
+const POLL_MS = 2000;
 
 const OVER_TEXT = "아직 끝나지 않았어요.";
 const SHOWING_TEXT = "적용했어요. 라이브러리에 보이기를 기다려요.";

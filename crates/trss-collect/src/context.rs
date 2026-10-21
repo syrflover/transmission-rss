@@ -127,6 +127,7 @@ impl CollectContext {
             history: self.history.clone(),
             settings: self.settings.clone(),
             transmission: self.transmission.clone(),
+            commands: self.commands.clone(),
         }
     }
 

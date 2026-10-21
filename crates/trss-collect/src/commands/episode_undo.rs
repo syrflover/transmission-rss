@@ -121,7 +121,7 @@ use serde::{Deserialize, Serialize};
 use transmission_rpc::types::Id;
 
 use trss_core::{
-    commands::{Command, CommandState, Outcome},
+    commands::{Command, CommandState, CommandStore, Outcome},
     episode::signed,
     files::occupied,
     folder_locks::Section,
@@ -158,6 +158,9 @@ pub struct UndoContext {
     /// Where the collect folder is read from.
     pub settings: SettingsStore,
     pub transmission: TransmissionLink,
+    /// Announces the undo's progress, which the rule detail shows while the
+    /// command runs.
+    pub commands: CommandStore,
 }
 
 /// The `kind` of the command.
@@ -489,6 +492,8 @@ pub async fn run(ctx: &UndoContext, command: &Command, clock: &Clock) -> Result<
         }
     };
 
+    // The files are recorded: the rule detail shows them from here on.
+    ctx.commands.announce_progress(&command.id);
     let mut listing = Listing::default();
     let mut pending: Vec<&NewUndoFile> = undo
         .files
@@ -499,7 +504,11 @@ pub async fn run(ctx: &UndoContext, command: &Command, clock: &Clock) -> Result<
     let mut waiting = 0;
     while !pending.is_empty() {
         let file = pending.remove(next(&pending));
-        match carry_on(ctx, &command.id, file, &mut listing, clock).await {
+        let carried = carry_on(ctx, &command.id, file, &mut listing, clock).await;
+        if carried.is_ok() {
+            ctx.commands.announce_progress(&command.id);
+        }
+        match carried {
             Ok(true) => {}
             Ok(false) => waiting += 1,
             // The value is back: the files left wait for a new request

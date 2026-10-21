@@ -540,3 +540,158 @@ async fn the_first_name_noted_on_a_running_command_stays_through_its_next_start(
     let again = commands.claim_next(1_300).await.unwrap().unwrap();
     assert_eq!(again.original_name.as_deref(), Some("a.mkv"));
 }
+
+/// A store announcing on a channel, and what a listener on it has heard so far.
+async fn announcing_store() -> (tempfile::TempDir, CommandStore, Listener) {
+    let (dir, db, _) = store().await;
+    let changes = Changes::default();
+    let listener = Listener(changes.subscribe());
+    (dir, CommandStore::new(db).announcing(changes), listener)
+}
+
+struct Listener(tokio::sync::broadcast::Receiver<crate::changes::Change>);
+
+impl Listener {
+    /// The IDs of the commands announced since the last call, each with its
+    /// kind checked.
+    fn heard(&mut self) -> Vec<String> {
+        let mut ids = Vec::new();
+        while let Ok(change) = self.0.try_recv() {
+            assert_eq!(change.kind, ChangeKind::Command);
+            ids.push(change.id);
+        }
+        ids
+    }
+}
+
+#[tokio::test]
+async fn a_command_is_announced_when_it_is_accepted_started_and_ended() {
+    let (_dir, commands, mut listener) = announcing_store().await;
+
+    commands
+        .accept(new("cmd-1", "{}", None), 1_000)
+        .await
+        .unwrap();
+    assert_eq!(listener.heard(), ["cmd-1"]);
+
+    commands.claim_next(1_100).await.unwrap().unwrap();
+    assert_eq!(listener.heard(), ["cmd-1"]);
+
+    assert!(commands
+        .finish("cmd-1", CommandState::Done, done(), 1_200)
+        .await
+        .unwrap());
+    assert_eq!(listener.heard(), ["cmd-1"]);
+}
+
+#[tokio::test]
+async fn a_command_ended_with_an_unconfirmed_add_is_announced_too() {
+    let (_dir, commands, mut listener) = announcing_store().await;
+    commands
+        .accept(new("cmd-1", "{}", None), 1_000)
+        .await
+        .unwrap();
+    commands.claim_next(1_100).await.unwrap().unwrap();
+    listener.heard();
+
+    assert!(commands
+        .finish_with_unconfirmed_add("cmd-1", CommandState::Failed, done(), 1_200)
+        .await
+        .unwrap());
+
+    assert_eq!(listener.heard(), ["cmd-1"]);
+}
+
+#[tokio::test]
+async fn a_refused_or_repeated_accept_announces_nothing() {
+    let (_dir, commands, mut listener) = announcing_store().await;
+    commands
+        .accept(new("cmd-1", "{}", Some("7")), 1_000)
+        .await
+        .unwrap();
+    listener.heard();
+
+    // The same delivery again, the same ID with other content, and a second
+    // open command for the subject.
+    commands
+        .accept(new("cmd-1", "{}", Some("7")), 1_100)
+        .await
+        .unwrap();
+    commands
+        .accept(new("cmd-1", r#"{"other":1}"#, Some("7")), 1_200)
+        .await
+        .unwrap();
+    commands
+        .accept(new("cmd-2", "{}", Some("7")), 1_300)
+        .await
+        .unwrap();
+
+    assert!(listener.heard().is_empty());
+}
+
+#[tokio::test]
+async fn a_claim_with_nothing_to_hand_out_and_a_finish_that_ended_nothing_announce_nothing() {
+    let (_dir, commands, mut listener) = announcing_store().await;
+    assert!(commands.claim_next(1_000).await.unwrap().is_none());
+    assert!(!commands
+        .finish("nobody", CommandState::Done, done(), 1_100)
+        .await
+        .unwrap());
+
+    commands
+        .accept(new("cmd-1", "{}", None), 1_200)
+        .await
+        .unwrap();
+    commands.claim_next(1_300).await.unwrap().unwrap();
+    commands
+        .finish("cmd-1", CommandState::Done, done(), 1_400)
+        .await
+        .unwrap();
+    listener.heard();
+
+    // Ended already: a second end changes nothing.
+    assert!(!commands
+        .finish("cmd-1", CommandState::Failed, done(), 1_500)
+        .await
+        .unwrap());
+
+    assert!(listener.heard().is_empty());
+}
+
+#[tokio::test]
+async fn a_command_given_up_on_the_way_is_announced_beside_the_one_claimed_instead() {
+    let (_dir, commands, mut listener) = announcing_store().await;
+    commands
+        .accept(new("stuck", "{}", Some("7")), 1_000)
+        .await
+        .unwrap();
+    commands
+        .accept(new("next", "{}", Some("8")), 1_100)
+        .await
+        .unwrap();
+    for _ in 0..MAX_ATTEMPTS {
+        commands.claim_next(2_000).await.unwrap().unwrap();
+    }
+    listener.heard();
+
+    let claimed = commands.claim_next(3_000).await.unwrap().unwrap();
+
+    assert_eq!(claimed.id, "next");
+    assert_eq!(listener.heard(), ["stuck", "next"]);
+}
+
+#[tokio::test]
+async fn noting_what_no_screen_shows_announces_nothing() {
+    let (_dir, commands, mut listener) = announcing_store().await;
+    commands
+        .accept(new("cmd-1", "{}", None), 1_000)
+        .await
+        .unwrap();
+    commands.claim_next(1_100).await.unwrap().unwrap();
+    listener.heard();
+
+    commands.note_unconfirmed_add("cmd-1", 1_200).await.unwrap();
+    commands.note_original_name("cmd-1", "name").await.unwrap();
+
+    assert!(listener.heard().is_empty());
+}

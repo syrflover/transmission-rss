@@ -31,6 +31,19 @@ export class ApiError extends Error {
 const NETWORK_MESSAGE = "서버에 연결하지 못했어요. 연결을 확인하고 다시 시도해 주세요.";
 const UNKNOWN_MESSAGE = "서버가 알 수 없는 응답을 보냈어요. 잠시 뒤 다시 시도해 주세요.";
 
+/** How long a read may take before it counts as failed, in milliseconds (see {@link timedRead}). */
+export const READ_TIMEOUT_MS = 15_000;
+
+/**
+ * `init` for a read that a screen waits on before it reads again, as the
+ * screens that follow a command or a search do: a read the server never
+ * answers would keep every later one from starting. When it runs out the read
+ * fails like a lost connection (`network`), and the screen's retry applies.
+ */
+export function timedRead(): { signal: AbortSignal } {
+  return { signal: AbortSignal.timeout(READ_TIMEOUT_MS) };
+}
+
 /**
  * Sends a request to `/api{path}` and returns the parsed JSON body.
  * A `body` object is sent as JSON, a `Blob` (a chosen file) as its bytes, and

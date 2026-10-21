@@ -11,7 +11,12 @@ use std::{
 };
 
 use common::*;
-use trss_collect::store::history::HistoryResult;
+use serde_json::{json, Value};
+use trss_collect::store::{
+    channels::{ChannelInput, RuleInput},
+    history::HistoryResult,
+};
+use trss_core::settings::SettingsStore;
 
 struct Proc {
     child: Child,
@@ -76,6 +81,19 @@ impl Proc {
             self.output().contains(needle)
         })
         .await;
+    }
+
+    /// The address the process's web listens on, once it has said so.
+    async fn web_addr(&self) -> String {
+        const SAID: &str = "trss listening on http://";
+        let said = || {
+            self.output().lines().find_map(|line| {
+                let rest = line.strip_prefix(SAID)?;
+                Some(rest.split_whitespace().next()?.to_owned())
+            })
+        };
+        wait_until("the web to listen", || async { said().is_some() }).await;
+        said().unwrap()
     }
 }
 
@@ -399,4 +417,265 @@ async fn the_worker_needs_transmission_and_a_database_but_not_the_yaml_url() {
     let out = run(&[("TRANSMISSION_URL", "http://127.0.0.1:1/")], &[]);
     assert!(!out.status.success());
     assert!(String::from_utf8_lossy(&out.stderr).contains("TRSS_DB_PATH"));
+}
+
+// --- the screens' event stream (ticket 0154) ----------------------------------------------
+
+/// What Transmission says while a test makes it refuse an add.
+const REFUSAL: &str = "Transmission is having a bad day";
+
+/// A client of the process's `GET /api/events`, reading the events as a
+/// browser's `EventSource` would.
+struct EventStream {
+    response: reqwest::Response,
+    pending: String,
+}
+
+impl EventStream {
+    async fn open(addr: &str) -> EventStream {
+        let response = reqwest::Client::new()
+            .get(format!("http://{addr}/api/events"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 200);
+        assert_eq!(
+            response.headers()["content-type"],
+            "text/event-stream",
+            "{:?}",
+            response.headers()
+        );
+        EventStream {
+            response,
+            pending: String::new(),
+        }
+    }
+
+    /// The next event as its name and its JSON `data`, skipping comments;
+    /// `None` when the server closed the stream, and a panic when nothing
+    /// came within `within`.
+    async fn next(&mut self, within: Duration) -> Option<(String, Value)> {
+        self.try_next(within)
+            .await
+            .unwrap_or_else(|| panic!("no event within {within:?}; read: {:?}", self.pending))
+    }
+
+    /// [`EventStream::next`] that gives `None` when nothing came within
+    /// `within`, and `Some(None)` when the server closed the stream.
+    async fn try_next(&mut self, within: Duration) -> Option<Option<(String, Value)>> {
+        loop {
+            if let Some(end) = self.pending.find("\n\n") {
+                let block: String = self.pending.drain(..end + 2).collect();
+                let mut name = String::new();
+                let mut data = String::new();
+                for line in block.lines() {
+                    if let Some(value) = line.strip_prefix("event:") {
+                        name = value.trim().to_owned();
+                    } else if let Some(value) = line.strip_prefix("data:") {
+                        data.push_str(value.trim());
+                    }
+                }
+                if name.is_empty() && data.is_empty() {
+                    continue;
+                }
+                let data = serde_json::from_str(&data).expect("JSON data");
+                return Some(Some((name, data)));
+            }
+            let Ok(chunk) = tokio::time::timeout(within, self.response.chunk()).await else {
+                return None;
+            };
+            let Some(chunk) = chunk.ok().flatten() else {
+                return Some(None);
+            };
+            self.pending.push_str(std::str::from_utf8(&chunk).unwrap());
+        }
+    }
+
+    /// Reads the first event, which has to be `ready`.
+    async fn ready(&mut self) {
+        let first = self.next(Duration::from_secs(10)).await;
+        assert_eq!(first, Some(("ready".to_owned(), json!({}))));
+    }
+
+    /// Reads until `count` changes of `(kind, id)` came, ignoring the others.
+    async fn changes_of(&mut self, kind: &str, id: &str, count: usize) {
+        let mut seen = 0;
+        while seen < count {
+            let (name, data) = self
+                .next(Duration::from_secs(30))
+                .await
+                .expect("the stream ended");
+            if name == "change" && data == json!({ "kind": kind, "id": id }) {
+                seen += 1;
+            }
+        }
+    }
+
+    /// Whether another change of `(kind, id)` comes within `within`.
+    async fn more_changes_of(&mut self, kind: &str, id: &str, within: Duration) -> bool {
+        let deadline = Instant::now() + within;
+        while let Some(left) = deadline.checked_duration_since(Instant::now()) {
+            match self.try_next(left).await {
+                Some(Some((name, data))) => {
+                    if name == "change" && data == json!({ "kind": kind, "id": id }) {
+                        return true;
+                    }
+                }
+                Some(None) | None => break,
+            }
+        }
+        false
+    }
+}
+
+async fn post_json(addr: &str, path: &str, body: Value) -> (reqwest::StatusCode, Value) {
+    let response = reqwest::Client::new()
+        .post(format!("http://{addr}{path}"))
+        .header("content-type", "application/json")
+        .body(body.to_string())
+        .send()
+        .await
+        .unwrap();
+    let status = response.status();
+    let text = response.text().await.unwrap();
+    (status, serde_json::from_str(&text).unwrap_or(Value::Null))
+}
+
+async fn get_json(addr: &str, path: &str) -> Value {
+    let text = reqwest::Client::new()
+        .get(format!("http://{addr}{path}"))
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    serde_json::from_str(&text).unwrap_or_else(|_| panic!("not JSON: {text}"))
+}
+
+/// Sends a `receive_once` command for `item_id` to the process's web as a
+/// screen does.
+async fn post_receive_once(addr: &str, id: &str, item_id: i64) -> reqwest::StatusCode {
+    let body = json!({ "id": id, "kind": "receive_once", "payload": { "item_id": item_id } });
+    post_json(addr, "/api/commands", body).await.0
+}
+
+#[tokio::test]
+async fn a_client_of_the_event_stream_hears_a_command_accepted_run_and_ended_done_or_failed() {
+    let h = harness_with_channel_a().await;
+    // The first cycle's adds are refused: its items are `add_failed` with the
+    // rule recorded, which is what `다시 받기` takes.
+    h.tr.reject_adds(Some(REFUSAL));
+    let worker = Proc::spawn(&h, "w", &[("TRSS_WORKER_INTERVAL_SECS", "3600")]);
+    wait_until("the first cycle", || cycle_finished(&h)).await;
+    assert_eq!(count_result(&h, HistoryResult::AddFailed).await, 3);
+    let items = h.history_items().await;
+    let addr = worker.web_addr().await;
+    let mut events = EventStream::open(&addr).await;
+    events.ready().await;
+    let quiet = Duration::from_millis(500);
+
+    // Adding works again: accepted, started and ended done, one change each.
+    h.tr.reject_adds(None);
+    let status = post_receive_once(&addr, "cmd-done", items[0].id).await;
+    assert_eq!(status, 202, "{}", worker.output());
+    events.changes_of("command", "cmd-done", 3).await;
+    let done = get_json(&addr, "/api/commands/cmd-done").await;
+    assert_eq!(done["state"], "done", "{done}");
+    assert!(
+        !events.more_changes_of("command", "cmd-done", quiet).await,
+        "a fourth change for a command that changes in three steps"
+    );
+
+    // Refused again: the command ends failed.
+    h.tr.reject_adds(Some(REFUSAL));
+    let status = post_receive_once(&addr, "cmd-failed", items[1].id).await;
+    assert_eq!(status, 202, "{}", worker.output());
+    events.changes_of("command", "cmd-failed", 3).await;
+    let failed = get_json(&addr, "/api/commands/cmd-failed").await;
+    assert_eq!(failed["state"], "failed", "{failed}");
+    assert!(
+        !events.more_changes_of("command", "cmd-failed", quiet).await,
+        "a fourth change for a command that changes in three steps"
+    );
+}
+
+#[tokio::test]
+async fn a_client_of_the_event_stream_hears_a_past_search_start_get_further_and_end() {
+    let h = Harness::without_collect_folder().await;
+    let media = h.dir.path().join("media");
+    std::fs::create_dir_all(media.join("Show/Season 01")).unwrap();
+    SettingsStore::new(h.db.clone())
+        .put_collection(0, media.to_str().unwrap().to_owned(), None)
+        .await
+        .unwrap();
+    // A first page that is full and lacks episodes 1 to 5 of the range: one
+    // more search, sent after the tracker's spacing.
+    let nyaa = FakeNyaa::start().await;
+    let releases: Vec<String> = (1..=100)
+        .rev()
+        .map(|n| {
+            format!(
+                "[SubsPlease] Show - {n:02} (1080p) [{:08X}].mkv",
+                0xA000_0000u32 + n
+            )
+        })
+        .collect();
+    nyaa.set_releases(&releases);
+    let mut input = ChannelInput::new(nyaa.url(SECRET));
+    input.past_search = Some("[SubsPlease] {match} 1080p".to_owned());
+    let channel = h
+        .channels
+        .create_channel_with_rules(
+            input,
+            vec![RuleInput {
+                r#match: Some("Show".to_owned()),
+                directory: "Show/Season 01".to_owned(),
+                ..Default::default()
+            }],
+        )
+        .await
+        .unwrap();
+    let worker = Proc::spawn(&h, "w", &[("TRSS_WORKER_INTERVAL_SECS", "3600")]);
+    let addr = worker.web_addr().await;
+    let mut events = EventStream::open(&addr).await;
+    events.ready().await;
+
+    let path = format!("/api/rules/{}/past-search", channel.rules[0].id);
+    let body = json!({ "query": "[SubsPlease] Show 1080p", "from": 1, "to": 5 });
+    let (status, started) = post_json(&addr, &path, body).await;
+    assert_eq!(status, 202, "{started}");
+    let id = started["search_id"].as_str().unwrap();
+
+    // Started, got to its extra search (0 of 1), sent it (1 of 1), ended.
+    events.changes_of("past_search", id, 4).await;
+    let poll = get_json(&addr, &format!("/api/past-searches/{id}")).await;
+    assert_eq!(poll["state"], "done", "{poll}\n{}", worker.output());
+    let result = &poll["result"];
+    assert_eq!(
+        (&result["extra_sent"], &result["extra_needed"]),
+        (&json!(1), &json!(1))
+    );
+    assert!(
+        !events
+            .more_changes_of("past_search", id, Duration::from_millis(500))
+            .await
+    );
+}
+
+#[tokio::test]
+async fn sigterm_with_an_event_stream_open_exits_promptly_and_closes_the_stream() {
+    let h = Harness::new().await;
+    let mut worker = Proc::spawn(&h, "w", &[("TRSS_WORKER_INTERVAL_SECS", "3600")]);
+    let addr = worker.web_addr().await;
+    let mut events = EventStream::open(&addr).await;
+    events.ready().await;
+
+    worker.sigterm();
+
+    // The server waits for open responses before it stops: a stream that did
+    // not end would hold it until the container's grace period killed it.
+    let status = worker.wait_exit(Duration::from_secs(5)).await;
+    assert!(status.success(), "{status:?}\n{}", worker.output());
+    assert_eq!(events.next(Duration::from_secs(5)).await, None);
 }

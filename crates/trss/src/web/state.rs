@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use crate::{wake::Wakes, web::origin_guard::AllowedHosts};
 
+use tokio_util::sync::CancellationToken;
 use trss_anilist::AnilistConfig;
 use trss_anissia::{Anissia, AnissiaConfig};
 use trss_collect::{
@@ -11,7 +12,9 @@ use trss_collect::{
         revisions::RevisionStore, search_pace::SearchPace, status::StatusStore,
     },
 };
-use trss_core::{app_data::RECEIVE_DIR, commands::CommandStore, settings::SettingsStore, Db};
+use trss_core::{
+    app_data::RECEIVE_DIR, changes::Changes, commands::CommandStore, settings::SettingsStore, Db,
+};
 use trss_jobs::{Follow, JobRequests, JobViews, PlaceStore, ReceiveArea, ScreenStore, Uploads};
 use trss_library::{
     artwork::Artwork,
@@ -54,6 +57,13 @@ pub struct AppState {
     /// The rings of the worker part's loops, which start at once what a
     /// handler stored for them ([`crate::wake`]).
     pub wakes: Wakes,
+    /// What changed, announced by the code that changes it; the event stream
+    /// (`GET /api/events`) tells the screens what it hears. Given to the
+    /// stores that announce ([`AppState::with_changes`]).
+    pub changes: Changes,
+    /// Cancelled when the process shuts down, to end the streams that would
+    /// otherwise keep the server from stopping ([`AppState::with_shutdown`]).
+    pub shutdown: CancellationToken,
     /// The subtitle jobs the worker carries out, as the lists and a job's
     /// detail show them.
     pub jobs: JobViews,
@@ -97,6 +107,8 @@ impl AppState {
             revisions: RevisionStore::new(db.clone()),
             past_search: PastSearch::new(SearchPace::new(db.clone())),
             wakes: Wakes::default(),
+            changes: Changes::default(),
+            shutdown: CancellationToken::new(),
             jobs: JobViews::new(db.clone()),
             job_requests: JobRequests::new(db.clone()),
             place: PlaceStore::new(db.clone()),
@@ -138,6 +150,24 @@ impl AppState {
         self
     }
 
+    /// Hears and announces the changes on `changes`: the event stream listens
+    /// to it, and the stores that announce (the commands, the past episode
+    /// search) announce on it. The worker of the same process is given the
+    /// same one ([`crate::worker::Worker::with_changes`]).
+    pub fn with_changes(mut self, changes: Changes) -> Self {
+        self.commands = self.commands.announcing(changes.clone());
+        self.past_search = self.past_search.announcing(changes.clone());
+        self.changes = changes;
+        self
+    }
+
+    /// Ends the event streams when `shutdown` is cancelled. Without it they
+    /// end only when the browser closes them.
+    pub fn with_shutdown(mut self, shutdown: CancellationToken) -> Self {
+        self.shutdown = shutdown;
+        self
+    }
+
     /// Shows the jobs' files in `area` (the app data folder's).
     pub fn with_receive_area(mut self, area: &ReceiveArea) -> Self {
         self.receive_root = area.root().to_owned();
@@ -159,9 +189,11 @@ impl AppState {
         self
     }
 
-    /// Replaces the past episode search service (the time between requests in tests).
+    /// Replaces the past episode search service (the time between requests in
+    /// tests). It announces on this state's channel ([`AppState::changes`]),
+    /// whatever channel it had.
     pub fn with_past_search(mut self, past_search: PastSearch) -> Self {
-        self.past_search = past_search;
+        self.past_search = past_search.announcing(self.changes.clone());
         self
     }
 

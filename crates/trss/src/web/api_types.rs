@@ -48,6 +48,7 @@ fn roots(v: &mut impl TypeVisitor) {
     v.visit::<error::ErrorBody>();
     v.visit::<commands_api::CommandRequest>();
     v.visit::<commands_api::CommandView>();
+    v.visit::<trss_core::changes::Change>();
     v.visit::<archive_api::SuggestionList>();
     v.visit::<archive_api::KeepBody>();
     v.visit::<archive_api::Kept>();

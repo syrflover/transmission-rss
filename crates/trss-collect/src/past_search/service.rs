@@ -36,6 +36,7 @@ use crate::{
         status::TorrentListing,
     },
 };
+use trss_core::changes::{ChangeKind, Changes};
 use trss_transmission::Redactor;
 
 /// How many searches are kept at once.
@@ -119,8 +120,10 @@ struct Registry {
 
 impl Registry {
     /// Forgets the searches past [`KEEP`], and the oldest ones beyond
-    /// [`MAX_SEARCHES`]; the task of each is aborted.
-    fn sweep(&mut self) {
+    /// [`MAX_SEARCHES`]; the task of each is aborted, and each is announced
+    /// to `changes`, because a screen following it would otherwise never
+    /// find out that it is gone.
+    fn sweep(&mut self, changes: &Changes) {
         let expired: Vec<String> = self
             .searches
             .iter()
@@ -128,7 +131,7 @@ impl Registry {
             .map(|(id, _)| id.clone())
             .collect();
         for id in expired {
-            self.remove(&id);
+            self.remove(&id, changes);
         }
         while self.searches.len() > MAX_SEARCHES {
             let oldest = self
@@ -137,17 +140,20 @@ impl Registry {
                 .min_by_key(|(_, e)| e.started)
                 .map(|(id, _)| id.clone());
             match oldest {
-                Some(id) => self.remove(&id),
+                Some(id) => self.remove(&id, changes),
                 None => break,
             }
         }
     }
 
-    fn remove(&mut self, id: &str) {
+    /// Forgets one search, aborts its task and announces it. Does nothing when
+    /// the search is not here.
+    fn remove(&mut self, id: &str, changes: &Changes) {
         if let Some(entry) = self.searches.remove(id) {
             if let Some(abort) = entry.abort {
                 abort.abort();
             }
+            changes.announce(ChangeKind::PastSearch, id);
         }
     }
 }
@@ -171,15 +177,32 @@ pub struct PastSearch {
     pace: SearchPace,
     spacing: Duration,
     registry: Arc<Mutex<Registry>>,
+    changes: Changes,
 }
 
 impl PastSearch {
+    /// A service that announces to nobody; [`PastSearch::announcing`] gives it
+    /// the channel the screens listen on.
     pub fn new(pace: SearchPace) -> Self {
         PastSearch {
             pace,
             spacing: REQUEST_SPACING,
             registry: Arc::default(),
+            changes: Changes::default(),
         }
+    }
+
+    /// Announces a search as [`ChangeKind::PastSearch`] when it starts, when
+    /// its progress changes, when it ends and when the registry forgets it
+    /// (a newer search of its rule, a cancel, eviction). A search is in
+    /// memory only, so this is the one place that knows its state changed.
+    pub fn announcing(mut self, changes: Changes) -> Self {
+        self.changes = changes;
+        self
+    }
+
+    fn announce(&self, id: &str) {
+        self.changes.announce(ChangeKind::PastSearch, id);
     }
 
     /// Overrides the time between requests (tests).
@@ -200,15 +223,15 @@ impl PastSearch {
         let rule_id = spec.rule.id.clone();
         {
             let mut registry = self.lock();
-            registry.searches.retain(|_, entry| {
-                let same = entry.rule_id == rule_id;
-                if same {
-                    if let Some(abort) = &entry.abort {
-                        abort.abort();
-                    }
-                }
-                !same
-            });
+            let earlier: Vec<String> = registry
+                .searches
+                .iter()
+                .filter(|(_, entry)| entry.rule_id == rule_id)
+                .map(|(id, _)| id.clone())
+                .collect();
+            for earlier in earlier {
+                registry.remove(&earlier, &self.changes);
+            }
             registry.searches.insert(
                 id.clone(),
                 Entry {
@@ -218,7 +241,10 @@ impl PastSearch {
                     abort: None,
                 },
             );
-            registry.sweep();
+            registry.sweep(&self.changes);
+            // Under the lock, as in `set` and `progress`: whoever sees the
+            // state has the announcement sent already.
+            self.announce(&id);
         }
 
         let this = self.clone();
@@ -252,17 +278,28 @@ impl PastSearch {
         id
     }
 
+    // Both announce under the lock, so that a reader who finds the new state
+    // knows the announcement was sent, and a listener that hears it finds the
+    // new state.
     fn set(&self, id: &str, status: Status) {
         if let Some(entry) = self.lock().searches.get_mut(id) {
             entry.status = status;
             entry.abort = None;
+            self.announce(id);
         }
     }
 
     fn progress(&self, id: &str, sent: usize, needed: usize) {
         if let Some(entry) = self.lock().searches.get_mut(id) {
-            if matches!(entry.status, Status::Running { .. }) {
+            if let Status::Running {
+                sent: was_sent,
+                needed: was_needed,
+            } = entry.status
+            {
                 entry.status = Status::Running { sent, needed };
+                if (was_sent, was_needed) != (sent, needed) {
+                    self.announce(id);
+                }
             }
         }
     }
@@ -270,7 +307,7 @@ impl PastSearch {
     /// The state of a search, or `None` when it is gone.
     pub fn status(&self, id: &str) -> Option<(String, Status)> {
         let mut registry = self.lock();
-        registry.sweep();
+        registry.sweep(&self.changes);
         registry
             .searches
             .get(id)
@@ -288,15 +325,10 @@ impl PastSearch {
 
     /// Ends a search and forgets it. Returns whether it was here.
     pub fn cancel(&self, id: &str) -> bool {
-        match self.lock().searches.remove(id) {
-            Some(entry) => {
-                if let Some(abort) = entry.abort {
-                    abort.abort();
-                }
-                true
-            }
-            None => false,
-        }
+        let mut registry = self.lock();
+        let here = registry.searches.contains_key(id);
+        registry.remove(id, &self.changes);
+        here
     }
 
     /// The item `key` of the finished search `id` of rule `rule_id`, as history
@@ -305,7 +337,7 @@ impl PastSearch {
         let mut registry = self.lock();
         // A search is kept for [`KEEP`] and no longer, whether or not
         // anything polled it in the meantime.
-        registry.sweep();
+        registry.sweep(&self.changes);
         let entry = registry.searches.get(id).ok_or(Resolve::Gone)?;
         if entry.rule_id != rule_id {
             return Err(Resolve::OtherRule);
@@ -647,6 +679,130 @@ mod tests {
             service.resolve(&second, &rule_id, "no such key"),
             Err(Resolve::NoItem)
         );
+    }
+
+    /// A service announcing on a channel, and what a listener on it hears.
+    async fn announcing() -> (
+        PastSearch,
+        tempfile::TempDir,
+        tokio::sync::broadcast::Receiver<trss_core::changes::Change>,
+    ) {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Db::open(dir.path().join("app.db")).await.unwrap();
+        let changes = Changes::default();
+        let heard = changes.subscribe();
+        let service = PastSearch::new(SearchPace::new(db))
+            .with_spacing(Duration::from_millis(5))
+            .announcing(changes);
+        (service, dir, heard)
+    }
+
+    /// The IDs heard so far, each of the kind `past_search`.
+    fn heard(
+        listener: &mut tokio::sync::broadcast::Receiver<trss_core::changes::Change>,
+    ) -> Vec<String> {
+        let mut ids = Vec::new();
+        while let Ok(change) = listener.try_recv() {
+            assert_eq!(change.kind, ChangeKind::PastSearch);
+            ids.push(change.id);
+        }
+        ids
+    }
+
+    #[tokio::test]
+    async fn a_search_is_announced_when_it_starts_and_when_it_ends_done() {
+        let (service, _dir, mut listener) = announcing().await;
+        let nyaa = FakeNyaa::start().await;
+        nyaa.set_releases(&["[SubsPlease] Show - 01 (1080p) [AAAA0001].mkv".to_owned()]);
+        let world = World::new().await;
+
+        let id = service.start(spec_on(nyaa.url("token"), &world).await);
+        assert_eq!(heard(&mut listener), std::slice::from_ref(&id));
+
+        assert!(matches!(finished(&service, &id).await, Status::Done(_)));
+        assert_eq!(heard(&mut listener), std::slice::from_ref(&id));
+    }
+
+    #[tokio::test]
+    async fn a_search_that_fails_is_announced_when_it_ends() {
+        let (service, _dir, mut listener) = announcing().await;
+        let nyaa = FakeNyaa::start().await;
+        nyaa.refuse(Some((429, Some(30))));
+        let world = World::new().await;
+
+        let id = service.start(spec_on(nyaa.url("token"), &world).await);
+        assert!(matches!(finished(&service, &id).await, Status::Failed(_)));
+
+        assert_eq!(heard(&mut listener), [id.clone(), id]);
+    }
+
+    #[tokio::test]
+    async fn progress_that_moves_is_announced_and_progress_that_stays_is_not() {
+        let (service, _dir, mut listener) = announcing().await;
+        let (running, _task) = entry(Duration::ZERO, Status::Running { sent: 0, needed: 0 });
+        service.lock().searches.insert("s".into(), running);
+
+        service.progress("s", 0, 3);
+        service.progress("s", 0, 3);
+        service.progress("s", 1, 3);
+        // A search that is not here, or has ended, has no progress to tell.
+        service.progress("gone", 1, 3);
+        service.set("s", Status::Failed("no".into()));
+        service.progress("s", 2, 3);
+
+        assert_eq!(heard(&mut listener), ["s", "s", "s"]);
+    }
+
+    #[tokio::test]
+    async fn a_cancelled_search_is_announced_once_and_its_late_end_adds_nothing() {
+        let (service, _dir, mut listener) = announcing().await;
+        let (running, task) = entry(Duration::ZERO, Status::Running { sent: 0, needed: 0 });
+        service.lock().searches.insert("s".into(), running);
+
+        assert!(service.cancel("s"));
+        service.set("s", Status::Failed("no".into()));
+        assert!(!service.cancel("s"));
+
+        assert_eq!(heard(&mut listener), ["s"]);
+        assert!(ended(task).await);
+    }
+
+    #[tokio::test]
+    async fn a_search_ended_by_a_newer_one_of_its_rule_is_announced() {
+        let (service, _dir, mut listener) = announcing().await;
+        let nyaa = FakeNyaa::start().await;
+        nyaa.set_releases(&["[SubsPlease] Show - 01 (1080p) [AAAA0001].mkv".to_owned()]);
+        let world = World::new().await;
+
+        let first = service.start(spec_on(nyaa.url("token"), &world).await);
+        let second = service.start(spec_on(nyaa.url("token"), &world).await);
+
+        // The first search's start, then its removal, then the second's start.
+        assert_eq!(
+            heard(&mut listener)[..3],
+            [first.clone(), first.clone(), second]
+        );
+        assert!(service.status(&first).is_none());
+    }
+
+    #[tokio::test]
+    async fn a_search_dropped_for_its_age_or_beyond_the_limit_is_announced() {
+        let (service, _dir, mut listener) = announcing().await;
+        {
+            let mut registry = service.lock();
+            let done = || Status::Done(Arc::new(outcome()));
+            let (old, _task) = entry(KEEP + Duration::from_secs(1), done());
+            registry.searches.insert("old".into(), old);
+            // One more than the limit is kept; the oldest of them goes.
+            for n in 1..=MAX_SEARCHES + 1 {
+                let (fresh, _task) = entry(Duration::from_secs(10 * n as u64), done());
+                registry.searches.insert(format!("s{n}"), fresh);
+            }
+        }
+
+        assert!(service.status("s1").is_some());
+
+        assert_eq!(heard(&mut listener), ["old", "s7"]);
     }
 
     /// The sentence a tracker's `Retry-After` becomes ([`search_error`]), end

@@ -29,6 +29,7 @@ pub mod channels_api;
 pub mod commands_api;
 pub mod env;
 pub mod error;
+pub mod events_api;
 pub mod history_api;
 pub mod import_api;
 pub mod in_place;

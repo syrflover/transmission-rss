@@ -38,6 +38,7 @@ use std::{collections::HashMap, fmt, str::FromStr};
 use serde::{Deserialize, Serialize};
 
 use crate::{
+    changes::{ChangeKind, Changes},
     db::{Db, DbError},
     Millis,
 };
@@ -177,14 +178,42 @@ pub enum Accepted {
 }
 
 /// Async access to the commands. Cheap to clone.
+///
+/// Every change of a command's state is announced as [`ChangeKind::Command`]
+/// once it is committed, whichever clone made it; see
+/// [`CommandStore::announcing`].
 #[derive(Clone)]
 pub struct CommandStore {
     db: Db,
+    changes: Changes,
 }
 
 impl CommandStore {
+    /// A store that announces to nobody; [`CommandStore::announcing`] gives it
+    /// the channel the screens listen on.
     pub fn new(db: Db) -> Self {
-        CommandStore { db }
+        CommandStore {
+            db,
+            changes: Changes::default(),
+        }
+    }
+
+    /// Announces the state changes of the commands on `changes`.
+    pub fn announcing(mut self, changes: Changes) -> Self {
+        self.changes = changes;
+        self
+    }
+
+    fn announce(&self, id: &str) {
+        self.changes.announce(ChangeKind::Command, id);
+    }
+
+    /// Announces that what a screen shows about the command `id` changed
+    /// without its state changing (the files an episode undo has gone through
+    /// so far), for the code that stores such progress. The state changes
+    /// need no call: the store announces them itself.
+    pub fn announce_progress(&self, id: &str) {
+        self.announce(id);
     }
 
     /// Stores `command` as `pending` at time `now`, unless its ID is known or
@@ -192,7 +221,11 @@ impl CommandStore {
     /// and the insert are one write transaction, so two deliveries of the same
     /// ID at once store one command.
     pub async fn accept(&self, command: NewCommand, now: Millis) -> Result<Accepted, CommandError> {
-        self.db.run(move |c| repo::accept(c, &command, now)).await
+        let accepted = self.db.run(move |c| repo::accept(c, &command, now)).await?;
+        if let Accepted::Created(created) = &accepted {
+            self.announce(&created.id);
+        }
+        Ok(accepted)
     }
 
     pub async fn get(&self, id: &str) -> Result<Option<Command>, CommandError> {
@@ -265,9 +298,17 @@ impl CommandStore {
         now: Millis,
         excluded: Vec<String>,
     ) -> Result<Option<Command>, CommandError> {
-        self.db
+        let (claimed, given_up) = self
+            .db
             .run(move |c| repo::claim_next_excluding(c, now, &excluded))
-            .await
+            .await?;
+        for id in &given_up {
+            self.announce(id);
+        }
+        if let Some(command) = &claimed {
+            self.announce(&command.id);
+        }
+        Ok(claimed)
     }
 
     /// Ends a command. Only an open command changes; the return value tells
@@ -331,10 +372,15 @@ impl CommandStore {
         add_unconfirmed: bool,
     ) -> Result<bool, CommandError> {
         assert!(!state.is_open(), "a command ends as done or failed");
-        let id = id.to_owned();
-        self.db
-            .run(move |c| repo::finish(c, &id, state, &outcome, now, add_unconfirmed))
-            .await
+        let owned = id.to_owned();
+        let ended = self
+            .db
+            .run(move |c| repo::finish(c, &owned, state, &outcome, now, add_unconfirmed))
+            .await?;
+        if ended {
+            self.announce(id);
+        }
+        Ok(ended)
     }
 
     /// How many commands with an unconfirmed add (see

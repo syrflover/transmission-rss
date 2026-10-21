@@ -1,4 +1,4 @@
-import { api } from "@/lib/api";
+import { api, timedRead } from "@/lib/api";
 import type {
   Command,
   CommandKind,
@@ -43,5 +43,5 @@ export function sendCommand<K extends CommandKind>(
 }
 
 export function getCommand(id: string): Promise<Command> {
-  return api<Command>(`/commands/${id}`);
+  return api<Command>(`/commands/${id}`, timedRead());
 }

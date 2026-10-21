@@ -3,10 +3,12 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiError } from "@/lib/api";
 import type { HistoryItem, ReceiveOnce } from "@/lib/api-types";
 
+import { useCommandWatch } from "@/lib/useCommandWatch";
+
 import { getCommand, getHistoryItem, newCommandId, sendRetry, type Command } from "./api";
 
-/** How often a running command is asked for its state, in milliseconds. */
-export const POLL_MS = 2000;
+/** How long to wait before reading again a command whose last read failed, in milliseconds. */
+const RETRY_AFTER_MS = 2000;
 
 /**
  * Where one `다시 받기` is. The parts that matter for the wording:
@@ -98,8 +100,9 @@ export function useRetry(item: HistoryItem, onItem: (item: HistoryItem) => void)
  *
  * - One ID per user action, made when the button is pressed and kept until the
  *   command ends or the server refuses the request. A resend is the same request.
- * - The answer to the request only says accepted. The screen then asks for the
- *   command by its ID every {@link POLL_MS} until the worker has ended it.
+ * - The answer to the request only says accepted. The screen then reads the
+ *   command by its ID, now and whenever the server says it changed
+ *   ({@link useCommandWatch}), until the worker has ended it.
  * - When the answer is lost, the screen asks for the command by the same ID.
  *   Only a `404` (the server never stored it) allows sending it again, still
  *   with the same ID.
@@ -110,27 +113,29 @@ export function useRetry(item: HistoryItem, onItem: (item: HistoryItem) => void)
 export function useItemRetry(itemId: number, openCommand: Command | null, onEnded: () => Promise<void>) {
   const [phase, setPhase] = useState<RetryPhase>({ kind: "idle", error: null });
   const attempt = useRef<Attempt | null>(null);
-  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const watching = useCommandWatch();
   const alive = useRef(true);
   const onEndedRef = useRef(onEnded);
   onEndedRef.current = onEnded;
 
-  const clearTimer = () => {
-    if (timer.current !== null) clearTimeout(timer.current);
-    timer.current = null;
+  const ask = useRef<() => Promise<void>>(async () => {});
+
+  /** Reads the attempt's command now and whenever the server says it changed. */
+  const watch = () => {
+    const id = attempt.current?.id;
+    if (id) watching.watch(id, () => ask.current());
   };
 
-  const ask = useRef<() => void>(() => {});
-
+  /** Reads it again soon: the last read did not get an answer. */
   const later = () => {
-    clearTimer();
-    timer.current = setTimeout(() => ask.current(), POLL_MS);
+    const id = attempt.current?.id;
+    if (id) watching.retry(id, () => ask.current(), RETRY_AFTER_MS);
   };
 
   const settle = useCallback(
     async (command: Command) => {
       attempt.current = null;
-      clearTimer();
+      watching.stop();
       const { failed, message } = endedMessage(command);
       try {
         if (alive.current) await onEndedRef.current();
@@ -147,7 +152,7 @@ export function useItemRetry(itemId: number, openCommand: Command | null, onEnde
       if (!alive.current) return;
       if (command.state === "pending" || command.state === "running") {
         setPhase({ kind: "waiting" });
-        later();
+        watch();
       } else {
         void settle(command);
       }
@@ -155,7 +160,7 @@ export function useItemRetry(itemId: number, openCommand: Command | null, onEnde
     [settle],
   );
 
-  /** Asks for the command by its ID: after a lost answer, and on every poll. */
+  /** Asks for the command by its ID: after a lost answer, and when the server says it changed. */
   const lookup = useCallback(async () => {
     const current = attempt.current;
     if (!current) return;
@@ -165,7 +170,7 @@ export function useItemRetry(itemId: number, openCommand: Command | null, onEnde
     } catch (e) {
       if (!alive.current || attempt.current?.id !== current.id) return;
       if (e instanceof ApiError && e.code === "not_found") {
-        clearTimer();
+        watching.stop();
         setPhase({ kind: "unconfirmed", lost: true });
       } else {
         // Cannot reach the server, or it failed: unknown, so keep asking.
@@ -174,7 +179,7 @@ export function useItemRetry(itemId: number, openCommand: Command | null, onEnde
       }
     }
   }, [follow]);
-  ask.current = () => void lookup();
+  ask.current = lookup;
 
   const send = useCallback(async () => {
     const current = attempt.current;
@@ -218,7 +223,7 @@ export function useItemRetry(itemId: number, openCommand: Command | null, onEnde
 
   /** Asks again right away. */
   const recheck = useCallback(() => {
-    clearTimer();
+    watching.stop();
     void lookup();
   }, [lookup]);
 
@@ -231,12 +236,12 @@ export function useItemRetry(itemId: number, openCommand: Command | null, onEnde
       attempt.current = { id: openCommand.id, payload: null };
       follow(openCommand);
     } else if (attempt.current) {
-      // Mounted again (development double mount): the earlier timer was cleared.
+      // Mounted again (development double mount): the earlier watch was stopped.
       void lookup();
     }
     return () => {
       alive.current = false;
-      clearTimer();
+      watching.stop();
     };
     // Only on mount: later changes come from this hook's own state.
     // eslint-disable-next-line react-hooks/exhaustive-deps

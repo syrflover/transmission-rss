@@ -182,12 +182,15 @@ pub fn running_count_excluding(conn: &Connection, excluded: &[String]) -> Result
     Ok(count as usize)
 }
 
+/// The command claimed, if any, and the IDs of the ones failed on the way
+/// because they were started [`MAX_ATTEMPTS`] times already.
 pub fn claim_next_excluding(
     conn: &mut Connection,
     now: Millis,
     excluded: &[String],
-) -> Result<Option<Command>> {
+) -> Result<(Option<Command>, Vec<String>)> {
     let excluded = id_list(excluded);
+    let mut given_up = Vec::new();
     let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
     loop {
         let Some(command) = select_one(
@@ -201,7 +204,7 @@ pub fn claim_next_excluding(
         )?
         else {
             tx.commit()?;
-            return Ok(None);
+            return Ok((None, given_up));
         };
 
         if command.attempts >= MAX_ATTEMPTS {
@@ -218,6 +221,7 @@ pub fn claim_next_excluding(
                 now,
                 command.add_unconfirmed,
             )?;
+            given_up.push(command.id);
             continue;
         }
 
@@ -228,7 +232,7 @@ pub fn claim_next_excluding(
         .execute(params![command.id, now])?;
         let claimed = get(&tx, &command.id)?.expect("the command was just updated");
         tx.commit()?;
-        return Ok(Some(claimed));
+        return Ok((Some(claimed), given_up));
     }
 }
 

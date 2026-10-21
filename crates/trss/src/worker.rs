@@ -174,6 +174,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::wake::Wakes;
 use trss_core::{
+    changes::Changes,
     commands::{CommandError, CommandStore},
     folder_locks::FolderLocks,
     settings::SettingsStore,
@@ -411,6 +412,16 @@ impl Worker {
     /// command of its own ends or is due.
     pub fn with_wakes(mut self, wakes: Wakes) -> Self {
         self.wakes = wakes;
+        self
+    }
+
+    /// Announces the state changes of the commands this worker claims and
+    /// ends on `changes`, the channel the screens' event stream is fed from.
+    /// The web of the same process gets the same one
+    /// ([`crate::web::AppState::with_changes`]).
+    pub fn with_changes(mut self, changes: Changes) -> Self {
+        self.commands = self.commands.announcing(changes.clone());
+        self.ctx.commands = self.ctx.commands.announcing(changes);
         self
     }
 

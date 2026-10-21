@@ -2,10 +2,13 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { ApiError } from "@/lib/api";
 import { getCommand, isOpen, newCommandId, type Command } from "@/lib/commands";
+import { useCommandWatch } from "@/lib/useCommandWatch";
 import type { EpisodeUndo, Rule } from "@/lib/api-types";
 
 import { getRule, sendEpisodeUndo } from "./api";
-import { POLL_MS } from "./useArchiveMove";
+
+/** How long to wait before reading again what a failed read left open, in milliseconds. */
+const RETRY_AFTER_MS = 2000;
 
 /**
  * Where one `되돌리기` is:
@@ -33,34 +36,37 @@ interface Attempt {
 /**
  * The `되돌리기` flow of a rule's automatic offset, following the web command
  * contract as {@link useArchiveMove} does: one ID per press, kept until the
- * command ends or the server refuses it; the screen asks for the command by
- * that ID every {@link POLL_MS} and, while it is open, reads the rule for the
- * files renamed so far. When it ends, the rule is read again and handed to
- * `onRule`; the rule's own `episode_undo` then tells the outcome.
+ * command ends or the server refuses it; the screen reads the command by that
+ * ID now and whenever the server says it changed ({@link useCommandWatch}; the
+ * undo says so as it records each file) and, while it is open, reads the rule
+ * for the files renamed so far. When it ends, the rule is read again and
+ * handed to `onRule`; the rule's own `episode_undo` then tells the outcome.
  */
 export function useEpisodeUndo(rule: Rule, onRule: (fresh: Rule) => void) {
   const [phase, setPhase] = useState<UndoPhase>({ kind: "idle", error: null });
   const attempt = useRef<Attempt | null>(null);
-  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const watching = useCommandWatch();
   const alive = useRef(true);
   const onRuleRef = useRef(onRule);
   onRuleRef.current = onRule;
   const ruleId = rule.id;
 
-  const clearTimer = () => {
-    if (timer.current !== null) clearTimeout(timer.current);
-    timer.current = null;
+  const ask = useRef<() => Promise<void>>(async () => {});
+  /** Reads the attempt's command now and whenever the server says it changed. */
+  const watch = () => {
+    const id = attempt.current?.id;
+    if (id) watching.watch(id, () => ask.current());
   };
-  const ask = useRef<() => void>(() => {});
+  /** Reads it again soon: the last read did not get an answer. */
   const later = () => {
-    clearTimer();
-    timer.current = setTimeout(() => ask.current(), POLL_MS);
+    const id = attempt.current?.id;
+    if (id) watching.retry(id, () => ask.current(), RETRY_AFTER_MS);
   };
 
   const settle = useCallback(
     async (command: Command) => {
       attempt.current = null;
-      clearTimer();
+      watching.stop();
       try {
         const fresh = await getRule(ruleId);
         if (!alive.current) return;
@@ -73,15 +79,37 @@ export function useEpisodeUndo(rule: Rule, onRule: (fresh: Rule) => void) {
     [ruleId],
   );
 
+  /**
+   * Shows `command`, a command the server has, and follows it. The reading
+   * itself, the command and the progress together, is the watched one
+   * ({@link lookup}), so reads of it never overlap and a failed one is read
+   * again.
+   */
   const follow = useCallback(
-    async (command: Command) => {
+    (command: Command) => {
       if (!alive.current) return;
       if (!isOpen(command)) {
         void settle(command);
         return;
       }
       setPhase((was) => ({ kind: "waiting", progress: was.kind === "waiting" ? was.progress : null }));
-      later();
+      watch();
+    },
+    [settle],
+  );
+
+  /** The watched read: the command, and while it is open the files renamed so far. */
+  const lookup = useCallback(async () => {
+    const current = attempt.current;
+    if (!current) return;
+    try {
+      const command = await getCommand(current.id);
+      if (!alive.current || attempt.current?.id !== current.id) return;
+      if (!isOpen(command)) {
+        await settle(command);
+        return;
+      }
+      setPhase((was) => ({ kind: "waiting", progress: was.kind === "waiting" ? was.progress : null }));
       try {
         const fresh = await getRule(ruleId);
         const undo = fresh.episode_undo;
@@ -89,37 +117,28 @@ export function useEpisodeUndo(rule: Rule, onRule: (fresh: Rule) => void) {
           setPhase((was) => (was.kind === "waiting" ? { kind: "waiting", progress: undo } : was));
         }
       } catch {
-        // The progress waits for the next look.
+        // The command is known; only the progress is missing, so look again soon.
+        if (alive.current && attempt.current?.id === current.id) later();
       }
-    },
-    [settle, ruleId],
-  );
-
-  const lookup = useCallback(async () => {
-    const current = attempt.current;
-    if (!current) return;
-    try {
-      const command = await getCommand(current.id);
-      if (attempt.current?.id === current.id) void follow(command);
     } catch (e) {
       if (!alive.current || attempt.current?.id !== current.id) return;
       if (e instanceof ApiError && e.code === "not_found") {
-        clearTimer();
+        watching.stop();
         setPhase({ kind: "unconfirmed", lost: true });
       } else {
         setPhase((was) => (was.kind === "waiting" ? was : { kind: "unconfirmed", lost: false }));
         later();
       }
     }
-  }, [follow]);
-  ask.current = () => void lookup();
+  }, [settle, ruleId]);
+  ask.current = lookup;
 
   const send = useCallback(async () => {
     const current = attempt.current;
     if (!current?.mine) return;
     setPhase({ kind: "sending" });
     try {
-      void follow(await sendEpisodeUndo(current.id, ruleId, current.episode));
+      follow(await sendEpisodeUndo(current.id, ruleId, current.episode));
     } catch (e) {
       if (!alive.current) return;
       if (e instanceof ApiError && (e.code === "invalid" || e.code === "not_found")) {
@@ -131,7 +150,7 @@ export function useEpisodeUndo(rule: Rule, onRule: (fresh: Rule) => void) {
         if (open && typeof open.id === "string" && open.id !== current.id && isOpen(open)) {
           // Another tab is undoing it already: follow that one.
           attempt.current = { id: open.id, episode: current.episode, mine: false };
-          void follow(open);
+          follow(open);
         } else {
           attempt.current = null;
           setPhase({ kind: "idle", error: e.message });
@@ -167,13 +186,13 @@ export function useEpisodeUndo(rule: Rule, onRule: (fresh: Rule) => void) {
     alive.current = true;
     if (open && !attempt.current) {
       attempt.current = { id: open.command.id, episode: rule.episode, mine: false };
-      void follow(open.command);
+      follow(open.command);
     } else if (attempt.current) {
       void lookup();
     }
     return () => {
       alive.current = false;
-      clearTimer();
+      watching.stop();
     };
     // Only on mount: later changes come from this hook's own state.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -182,7 +201,7 @@ export function useEpisodeUndo(rule: Rule, onRule: (fresh: Rule) => void) {
   useEffect(() => {
     if (open && !attempt.current) {
       attempt.current = { id: open.command.id, episode: rule.episode, mine: false };
-      void follow(open.command);
+      follow(open.command);
     }
     // Only when an open undo appears on the rule; the effect above handles the mount.
     // eslint-disable-next-line react-hooks/exhaustive-deps

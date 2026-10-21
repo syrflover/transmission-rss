@@ -11,6 +11,7 @@
 pub mod access;
 pub mod app_data;
 pub mod calendar;
+pub mod changes;
 mod clock;
 pub mod commands;
 pub mod db;

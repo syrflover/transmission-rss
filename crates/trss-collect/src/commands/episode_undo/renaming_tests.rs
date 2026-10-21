@@ -289,3 +289,24 @@ async fn a_file_another_torrent_shares_keeps_its_name() {
     let reason = s.undo_reason("undo-0402-a", 1).await;
     assert!(reason.contains("다른 토렌트"), "{reason}");
 }
+
+#[tokio::test]
+async fn an_undo_announces_its_command_as_its_files_are_recorded() {
+    let (mut s, rule) = third_season_received().await;
+    let changes = trss_core::changes::Changes::default();
+    let mut heard = changes.subscribe();
+    s.ctx.commands = s.ctx.commands.clone().announcing(changes);
+
+    let finished = s.undo(&rule, "undo-0003-a", -48).await;
+    assert_eq!(finished.state, CommandState::Done, "{finished:?}");
+
+    let mut ids = Vec::new();
+    while let Ok(change) = heard.try_recv() {
+        assert_eq!(change.kind, trss_core::changes::ChangeKind::Command);
+        ids.push(change.id);
+    }
+    // Accepted, started, the two files recorded (once when the undo began
+    // and once for each file renamed), and ended.
+    assert_eq!(ids.len(), 2 + 1 + 2 + 1, "{ids:?}");
+    assert!(ids.iter().all(|id| id == "undo-0003-a"), "{ids:?}");
+}

@@ -1,4 +1,4 @@
-import { api } from "@/lib/api";
+import { api, timedRead } from "@/lib/api";
 import { sendCommand, type Command } from "@/lib/commands";
 import type {
   ArchiveDirection,
@@ -81,7 +81,7 @@ export function listRules(): Promise<RuleList> {
 }
 
 export function getRule(id: string): Promise<Rule> {
-  return api<Rule>(`/rules/${encodeURIComponent(id)}`);
+  return api<Rule>(`/rules/${encodeURIComponent(id)}`, timedRead());
 }
 
 /**

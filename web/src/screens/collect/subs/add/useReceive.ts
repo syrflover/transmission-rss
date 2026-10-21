@@ -2,11 +2,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { ApiError } from "@/lib/api";
 import { getCommand, isOpen, newCommandId, type Command } from "@/lib/commands";
+import { useCommandWatch } from "@/lib/useCommandWatch";
 
 import { receiveWithRule } from "../api";
 
-/** How often the open commands are asked for their state, in milliseconds. */
-const POLL_MS = 2000;
+/** How long to wait before reading again a command whose last read failed, in milliseconds. */
+const RETRY_AFTER_MS = 2000;
 
 /**
  * Where one item's receive command is:
@@ -52,9 +53,11 @@ function ended(command: Command): ReceivePhase {
 
 /**
  * Sends one receive command per item and follows every command until the
- * worker ended it. `send(commandId, key, scope)` makes the request; `scope` is
- * the rule it is for. Nothing here decides which items are received: the
- * worker checks that the rule would pick each one.
+ * worker ended it: each is read when its request was answered and again when
+ * the server says it changed ({@link useCommandWatch}), not on a timer.
+ * `send(commandId, key, scope)` makes the request; `scope` is the rule it is
+ * for. Nothing here decides which items are received: the worker checks that
+ * the rule would pick each one.
  *
  * Commands are sent one after another in the order given, so the worker, which
  * runs the oldest first, adds them in that order. Every ticked item is sent
@@ -147,24 +150,27 @@ export function useCommandRows<K extends string | number>(
     [scope, post],
   );
 
-  const waiting = rows.some((r) => r.phase.kind === "waiting");
+  // The commands the worker has not ended: each is read now and whenever the
+  // server says it changed, until it ended and its row stops waiting.
+  const watching = useCommandWatch();
+  const waitingKey = rows
+    .filter((r) => r.phase.kind === "waiting")
+    .map((r) => r.commandId)
+    .join(" ");
   useEffect(() => {
-    if (!waiting) return;
-    const timer = window.setInterval(() => {
-      for (const r of open.current) {
-        if (r.phase.kind !== "waiting") continue;
-        getCommand(r.commandId).then(
-          (command) => {
-            if (alive.current && !isOpen(command)) setPhase(r.key, ended(command));
-          },
-          () => {
-            // Cannot reach the server for now: the next poll asks again.
-          },
-        );
+    const read = async (commandId: string) => {
+      const row = open.current.find((r) => r.commandId === commandId);
+      if (!row) return;
+      try {
+        const command = await getCommand(commandId);
+        if (alive.current && !isOpen(command)) setPhase(row.key, ended(command));
+      } catch {
+        // Cannot reach the server for now: ask again soon.
+        watching.retry(commandId, () => read(commandId), RETRY_AFTER_MS);
       }
-    }, POLL_MS);
-    return () => window.clearInterval(timer);
-  }, [waiting, setPhase]);
+    };
+    watching.sync(waitingKey === "" ? [] : waitingKey.split(" "), read);
+  }, [waitingKey, watching, setPhase]);
 
   return { rows, start, retry, one };
 }

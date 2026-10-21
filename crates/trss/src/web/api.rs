@@ -23,6 +23,7 @@ pub fn router() -> Router<AppState> {
         .merge(super::artwork_api::routes())
         .merge(super::channels_api::routes())
         .merge(super::commands_api::routes())
+        .merge(super::events_api::routes())
         .merge(super::history_api::routes())
         .merge(super::import_api::routes())
         .merge(super::jobs_api::routes())

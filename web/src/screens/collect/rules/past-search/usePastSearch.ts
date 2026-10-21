@@ -1,12 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { ApiError } from "@/lib/api";
-import type { SearchContext, SearchResult, StartSearchBody } from "@/lib/api-types";
+import type { Change, SearchContext, SearchResult, StartSearchBody } from "@/lib/api-types";
+import { useChanges } from "@/lib/useChanges";
 
 import { cancelSearch, pollSearch, searchContext, startSearch } from "./api";
-
-/** How often a running search is asked how far it is, in milliseconds. */
-const POLL_MS = 700;
 
 /**
  * Where a past episode search is:
@@ -26,13 +24,18 @@ export type SearchPhase =
   | { kind: "preview"; context: SearchContext; searchId: string; result: SearchResult }
   | { kind: "unavailable"; message: string };
 
+/** How long to wait before reading a search again when the last read got no answer, in milliseconds. */
+const RETRY_AFTER_MS = 2100;
+
 function message(error: unknown, fallback: string): string {
   return error instanceof ApiError ? error.message : fallback;
 }
 
 /**
  * Drives one rule's past episode search. The server runs and judges it; this
- * only starts it, follows it and hands over the finished preview. A search that
+ * only starts it, follows it and hands over the finished preview. It follows
+ * the search by reading it when it starts and again whenever the server says
+ * the search changed (it got further or ended), not on a timer. A search that
  * is left (the section closed, the rule left) is ended on the server, so
  * nothing of it stays, unless something of that very search was already sent
  * to be received (a later search of the rule is ended as usual).
@@ -99,47 +102,69 @@ export function usePastSearch(ruleId: string) {
   }, []);
 
   const searching = phase.kind === "searching" ? phase : null;
+  const following = useRef(searching);
+  following.current = searching;
+  const reading = useRef({ busy: false, again: false });
+  const retryTimer = useRef<number | undefined>(undefined);
+
+  /** Reads how far the search is, and reads again once if it changed meanwhile. */
+  const ask = useCallback(async () => {
+    const now = following.current;
+    if (!now) return;
+    if (reading.current.busy) {
+      reading.current.again = true;
+      return;
+    }
+    reading.current.busy = true;
+    const mine = () => following.current?.searchId === now.searchId;
+    try {
+      const poll = await pollSearch(now.searchId);
+      if (!mine()) return;
+      if (poll.state === "running") {
+        setPhase((was) =>
+          was.kind === "searching" && was.searchId === now.searchId
+            ? { ...was, sent: poll.sent, needed: poll.needed }
+            : was,
+        );
+      } else if (poll.state === "done" && poll.result) {
+        setPhase({ kind: "preview", context: now.context, searchId: now.searchId, result: poll.result });
+      } else {
+        searchId.current = null;
+        setPhase({ kind: "range", context: now.context, error: poll.error ?? "검색하지 못했어요." });
+      }
+    } catch (e) {
+      if (!mine()) return;
+      if (e instanceof ApiError && e.code === "not_found") {
+        searchId.current = null;
+        setPhase({
+          kind: "range",
+          context: now.context,
+          error: "검색이 사라졌어요. 서버가 다시 시작됐을 수 있어요. 다시 검색해 주세요.",
+        });
+      } else {
+        // The server cannot be reached for now: ask again soon.
+        window.clearTimeout(retryTimer.current);
+        retryTimer.current = window.setTimeout(() => void ask(), RETRY_AFTER_MS);
+      }
+    } finally {
+      reading.current.busy = false;
+      if (reading.current.again) {
+        reading.current.again = false;
+        void ask();
+      }
+    }
+  }, []);
+
+  // Listening starts before the first read, so a change during that read is heard.
+  const aboutSearch = useCallback(
+    (change: Change) => change.kind === "past_search" && change.id === following.current?.searchId,
+    [],
+  );
+  useChanges(aboutSearch, () => void ask(), searching !== null);
   useEffect(() => {
     if (!searching) return;
-    let cancelled = false;
-    let timer: number | undefined;
-    const ask = async () => {
-      try {
-        const poll = await pollSearch(searching.searchId);
-        if (cancelled) return;
-        if (poll.state === "running") {
-          setPhase((now) =>
-            now.kind === "searching" && now.searchId === searching.searchId
-              ? { ...now, sent: poll.sent, needed: poll.needed }
-              : now,
-          );
-          timer = window.setTimeout(ask, POLL_MS);
-        } else if (poll.state === "done" && poll.result) {
-          setPhase({ kind: "preview", context: searching.context, searchId: searching.searchId, result: poll.result });
-        } else {
-          searchId.current = null;
-          setPhase({ kind: "range", context: searching.context, error: poll.error ?? "검색하지 못했어요." });
-        }
-      } catch (e) {
-        if (cancelled) return;
-        if (e instanceof ApiError && e.code === "not_found") {
-          searchId.current = null;
-          setPhase({
-            kind: "range",
-            context: searching.context,
-            error: "검색이 사라졌어요. 서버가 다시 시작됐을 수 있어요. 다시 검색해 주세요.",
-          });
-        } else {
-          // The server cannot be reached for now: ask again.
-          timer = window.setTimeout(ask, POLL_MS * 3);
-        }
-      }
-    };
-    timer = window.setTimeout(ask, POLL_MS);
-    return () => {
-      cancelled = true;
-      window.clearTimeout(timer);
-    };
+    void ask();
+    return () => window.clearTimeout(retryTimer.current);
   }, [searching?.searchId, searching?.context]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Leaving the screen ends a search that nothing was received from.

@@ -19,7 +19,9 @@ use trss_collect::{
     anissia::{captions::CaptionObserver, AnissiaQueue},
     store::anissia::AnissiaStore,
 };
-use trss_core::{access::check_app_data, db::DB_PATH_ENV, instance_lock_path, Db, InstanceLock};
+use trss_core::{
+    access::check_app_data, changes::Changes, db::DB_PATH_ENV, instance_lock_path, Db, InstanceLock,
+};
 use trss_jobs::{place::unpack, JobRun, ReceiveArea, Runner, Unpacker};
 use trss_library::{
     artwork::{AppData, Artwork},
@@ -151,6 +153,9 @@ async fn run() -> Result<(), String> {
     // What the web stores for the worker part starts at once: the web rings
     // the loop that runs it.
     let wakes = Wakes::default();
+    // What changes is told to the screens' event stream through this one
+    // channel: the web's stores and the worker's announce on it.
+    let changes = Changes::default();
     let state = AppState::new(web_db.clone())
         .with_artwork(Artwork::new(
             web_db.clone(),
@@ -160,6 +165,10 @@ async fn run() -> Result<(), String> {
         .with_anissia(Anissia::with_defaults(web_db, anissia_config.clone()))
         .with_receive_area(&receive)
         .with_wakes(wakes.clone())
+        .with_changes(changes.clone())
+        // The event streams end with the process: the server waits for open
+        // responses before it stops.
+        .with_shutdown(cancel.clone())
         .with_web_hosts(web_env.hosts.clone());
     let state = match &web_env.browser {
         Some(access) => state.with_remote_screens(RemoteScreens::new(access)?),
@@ -285,7 +294,8 @@ async fn run() -> Result<(), String> {
         .with_captions(captions.clone())
         .with_jobs(jobs)
         .with_season_info(season_info.stored())
-        .with_wakes(wakes);
+        .with_wakes(wakes)
+        .with_changes(changes);
     if let Some(pool) = browser {
         println!("The server browser is on (a pool over the browser container)");
         worker = worker.with_browser(pool);

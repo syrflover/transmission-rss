@@ -196,7 +196,7 @@
 | [0151](0151-probe-rename-exchange.md) | 서버의 미디어 파일시스템이 `RENAME_EXCHANGE`를 지원하는지 `trss-probe`로 확인해요 | 진행 중 | 0144 |
 | [0152](0152-interrupted-jobs-stop.md) | 실행 도중 끊긴 자막 작업을 `중단됨`으로 멈추고 사람이 다시 시작하게 해요 | 완료 | 0145 |
 | [0153](0153-no-effect-records.md) | 자막 작업의 효과별 기록을 없애고 단계를 기록 없이 다시 해도 안전하게 해요 | 대기 | 0151, 0152 |
-| [0154](0154-change-events-and-command-reads.md) | 바뀜을 알리는 SSE 경로를 만들고 명령과 지난 회차 검색의 주기 조회를 바꿔요 | 대기 | 0147 |
+| [0154](0154-change-events-and-command-reads.md) | 바뀜을 알리는 SSE 경로를 만들고 명령과 지난 회차 검색의 주기 조회를 바꿔요 | 완료 | 0147 |
 | [0155](0155-events-for-jobs-todos-candidates.md) | 자막 작업·할 일·자막 후보·보관 파일 정리를 이벤트로 다시 읽어요 | 대기 | 0154, 쓰기 길 모으기 |
 | [0156](0156-events-for-covers-schedule-status.md) | 표지·시즌 정보·편성·상태판을 이벤트로 다시 읽고 남은 주기 조회를 없애요 | 대기 | 0148, 0154, 쓰기 길 모으기 |
 | [0157](0157-generated-types-collect.md) | 화면 타입 생성 도구를 들이고 수집 화면이 쓰는 API의 타입을 생성해요 | 완료 | 0145 |

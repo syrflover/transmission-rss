@@ -1,4 +1,4 @@
-import { api } from "@/lib/api";
+import { api, timedRead } from "@/lib/api";
 import { sendCommand, type Command } from "@/lib/commands";
 import type {
   RangeLabel,
@@ -33,7 +33,7 @@ export function startSearch(ruleId: string, body: StartSearchBody): Promise<Sear
 }
 
 export function pollSearch(searchId: string): Promise<SearchPoll> {
-  return api<SearchPoll>(`/past-searches/${encodeURIComponent(searchId)}`);
+  return api<SearchPoll>(`/past-searches/${encodeURIComponent(searchId)}`, timedRead());
 }
 
 export function cancelSearch(searchId: string): Promise<void> {

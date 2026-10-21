@@ -65,6 +65,8 @@ image.workspace = true
 rusqlite.workspace = true
 rustix.workspace = true
 tempfile.workspace = true
+# `test-util`: the event stream's keep-alive is tested on a paused clock.
+tokio = { workspace = true, features = ["test-util"] }
 tower.workspace = true
 ts-rs.workspace = true
 tokio-tungstenite.workspace = true

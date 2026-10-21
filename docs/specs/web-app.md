@@ -185,8 +185,20 @@ Anissia의 종영일이 든 주에는 그 작품의 카드에 조용한 `이번 
 | 연결 단절·접근 거부 | 마지막으로 확인한 상태와 조회 시점을 남기되 최신 상태로 표시하지 않아요. 조회 실패만으로 서버 작업을 실패·취소 처리하지 않으며, 접근이 거부되면 새 명령과 원격 입력을 중지해요. |
 | 화면 재접속 | 서버의 현재 작업과 항목별 결과를 조회해 복원하고, 화면을 복원하는 것만으로 다운로드·적용·승인을 다시 보내지 않아요. |
 
-작업 상태 갱신은 우선 HTTP 주기 조회를 사용하고, 화면·입력을 전달하는 원격 인증 WebSocket과 구분해요.
-보이는 화면의 기본 조회 간격은 2초로 두며, 앞선 조회가 끝나지 않았으면 같은 화면의 주기 조회를 쌓지 않아요.
+작업 상태 갱신은 화면·입력을 전달하는 원격 인증 WebSocket과 구분해요. 명령과 지난 회차 검색의 상태는 무엇이 바뀌었는지만 알려 주는 서버 전송 이벤트(SSE) 스트림 `GET /api/events`로 갱신하고, 그 밖의 상태는 아직 HTTP 주기 조회를 사용해요.
+
+스트림은 웹 전체의 Host·Origin 검사 안에 있고, 압축하지 않아요. 보내는 이벤트는 넷이에요.
+
+| 이벤트 | 데이터 | 뜻 |
+| --- | --- | --- |
+| `ready` | `{}` | 서버가 이 연결로 바뀜을 듣기 시작한 직후 한 번 보내요. 화면은 보고 있는 상태를 모두 다시 읽어요. |
+| `change` | `{"kind":"command"\|"past_search","id":"…"}` | 그 ID의 명령 또는 지난 회차 검색이 바뀌었어요. 바뀐 내용은 담지 않고, 화면은 해당 조회로 다시 읽어요. |
+| `lagged` | `{}` | 스트림이 바뀜을 다 보내지 못하고 일부를 건너뛰었어요. 화면은 `ready`와 똑같이 모두 다시 읽어요. |
+| `alive` | `{}` | 다른 이벤트가 없는 동안 15초마다 보내요. 화면은 아무것도 다시 읽지 않고, 45초 동안 아무 이벤트도 받지 못한 스트림만 닫고 바로 다시 열어요. |
+
+서버는 바뀐 상태를 커밋한 뒤에, 메모리에만 있는 지난 회차 검색의 진행은 바꾼 뒤에 `change`를 알려서, 화면이 이벤트를 받고 읽으면 바뀐 값을 봐요. 연결이 끊어졌다 다시 맺으면 `ready`로 놓친 변화를 되찾고, 서버를 끌 때는 열린 스트림을 닫아요. 화면은 탭마다 연결 하나만 열고, 숨겨진 탭은 연결을 닫았다가 다시 보이면 열어서 `ready`로 갱신해요.
+
+이벤트로 옮기지 않은 상태의 보이는 화면 기본 조회 간격은 2초로 두며, 앞선 조회가 끝나지 않았으면 같은 화면의 주기 조회를 쌓지 않아요.
 이는 초기 UI 기본값이며 처리 완료 시간의 보장이나 실측 성능값이 아니에요.
 숨겨진 화면의 주기 조회는 멈추고 다시 활성화되면 갱신하되, 서버의 5분 RSS 처리·30분 자막 후보 관찰이나 진행 중 작업은 계속돼요.
 화면의 마지막 동기화 시각과 출처·파일 상태를 실제로 관찰한 시각을 구분하며, 편집 중인 입력을 새 조회 값으로 자동 덮어쓰지 않아요.
@@ -429,6 +441,7 @@ cargo types
 | 표: 늦게 도착한 이전 조회 응답 | 참고(헤드리스 브라우저): 2026-10-01 응답을 1.5초 늦춘 `zz` 요청 뒤에 `series 02`를 치자 `series 02`의 7편이 남고 늦은 답이 덮지 않았어요 ([0013]) | 원격 화면의 프레임에 한해서: `web` `src/screens/todo/remote/session.test.ts` `a late frame of an older generation does not make inputs valid again` | 목록과 작업 화면의 조회(`usePolled`, `web/src/lib/cached.ts`)에서 응답 순서를 뒤집어도 선택과 완료 상태가 되돌아가지 않는 것은 테스트와 관찰이 없어요. 이미 확인한 명령 접수 결과를 이전 응답이 덮지 않는 것도 확인하지 않았어요 |
 | 표: 연결 단절·접근 거부 | 없음 | 원격 화면의 소켓에 한해서: `web` `src/screens/todo/remote/reconnect.test.ts` `the delays grow and the attempts stop after five`, `web` `src/screens/todo/remote/move.test.ts` `another end, a lost socket or the limit ends the move so the screen says what happened` | 마지막으로 확인한 상태와 조회 시점을 남기고 최신으로 표시하지 않는 동작, 조회 실패만으로 서버 작업을 실패 처리하지 않는 동작, 접근이 거부되면 새 명령과 원격 입력을 중지하는 동작은 본 기록과 테스트가 없어요 |
 | 표: 화면 재접속 | (1) 참고(가짜 출처): 2026-10-03 확인 화면을 연 채 `trss-web`만 재시작하자 묶인 실행이 그대로였고 화면이 다시 붙어 상자를 눌러 받았어요 ([0040])<br>(2) 참고(헤드리스 브라우저): 2026-09-30 다시 불러온 화면도 진행 중 명령을 이어 보여줬어요 ([0008]) | (1) `trss` `web/screen_api/tests.rs` `a_reconnect_reaches_the_same_run_and_asks_for_none`<br>(2) `web` `src/screens/todo/prepareGate.test.ts` `the reads a reconnecting socket makes never ask`<br>(3) `trss` `tests/it/receive_once.rs` `a_command_accepted_before_a_restart_runs_once_after_it` | 화면을 복원하는 것만으로 다운로드·적용·승인을 다시 보내지 않는 것은 원격 화면과 접수된 명령에서만 확인했어요. 할 일과 작품 상세 화면의 복원은 테스트와 관찰이 없어요 |
+| 명령·지난 회차 검색 상태의 이벤트 갱신(`GET /api/events`)<br>(1) 바뀐 것의 종류와 ID만 보냄<br>(2) 바뀐 뒤에 알림<br>(3) `ready`·`lagged`에 보이는 것을 모두 다시 읽음<br>(4) 탭마다 연결 하나, 숨겨진 탭은 닫음<br>(5) 접근 경계<br>(6) 서버를 끌 때 스트림을 닫음 | (1)(2) 2026-10-21 개발(서버 DB 사본, Vite 프록시): 감시 폴더의 `다시 확인`을 누르자 명령의 접수·시작·끝남 `change` 셋이 POST 응답과 같은 43 ms에 왔고, 화면은 명령을 한 번만 읽고 `다시 확인했어요.`를 보였어요 ([0154])<br>(4) 같은 날 같은 환경에서 화면의 `sharedEvents`에 구독자 둘을 붙이자 연결이 하나 열렸어요. 숨김 신호에 닫혔다가 다시 보이자 열려, `ready`로 둘 다 다시 읽었어요. 숨김은 `visibilitychange`를 흉내 냈어요 ([0154]) | (1) `trss-core` `changes/tests.rs` `a_change_is_sent_as_its_kind_in_snake_case_and_its_id`, `trss` `web/events_api/tests.rs` `ready_comes_first_and_once_then_the_changes_in_the_order_they_were_announced`<br>(2) `trss-core` `commands/tests.rs` `a_command_is_announced_when_it_is_accepted_started_and_ended`, `a_command_given_up_on_the_way_is_announced_beside_the_one_claimed_instead`, `trss-collect` `past_search/service.rs` `progress_that_moves_is_announced_and_progress_that_stays_is_not`, `trss` `tests/it/worker_process.rs` `a_client_of_the_event_stream_hears_a_command_accepted_run_and_ended_done_or_failed`, `a_client_of_the_event_stream_hears_a_past_search_start_get_further_and_end`<br>(3) `trss` `web/events_api/tests.rs` `a_stream_that_fell_behind_says_lagged_and_goes_on`, `web` `src/lib/events.test.ts` `lagged reads everything again, and a change that cannot be read counts as one that was missed`, `src/lib/watchCommands.test.ts` `the stream is listened to before the first read, so a change during it is not lost`<br>(4) `web` `src/lib/events.test.ts` `nothing is opened until somebody listens, and one connection serves every listener`, `a page shown again opens one connection and its ready reads everything again`<br>(5) `trss` `web/events_api/tests.rs` `a_host_the_web_does_not_answer_to_is_refused_like_on_every_other_route`<br>(6) `trss` `web/events_api/tests.rs` `the_stream_ends_when_the_process_shuts_down`, `tests/it/worker_process.rs` `sigterm_with_an_event_stream_open_exits_promptly_and_closes_the_stream` | 브라우저가 실제로 탭을 숨길 때와, 브라우저가 포기한 연결을 5초 뒤에 다시 여는 것은 실제 브라우저에서 보지 않았어요. 일곱 곳의 React 훅에는 자동 테스트가 없고, 개발 환경에서는 감시 폴더의 `다시 확인`만 눌러 봤어요. 서버(j4105)와 reverse proxy를 거친 전달은 확인하지 않았어요. 45초 동안 아무 이벤트도 없는 스트림을 다시 여는 동작은 가짜 스트림과 멈춘 시계로만 확인했고, 실제로 끊긴 연결에서는 보지 않았어요 |
 | 작업 상태 갱신의 HTTP 주기 조회, 2초 기본 간격과 겹치지 않는 조회, 숨겨진 화면의 멈춤, 마지막 동기화 시각, 조회가 사용 시각을 갱신하지 않음 | (1) 2026-10-08 개발(서버 DB 사본): 적용한 뒤 새로고침 없이 약 4초 만에 회차 줄이 바뀌었어요 ([0127])<br>(2) 2026-10-08 개발(서버 DB 사본): 열어 둔 화면은 다시 열기 전까지 `영상 대기`로 남았어요 ([0083])<br>(1) 2026-10-10 서버: Hanaori 7화의 `적용` 뒤 회차 줄이 새로고침 없이 바뀌었어요 ([0114]) | (1) `web` `src/screens/library/detail/subtitles.test.ts` `a finished apply shows once the episode lists the file the job put beside the video, and not before`<br>(2) `trss` `web/screen_api/tests.rs` `reading_the_job_and_the_lists_asks_for_no_run_and_opening_its_page_does`<br>(3) 없음 (간격, 겹치지 않는 조회, 숨겨진 화면의 멈춤, 마지막 동기화 시각, 편집 중 입력) | 조회 간격이 화면마다 달라요. 작업 목록과 작업 상세는 2초(`TodoScreen.tsx`, `JobDetailScreen.tsx`), 할 일 목록은 10초(`screens/todo/poll.ts`), 메뉴의 할 일 개수는 15초(`app/todo-count.ts`), 이번 주 편성과 수집 상태판은 30초(`ScheduleScreen.tsx`, `StatusBoard.tsx`), 작품 상세의 표지는 3초(`WorkDetailScreen.tsx`)예요. 명세가 2초를 초기 UI 기본값이라고 해서 어긋남으로 올리지 않았어요. 앞선 조회가 끝나기 전에 쌓지 않는 것과 숨겨진 화면의 멈춤은 코드(`poll.ts`)에만 있어요. 폴링 비용은 측정하지 않았어요 ([0021]) |
 | 출처에서 받은 자막 본문·파일명·오류 문구·RSS 제목을 데이터로 표시 | 참고(가짜 출처): 2026-10-01 AniList 줄거리의 `<script>`·`<svg onload>`·`<img onerror>`가 DOM에 생기지 않았어요 ([0017]) | AniList 줄거리에 한해서: `trss-library` `seasons/describe.rs` `other_tags_go_and_their_text_stays` | 자막 본문·파일명·오류 문구·RSS 항목 제목을 화면에서 확인한 테스트와 관찰이 없어요. `web/src`에는 `dangerouslySetInnerHTML`과 `innerHTML`이 없어요(2026-10-10 검색) |
 
@@ -468,4 +481,5 @@ cargo types
 [0141]: ../tickets/0141-anissia-status-shown.md
 [0142]: ../tickets/0142-phone-top-bar-and-theme-setting.md
 [0147]: ../tickets/0147-commands-start-at-once.md
+[0154]: ../tickets/0154-change-events-and-command-reads.md
 [0114]: ../archive/tickets/refactoring-between-5-and-6/0114-refactor-final-check.md#실제-서버-2026-10-10-070
