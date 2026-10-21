@@ -371,7 +371,7 @@ async fn save(
         Saved::Done(Some(mapping)) => {
             // The jobs whose rows the change moved are back in line
             // ([`trss_jobs::place::relocate`]).
-            state.wake_worker();
+            state.wakes.jobs();
             // The follower reads the new mapping: what it lets through is
             // received now, and the conflicts are found against it.
             follow_now(&state).await;

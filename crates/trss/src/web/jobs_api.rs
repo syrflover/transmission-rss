@@ -15,7 +15,7 @@
 //!   that starts with `auto:` or `recheck:` is the app's own (the subscribed
 //!   creator's receipts, [`trss_jobs::follow`], and the revisions the
 //!   recheck makes, [`trss_jobs::recheck`]) and is refused with `400`. A new
-//!   job answers `202` `{ "id" }` and wakes the worker. The candidates must be
+//!   job answers `202` `{ "id" }` and rings the jobs' loop. The candidates must be
 //!   the season's Anissia anime's ([`trss_collect::store::anissia::AnissiaStore::candidates`])
 //!   and of one creator; the job copies their posts and episodes as they are.
 //! - `GET /api/subtitle-jobs` the jobs by group: `failed` (`failed`,
@@ -1105,7 +1105,7 @@ async fn create(
         .map_err(|e| internal(&e))?
     {
         Created::Created(id) => {
-            state.wake_worker();
+            state.wakes.jobs();
             Ok((StatusCode::ACCEPTED, Json(json!({ "id": id }))))
         }
         Created::Existing(id) => Ok((StatusCode::OK, Json(json!({ "id": id })))),
@@ -1184,7 +1184,7 @@ async fn create_find(
         .map_err(|e| internal(&e))?
     {
         Created::Created(id) => {
-            state.wake_worker();
+            state.wakes.jobs();
             Ok((StatusCode::ACCEPTED, Json(json!({ "id": id }))))
         }
         Created::Existing(id) => Ok((StatusCode::OK, Json(json!({ "id": id })))),
@@ -1212,7 +1212,7 @@ async fn finish(
         }
         AskedFinish::Ended => "done",
         AskedFinish::Asked => {
-            state.wake_worker();
+            state.wakes.screens();
             "finishing"
         }
     };
@@ -1220,14 +1220,14 @@ async fn finish(
 }
 
 /// Makes the subscribed creators' jobs now ([`trss_jobs::Follow::evaluate`])
-/// and wakes the worker when it made one: after the creator was set or
+/// and rings the jobs' loop when it made one: after the creator was set or
 /// changed, the rule's receiving turned on, or a season's AniList or Anissia
 /// link saved. A failure is logged and changes nothing of the answer, since the
 /// worker looks again at its next start and after its next reading.
 pub async fn follow_now(state: &AppState) {
     match state.follow.evaluate(now_millis()).await {
         Ok(made) if !made.is_empty() => {
-            state.wake_worker();
+            state.wakes.jobs();
         }
         Ok(_) => {}
         Err(err) => eprintln!("Cannot look at the subscribed creators' subtitles: {err}"),

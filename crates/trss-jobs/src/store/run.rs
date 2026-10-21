@@ -101,8 +101,8 @@ impl JobRun {
 
     /// Puts back in line the jobs that wait (`자막 대기`) for an archive's
     /// next try to unpack it once its time came ([`crate::place::unpack`]);
-    /// how many. Every command poll asks, so a look that finds none takes
-    /// no write lock.
+    /// how many. Every look of the jobs' loop asks, so a look that finds
+    /// none takes no write lock.
     pub async fn requeue_unpack_retries(&self, now: Millis) -> Result<usize, JobError> {
         const DUE: &str = "SELECT f.job_id FROM subtitle_job_files f
                              JOIN subtitle_jobs j ON j.id = f.job_id
@@ -153,8 +153,8 @@ impl JobRun {
         }
         self.db
             .run(move |c| {
-                // Every command poll asks: a library that did not change takes
-                // no write lock.
+                // Every look of the jobs' loop asks: a library that did not
+                // change takes no write lock.
                 if let Some(seen) = seen {
                     if generation(c)? == seen {
                         return Ok((seen, 0));

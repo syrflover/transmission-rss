@@ -1,8 +1,7 @@
 //! The start-up check that this process can write the app data folder.
 //!
 //! The web and the worker run as one user and share the database (WAL and
-//! shared-memory files included), the lock files, the wake socket and the
-//! receive area. A file an earlier deploy made as another user (root, before
+//! shared-memory files included), the lock files and the receive area. A file an earlier deploy made as another user (root, before
 //! the image ran as 1000:1000) is not writable here, and without this check it
 //! would fail later and in pieces: a lock that cannot be opened, a database
 //! that opens read-only. [`check_writable`] looks once at what trss writes in
@@ -13,7 +12,7 @@
 
 use std::{
     fmt, fs, io,
-    os::unix::fs::{FileTypeExt, MetadataExt},
+    os::unix::fs::MetadataExt,
     path::{Path, PathBuf},
 };
 
@@ -90,16 +89,13 @@ impl std::error::Error for AccessError {}
 
 /// What trss writes in the app data folder next to the database file, as
 /// suffixes of the database's file name: the database's WAL, shared-memory
-/// and journal files, every lock file ([`LockFile::ALL`]) and the wake socket
-/// (`wake_path_for`). The lock files come from [`LockFile`], so a new one is
-/// checked without being added here; the test
-/// `the_checked_suffixes_hold_every_lock_file_and_the_wake_socket_once` keeps
-/// the wake socket in step with this.
+/// and journal files, and every lock file ([`LockFile::ALL`]). The lock files
+/// come from [`LockFile`], so a new one is checked without being added here.
 pub const DATABASE_FILE_SUFFIXES: &[&str] = &SUFFIXES;
 
-const SUFFIXES: [&str; 5 + LockFile::ALL.len()] = {
+const SUFFIXES: [&str; 4 + LockFile::ALL.len()] = {
     const BEFORE_LOCKS: [&str; 4] = ["", "-wal", "-shm", "-journal"];
-    let mut all = [""; 5 + LockFile::ALL.len()];
+    let mut all = [""; 4 + LockFile::ALL.len()];
     let mut at = 0;
     while at < BEFORE_LOCKS.len() {
         all[at] = BEFORE_LOCKS[at];
@@ -111,7 +107,6 @@ const SUFFIXES: [&str; 5 + LockFile::ALL.len()] = {
         at += 1;
         lock += 1;
     }
-    all[at] = ".wake";
     all
 };
 
@@ -171,7 +166,7 @@ pub fn check_writable(
             );
             for file in files {
                 match fs::symlink_metadata(file) {
-                    Ok(meta) if meta.is_file() || meta.file_type().is_socket() => {
+                    Ok(meta) if meta.is_file() => {
                         check_one(file, &meta, Access::WRITE_OK | Access::READ_OK, &mut found)
                     }
                     // Missing, or something else: not a file trss made.
@@ -315,23 +310,13 @@ mod tests {
     }
 
     #[test]
-    fn the_checked_suffixes_hold_every_lock_file_and_the_wake_socket_once() {
-        let db = Path::new("/data/trss.db");
+    fn the_checked_suffixes_hold_every_lock_file_once() {
         let mut suffixes: Vec<&str> = DATABASE_FILE_SUFFIXES.to_vec();
         for lock in LockFile::ALL {
             let at = suffixes.iter().position(|s| *s == lock.suffix());
             assert!(at.is_some(), "{lock:?} is not checked");
             suffixes.remove(at.unwrap());
         }
-        let wake = crate::wake::wake_path_for(db);
-        let wake_suffix = wake
-            .to_str()
-            .unwrap()
-            .strip_prefix("/data/trss.db")
-            .unwrap();
-        let at = suffixes.iter().position(|s| *s == wake_suffix);
-        assert!(at.is_some(), "the wake socket is not checked");
-        suffixes.remove(at.unwrap());
         // What is left are the database's own files.
         assert_eq!(suffixes, ["", "-wal", "-shm", "-journal"]);
     }

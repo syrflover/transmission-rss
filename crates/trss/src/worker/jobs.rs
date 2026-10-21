@@ -14,7 +14,7 @@ use super::Worker;
 pub(crate) const RECHECK_EVERY: Duration = Duration::from_secs(60 * 60);
 
 /// How often the worker looks at the remote screens besides the web's
-/// wake-ups: the runs bound to jobs that wait for a site's check are watched
+/// rings: the runs bound to jobs that wait for a site's check are watched
 /// from the first look after the job settled.
 pub(crate) const SCREEN_POLL: Duration = Duration::from_secs(2);
 
@@ -63,7 +63,7 @@ impl Worker {
             );
         }
         if !report.jobs.is_empty() {
-            self.job_wake.notify_one();
+            self.wakes.jobs();
         }
         Ok(report.read())
     }
@@ -159,8 +159,8 @@ impl Worker {
     }
 
     /// The remote screens of the jobs that wait for a site's check, until
-    /// `cancel` fires: whenever the web wakes the worker (a person opened a
-    /// job's page) and every [`SCREEN_POLL`], the runner watches the bound
+    /// `cancel` fires: whenever the web rings the screens' loop (a person
+    /// opened a job's page) and every [`SCREEN_POLL`], the runner watches the bound
     /// runs and answers the requests to prepare a screen
     /// ([`trss_jobs::Runner::tend_screens`]). A worker without the server
     /// browser has no runs to watch; it still ends the find jobs a person
@@ -175,10 +175,10 @@ impl Worker {
             tokio::select! {
                 biased;
                 _ = cancel.cancelled() => break,
-                _ = self.screen_wake.notified() => {}
+                _ = self.wakes.screens.notified() => {}
                 _ = ticker.tick() => {}
             }
-            if let Err(err) = runner.tend_screens(&self.job_wake, &cancel).await {
+            if let Err(err) = runner.tend_screens(&self.wakes.jobs, &cancel).await {
                 eprintln!("Remote screens: {err}");
             }
         }
@@ -229,7 +229,7 @@ impl Worker {
     }
 
     /// The jobs until `cancel` fires: a look at the start, whenever the web
-    /// wakes the worker, and every command poll. The subscribed creators are
+    /// rings the jobs' loop, and every [`Worker::with_poll`]. The subscribed creators are
     /// looked at again when Anissia's lines added observations and when a
     /// season's entry was stored. A run under way at shutdown
     /// gets the grace period, then is aborted; its job stays `running`.
@@ -247,14 +247,14 @@ impl Worker {
         // What the subscribed creators posted while the worker was away.
         self.follow_logged().await;
         let observed = self.captions.as_ref().map(|c| c.observed());
-        let mut ticker = tokio::time::interval(self.command_poll);
+        let mut ticker = tokio::time::interval(self.poll);
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
         loop {
             tokio::select! {
                 biased;
                 _ = cancel.cancelled() => break,
-                _ = self.job_wake.notified() => {}
+                _ = self.wakes.jobs.notified() => {}
                 _ = async {
                     match &observed {
                         Some(observed) => observed.notified().await,
@@ -287,7 +287,7 @@ impl Worker {
                 // makes is run at once.
                 Ok(Ok(Some(ran))) if ran > 0 => {
                     if self.follow_logged().await {
-                        self.job_wake.notify_one();
+                        self.wakes.jobs();
                     }
                 }
                 Ok(Ok(_)) => {}

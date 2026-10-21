@@ -400,7 +400,7 @@ pub(super) async fn decide(
         .map_err(|e| internal(&e))?;
     match decided {
         Decided::Done(to) => {
-            state.wake_worker();
+            state.wakes.jobs();
             Ok(Json(json!({ "state": to.code() })))
         }
         Decided::NotFound => Err(ApiError::not_found("교체 계획을 찾지 못했어요.")),
@@ -474,7 +474,7 @@ pub(super) async fn decide_many(
         return Err(ApiError::not_found("교체 계획을 찾지 못했어요."));
     }
     if decided.iter().any(|d| matches!(d, Decided::Done(_))) {
-        state.wake_worker();
+        state.wakes.jobs();
     }
     let results: Vec<_> = request
         .decisions

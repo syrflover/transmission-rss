@@ -1,8 +1,8 @@
 //! `POST /api/subtitle-jobs/upload`: the subtitles and fonts a person uploads
 //! from the work detail (`docs/specs/subtitles.md`, 직접 찾기와 자막 올리기),
 //! made into one job whose files are received and which waits for the worker
-//! to unpack and analyse them for the person's 배치 확인; this wakes it
-//! ([`trss_jobs::upload`]).
+//! to unpack and analyse them for the person's 배치 확인; this rings the
+//! jobs' loop ([`trss_jobs::upload`]).
 //!
 //! The body is `multipart/form-data`, its parts in this order:
 //!
@@ -675,7 +675,7 @@ async fn receive(
             dropped,
         } => {
             // What it kept is the worker's to unpack and analyse.
-            state.wake_worker();
+            state.wakes.jobs();
             Ok((
             StatusCode::ACCEPTED,
             Json(json!({

@@ -436,7 +436,7 @@ pub(super) async fn changes_work_folder(
 }
 
 /// Stores the `start` (a new rule) or `resume` (`영상 받기` on) command of the
-/// paused rule `rule_id` and wakes the worker. A `start` carries the past items
+/// paused rule `rule_id` and rings the commands' loop. A `start` carries the past items
 /// `receive` to receive once the rule is on ([`rule_archive::RuleArchive::receive`]).
 /// `false` when the rule has another `rule_archive` command open.
 pub(super) async fn ask_start(
@@ -456,7 +456,7 @@ pub(super) async fn ask_start(
     .map_err(|e| ApiError::Internal(e.to_string()))?;
     match accepted {
         Accepted::Created(_) => {
-            state.wake_worker();
+            state.wakes.commands();
             Ok(true)
         }
         Accepted::Existing(_) => Ok(true),

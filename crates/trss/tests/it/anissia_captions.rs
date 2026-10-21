@@ -272,7 +272,7 @@ impl Env {
         let worker = self
             .worker()
             .with_jobs(runner)
-            .with_command_poll(Duration::from_secs(3600));
+            .with_poll(Duration::from_secs(3600));
         (worker, jobs)
     }
 }

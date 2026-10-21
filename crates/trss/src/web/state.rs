@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use crate::web::origin_guard::AllowedHosts;
+use crate::{wake::Wakes, web::origin_guard::AllowedHosts};
 
 use trss_anilist::AnilistConfig;
 use trss_anissia::{Anissia, AnissiaConfig};
@@ -56,9 +56,9 @@ pub struct AppState {
     /// The past episode searches this process runs, and the request pace of
     /// the trackers they read.
     pub past_search: PastSearch,
-    /// Where the worker hears that a command was accepted
-    /// ([`trss_core::wake`]); `None`: it finds the command at its own next look.
-    pub worker_wake: Option<PathBuf>,
+    /// The rings of the worker part's loops, which start at once what a
+    /// handler stored for them ([`crate::wake`]).
+    pub wakes: Wakes,
     /// The subtitle jobs the worker carries out, as the lists and a job's
     /// detail show them.
     pub jobs: JobViews,
@@ -102,7 +102,7 @@ impl AppState {
             setup: SetupStore::new(db.clone()),
             revisions: RevisionStore::new(db.clone()),
             past_search: PastSearch::new(SearchPace::new(db.clone())),
-            worker_wake: None,
+            wakes: Wakes::default(),
             jobs: JobViews::new(db.clone()),
             job_requests: JobRequests::new(db.clone()),
             place: PlaceStore::new(db.clone()),
@@ -137,17 +137,11 @@ impl AppState {
         self
     }
 
-    /// Wakes the worker at `path` whenever a command is accepted (see
-    /// [`trss_core::wake`]).
-    pub fn with_worker_wake(mut self, path: PathBuf) -> Self {
-        self.worker_wake = Some(path);
+    /// Rings the loops of the worker part that `wakes` belongs to
+    /// ([`crate::worker::Worker::with_wakes`]).
+    pub fn with_wakes(mut self, wakes: Wakes) -> Self {
+        self.wakes = wakes;
         self
-    }
-
-    /// Wakes the worker if this web has a wake path; call it once a command
-    /// was accepted.
-    pub fn wake_worker(&self) {
-        trss_core::wake::wake_worker_if(self.worker_wake.as_deref());
     }
 
     /// Shows the jobs' files in `area` (the app data folder's).

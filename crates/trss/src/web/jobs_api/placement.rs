@@ -235,7 +235,7 @@ pub(super) async fn confirm(
         .map_err(|e| internal(&e))?;
     match confirmed {
         Confirmed::Queued { applied, stored } => {
-            state.wake_worker();
+            state.wakes.jobs();
             Ok(Json(json!({ "applied": applied, "stored": stored })))
         }
         Confirmed::NotFound => Err(ApiError::not_found("작업을 찾지 못했어요.")),

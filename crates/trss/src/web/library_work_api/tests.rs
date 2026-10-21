@@ -704,9 +704,14 @@ async fn a_work_shows_its_stored_files_and_one_is_cleaned_on_request() {
     assert_eq!(body["current"]["id"], "s2");
     assert_eq!(body["current"]["with"][0]["id"], "a2");
 
+    // Refused asks start nothing; the one taken rings the jobs' loop, which
+    // carries the cleanup out at once.
+    let rung = || futures::FutureExt::now_or_never(state.wakes.jobs_rung()).is_some();
+    assert!(!rung());
     let (status, body) = post_json(&state, &clean, "{\"assets\": [\"a2\"]}").await;
     assert_eq!(status, StatusCode::ACCEPTED, "{body}");
     let cleanup = body["cleanup_id"].as_str().unwrap().to_owned();
+    assert!(rung());
 
     // It is no stored copy from then: the episode and the list lose it,
     // and the cleanup waits for the worker.

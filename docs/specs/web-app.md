@@ -162,11 +162,15 @@ Anissia의 종영일이 든 주에는 그 작품의 카드에 조용한 `이번 
 규칙·대응·가져오기 계획의 편집에는 확인한 대상 버전을, 교체 승인에는 확인한 불변 계획의 ID·버전을 전달하며 서버가 다시 검증해요.
 이 실행 중 버전은 YAML 교환 규격의 `version`과 다른 값이고, 화면에 보여주지 않아요.
 
-접수한 명령은 worker가 바로 실행을 시작해요(사용자 결정, 2026-10-02).
-worker는 정해진 주기의 확인을 기다리지 않고 접수를 알아채며, 진행 중인 RSS 수집 주기나 감시 폴더 읽기, 관계없는 다른 명령이 끝나기를 기다리지 않아요.
+접수한 명령은 `commands` 테이블에 기록으로 남기고, 같은 프로세스에서 곧바로 실행을 시작해요(사용자 결정, 2026-10-02·2026-10-21). 웹은 명령을 적은 뒤 명령을 실행하는 흐름을 깨우고, 끝나기를 기다리지 않고 적은 명령으로 응답해요.
+실행은 진행 중인 RSS 수집 주기나 감시 폴더 읽기, 관계없는 다른 명령이 끝나기를 기다리지 않아요.
 같은 토렌트·작품 폴더·파일처럼 대상이 겹치는 명령과 수집 처리는 겹치는 구간만 차례로 실행하고, 수집 주기가 Transmission에서 사라진 토렌트를 지우는 판단과 명령의 토렌트 추가가 엇갈리지 않게 해요.
 명령이 토렌트를 다루는 중이면 그 수집 주기는 사라진 토렌트 정리를 건너뛰고 다음 주기에 해요. 정기 처리(사라진 토렌트 정리, 주기의 감시 폴더 읽기)는 명령 뒤에 줄 서지 않아요.
-worker가 멈춰 있거나 재시작 중이면 명령은 접수된 채 기다리며, 화면은 이를 실행 실패로 표시하지 않아요.
+프로세스가 멈췄다 다시 시작하는 동안 끝나지 않은 명령은 접수된 채 기다리며, 화면은 이를 실행 실패로 표시하지 않아요.
+
+프로세스가 다시 시작하면 끝나지 않은 명령을, 접수만 된 것이든 실행하다 멈춘 것이든 다시 실행하고, 이것도 시도 한 번으로 세요. 업그레이드 직전에 끝나지 않은 명령도 새 버전이 처음 시작할 때 같은 길로 실행돼요(사용자 결정, 2026-10-21).
+한 번의 실행에서 끝내지 못한 명령(토렌트 추가에 응답이 없었을 때, DB 오류)은 3초 뒤에 다시 실행을 시작해요. 실행을 시작할 때마다 시도 횟수가 하나 늘고, 다섯 번째 시작에서 이유와 함께 끝나요. 명령을 찾으러 주기적으로 보는 일은 없어요.
+동시에 실행하는 명령은 8개까지예요.
 
 | 입력·통신 상황 | 필요한 처리와 관찰 |
 | --- | --- |
@@ -209,7 +213,7 @@ DB와 [앱 데이터 폴더](../adr/0008-trss-folder-and-app-data-files.md)는 �
 새 배포 구성에서 Transmission의 미디어 경로와 앱이 읽고 쓰는 경로의 대응, 감시 폴더 마운트, 실행 사용자 권한을 확인하고 실제 보관·복사 적용을 수행해야 해요.
 `trss`는 Transmission이 받은 파일과 같은 uid·gid 1000:1000으로 실행해요(사용자 결정, 2026-10-04). 재생기는 미디어 디스크를 NFS로 읽고 NFS는 소유를 숫자로 보여서, root로 쓴 보관본·적용본은 같은 폴더의 영상과 소유가 달라져요.
 이미지와 Compose가 이 사용자를 정하고, 이전 배포에서 root로 만든 앱 데이터 폴더의 파일은 전환할 때 소유를 옮겨요.
-`trss`는 시작할 때 앱 데이터 폴더와 trss가 거기에 쓰는 것(DB와 WAL·공유 메모리 파일, 잠금 파일, 깨우기 소켓, `receive/`·`artwork/`·`subtitle-files/`의 폴더)에 쓸 수 있는지 확인해요. 쓸 수 없으면 그 경로와 필요한 uid를 알리고 오류로 멈춰서, 이전 배포가 남긴 root 소유 파일이 나중에 조각조각 실패하지 않게 해요. `lost+found`나 백업 사본처럼 trss가 쓰지 않는 것은 보지 않아요. 서버 브라우저의 `browser-downloads/`는 따로 준비하고, 준비하지 못하면 서버 브라우저 없이 돌아요.
+`trss`는 시작할 때 앱 데이터 폴더와 trss가 거기에 쓰는 것(DB와 WAL·공유 메모리 파일, 잠금 파일, `receive/`·`artwork/`·`subtitle-files/`의 폴더)에 쓸 수 있는지 확인해요. 쓸 수 없으면 그 경로와 필요한 uid를 알리고 오류로 멈춰서, 이전 배포가 남긴 root 소유 파일이 나중에 조각조각 실패하지 않게 해요. `lost+found`나 백업 사본처럼 trss가 쓰지 않는 것은 보지 않아요. 서버 브라우저의 `browser-downloads/`는 따로 준비하고, 준비하지 못하면 서버 브라우저 없이 돌아요.
 시험용 작품에 보관·복사·승인한 교체를 수행해 Transmission에서 보이는 경로와 앱의 실제 파일이 대응하는지 확인하고, 읽기 전용·권한 거부·마운트 누락에서는 기존 파일을 보존하며 실패를 표시해야 해요.
 5분 RSS 처리와 30분 자막 후보 관찰의 실행 주체는 `trss`이고, 운영 안내에 새 실행·중지 절차를 명시해요.
 이 검증은 실제 네트워크의 접근 보호를 대신하지 않아요.
@@ -404,7 +408,7 @@ DB와 [앱 데이터 폴더](../adr/0008-trss-folder-and-app-data-files.md)는 �
 | 요구 | 실제 사용에서 본 것 | 테스트로 확인한 것 | 확인하지 않은 것 |
 | --- | --- | --- | --- |
 | 설정 저장·명령 접수 응답의 뜻, 접수와 실제 진행의 구분, 확인한 대상 버전의 전달, 실행 중 버전과 YAML `version`의 구분 | (1) 2026-10-08 개발(서버 DB 사본): 회차 줄의 `적용` 뒤 줄이 `적용했어요. 라이브러리에 보이기를 기다려요.`를 보였다가 약 4초 만에 새로고침 없이 자막 `보유`로 바뀌었어요 ([0127])<br>(2) 2026-10-06 개발(서버 DB 사본): 요청의 `seen`을 옛 값으로 바꿔 `확인함`을 누르자 `409` 문장이 카드에 나오고 카드가 남았어요 ([0078])<br>(1) 2026-10-10 서버: 보관본의 `적용` 뒤 줄이 새로고침 없이 바뀌었다고 사용자가 알렸어요 ([0114]) | (1) `trss` `web/commands_api/tests.rs` `a_command_is_accepted_pending_and_can_be_read_back`<br>(2) `trss` `web/settings_api/tests.rs` `both_folders_are_saved_and_read_back`<br>(3) `trss` `web/rules_api/tests.rs` `the_second_save_from_an_old_version_is_a_conflict_that_shows_the_saved_rule`, `trss` `web/jobs_api/replacement/tests.rs` `a_decision_names_the_version_it_saw`<br>(4) `web` `src/screens/library/detail/subtitles.test.ts` `a finished apply shows once the episode lists the file the job put beside the video, and not before`<br>(5) 없음 (실행 중 버전을 화면에 보이지 않는 것) | 2026-10-07 서버에서 사용자가 본 것은 고치기 전의 동작이에요(적용 직후 화면이 바로 바뀌지 않았어요) ([0083], [0119]). `ApplyStatus`의 조회 순환(React 효과)은 자동 테스트가 없어요 ([0127]). 가져오기 계획 편집의 버전 전달은 이 행에서 확인하지 않았어요 |
-| 접수한 명령의 즉시 실행, 겹치는 대상의 차례, worker가 멈춘 동안의 대기 | (1) 2026-10-08 서버: 속편 구독의 `start` 명령이 9 ms 만에 `moved`로 끝났어요 ([0123])<br>(2) 2026-10-02 개발(컨테이너 두 개): 웹으로 보낸 `다시 확인` 3개가 접수 뒤 16–28 ms 안에 끝났어요 ([0031]) | (1) `trss` `tests/it/receive_once.rs` `a_command_the_web_accepts_starts_within_a_second_without_waiting_for_a_look`<br>(2) `trss` `tests/it/receive_once.rs` `a_command_runs_to_its_end_while_the_same_workers_cycle_is_held_in_transmission`, `the_cycles_removal_leaves_the_torrents_alone_while_a_command_adds`<br>(3) `trss` `tests/it/receive_once.rs` `a_retry_and_the_cycles_add_of_the_same_item_go_in_turn`<br>(4) `trss` `tests/it/receive_once.rs` `a_command_accepted_before_a_restart_runs_once_after_it` | 실제 Transmission으로 오래 걸리는 이동과 명령을 겹쳐 본 기록이 없어요 ([0031]). 서버에서 worker를 멈추거나 재시작한 채 명령을 접수해 본 기록이 없고, 화면이 기다리는 명령을 실행 실패로 표시하지 않는 것도 테스트와 관찰이 없어요. 차례는 경로 글자로 겹침을 판단해서 심볼릭 링크로 다르게 적으면 겹침을 놓치는 한계가 남아 있어요 ([0031]) |
+| 접수한 명령의 실행<br>(1) 곧바로 시작<br>(2) 수집 주기와 관계없는 명령을 기다리지 않음<br>(3) 겹치는 대상의 차례<br>(4) 프로세스가 멈춘 동안의 대기와 다시 시작할 때의 재실행<br>(5) 다시 시도의 3초 대기와 횟수<br>(6) 동시 실행 8개 | (1) 2026-10-08 서버: 속편 구독의 `start` 명령이 9 ms 만에 `moved`로 끝났어요 ([0123])<br>(1) 2026-10-02 개발(컨테이너 두 개): 웹으로 보낸 `다시 확인` 3개가 접수 뒤 16–28 ms 안에 끝났어요 ([0031])<br>(1) 2026-10-21 개발(컨테이너 하나): 웹으로 보낸 `다시 확인` 3개가 접수 뒤 13–14 ms 안에 끝났어요 ([0147]) | (1) `trss` `tests/it/receive_once.rs` `a_command_the_web_accepts_starts_within_a_second_without_waiting_for_a_look`<br>(2) `trss` `tests/it/receive_once.rs` `the_process_runs_a_command_to_its_end_while_its_cycle_is_held_in_transmission`, `a_command_runs_to_its_end_while_the_same_workers_cycle_is_held_in_transmission`, `the_cycles_removal_leaves_the_torrents_alone_while_a_command_adds`<br>(3) `trss` `tests/it/receive_once.rs` `a_retry_and_the_cycles_add_of_the_same_item_go_in_turn`<br>(4) `trss` `tests/it/receive_once.rs` `a_command_accepted_before_a_restart_runs_once_after_it`, `a_started_process_runs_again_the_commands_an_earlier_one_left_open`<br>(5) `trss` `tests/it/receive_once.rs` `a_command_left_for_later_starts_again_by_itself_once_its_wait_is_over`, `a_look_that_finds_the_lock_taken_looks_again_by_itself`, `a_command_whose_adds_never_get_an_answer_ends_add_failed_and_holds_the_next_cleanup`<br>(6) `trss` `tests/it/receive_once.rs` `at_most_eight_commands_run_at_once_and_the_next_starts_when_one_ends` | 실제 Transmission으로 오래 걸리는 이동과 명령을 겹쳐 본 기록이 없어요 ([0031]). 서버에서 끝나지 않은 명령을 남긴 채 프로세스를 다시 시작해 본 기록이 없고, 화면이 기다리는 명령을 실행 실패로 표시하지 않는 것도 테스트와 관찰이 없어요. 차례는 경로 글자로 겹침을 판단해서 심볼릭 링크로 다르게 적으면 겹침을 놓치는 한계가 남아 있어요 ([0031]) |
 | 표: 두 화면에서 같은 설정을 편집 | (1) 참고(헤드리스 브라우저): 2026-09-30 두 컨텍스트에서 규칙을 열어 한쪽이 먼저 저장하자 나중 저장이 `409`로 거부되고 내 입력이 남았어요 ([0006]). 채널도 같았어요 ([0007]) | (1) `trss-core` `settings/tests.rs` `a_write_from_a_stale_version_changes_nothing`<br>(2) `trss` `web/settings_api/tests.rs` `a_save_from_a_stale_version_conflicts_and_shows_the_current_value`<br>(3) `trss` `web/rules_api/tests.rs` `the_second_save_from_an_old_version_is_a_conflict_that_shows_the_saved_rule` | 두 번째 화면이 편집 입력을 남기고 현재 값과 비교해 다시 저장하는 동작은 헤드리스 브라우저(임시 DB)로만 봤고 자동 테스트가 없어요. 설정 화면의 폴더 저장에서 두 화면이 부딪치는 것을 본 기록이 없어요. 코드가 이 요구와 달라요: 작품별 자막 형식 순서의 저장과 삭제(`PUT`·`DELETE /api/library/works/{id}/subtitle-order`, `trss` `web/library_work_api.rs`)는 버전을 받지 않아요 ([0134](../tickets/0134-settings-version-and-first-run-badge.md)) |
 | 표: 비교 후 계획·대상이 변경 | 2026-10-05 개발(서버 DB 사본): 올리기 3화의 첫 계획이 그 사이 다른 자막이 생겨 낡았고, 다시 비교한 계획을 승인하자 적용됐어요 ([0076]) | (1) `trss` `web/jobs_api/replacement/tests.rs` `a_decision_names_the_version_it_saw`<br>(2) `trss-jobs` `tests/it/replace.rs` `a_video_replaced_after_approval_asks_to_compare_again`, `a_mapping_changed_after_approval_is_not_applied` | 오래된 화면의 활성 승인 버튼을 서버가 거부하는 장면을 화면에서 본 기록이 없어요. 결정과 다시 비교가 겹치는 경쟁(계획을 `다시 비교 필요`로 옮기지 못하는 경우)은 시험하지 않았어요 ([0068]) |
 | 표: 같은 명령의 중복 전달 | 없음 | (1) `trss-core` `commands/tests.rs` `the_same_id_with_the_same_content_returns_the_stored_command`, `the_same_id_with_other_content_is_refused_and_changes_nothing`<br>(2) `trss` `web/commands_api/tests.rs` `the_same_command_delivered_twice_is_stored_once_and_answered_alike` | 화면이 같은 사용자 동작의 명령 ID와 내용을 고정해 다시 보내는 코드(`web/src/lib/commands.ts`)는 테스트와 관찰이 없어요. 반복 전달 뒤 실제 작업이 추가로 생기지 않는 것을 서버에서 본 기록이 없어요 |
@@ -451,4 +455,5 @@ DB와 [앱 데이터 폴더](../adr/0008-trss-folder-and-app-data-files.md)는 �
 [0127]: ../archive/tickets/5-deployed-verification/0127-row-waits-for-library-after-apply.md
 [0141]: ../tickets/0141-anissia-status-shown.md
 [0142]: ../tickets/0142-phone-top-bar-and-theme-setting.md
+[0147]: ../tickets/0147-commands-start-at-once.md
 [0114]: ../archive/tickets/refactoring-between-5-and-6/0114-refactor-final-check.md#실제-서버-2026-10-10-070

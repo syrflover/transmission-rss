@@ -57,8 +57,8 @@
 //! **Accepted is not done.** The answer to a `POST` says the command is stored
 //! (`state: "pending"`); the worker runs it, and the screen reads the
 //! outcome from `GET /commands/{id}` (or from the item the command is about).
-//! A stored command wakes the worker ([`trss_core::wake`]), which starts it at
-//! once rather than at its next look a few seconds later.
+//! A stored command rings the commands' loop of the same process
+//! ([`crate::wake`]), which starts it at once.
 //! Nothing here reports a command as succeeded before the worker has written
 //! its outcome.
 //!
@@ -420,7 +420,7 @@ async fn check_anissia_captions(
 pub(super) async fn ask_anissia_captions(state: &AppState, anime_no: i64) {
     match anissia_captions::ask(&state.commands, anime_no, now_millis()).await {
         Ok(true) => {
-            state.wake_worker();
+            state.wakes.commands();
         }
         Ok(false) => {}
         Err(e) => eprintln!("trss: cannot ask for the subtitle lines of anime {anime_no}: {e}"),
@@ -625,8 +625,8 @@ async fn create_command(
         .map_err(store)?
     {
         Accepted::Created(command) => {
-            // The worker starts it now rather than at its next look.
-            state.wake_worker();
+            // The commands' loop starts it now.
+            state.wakes.commands();
             Ok((StatusCode::ACCEPTED, Json(CommandView::from(&command))))
         }
         Accepted::Existing(command) => Ok((StatusCode::OK, Json(CommandView::from(&command)))),

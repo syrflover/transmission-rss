@@ -58,9 +58,7 @@ name: trss-app
 # `up`, owned by TRSS_UID:TRSS_GID with mode 1777 (the readme has the
 # commands); otherwise trss runs without the server browser. Keep it on a
 # local disk of this host, not an SMB or NFS share: SQLite and the lock files
-# next to the database (`trss.db.*.lock`) rely on local file locking, and the
-# web part of trss wakes its worker part through the socket `trss.db.wake`
-# there.
+# next to the database (`trss.db.*.lock`) rely on local file locking.
 
 services:
   trss:

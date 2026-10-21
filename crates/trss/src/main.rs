@@ -1,8 +1,9 @@
-use std::{path::PathBuf, process::ExitCode};
+use std::{io, path::PathBuf, process::ExitCode};
 
 use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
 use trss::{
+    wake::Wakes,
     web::{
         self as web,
         browser_net::{self, GuardedListener},
@@ -18,9 +19,7 @@ use trss_collect::{
     anissia::{captions::CaptionObserver, AnissiaQueue},
     store::anissia::AnissiaStore,
 };
-use trss_core::{
-    access::check_app_data, db::DB_PATH_ENV, lock_path_for, wake::wake_path_for, Db, LockFile,
-};
+use trss_core::{access::check_app_data, db::DB_PATH_ENV, lock_path_for, Db, LockFile};
 use trss_jobs::{place::unpack, JobRun, ReceiveArea, Runner, Unpacker};
 use trss_library::{
     artwork::{AppData, Artwork},
@@ -46,8 +45,8 @@ async fn main() -> ExitCode {
 
 /// Serves the screens and the API, and runs the collection cycles, the
 /// commands the web accepts and the subtitle jobs beside them, until SIGTERM
-/// or SIGINT. The web still hands its commands to the worker part through the
-/// database and the wake socket, as when the two were two processes.
+/// or SIGINT. The web stores the commands and the jobs in the database and
+/// rings the worker part's loops, which start them at once ([`trss::wake`]).
 async fn run() -> Result<(), String> {
     let worker_env = WorkerEnv::from_env().map_err(|e| e.to_string())?;
     let web_env = WebEnv::from_env().map_err(|e| e.to_string())?;
@@ -82,6 +81,7 @@ async fn run() -> Result<(), String> {
     let web_db = open().await?;
     // Cover images live in the app data folder: the database's folder.
     let app_data = AppData::for_database(&db_path);
+    remove_old_wake_socket(&db_path);
 
     // From here on SIGTERM and SIGINT stop the process the orderly way, the
     // waits of the start included.
@@ -121,6 +121,9 @@ async fn run() -> Result<(), String> {
     );
 
     let receive = ReceiveArea::in_app_data(app_data.root());
+    // What the web stores for the worker part starts at once: the web rings
+    // the loop that runs it.
+    let wakes = Wakes::default();
     let state = AppState::new(web_db.clone())
         .with_artwork(Artwork::new(
             web_db.clone(),
@@ -129,7 +132,7 @@ async fn run() -> Result<(), String> {
         ))
         .with_anissia(Anissia::with_defaults(web_db, anissia_config.clone()))
         .with_receive_area(&receive)
-        .with_worker_wake(wake_path_for(&db_path))
+        .with_wakes(wakes.clone())
         .with_web_hosts(web_env.hosts.clone());
     let state = match &web_env.browser {
         Some(access) => state.with_remote_screens(RemoteScreens::new(access)?),
@@ -266,7 +269,7 @@ async fn run() -> Result<(), String> {
         .with_captions(captions.clone())
         .with_jobs(jobs)
         .with_season_info(season_info.stored())
-        .with_wake_socket(wake_path_for(&db_path));
+        .with_wakes(wakes);
     if let Some(pool) = browser {
         println!("The server browser is on (a pool over the browser container)");
         worker = worker.with_browser(pool);
@@ -322,6 +325,26 @@ async fn run() -> Result<(), String> {
 
     println!("trss stopped");
     served
+}
+
+/// Removes the socket next to the database on which releases before one
+/// process heard the web's wake-ups (`<database>.wake`): nothing listens on it
+/// now.
+fn remove_old_wake_socket(db_path: &std::path::Path) {
+    let mut socket = db_path.as_os_str().to_owned();
+    socket.push(".wake");
+    let socket = PathBuf::from(socket);
+    match std::fs::remove_file(&socket) {
+        Ok(()) => println!(
+            "trss: removed the wake socket of an earlier release ({})",
+            socket.display()
+        ),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+        Err(e) => eprintln!(
+            "trss: cannot remove the wake socket of an earlier release ({}): {e}",
+            socket.display()
+        ),
+    }
 }
 
 /// Cancels `cancel` on SIGTERM or SIGINT, so a cycle in progress can wind down

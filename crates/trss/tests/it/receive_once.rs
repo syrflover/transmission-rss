@@ -30,7 +30,11 @@ use axum::http::StatusCode;
 use common::*;
 use serde_json::{json, Value};
 use tokio_util::sync::CancellationToken;
-use trss::worker::{CommandsOutcome, CycleReport, TickOutcome, Worker};
+use trss::{
+    wake::Wakes,
+    web::AppState,
+    worker::{CommandsOutcome, CycleReport, TickOutcome, Worker},
+};
 use trss_collect::{
     commands::receive_once::NAME_NOT_DERIVED,
     store::{
@@ -812,12 +816,12 @@ async fn the_running_worker_picks_up_a_command_without_waiting_for_the_next_cycl
     // The item has left the feed, so the worker's own cycles do not pick it.
     s.feed(&[]);
 
-    // A cycle every hour; commands are looked for every 20 ms.
+    // A cycle every hour; the web rings the worker's commands' loop.
     let env =
         s.h.worker_env_with(&[("TRSS_WORKER_INTERVAL_SECS", "3600")]);
-    let worker =
-        s.h.worker_with(s.h.db.clone(), &env)
-            .with_command_poll(Duration::from_millis(20));
+    let wakes = Wakes::default();
+    let web = WebApi::with_state(AppState::new(s.h.db.clone()).with_wakes(wakes.clone()));
+    let worker = s.h.worker_with(s.h.db.clone(), &env).with_wakes(wakes);
     let cancel = CancellationToken::new();
     let running = {
         let (worker, cancel) = (worker.clone(), cancel.clone());
@@ -832,8 +836,14 @@ async fn the_running_worker_picks_up_a_command_without_waiting_for_the_next_cycl
     tokio::time::sleep(Duration::from_millis(200)).await;
     let cycles_before = s.h.feeds.hits(FEED);
 
-    let (status, _) = s.post(CMD, &item).await;
-    assert_eq!(status, StatusCode::ACCEPTED);
+    let (status, _, body) = web
+        .call(
+            "POST",
+            "/api/commands",
+            Some(json!({ "id": CMD, "kind": "receive_once", "payload": { "item_id": item.id } })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{body}");
     wait_for("the result", || async {
         s.command(CMD).await.1["state"] == "done"
     })
@@ -844,6 +854,147 @@ async fn the_running_worker_picks_up_a_command_without_waiting_for_the_next_cycl
         HistoryResult::Received
     );
     assert_eq!(s.h.feeds.hits(FEED), cycles_before, "no cycle was needed");
+    cancel.cancel();
+    running.await.unwrap();
+}
+
+#[tokio::test]
+async fn a_command_left_for_later_starts_again_by_itself_once_its_wait_is_over() {
+    let liar = release("guid-liar-26", 26, LIAR, "");
+    let s = Scene::failing(&[&liar], picked_rules()).await;
+    // The item has left the feed, so the worker's own cycles do not take it.
+    s.feed(&[]);
+    s.post(CMD, &s.item("LIAR GAME - 26").await).await;
+    let store = CommandStore::new(s.h.db.clone());
+    // Transmission takes the add but answers only after the worker gave up,
+    // so the first start leaves the command for later.
+    let late = s.h.tr.hold_answer("torrent-add");
+
+    // A cycle an hour and no ring: what starts the command again is its wait.
+    let env =
+        s.h.worker_env_with(&[("TRSS_WORKER_INTERVAL_SECS", "3600")]);
+    let worker =
+        s.h.worker_with(s.h.db.clone(), &env)
+            .with_transmission_timeout(Duration::from_millis(300))
+            // Long enough for the gate to open before the second start, whose
+            // add would otherwise be held too.
+            .with_command_retry(Duration::from_secs(2));
+    let cancel = CancellationToken::new();
+    let running = {
+        let (worker, cancel) = (worker.clone(), cancel.clone());
+        tokio::spawn(async move { worker.run(cancel).await })
+    };
+    wait_for("the first start to be left for later", || async {
+        store.get(CMD).await.unwrap().unwrap().add_unconfirmed
+    })
+    .await;
+    late.release_all();
+
+    wait_for("the command to be done", || async {
+        state_of(&s, CMD).await == "done"
+    })
+    .await;
+    let command = store.get(CMD).await.unwrap().unwrap();
+    assert_eq!(command.attempts, 2);
+    assert_eq!(command.outcome.unwrap().result, "received");
+    assert_eq!(s.h.tr.torrents().len(), 1);
+    cancel.cancel();
+    running.await.unwrap();
+}
+
+#[tokio::test]
+async fn a_look_that_finds_the_lock_taken_looks_again_by_itself() {
+    let liar = release("guid-liar-26", 26, LIAR, "");
+    let s = Scene::failing(&[&liar], picked_rules()).await;
+    // The item has left the feed, so the worker's own cycles do not take it.
+    s.feed(&[]);
+    s.post(CMD, &s.item("LIAR GAME - 26").await).await;
+    // Another process holds the worker lock when the worker starts.
+    let lock = CycleLock::try_acquire(&lock_path_for(&s.h.db_path()))
+        .unwrap()
+        .expect("free lock");
+
+    // A cycle an hour and no ring: what finds the command is the look again.
+    let env =
+        s.h.worker_env_with(&[("TRSS_WORKER_INTERVAL_SECS", "3600")]);
+    let worker =
+        s.h.worker_with(s.h.db.clone(), &env)
+            .with_command_retry(Duration::from_millis(200));
+    let cancel = CancellationToken::new();
+    let running = {
+        let (worker, cancel) = (worker.clone(), cancel.clone());
+        tokio::spawn(async move { worker.run(cancel).await })
+    };
+    tokio::time::sleep(Duration::from_millis(600)).await;
+    assert_eq!(state_of(&s, CMD).await, "pending");
+    drop(lock);
+
+    wait_for("the command to be done", || async {
+        state_of(&s, CMD).await == "done"
+    })
+    .await;
+    assert_eq!(s.adds().len(), 1);
+    cancel.cancel();
+    running.await.unwrap();
+}
+
+#[tokio::test]
+async fn at_most_eight_commands_run_at_once_and_the_next_starts_when_one_ends() {
+    let titles: Vec<String> = (1..=9)
+        .map(|n| format!("[SubsPlease] Show {n} - 01 (1080p) [ABCD{n:04}].mkv"))
+        .collect();
+    let guids: Vec<&'static str> = (1..=9)
+        .map(|n| &*Box::leak(format!("guid-show-{n}").into_boxed_str()))
+        .collect();
+    let releases: Vec<Release> = (0..9)
+        .map(|i| release(guids[i], 100 + i as u32, &titles[i], ""))
+        .collect();
+    let rules = (1..=9)
+        .map(|n| rule(&format!("Show {n}"), &format!("Show {n}/Season 01")))
+        .collect();
+    let s = Scene::failing(&releases.iter().collect::<Vec<_>>(), rules).await;
+    // The items have left the feed, so the worker's own cycles do not take them.
+    s.feed(&[]);
+    let ids: Vec<String> = (1..=9)
+        .map(|n| format!("5a0c2a71-0000-4000-8000-0000000001{n:02}"))
+        .collect();
+    for (n, id) in (1..=9).zip(&ids) {
+        let item = s.item(&format!("Show {n} - 01")).await;
+        let (status, view) = s.post(id, &item).await;
+        assert_eq!(status, StatusCode::ACCEPTED, "{view}");
+    }
+    // Every add waits until the test lets it through.
+    let gate = s.h.tr.hold("torrent-add");
+
+    let env =
+        s.h.worker_env_with(&[("TRSS_WORKER_INTERVAL_SECS", "3600")]);
+    let worker = s.h.worker_with(s.h.db.clone(), &env);
+    let cancel = CancellationToken::new();
+    let running = {
+        let (worker, cancel) = (worker.clone(), cancel.clone());
+        tokio::spawn(async move { worker.run(cancel).await })
+    };
+    for _ in 0..8 {
+        gate.wait_arrived().await;
+    }
+    let ninth = tokio::time::timeout(Duration::from_millis(500), gate.wait_arrived()).await;
+    assert!(ninth.is_err(), "a ninth command ran beside eight");
+    assert_eq!(state_of(&s, &ids[8]).await, "pending");
+
+    // One ends, and the ninth takes its place.
+    gate.release_one();
+    gate.wait_arrived().await;
+    gate.release_all();
+    wait_for("every command to end", || async {
+        for id in &ids {
+            if state_of(&s, id).await != "done" {
+                return false;
+            }
+        }
+        true
+    })
+    .await;
+    assert_eq!(s.adds().len(), 9);
     cancel.cancel();
     running.await.unwrap();
 }
@@ -892,6 +1043,41 @@ impl Proc {
             std::fs::read_to_string(&self.stdout).unwrap_or_default(),
             std::fs::read_to_string(&self.stderr).unwrap_or_default()
         )
+    }
+
+    /// The address the process's web listens on, once it has said so.
+    async fn web_addr(&self) -> String {
+        const SAID: &str = "trss listening on http://";
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            let output = self.output();
+            let said = output.lines().find_map(|line| {
+                let rest = line.strip_prefix(SAID)?;
+                Some(rest.split_whitespace().next()?.to_owned())
+            });
+            if let Some(addr) = said {
+                return addr;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "the web did not listen:\n{output}"
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    }
+
+    /// Sends `command` to the process's web as the screen does.
+    async fn post_command(&self, command: Value) -> u16 {
+        let addr = self.web_addr().await;
+        reqwest::Client::new()
+            .post(format!("http://{addr}/api/commands"))
+            .header("content-type", "application/json")
+            .body(command.to_string())
+            .send()
+            .await
+            .unwrap()
+            .status()
+            .as_u16()
     }
 }
 
@@ -953,6 +1139,72 @@ async fn a_started_worker_process_runs_an_accepted_command_and_prints_no_secret(
         "secret in the worker's output:\n{output}"
     );
     s.assert_secret_nowhere().await;
+}
+
+#[tokio::test]
+async fn the_process_runs_a_command_to_its_end_while_its_cycle_is_held_in_transmission() {
+    let liar = release("guid-liar-26", 26, LIAR, "");
+    let s = Scene::failing(&[&liar], picked_rules()).await;
+    let item = s.item("LIAR GAME - 26").await;
+    // The process's first cycle is held at its first request to Transmission,
+    // which no command makes.
+    let gate = s.h.tr.hold("session-set");
+    let worker = Proc::spawn(&s.h);
+    gate.wait_arrived().await;
+
+    let status = worker
+        .post_command(
+            json!({ "id": CMD, "kind": "receive_once", "payload": { "item_id": item.id } }),
+        )
+        .await;
+    assert_eq!(status, 202, "{}", worker.output());
+    wait_for("the command to be done", || async {
+        s.command(CMD).await.1["state"] == "done"
+    })
+    .await;
+
+    assert_eq!(s.command(CMD).await.1["outcome"]["result"], "received");
+    let output = worker.output();
+    assert!(
+        !output.contains("Cycle finished"),
+        "the cycle was not held:\n{output}"
+    );
+    gate.release_all();
+    wait_for("the cycle to finish", || async {
+        worker.output().contains("Cycle finished")
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_started_process_runs_again_the_commands_an_earlier_one_left_open() {
+    const STARTED: &str = "5a0c2a71-0000-4000-8000-000000000041";
+    const ACCEPTED: &str = "5a0c2a71-0000-4000-8000-000000000042";
+    let liar = release("guid-liar-26", 26, LIAR, "");
+    let other = release("guid-other-3", 3, OTHER, "");
+    let s = Scene::failing(&[&liar, &other], picked_rules()).await;
+    // The items have left the feed, so the process's cycle does not take them.
+    s.feed(&[]);
+    let store = CommandStore::new(s.h.db.clone());
+    // An earlier process (an earlier release, say, stopped for an upgrade)
+    // started one command and stopped before its end, and accepted another.
+    s.post(STARTED, &s.item("LIAR GAME - 26").await).await;
+    let started = store.claim_next(s.h.now()).await.unwrap().unwrap();
+    assert_eq!((started.id.as_str(), started.attempts), (STARTED, 1));
+    s.post(ACCEPTED, &s.item("Another Show").await).await;
+
+    let worker = Proc::spawn(&s.h);
+    wait_for("both commands to end", || async {
+        state_of(&s, STARTED).await == "done" && state_of(&s, ACCEPTED).await == "done"
+    })
+    .await;
+
+    for (id, attempts) in [(STARTED, 2), (ACCEPTED, 1)] {
+        let command = store.get(id).await.unwrap().unwrap();
+        assert_eq!(command.attempts, attempts, "{id}: {}", worker.output());
+        assert_eq!(command.outcome.unwrap().result, "received");
+    }
+    assert_eq!(s.h.tr.torrents().len(), 2);
 }
 
 // --- receiving the past items of a subscription ------------------------------------------
@@ -1027,34 +1279,26 @@ async fn a_command_the_web_accepts_starts_within_a_second_without_waiting_for_a_
     let s = Scene::failing(&[&liar, &other], picked_rules()).await;
     // The items have left the feed, so the worker's own cycles do not take them.
     s.feed(&[]);
-    let wake = trss_core::wake::wake_path_for(&s.h.db_path());
-    // The worker would look by itself only once an hour: only the web's wake
-    // can explain a start within the second.
-    let worker =
-        s.h.worker()
-            .with_command_poll(Duration::from_secs(3600))
-            .with_wake_socket(wake.clone());
+    // The worker looks for commands by itself only at its start: only the
+    // web's ring can explain a start within the second.
+    let wakes = Wakes::default();
+    let worker = s.h.worker().with_wakes(wakes.clone());
     let cancel = CancellationToken::new();
     let running = tokio::spawn({
         let (worker, cancel) = (worker.clone(), cancel.clone());
         async move { worker.run(cancel).await }
     });
-    wait_for("the worker's wake socket", || {
-        let wake = wake.clone();
-        async move { wake.exists() }
-    })
-    .await;
     // Its first cycle and first look have found nothing to do.
     tokio::time::sleep(Duration::from_millis(300)).await;
 
-    // Accepted by a web that does not wake the worker: nothing starts it.
+    // Accepted by a web that does not ring the worker: nothing starts it.
     let (status, _) = s.post(UNHEARD, &s.item("Another Show").await).await;
     assert_eq!(status, StatusCode::ACCEPTED);
     tokio::time::sleep(Duration::from_millis(1500)).await;
     assert_eq!(state_of(&s, UNHEARD).await, "pending");
 
-    // Accepted by a web that wakes it: under way within the second.
-    let web = WebApi::with_state(trss::web::AppState::new(s.h.db.clone()).with_worker_wake(wake));
+    // Accepted by a web that rings it: under way within the second.
+    let web = WebApi::with_state(AppState::new(s.h.db.clone()).with_wakes(wakes));
     let item = s.item("LIAR GAME - 26").await;
     let accepted = Instant::now();
     let (status, _, body) = web
@@ -1072,7 +1316,7 @@ async fn a_command_the_web_accepts_starts_within_a_second_without_waiting_for_a_
         );
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
-    // The look the wake started takes every open command.
+    // The look the ring started takes every open command.
     wait_for("both commands to end", || async {
         state_of(&s, WOKEN).await == "done" && state_of(&s, UNHEARD).await == "done"
     })

@@ -2,25 +2,35 @@
 //!
 //! # When
 //!
-//! The web wakes the worker when it has stored a command
-//! ([`trss_core::wake`]), and the worker also looks every
-//! [`DEFAULT_COMMAND_POLL`] by itself, for a wake that was lost and for the
-//! commands it left for a later look. A look claims the waiting commands,
-//! oldest first, and starts each in its own task, up to
-//! [`MAX_COMMANDS_AT_ONCE`]; one that ends lets the next in. A command does
-//! not wait for a cycle, a reading of the watch folders, or another command,
-//! except where they touch the same folders or items, where they may decide
-//! the episode offset of the same rule, or while the removal of departed
-//! torrents is under way (below).
+//! A command starts as soon as it is stored: whatever stores one (the web, the
+//! cycle's moves, the season link) rings the commands' loop ([`crate::wake`]),
+//! which looks at once. A command that a running command stores (the receives a
+//! `start` asks for, the `start` a `receive_once` asks for) is not rung: the
+//! look that follows the running one's end claims it. A look claims the waiting
+//! commands, oldest first, and starts each in its own task, up to
+//! [`MAX_COMMANDS_AT_ONCE`]; one that ends lets the next in. The loop's first
+//! look, at the process's start, claims the commands an earlier process left
+//! open, accepted or started, so a command left by a restart or an upgrade runs
+//! again the same way. Nothing looks on a timer otherwise: a command left for
+//! later (below) is due [`DEFAULT_COMMAND_RETRY`] after it was left, and a look
+//! that failed is made again as long after. A command does not wait for a
+//! cycle, a reading of the watch folders, or another command, except where they
+//! touch the same folders or items, where they may decide the episode offset of
+//! the same rule, or while the removal of departed torrents is under way
+//! (below).
 //!
 //! The worker claims only while it holds the worker lock
 //! ([`trss_core::WorkerLock`]), which everything it runs shares and another
 //! worker never holds at the same time:
 //!
 //! - two workers never run one command twice, because only the holder claims,
-//!   and a worker passes over the commands it runs itself
+//!   and a worker passes over the commands it runs or left for later itself
 //!   ([`trss_core::commands::CommandStore::claim_next_excluding`]);
-//! - a lock another worker holds is not an error: the next look tries again.
+//! - a lock another worker holds is not an error: the loop looks again
+//!   [`DEFAULT_COMMAND_RETRY`] later;
+//! - a command another worker started and left open when it stopped is
+//!   claimed at this worker's next look (a ring, a command's end, a retry, or
+//!   this worker's restart): nothing looks for it alone.
 //!
 //! # Turns
 //!
@@ -57,7 +67,7 @@
 //! # Starts that do not finish
 //!
 //! A command claimed by a worker that then died stays `running`; the next
-//! worker to hold the lock claims it again (see [`trss_core::commands::CommandStore::claim_next`]).
+//! start claims it again (see [`trss_core::commands::CommandStore::claim_next`]).
 //! Adding a torrent Transmission already has answers `duplicate`, so running
 //! such a command a second time does not add a second torrent.
 //!
@@ -71,8 +81,7 @@
 //! A request to add a torrent that was sent and got no answer (it timed out,
 //! say) may have been taken all the same. The command is not ended then: it is
 //! marked ([`trss_core::commands::CommandStore::note_unconfirmed_add`]) and stays `running` for a
-//! later look (at the earliest the next look of the worker's own,
-//! [`DEFAULT_COMMAND_POLL`] later), and removals in between remove nothing, as
+//! later start ([`DEFAULT_COMMAND_RETRY`] later), and removals in between remove nothing, as
 //! above. The next start adds the item again; Transmission answers `duplicate`
 //! with the hash, and a torrent carrying the command's label counts as this
 //! command's own (`received`, renamed and noted). A connection that could not
@@ -81,7 +90,7 @@
 //! deleted, the folder is refused) ends the command at once too; the torrent's
 //! item label keeps it while its item is in a feed. A start that could not be
 //! carried through for another reason (the database failed) is left for a
-//! later look the same way.
+//! later start the same way.
 //!
 //! The last start ([`trss_core::commands::MAX_ATTEMPTS`]) ends the command
 //! instead, and so does a task that ended in a panic, with the unanswered add
@@ -138,10 +147,10 @@
 use std::{
     collections::HashMap,
     sync::{Arc, Mutex},
-    time::{Duration, Instant},
+    time::Duration,
 };
 
-use tokio::{net::UnixDatagram, task::JoinSet};
+use tokio::{task::JoinSet, time::Instant};
 use tokio_util::sync::CancellationToken;
 
 use trss_core::{
@@ -158,8 +167,10 @@ use trss_library::watch_rescan;
 
 use super::{removal, Worker, WorkerError};
 
-/// How often the worker looks for waiting commands without being woken.
-pub const DEFAULT_COMMAND_POLL: Duration = Duration::from_secs(3);
+/// How long a command left for later waits before its next start: as long as
+/// it waited for the worker's next look when the worker looked every few
+/// seconds.
+pub const DEFAULT_COMMAND_RETRY: Duration = Duration::from_secs(3);
 
 /// How many commands one worker carries out at the same time.
 pub const MAX_COMMANDS_AT_ONCE: usize = 8;
@@ -175,7 +186,7 @@ enum Ran {
     /// A `receive_once` add got no answer; see the module docs.
     AddUnanswered,
     /// It could not be carried through now (the database failed, or shutdown
-    /// was asked for) and stays `running` for a later look.
+    /// was asked for) and stays `running` for a later start.
     NotNow(String),
 }
 
@@ -235,12 +246,13 @@ struct Claim {
 enum Carried {
     /// The command ended (its end is written).
     Ended,
-    /// It stays `running` for a later look.
+    /// It stays `running` for a later start.
     Later(String),
 }
 
-/// Commands left for a later look, and since when: the claims of the look
-/// that started them pass over them until [`Deferred::forget`] lets them go.
+/// Commands left for later, and since when: the claims of the loop that
+/// started them pass over them until [`Deferred::forget`] lets them go, once
+/// they are due.
 /// Shared with the look's tasks, which note a command here before it leaves
 /// the in-flight set ([`removal::InFlight`]), so no claim in between finds it
 /// in neither and takes it again at once.
@@ -254,6 +266,12 @@ impl Deferred {
 
     fn ids(&self) -> Vec<String> {
         self.map().keys().cloned().collect()
+    }
+
+    /// When the first of the commands left for later is due, `after` after it
+    /// was left; `None` when none is.
+    fn next_due(&self, after: Duration) -> Option<Instant> {
+        self.map().values().min().map(|since| *since + after)
     }
 
     /// Lets the commands left for later at least `after` ago be claimed again.
@@ -289,18 +307,19 @@ impl Batch {
 }
 
 impl Worker {
-    /// Overrides how often the worker looks for waiting commands without being
-    /// woken (default: [`DEFAULT_COMMAND_POLL`]).
-    pub fn with_command_poll(mut self, every: Duration) -> Self {
-        self.command_poll = every;
+    /// Overrides how long a command left for later waits before its next
+    /// start (default: [`DEFAULT_COMMAND_RETRY`]).
+    pub fn with_command_retry(mut self, wait: Duration) -> Self {
+        self.command_retry = wait;
         self
     }
 
     /// One look for commands: if this worker can take the lock, claims the
     /// waiting commands, carries them out side by side (each in its turn), and
     /// returns once all have come out. Returns without taking the lock when
-    /// nothing is waiting. A command that is left for a later look is not
-    /// claimed again by the same look and does not count.
+    /// nothing is waiting. A command that is left for later is not claimed
+    /// again by the same look and does not count; the next look claims it at
+    /// once.
     pub async fn run_commands(
         &self,
         cancel: &CancellationToken,
@@ -333,60 +352,48 @@ impl Worker {
         }
     }
 
-    /// Where the web's wake-ups arrive, if this worker listens for them. The
-    /// path is bound anew: a socket left by an earlier worker is replaced.
-    pub(crate) fn listen_for_wakes(&self) -> Option<UnixDatagram> {
-        let path = self.wake_path.as_ref()?;
-        let _ = std::fs::remove_file(path);
-        match UnixDatagram::bind(path) {
-            Ok(socket) => Some(socket),
-            Err(err) => {
-                eprintln!(
-                    "Cannot listen for the web's wake-ups at {}: {err}; \
-                     looking for commands every {}s",
-                    path.display(),
-                    self.command_poll.as_secs()
-                );
-                None
-            }
-        }
-    }
-
-    /// The worker's commands until `cancel` fires: a look whenever the web
-    /// wakes the worker, a command ends, or [`DEFAULT_COMMAND_POLL`] passes.
-    /// Then the commands under way get the grace period and are aborted.
-    pub(crate) async fn dispatch(&self, cancel: CancellationToken, mut wake: Option<UnixDatagram>) {
+    /// The worker's commands until `cancel` fires: a look at the start, and
+    /// whenever the commands' loop is rung, a command ends, or one left for
+    /// later is due. A look that failed (the database) or found the lock
+    /// taken is made again [`Worker::with_command_retry`] later. Then the
+    /// commands under way get the grace period and are aborted.
+    pub(crate) async fn dispatch(&self, cancel: CancellationToken) {
         let mut batch = Batch::default();
-        let mut ticker = tokio::time::interval(self.command_poll);
-        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-        let mut buf = [0u8; 16];
+        let mut look_again = None;
 
         loop {
+            match self.look(&mut batch, &cancel).await {
+                Ok(true) => {}
+                // Another worker holds the lock.
+                Ok(false) => look_again = Some(Instant::now() + self.command_retry),
+                Err(err) => {
+                    eprintln!(
+                        "Commands failed: {err}; looking again in {}s",
+                        self.command_retry.as_secs()
+                    );
+                    look_again = Some(Instant::now() + self.command_retry);
+                }
+            }
+            let due = [batch.deferred.next_due(self.command_retry), look_again]
+                .into_iter()
+                .flatten()
+                .min();
             tokio::select! {
                 biased;
                 _ = cancel.cancelled() => break,
                 Some(joined) = batch.tasks.join_next(), if !batch.tasks.is_empty() => {
                     batch.settle(joined);
                 }
-                received = async { wake.as_ref().expect("guarded").recv(&mut buf).await },
-                    if wake.is_some() =>
-                {
-                    // A wake may be for a subtitle job or a job's remote
-                    // screen as well.
-                    self.job_wake.notify_one();
-                    self.screen_wake.notify_one();
-                    if let Err(err) = received {
-                        eprintln!(
-                            "Cannot hear the web's wake-ups: {err}; looking for commands every {}s",
-                            self.command_poll.as_secs()
-                        );
-                        wake = None;
+                _ = self.wakes.commands.notified() => {}
+                _ = async {
+                    match due {
+                        Some(due) => tokio::time::sleep_until(due).await,
+                        None => std::future::pending().await,
                     }
+                } => {
+                    look_again = None;
+                    batch.deferred.forget(self.command_retry);
                 }
-                _ = ticker.tick() => batch.deferred.forget(self.command_poll),
-            }
-            if let Err(err) = self.look(&mut batch, &cancel).await {
-                eprintln!("Commands failed: {err}");
             }
         }
 
@@ -408,21 +415,24 @@ impl Worker {
     }
 
     /// One look of the long-running loop: starts what is waiting, if there is
-    /// room and the lock can be had.
-    async fn look(&self, batch: &mut Batch, cancel: &CancellationToken) -> Result<(), WorkerError> {
+    /// room and the lock can be had. `false`: another worker holds the lock.
+    async fn look(
+        &self,
+        batch: &mut Batch,
+        cancel: &CancellationToken,
+    ) -> Result<bool, WorkerError> {
         if cancel.is_cancelled()
             || batch.tasks.len() >= MAX_COMMANDS_AT_ONCE
             || !self.commands.has_open().await?
         {
-            return Ok(());
+            return Ok(true);
         }
-        // Another worker holds the lock: the next look tries again.
         let Some(hold) = self.hold().await? else {
-            return Ok(());
+            return Ok(false);
         };
         let filled = self.fill(batch, &hold, cancel).await;
         hold.release().await;
-        filled
+        filled.map(|()| true)
     }
 
     /// Claims waiting commands and starts them, oldest first, while there is
@@ -563,7 +573,7 @@ impl Worker {
             && matches!(carried, Carried::Ended)
             && self.follow_logged().await
         {
-            self.job_wake.notify_one();
+            self.wakes.jobs();
         }
         carried
     }

@@ -1,4 +1,4 @@
-//! Web commands: user actions the web accepts and the worker carries out.
+//! Web commands: user actions the web accepts and the worker part carries out.
 //!
 //! A command is the first thing that crosses from the web to the worker. The
 //! contract (`docs/specs/web-app.md`, 웹 명령과 상태 갱신) is built here so
@@ -18,11 +18,11 @@
 //!   hands out the oldest open command and marks it `running`. A worker claims
 //!   only while it holds the worker lock ([`crate::WorkerLock`]), which one
 //!   worker at a time holds, and it passes over the commands it is running
-//!   itself ([`CommandStore::claim_next_excluding`]). So a command still
-//!   `running` when a worker claims it is one an earlier start did not finish
-//!   (its worker died or was stopped, or left it for a later look), and it is
-//!   handed out again. A command that keeps ending its worker is given up
-//!   after [`MAX_ATTEMPTS`] tries.
+//!   or left for later itself ([`CommandStore::claim_next_excluding`]). So a
+//!   command still `running` when a worker claims it is one an earlier start
+//!   did not finish (its worker died or was stopped, or left it for later),
+//!   and it is handed out again. A command that keeps ending its worker is
+//!   given up after [`MAX_ATTEMPTS`] tries.
 //! - **The end is recorded once**, as `done` or `failed`, with an
 //!   [`Outcome`] the screen can show. Outcomes and everything else stored here
 //!   are free of secret values.

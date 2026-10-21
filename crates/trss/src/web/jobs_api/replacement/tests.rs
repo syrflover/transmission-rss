@@ -625,15 +625,14 @@ async fn a_plan_of_another_job_is_not_found_and_nothing_of_the_list_is_written()
 
 #[tokio::test]
 async fn the_worker_is_woken_only_when_a_decision_was_written() {
-    use std::os::unix::net::UnixDatagram;
+    use futures::FutureExt;
     let mut app = App::new().await;
-    let socket_path = app.dir.path().join("worker.wake");
-    let socket = UnixDatagram::bind(&socket_path).unwrap();
-    socket.set_nonblocking(true).unwrap();
-    app.state = app.state.clone().with_worker_wake(socket_path);
+    let wakes = crate::wake::Wakes::default();
+    app.state = app.state.clone().with_wakes(wakes.clone());
     app.router = testing::api(&app.state);
     let (job, plans) = app.three_waiting().await;
-    let woke = || socket.recv(&mut [0u8; 8]).is_ok();
+    // The jobs' loop was rung since the last look here.
+    let woke = || wakes.jobs_rung().now_or_never().is_some();
     while woke() {}
 
     let stale: Vec<Value> = plans
@@ -650,5 +649,5 @@ async fn the_worker_is_woken_only_when_a_decision_was_written() {
         .collect();
     let (status, body) = app.decide_many(&job, json!({ "decisions": all })).await;
     assert_eq!(status, StatusCode::OK, "{body}");
-    assert!(woke(), "the worker was woken");
+    assert!(woke(), "the jobs' loop was rung");
 }

@@ -409,10 +409,7 @@ async fn the_running_worker_watches_folders_registered_later_and_catches_up_on_t
     touch(&first.join("A/Season 01/A S01E01.mkv"));
     let first_folder = lib.register(&first).await;
 
-    let worker = lib
-        .worker
-        .clone()
-        .with_command_poll(Duration::from_millis(40));
+    let worker = lib.worker.clone().with_poll(Duration::from_millis(40));
     let cancel = CancellationToken::new();
     let running = tokio::spawn({
         let (worker, cancel) = (worker.clone(), cancel.clone());

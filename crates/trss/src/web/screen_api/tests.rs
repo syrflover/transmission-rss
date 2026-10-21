@@ -4,7 +4,6 @@
 
 use std::{
     collections::HashMap,
-    os::unix::net::UnixDatagram,
     sync::{Arc, Mutex},
     time::Duration,
 };
@@ -16,7 +15,7 @@ use axum::{
     routing::get,
     Router,
 };
-use futures::{SinkExt, StreamExt};
+use futures::{FutureExt, SinkExt, StreamExt};
 use serde_json::{json, Value};
 use tokio_tungstenite::tungstenite::{self, client::IntoClientRequest, Message as WsMessage};
 use tokio_util::sync::CancellationToken;
@@ -429,7 +428,7 @@ struct Setup {
     launcher: Launcher,
     /// The web's address (host:port).
     web: String,
-    wake: UnixDatagram,
+    wakes: crate::wake::Wakes,
     job: String,
     item: i64,
 }
@@ -471,10 +470,8 @@ async fn setup_with(
             .with_state(launcher.clone()),
     )
     .await;
-    let wake_path = dir.path().join("app.db.wake");
-    let wake = UnixDatagram::bind(&wake_path).unwrap();
-    wake.set_nonblocking(true).unwrap();
-    let mut state = AppState::new(db.clone()).with_worker_wake(wake_path);
+    let wakes = crate::wake::Wakes::default();
+    let mut state = AppState::new(db.clone()).with_wakes(wakes.clone());
     if with_browser {
         let remote = RemoteScreens::new(&BrowserAccess {
             url: Url::parse(&format!("http://{launcher_addr}")).unwrap(),
@@ -523,7 +520,7 @@ async fn setup_with(
         state,
         launcher,
         web,
-        wake,
+        wakes,
         job,
         item,
     }
@@ -563,13 +560,10 @@ impl Setup {
         &self.state.screens
     }
 
+    /// 1 when the screens' loop was rung since the last call, else 0: rings
+    /// in between count once, as they do for the loop.
     fn woken(&self) -> usize {
-        let mut buf = [0u8; 8];
-        let mut n = 0;
-        while self.wake.recv(&mut buf).is_ok() {
-            n += 1;
-        }
-        n
+        usize::from(self.wakes.screens_rung().now_or_never().is_some())
     }
 
     async fn http(&self, method: &str, path: &str) -> (u16, Value) {

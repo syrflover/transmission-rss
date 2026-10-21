@@ -32,7 +32,6 @@ pub mod queue;
 pub mod response;
 pub mod settings;
 pub mod trname_names;
-pub mod wake;
 
 pub use clock::{system_clock, Clock, Millis};
 pub use db::{Db, DbError};

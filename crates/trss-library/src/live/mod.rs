@@ -91,7 +91,8 @@ use crate::store::library::WatchFolder;
 use crate::watch::WatchContext;
 
 /// How long placing the watches of one folder may hold up whoever attaches it
-/// (the command poll). Past it the folder is read by every cycle instead.
+/// (the worker's look at the watch folders, every few seconds). Past it the
+/// folder is read by every cycle instead.
 const ATTACH_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// How the watches behave. The defaults are what the worker runs with; tests

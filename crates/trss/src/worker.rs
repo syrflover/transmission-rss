@@ -86,15 +86,21 @@
 //! # Commands
 //!
 //! Beside the cycles, the worker carries out the commands the web accepted as
-//! soon as the web wakes it ([`trss_core::wake`]), or at its own look every
-//! few seconds, several at a time ([`commands`]).
+//! soon as the web rings the commands' loop ([`crate::wake`]), several at a
+//! time ([`commands`]). Nothing looks for commands every few seconds: a
+//! command is started when it is stored, when the process starts, when a
+//! running one ends, or once the wait it was left for is over, and a look that
+//! failed or found another worker holding the lock is made again a few
+//! seconds later.
 //!
 //! # Subtitle jobs
 //!
 //! Beside the commands, the worker carries out the subtitle jobs the web made
 //! ([`trss_jobs`]), one at a time, holding the lock like a command: at its
 //! start (after putting the jobs that wait for a source back in line), when
-//! the web wakes it, and every few seconds. A job cut short by a shutdown or a
+//! the web rings the jobs' loop ([`crate::wake`]), and every few seconds
+//! ([`Worker::with_poll`]), for the jobs whose wait ended without a ring (a
+//! video arrived, an archive is due to be unpacked again). A job cut short by a shutdown or a
 //! kill stays `running` and goes on at the next start from its records. The
 //! real sources (Tistory's attachments) are always on; the fake one only with
 //! [`env::FAKE_SUBTITLE_SOURCE_VAR`].
@@ -136,8 +142,8 @@
 //! ends runs. They meet in the database (`trss_jobs::screen`): the worker
 //! binds the run to the job, watches it for the file, and clears the binding
 //! when the run ends, all of them at its start; the web asks it to prepare
-//! the screen when a person opens the job's page, which wakes the worker's
-//! look at the screens, and records the person's input, which the pool's idle
+//! the screen when a person opens the job's page, which rings the screens'
+//! loop ([`crate::wake`]), and records the person's input, which the pool's idle
 //! end counts as use ([`browser::screen_activity`]).
 //!
 //! One worker at a time uses one container, since a pool resets it and its
@@ -178,6 +184,8 @@ pub mod removal;
 use std::{path::PathBuf, sync::Arc, time::Duration};
 
 use tokio_util::sync::CancellationToken;
+
+use crate::wake::Wakes;
 use trss_core::{
     commands::{CommandError, CommandStore},
     folder_locks::FolderLocks,
@@ -186,7 +194,7 @@ use trss_core::{
     system_clock, Clock, Db, WorkerHold, WorkerLock,
 };
 
-pub use commands::{CommandsOutcome, DEFAULT_COMMAND_POLL, MAX_COMMANDS_AT_ONCE};
+pub use commands::{CommandsOutcome, DEFAULT_COMMAND_RETRY, MAX_COMMANDS_AT_ONCE};
 pub use cycle::{run_cycle, CommandsAtRemoval, CycleError, CycleReport};
 pub use env::{EnvError, WorkerEnv};
 
@@ -255,7 +263,11 @@ pub struct Worker {
     /// Commands the web accepted; see [`commands`].
     commands: CommandStore,
     interval: Duration,
-    command_poll: Duration,
+    /// How long a command left for later waits before its next start.
+    command_retry: Duration,
+    /// How often the jobs' loop and the watch folders' list are looked at
+    /// without a ring.
+    poll: Duration,
     min_gap: Duration,
     shutdown_grace: Duration,
     /// How often the heartbeat is written while the lock is held.
@@ -269,9 +281,6 @@ pub struct Worker {
     in_flight: InFlight,
     /// Held while a cycle runs: one at a time.
     cycling: Arc<tokio::sync::Mutex<()>>,
-    /// Where the web's wake-ups arrive ([`trss_core::wake`]); `None`: only the
-    /// worker's own looks.
-    wake_path: Option<PathBuf>,
     /// Reads one anime's subtitle lines for `anissia_captions` commands; `None`
     /// fails them.
     captions: Option<CaptionObserver>,
@@ -283,11 +292,9 @@ pub struct Worker {
     recheck: Option<trss_jobs::Recheck>,
     /// How often the due rechecks are looked for.
     recheck_every: Duration,
-    /// Rung when the web wakes the worker, so the jobs are looked at too.
-    job_wake: Arc<tokio::sync::Notify>,
-    /// Rung when the web wakes the worker, so the remote screens are looked
-    /// at too (a person opened a job's page).
-    screen_wake: Arc<tokio::sync::Notify>,
+    /// The rings of the commands', the jobs' and the screens' loops, shared
+    /// with the web of the same process ([`crate::wake`]).
+    wakes: Wakes,
     /// Rung when the season queue stored a season's entry
     /// ([`trss_library::seasons::Seasons::stored`]); `None`: not heard.
     season_stored: Option<Arc<tokio::sync::Notify>>,
@@ -308,6 +315,10 @@ pub struct Worker {
 /// would otherwise hold the process until the call's own timeout. Container
 /// runtimes send SIGKILL after ten seconds by default; five leaves room.
 pub const SHUTDOWN_GRACE: Duration = Duration::from_secs(5);
+
+/// How often the jobs' loop and the watch folders' list are looked at without
+/// a ring ([`Worker::with_poll`]).
+pub const DEFAULT_POLL: Duration = Duration::from_secs(3);
 
 impl Worker {
     /// A worker on `db`, taking its settings from `env` and its lock file from
@@ -365,7 +376,8 @@ impl Worker {
                 folders,
             },
             interval: env.interval,
-            command_poll: DEFAULT_COMMAND_POLL,
+            command_retry: DEFAULT_COMMAND_RETRY,
+            poll: DEFAULT_POLL,
             min_gap: env.interval / 2,
             shutdown_grace: SHUTDOWN_GRACE,
             heartbeat_every: heartbeat::BEAT_EVERY,
@@ -373,14 +385,12 @@ impl Worker {
             torrents: TorrentGate::default(),
             in_flight: InFlight::default(),
             cycling: Arc::default(),
-            wake_path: None,
             captions: None,
             jobs: None,
             follow: None,
             recheck: None,
             recheck_every: jobs::RECHECK_EVERY,
-            job_wake: Arc::default(),
-            screen_wake: Arc::default(),
+            wakes: Wakes::default(),
             season_stored: None,
             jobs_running: Arc::default(),
             browser: None,
@@ -460,11 +470,19 @@ impl Worker {
         self.browser.as_ref()
     }
 
-    /// Listens for the web's wake-ups at `path` (see [`trss_core::wake`]) while
-    /// [`Worker::run`] runs. Without it the worker looks for commands at its
-    /// own pace only.
-    pub fn with_wake_socket(mut self, path: PathBuf) -> Self {
-        self.wake_path = Some(path);
+    /// Listens to `wakes`, which the web of the same process rings
+    /// ([`crate::wake`]), while [`Worker::run`] runs. Without it the worker
+    /// starts the commands stored meanwhile only at its next start, or when a
+    /// command of its own ends or is due.
+    pub fn with_wakes(mut self, wakes: Wakes) -> Self {
+        self.wakes = wakes;
+        self
+    }
+
+    /// Overrides how often the jobs' loop and the watch folders' list are
+    /// looked at without a ring (default: [`DEFAULT_POLL`]).
+    pub fn with_poll(mut self, every: Duration) -> Self {
+        self.poll = every;
         self
     }
 
@@ -492,7 +510,7 @@ impl Worker {
         self.ask_captions(&linked).await;
         // A subscribed creator's season may have just become one to receive.
         if linked.linked > 0 && self.follow_logged().await {
-            self.job_wake.notify_one();
+            self.wakes.jobs();
         }
         linked
     }
@@ -517,7 +535,7 @@ impl Worker {
             }
         }
         if stored {
-            trss_core::wake::wake_worker_if(self.wake_path.as_deref());
+            self.wakes.commands();
         }
     }
 
@@ -602,10 +620,9 @@ impl Worker {
         let report = run_cycle(&self.ctx, &self.session, started, &removal, cancel).await?;
 
         // The `start` commands the cycle stored for rules whose work folder
-        // was in the archive folder: the command runner looks at once, not at
-        // its next poll.
+        // was in the archive folder start at once.
         if report.moves_asked > 0 {
-            trss_core::wake::wake_worker_if(self.wake_path.as_deref());
+            self.wakes.commands();
         }
 
         // An interrupted cycle stays unfinished in the marker.
@@ -653,8 +670,8 @@ impl Worker {
             async move { worker.run_rechecks(cancel).await }
         });
         let commands = tokio::spawn({
-            let (worker, cancel, wake) = (self.clone(), cancel.clone(), self.listen_for_wakes());
-            async move { worker.dispatch(cancel, wake).await }
+            let (worker, cancel) = (self.clone(), cancel.clone());
+            async move { worker.dispatch(cancel).await }
         });
         let browser_reaper = self.browser.clone().map(|pool| {
             let cancel = cancel.clone();
@@ -712,7 +729,7 @@ impl Worker {
     async fn run_loop(&self, cancel: CancellationToken) {
         let mut ticker = tokio::time::interval(self.interval);
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-        let mut folder_ticker = tokio::time::interval(self.command_poll);
+        let mut folder_ticker = tokio::time::interval(self.poll);
         folder_ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
         loop {
