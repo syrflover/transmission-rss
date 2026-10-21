@@ -5,7 +5,7 @@
 2026-10-21에 사용자는 trss가 너무 무거워졌다고 했고, 특히 worker 방식을 짚었어요. 그날 조사에서 찾은 근거는 다음과 같아요.
 
 - 파일이나 Transmission을 건드리는 사용자 동작은 모두 web이 명령으로 적고 worker가 집어 실행해요. 이 인계와 관련된 코드가 `trss-core`에 3,873줄, `trss-worker`에 10,503줄(테스트 7,059줄 포함)이에요([한 프로세스 ADR](../adr/0019-one-process-for-web-and-worker.md)).
-- 자막 작업은 단계와 효과마다 기록을 남겨, 다시 시작할 때 디스크와 대조해 이어 해요. 이 기록을 담는 테이블이 `jobs/store_apply.sql`에만 9개예요. 서버에서 이 재개가 일어난 것을 본 기록은 없어요([끊긴 작업 ADR](../adr/0020-interrupted-jobs-wait-for-a-restart.md)).
+- 자막 작업은 단계와 효과마다 기록을 남겨, 다시 시작할 때 디스크와 대조해 이어 해요. 효과의 기록만 담는 테이블은 `jobs/store_apply.sql`의 `subtitle_file_effects` 하나이고, 받기 기록(`subtitle_job_files`)과 재배치 제거(`subtitle_relocations`), 교체 계획에는 효과의 상태와 열이 섞여 있어요. 서버에서 이 재개가 일어난 것을 본 기록은 없어요([끊긴 작업 ADR](../adr/0020-interrupted-jobs-wait-for-a-restart.md)).
 - 화면의 TypeScript 타입은 Rust 응답과 손으로 맞춰요. `trss-web`에는 `Serialize`를 붙인 구조체·열거형이 206개, 테스트 밖의 `json!` 호출이 75곳 있어요.
 - 화면은 서버 상태를 18곳에서 주기적으로 다시 읽어요. 간격은 0.7초에서 60초예요.
 - 2026-10-21 `5cdae9e`에서 `cargo test --workspace --no-run -j 4`가 94초 걸렸고, 그중 `trss-worker` 단위의 빌드가 64.1초였어요. 이 빌드는 외부 크레이트도 다시 빌드해서 `trss-core`만 고친 빌드가 아니었어요. `trss-core`를 고친 뒤의 빌드는 [기준값](#기준값)에서 다시 측정했어요.
