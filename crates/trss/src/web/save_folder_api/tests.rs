@@ -95,10 +95,10 @@ async fn a_suggestion_names_the_folder_its_library_work_and_why() {
         } })
     );
 
-    // A picked work, no anime: placed today, its season has no AniList entry.
+    // A picked work, no anime: which season it gets is trss-collect's.
     let (status, text, answer) = get(&app, "/api/save-folder/suggestion?work=Show").await;
     assert_eq!(status, StatusCode::OK, "{text}");
-    assert_eq!(answer["suggestion"]["directory"], "Show/Season 03");
+    assert_eq!(answer["suggestion"]["work"], "Show");
     assert_eq!(answer["suggestion"]["library"]["archived"], false);
 
     let (status, text, answer) = get(&app, "/api/save-folder/suggestion?release=%3A%2F").await;

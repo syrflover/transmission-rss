@@ -3,6 +3,17 @@ name = "trss"
 version.workspace = true
 edition.workspace = true
 
+# The binary has no unit tests of its own; they are the library's.
+[[bin]]
+name = "trss"
+path = "src/main.rs"
+test = false
+
+[features]
+# Builds `tests/it/remote_screen_docker.rs`, the remote screen against the real
+# server browser, which needs Docker and the browser image.
+remote-screen-docker = []
+
 [dependencies]
 trss-core.workspace = true
 trss-anissia.workspace = true

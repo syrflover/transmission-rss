@@ -11,6 +11,9 @@ mod library_watch;
 mod live_watch;
 mod past_search;
 mod receive_once;
+// Needs Docker and the browser image: built only with its feature.
+#[cfg(feature = "remote-screen-docker")]
+mod remote_screen_docker;
 mod season_link;
 mod status_snapshots_from_cycle;
 mod video_revisions;

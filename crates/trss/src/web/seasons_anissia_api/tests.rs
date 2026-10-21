@@ -864,26 +864,20 @@ async fn a_candidate_tells_its_episode_as_written_and_shown() {
 async fn a_candidate_carries_the_key_rank_and_form_of_its_episode() {
     let app = App::new().await;
     app.schedule_3320();
-    // A reading holds each creator's latest line: the episodes pile up over
-    // the readings, two creators and several spellings of one episode.
-    let observer = app.observer();
-    for (a, b) in [
-        ("0", "05"),
-        ("SP", "1"),
-        ("01", "10"),
-        ("1", "0.0"),
-        ("1.50", "5"),
-    ] {
-        let line = |episode: &str, creator: &str| {
-            let url = format!("https://blog.test/{creator}-{episode}");
-            app.fake
-                .recent_line(3320, episode, "2026-10-02T11:00:00", &url, creator)
-        };
+    // One episode of each form, from three creators in one reading. How a
+    // text becomes a key and a rank is trss-core's (`episode`); the form is
+    // the web's.
+    let line = |episode: &str, creator: &str| {
+        let url = format!("https://blog.test/{creator}-{episode}");
         app.fake
-            .set_recent(vec![line(a, "에루샤"), line(b, "코코렛")]);
-        observer.run_due().await.unwrap();
-        app.now.fetch_add(30 * 60_000, Ordering::SeqCst);
-    }
+            .recent_line(3320, episode, "2026-10-02T11:00:00", &url, creator)
+    };
+    app.fake.set_recent(vec![
+        line("SP", "에루샤"),
+        line("05", "코코렛"),
+        line("0", "세번째"),
+    ]);
+    app.observer().run_due().await.unwrap();
     let (status, linked) = app
         .link(1, json!({ "version": 0, "anime_no": 3320, "week": 3 }))
         .await;
@@ -891,19 +885,14 @@ async fn a_candidate_carries_the_key_rank_and_form_of_its_episode() {
 
     let shown = app.candidates(1).await;
 
-    // The episodes of the list in order are 0, 1, 1.5, 5, 10, SP: one rank
-    // for each, whichever way the texts were written.
     let expected = |episode: &str| match episode {
-        "0" | "0.0" => ("n:0", 0, "zero"),
-        "1" | "01" => ("n:1", 1, "number"),
-        "1.50" => ("n:1.5", 2, "number"),
-        "05" | "5" => ("n:5", 3, "number"),
-        "10" => ("n:10", 4, "number"),
-        "SP" => ("t:SP", 5, "text"),
+        "0" => ("n:0", 0, "zero"),
+        "05" => ("n:5", 1, "number"),
+        "SP" => ("t:SP", 2, "text"),
         other => panic!("{other}"),
     };
     let candidates = shown["candidates"].as_array().unwrap();
-    assert_eq!(candidates.len(), 10);
+    assert_eq!(candidates.len(), 3);
     for c in candidates {
         let (key, rank, form) = expected(c["episode"].as_str().unwrap());
         assert_eq!(c["episode_key"], key, "{c}");

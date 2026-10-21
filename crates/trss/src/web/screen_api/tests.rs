@@ -1,5 +1,5 @@
 //! The remote screen against a fake launcher whose DevTools proxy answers
-//! like a browser's page (the real one: `tests/remote_screen_docker.rs`,
+//! like a browser's page (the real one: `tests/it/remote_screen_docker.rs`,
 //! ignored).
 
 use std::{

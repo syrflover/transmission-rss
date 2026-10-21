@@ -6,10 +6,11 @@
 //! 브라우저 수명).
 //!
 //! Needs Docker and the browser image (`TRSS_BROWSER_IMAGE`, default
-//! `ghcr.io/syrflover/trss-browser:local`, built from `Dockerfile.browser`):
+//! `ghcr.io/syrflover/trss-browser:local`, built from `Dockerfile.browser`).
+//! The usual `cargo test --workspace` does not build it; its feature does:
 //!
 //! ```sh
-//! cargo test -p trss --test remote_screen_docker -- --ignored --nocapture
+//! cargo test -p trss --features remote-screen-docker --test it remote_screen_docker -- --ignored --nocapture
 //! ```
 //!
 //! It starts a throwaway container named `trss-remote-screen-<pid>-<test>`

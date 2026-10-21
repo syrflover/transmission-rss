@@ -296,14 +296,11 @@ fn stalled_at(board: Board) -> bool {
 }
 
 #[tokio::test]
-async fn a_cycle_without_an_end_past_its_bound_is_stalled() {
+async fn a_cycle_the_rule_takes_for_stalled_is_reported_stalled() {
     let (state, _router) = app();
-    // Ten minutes in: well within the half hour a cycle may take.
-    cycle_of_five_minutes(&state, 10 * MINUTE, false).await;
-    assert!(!stalled_at(board(&state, NOON, 0).await.unwrap()));
-
-    // Fifty minutes and one more: past ten intervals, the process stopped in it.
-    cycle_of_five_minutes(&state, 50 * MINUTE + 1, false).await;
+    // Two hours without an end; where the bound lies is trss-collect's
+    // (`CycleState::is_stalled`).
+    cycle_of_five_minutes(&state, 120 * MINUTE, false).await;
     assert!(stalled_at(board(&state, NOON, 0).await.unwrap()));
 }
 

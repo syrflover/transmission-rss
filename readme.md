@@ -281,6 +281,14 @@ dev/compose.sh down           # stop; dev/local stays for the next up
 - The containers run as 1000:1000 here too, so `dev/local/data` must belong to that user (`prepare` makes it as you, which is 1000 on most Linux machines; another user sets `TRSS_UID` and `TRSS_GID` in `dev/dev.env`). A `dev/local/data` that an earlier run as root left files in is refused at the start; `chown -R` it as [Running as 1000:1000](#running-as-10001000) says.
 - Changes stay in `dev/local`: archiving a rule moves the empty files there, and the server's data is never written.
 
+### Tests
+
+`cargo test --workspace -j 4` runs the tests on this machine's glibc. It does not build `crates/trss/tests/it/remote_screen_docker.rs`, the remote screen against the real server browser, which needs Docker and the browser image (`TRSS_BROWSER_IMAGE`, by default `ghcr.io/syrflover/trss-browser:local`, which `dev/compose.sh up` builds). Its feature builds it, and its tests are ignored until asked for:
+
+```sh
+cargo test -p trss --features remote-screen-docker --test it remote_screen_docker -- --ignored --nocapture
+```
+
 ### Releasing
 
 A release is a tag: pushing one makes the [Deploy workflow](.github/workflows/deploy.yml) build and publish the app image and the browser image under that tag and `latest`. Before tagging, run the workspace tests on the release's target too:
