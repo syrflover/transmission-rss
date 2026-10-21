@@ -13,11 +13,13 @@
 //! `보관 제안` suggestions. A suggestion is not something that needs doing, so
 //! nothing counts these in a menu badge.
 //!
-//! Archiving is not done here. The screen sends the rule's `rule_archive`
-//! command (`/api/commands`) for each rule, in order, so the work folder moves
-//! as the command's own rules say (the folder shared by several of the rules
-//! moves once, with the last of them); every view carries `after`, the
-//! sentence for what archiving that rule would do with its folder now.
+//! Archiving is not done here. The screen sends the chosen rules as one
+//! `rule_archive_batch` command (`/api/commands`), which the server carries out
+//! rule after rule through each rule's own `rule_archive` command
+//! ([`crate::archive_batch`]), so the work folder moves as that command's own
+//! rules say (the folder shared by several of the rules moves once, with the
+//! last of them); every view carries `after`, the sentence for what archiving
+//! that rule would do with its folder now.
 //!
 //! `POST /archive-suggestions/keep` (`{ rule_id, grounds }`, the `key`s of the
 //! grounds the user saw) remembers `수집 유지` for those grounds of the rule:

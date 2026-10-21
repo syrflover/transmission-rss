@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useId, useState } from "react";
 import { Link } from "react-router-dom";
 
 import { Button } from "@/components/ui/button";
@@ -6,9 +6,11 @@ import { useCached } from "@/lib/cached";
 import { cn } from "@/lib/utils";
 import type { ArchiveSuggestion } from "@/lib/api-types";
 
-import { KEYS, ruleArchived, suggestionGone } from "../cache";
+import { KEYS } from "../cache";
 import { btnNeutral } from "../channels/styles";
-import { archiveRule, fetchArchiveSuggestions } from "./api";
+import { fetchArchiveSuggestions, getCurrentBatch, startBatch } from "./api";
+import { batches } from "./batches";
+import type { Run } from "./batchRun";
 import { groundText, suggestionTitle } from "./ground";
 
 /** The accent of the suggestions: purple, the calm color of `보관`, not a warning. */
@@ -17,25 +19,19 @@ export const archFill = "bg-[color-mix(in_srgb,var(--accent-arch)_7%,transparent
 export const btnArch =
   "h-auto min-h-9 rounded-full border border-[color-mix(in_srgb,var(--accent-arch)_55%,transparent)] bg-surface-1 px-[15px] text-[13px] font-semibold text-arch hover:border-arch hover:bg-[color-mix(in_srgb,var(--accent-arch)_12%,transparent)] dark:hover:bg-[color-mix(in_srgb,var(--accent-arch)_12%,transparent)] max-[720px]:min-h-10";
 
-/** Where a `보관` of one or several suggestions is. */
-interface Run {
-  total: number;
-  /** How many were archived so far. */
-  finished: number;
-  /** The work being archived now; `null` once the run ended. */
-  current: string | null;
-  /** Why the run stopped before the end. */
-  error: string | null;
-}
-
 /**
  * The archive suggestions at the top of the 구독 tab, beside the title
  * candidates (purple, not red: nothing here is urgent). One suggestion is a
  * line with `보관`. Several fold into a count with `모두 보관` and `선택 보관`;
  * the latter opens a checklist with every rule selected, and `N개 보관`
- * archives the checked ones one after another through each rule's own
- * `rule_archive` command (so a work folder shared by several of them moves
- * once, with the last). Renders nothing while there are none.
+ * archives the checked ones one after another. They go to the server as one
+ * `rule_archive_batch` command, which archives them in order through each
+ * rule's own `rule_archive` command (so a work folder shared by several of
+ * them moves once, with the last) and goes on whether this tab is shown or not;
+ * the screen shows what the tab's batch tracker follows by the events the
+ * server sends (it keeps following when the screen is closed, so the caches
+ * still learn what was archived), and finds the batch again when it opens
+ * during one. Renders nothing while there are none.
  */
 export function ArchiveSuggestions({ className, onArchived }: { className?: string; onArchived: () => void }) {
   const headingId = useId();
@@ -47,48 +43,47 @@ export function ArchiveSuggestions({ className, onArchived }: { className?: stri
   const suggestions = list.data ?? [];
   const [choosing, setChoosing] = useState(false);
   const [unchecked, setUnchecked] = useState<ReadonlySet<string>>(new Set());
-  const [run, setRun] = useState<Run | null>(null);
-  const alive = useRef(true);
+  const tracker = batches();
+  const [run, setRun] = useState<Run | null>(tracker.run);
+  // What the batch calls at its end, which may come after this screen is gone: the latest props, not a render's.
+  tracker.setHooks({ archived: onArchived, reload: list.reload });
+
+  // The tracker follows the batch whether or not this screen is shown; the screen only shows what it says.
   useEffect(() => {
-    alive.current = true;
+    let alive = true;
+    setRun(tracker.run);
+    const stop = tracker.subscribe((update) => {
+      setRun(update.run);
+      if (update.ended) setChoosing(false);
+    });
+    // A batch the server runs when the screen opens (it went on while the screen was closed, or in another tab):
+    // show it and follow it.
+    if (!tracker.active) {
+      void getCurrentBatch()
+        .then((view) => {
+          if (alive && view !== null) tracker.adopt(view);
+        })
+        .catch(() => {
+          // Nothing is shown for a batch that cannot be read; a new one is refused while it runs.
+        });
+    }
     return () => {
-      alive.current = false;
+      alive = false;
+      stop();
     };
-  }, []);
+  }, [tracker]);
 
   const running = run !== null && run.current !== null;
   const selected = suggestions.filter((s) => !unchecked.has(s.rule_id));
 
-  /** Archives the rules in the order given, stopping at the first that does not end well. */
+  /**
+   * Archives the rules in the order given, stopping at the first that does not end well. The server does it as one
+   * command, so it goes on when this tab is hidden or the screen is closed.
+   */
   const archive = async (rules: ArchiveSuggestion[]) => {
-    if (running || rules.length === 0) return;
-    let finished = 0;
-    let error: string | null = null;
-    for (const rule of rules) {
-      const name = suggestionTitle(rule);
-      if (alive.current) setRun({ total: rules.length, finished, current: name, error: null });
-      const outcome = await archiveRule(rule.rule_id);
-      if (!outcome.ok) {
-        error = `‘${name}’: ${outcome.message}`;
-        break;
-      }
-      if (outcome.command.state === "failed") {
-        const reason = outcome.command.outcome?.reason ?? "까닭은 알 수 없어요.";
-        error = `‘${name}’을 옮기지 못했어요. ${reason} 규칙 상세에서 상태를 확인해 주세요.`;
-        break;
-      }
-      finished += 1;
-      suggestionGone(rule.rule_id);
-    }
-    if (finished > 0) {
-      ruleArchived();
-      onArchived();
-    }
-    list.reload();
-    if (alive.current) {
-      setRun({ total: rules.length, finished, current: null, error });
-      setChoosing(false);
-    }
+    if (running || tracker.active || rules.length === 0) return;
+    const entries = rules.map((rule) => ({ rule_id: rule.rule_id, name: suggestionTitle(rule) }));
+    await tracker.start(entries, () => startBatch(entries));
   };
 
   if (suggestions.length === 0 && run === null) {
@@ -150,7 +145,7 @@ export function ArchiveSuggestions({ className, onArchived }: { className?: stri
         </p>
       )}
 
-      {run !== null && <RunStatus run={run} onClose={() => setRun(null)} />}
+      {run !== null && <RunStatus run={run} onClose={() => tracker.dismiss()} />}
 
       {one !== null && (
         <ul className="m-0 flex list-none flex-col gap-2.5 p-0">
@@ -225,7 +220,7 @@ function RunStatus({ run, onClose }: { run: Run; onClose: () => void }) {
     ? run.error === null
       ? `${run.finished}개를 보관했어요.`
       : `${run.finished}개를 보관하고 멈췄어요. ${run.error}`
-    : `보관하는 중이에요. ‘${run.current}’ (${run.finished + 1}/${run.total})`;
+    : `보관하는 중이에요. ‘${run.current}’ (${Math.min(run.finished + 1, run.total)}/${run.total})`;
   return (
     <div
       role="status"

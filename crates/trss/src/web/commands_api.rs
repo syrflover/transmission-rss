@@ -15,6 +15,7 @@
 //! | `watch_rescan` | `다시 확인`  | `{ "folder_id": <watch folder> }`                              |
 //! | `episode_undo` | `되돌리기`   | `{ "rule_id": <rule>, "episode": <the automatic offset seen> }` |
 //! | `anissia_captions` | `새로고침` | `{ "anime_no": <Anissia anime a season is linked to> }`    |
+//! | `rule_archive_batch` | `모두 보관`·`N개 보관`·`보관` of an archive suggestion | `{ "rules": [{ "rule_id": <rule>, "name": <the title the screen showed> }] }`, at least one rule, distinct, in the order to archive them (`rule_id` at most 64 bytes, `name` at most 500 characters) |
 //!
 //! `receive_once` of a video revision is refused with `400` and the reason
 //! when the episode's place is known to hold the same or a higher revision
@@ -44,6 +45,12 @@
 //! with an ID of its own, when a season is linked
 //! ([`super::seasons_anissia_api`]); its state and outcome are the candidates'
 //! `refresh`.
+//!
+//! `rule_archive_batch` archives the chosen rules one after another on the
+//! server, each through a `rule_archive` command of its own, and stops at the
+//! first that does not end well ([`crate::archive_batch`]). Only one is open
+//! at a time. The screen reads its progress from
+//! `GET /archive-batches/{id}` ([`super::archive_batch_api`]).
 //!
 //! A rule is archived and restored only through `rule_archive`: the worker
 //! turns the rule off before its folder moves and on after it moved back.
@@ -87,6 +94,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::{in_place::Evidence, ApiError, AppState};
+use crate::archive_batch;
 use trss_collect::{
     commands::{anissia_captions, episode_undo, receive_once, receive_past, rule_archive},
     past_search::service::Resolve,
@@ -178,6 +186,7 @@ pub(super) enum CommandKind {
     WatchRescan,
     EpisodeUndo,
     AnissiaCaptions,
+    RuleArchiveBatch,
 }
 
 /// A request to `POST /commands` as a screen writes it: the ID, the kind and
@@ -201,6 +210,7 @@ pub(super) enum CommandPayload {
     WatchRescan(watch_rescan::WatchRescan),
     EpisodeUndo(episode_undo::EpisodeUndo),
     AnissiaCaptions(anissia_captions::AnissiaCaptions),
+    RuleArchiveBatch(archive_batch::ArchiveBatch),
 }
 
 const BAD_BODY: &str = "요청 내용을 읽지 못했어요. 화면을 새로고침한 뒤 다시 시도해 주세요.";
@@ -208,8 +218,8 @@ const MISMATCH: &str =
     "이 명령 ID는 다른 내용으로 이미 접수됐어요. 화면을 새로고침한 뒤 다시 시도해 주세요.";
 const FOLDER_REFUSED: &str = "`다시 받기`는 그 항목을 고른 규칙의 저장 폴더에 받아서 폴더를 고를 수 없어요. 화면을 새로고침한 뒤 다시 시도해 주세요.";
 const BUSY: &str = "이 항목은 이미 추가하는 중이에요. 그 결과가 나올 때까지 기다려 주세요.";
-const RULE_BUSY: &str =
-    "이 규칙은 이미 보관하거나 복원하거나 작품 폴더를 옮기는 중이에요. 그 결과가 나올 때까지 기다려 주세요.";
+const RULE_BUSY: &str = archive_batch::RULE_BUSY;
+const BATCH_BUSY: &str = "다른 일괄 보관이 진행 중이에요. 그 결과가 나올 때까지 기다려 주세요.";
 const FOLDER_BUSY: &str =
     "이 폴더는 이미 다시 확인하는 중이에요. 그 결과가 나올 때까지 기다려 주세요.";
 const CAPTIONS_BUSY: &str =
@@ -242,6 +252,7 @@ pub(super) enum Request {
     WatchRescan(watch_rescan::WatchRescan),
     EpisodeUndo(episode_undo::EpisodeUndo),
     AnissiaCaptions(anissia_captions::AnissiaCaptions),
+    RuleArchiveBatch(archive_batch::ArchiveBatch),
 }
 
 /// What the browser sends to receive a result of a past episode search.
@@ -287,6 +298,11 @@ impl Request {
                     serde_json::from_value(payload).map_err(|_| ApiError::invalid(BAD_BODY))?;
                 Ok(Request::AnissiaCaptions(payload))
             }
+            archive_batch::KIND => {
+                let payload: archive_batch::ArchiveBatch =
+                    serde_json::from_value(payload).map_err(|_| ApiError::invalid(BAD_BODY))?;
+                Ok(Request::RuleArchiveBatch(payload))
+            }
             _ => Err(ApiError::invalid("모르는 종류의 명령이에요.")),
         }
     }
@@ -299,6 +315,7 @@ impl Request {
             Request::WatchRescan(_) => watch_rescan::KIND,
             Request::EpisodeUndo(_) => episode_undo::KIND,
             Request::AnissiaCaptions(_) => anissia_captions::KIND,
+            Request::RuleArchiveBatch(_) => archive_batch::KIND,
         }
     }
 
@@ -310,6 +327,7 @@ impl Request {
             Request::WatchRescan(_) => FOLDER_BUSY,
             Request::EpisodeUndo(_) => UNDO_BUSY,
             Request::AnissiaCaptions(_) => CAPTIONS_BUSY,
+            Request::RuleArchiveBatch(_) => BATCH_BUSY,
         }
     }
 
@@ -345,6 +363,10 @@ impl Request {
                 serde_json::from_str::<anissia_captions::AnissiaCaptions>(&stored.payload)
                     .is_ok_and(|stored| stored == *payload)
             }
+            Request::RuleArchiveBatch(payload) => {
+                serde_json::from_str::<archive_batch::ArchiveBatch>(&stored.payload)
+                    .is_ok_and(|stored| stored == *payload)
+            }
         }
     }
 
@@ -356,6 +378,10 @@ impl Request {
             Request::ReceiveOnce(payload) if payload.names_a_folder() => {
                 Err(ApiError::invalid(FOLDER_REFUSED))
             }
+            Request::RuleArchiveBatch(payload) => match payload.refusal() {
+                Some(why) => Err(ApiError::invalid(why)),
+                None => Ok(()),
+            },
             Request::ReceiveOnce(_)
             | Request::ReceivePast(_)
             | Request::RuleArchive(_)
@@ -407,6 +433,12 @@ impl Request {
                 payload: payload.canonical(),
                 subject: Some(payload.subject()),
             },
+            Request::RuleArchiveBatch(payload) => NewCommand {
+                id,
+                kind: archive_batch::KIND.to_owned(),
+                payload: payload.canonical(),
+                subject: Some(payload.subject()),
+            },
         }
     }
 
@@ -430,6 +462,10 @@ impl Request {
             Request::AnissiaCaptions(payload) => {
                 check_anissia_captions(payload, state).await.map(|()| None)
             }
+            // Checked when it is new (`refuse_if_not_new`); a rule that is gone
+            // when its turn comes ends the batch there, as a rule archived
+            // meanwhile would.
+            Request::RuleArchiveBatch(_) => Ok(None),
         }
     }
 }

@@ -38,7 +38,7 @@ use std::{collections::HashMap, fmt, str::FromStr};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    changes::{ChangeKind, Changes},
+    changes::{Change, ChangeKind, Changes},
     db::{Db, DbError},
     Millis,
 };
@@ -233,6 +233,23 @@ impl CommandStore {
         self.db.run(move |c| repo::get(c, &id)).await
     }
 
+    /// The stored commands among `ids`, by ID: a screen's read of the many
+    /// commands one command is made of in one query.
+    pub async fn get_many(
+        &self,
+        ids: Vec<String>,
+    ) -> Result<HashMap<String, Command>, CommandError> {
+        self.db.run(move |c| repo::get_many(c, &ids)).await
+    }
+
+    /// Hears the changes announced on this store's channel from now on, for
+    /// code that waits for a command to change instead of asking on a timer.
+    /// Subscribe before reading what the wait is about, so a change between
+    /// the read and the wait is not lost.
+    pub fn subscribe(&self) -> tokio::sync::broadcast::Receiver<Change> {
+        self.changes.subscribe()
+    }
+
     /// The open command of `kind` for each of the given subjects, if any.
     pub async fn open_for_subjects(
         &self,
@@ -277,8 +294,20 @@ impl CommandStore {
         &self,
         excluded: Vec<String>,
     ) -> Result<usize, CommandError> {
+        self.running_count_excluding_kinds(excluded, Vec::new())
+            .await
+    }
+
+    /// [`CommandStore::running_count_excluding`] also without the commands of
+    /// the given `kinds`, for a caller that asks about a thing those kinds
+    /// never touch.
+    pub async fn running_count_excluding_kinds(
+        &self,
+        excluded: Vec<String>,
+        kinds: Vec<String>,
+    ) -> Result<usize, CommandError> {
         self.db
-            .run(move |c| repo::running_count_excluding(c, &excluded))
+            .run(move |c| repo::running_count_excluding(c, &excluded, &kinds))
             .await
     }
 

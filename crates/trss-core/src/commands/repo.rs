@@ -68,6 +68,19 @@ pub fn get(conn: &Connection, id: &str) -> Result<Option<Command>> {
     )
 }
 
+pub fn get_many(conn: &Connection, ids: &[String]) -> Result<HashMap<String, Command>> {
+    let mut stmt = conn.prepare_cached(&format!(
+        "SELECT {COLUMNS} FROM commands WHERE id IN (SELECT value FROM json_each(?1))"
+    ))?;
+    let mut rows = stmt.query([id_list(ids)])?;
+    let mut out = HashMap::new();
+    while let Some(row) = rows.next()? {
+        let command = command_from_row(row)?;
+        out.insert(command.id.clone(), command);
+    }
+    Ok(out)
+}
+
 pub fn accept(conn: &mut Connection, new: &NewCommand, now: Millis) -> Result<Accepted> {
     let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
 
@@ -172,13 +185,18 @@ fn id_list(ids: &[String]) -> String {
     serde_json::to_string(ids).expect("a list of strings serializes")
 }
 
-pub fn running_count_excluding(conn: &Connection, excluded: &[String]) -> Result<usize> {
+pub fn running_count_excluding(
+    conn: &Connection,
+    excluded: &[String],
+    kinds: &[String],
+) -> Result<usize> {
     let count: i64 = conn
         .prepare_cached(
             "SELECT count(*) FROM commands WHERE state = 'running'
-         AND id NOT IN (SELECT value FROM json_each(?1))",
+         AND id NOT IN (SELECT value FROM json_each(?1))
+         AND kind NOT IN (SELECT value FROM json_each(?2))",
         )?
-        .query_row([id_list(excluded)], |row| row.get(0))?;
+        .query_row([id_list(excluded), id_list(kinds)], |row| row.get(0))?;
     Ok(count as usize)
 }
 

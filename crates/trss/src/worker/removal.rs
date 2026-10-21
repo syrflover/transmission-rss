@@ -26,7 +26,8 @@
 //!   nothing. So is a command this worker is carrying out again
 //!   ([`InFlight`] counts only the first start of a command as its own). A
 //!   command whose add got no answer that ended since the previous cycle
-//!   started counts the same way.
+//!   started counts the same way. A `rule_archive_batch` is not counted: it
+//!   touches no torrent, and the `rule_archive` commands it stores do.
 //!
 //! The order is always the folder's turn first ([`trss_core::folder_locks`]),
 //! then the gate: whoever holds the gate never waits for a folder.
@@ -137,12 +138,72 @@ impl Removal {
         Ok(CommandsAtRemoval {
             running: self
                 .commands
-                .running_count_excluding(self.in_flight.first_starts())
+                .running_count_excluding_kinds(
+                    self.in_flight.first_starts(),
+                    // A batch of archives touches no torrent itself; the
+                    // commands it stores for its rules do, and count on their own.
+                    vec![crate::archive_batch::KIND.to_owned()],
+                )
                 .await?,
             unconfirmed_adds: self
                 .commands
                 .unconfirmed_adds_since(self.previous_start)
                 .await?,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use trss_core::{
+        commands::{CommandStore, NewCommand},
+        Db,
+    };
+
+    use super::*;
+
+    fn removal(commands: &CommandStore) -> Removal {
+        Removal {
+            gate: TorrentGate::default(),
+            commands: commands.clone(),
+            in_flight: InFlight::default(),
+            previous_start: None,
+        }
+    }
+
+    async fn claim_twice(commands: &CommandStore, id: &str, kind: &str) {
+        commands
+            .accept(
+                NewCommand {
+                    id: id.to_owned(),
+                    kind: kind.to_owned(),
+                    payload: "{}".to_owned(),
+                    subject: Some(id.to_owned()),
+                },
+                1_000,
+            )
+            .await
+            .unwrap();
+        // The second claim is the restart's: the first start is not this
+        // worker's, so nothing in `InFlight` vouches for the command.
+        for _ in 0..2 {
+            commands.claim_next(2_000).await.unwrap().unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn a_batch_claimed_again_after_a_restart_does_not_hold_back_the_removal() {
+        let commands = CommandStore::new(Db::open_blocking(":memory:").unwrap());
+        claim_twice(&commands, "batch-1", crate::archive_batch::KIND).await;
+
+        assert_eq!(removal(&commands).commands().await.unwrap().running, 0);
+    }
+
+    #[tokio::test]
+    async fn a_torrent_command_claimed_again_after_a_restart_still_holds_it_back() {
+        let commands = CommandStore::new(Db::open_blocking(":memory:").unwrap());
+        claim_twice(&commands, "once-1", "receive_once").await;
+
+        assert_eq!(removal(&commands).commands().await.unwrap().running, 1);
     }
 }

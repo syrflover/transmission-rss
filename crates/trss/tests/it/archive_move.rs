@@ -29,7 +29,11 @@ use axum::http::StatusCode;
 use common::*;
 use serde_json::{json, Value};
 use tokio_util::sync::CancellationToken;
-use trss::worker::{CommandsOutcome, TickOutcome, Worker};
+use trss::{
+    wake::Wakes,
+    web::AppState,
+    worker::{CommandsOutcome, TickOutcome, Worker},
+};
 use trss_anissia::Anime;
 use trss_collect::{
     commands::rule_archive::{self, work_folder::MovePolicy, Direction},
@@ -1267,4 +1271,208 @@ async fn a_subscriptions_start_receives_the_ticked_items_into_the_work_folder_th
             "Clevatess/Season 02/Clevatess S02E03.mkv",
         ]
     );
+}
+
+// --- 12. a batch of rules (모두 보관, N개 보관) ----------------------------------------------
+
+/// The web and the running worker of one process: the web rings the worker's
+/// commands' loop, as the `trss` binary wires them, and nobody reads the
+/// batch's progress for it to go on.
+struct Process {
+    web: WebApi,
+    cancel: CancellationToken,
+    running: tokio::task::JoinHandle<()>,
+}
+
+impl Process {
+    fn start(s: &Scene, wakes: &Wakes) -> Process {
+        let web = WebApi::with_state(AppState::new(s.h.db.clone()).with_wakes(wakes.clone()));
+        let worker = s
+            .worker()
+            .with_wakes(wakes.clone())
+            .with_shutdown_grace(Duration::from_millis(100));
+        let cancel = CancellationToken::new();
+        let running = tokio::spawn({
+            let cancel = cancel.clone();
+            async move { worker.run(cancel).await }
+        });
+        Process {
+            web,
+            cancel,
+            running,
+        }
+    }
+
+    async fn stop(self) {
+        self.cancel.cancel();
+        self.running.await.unwrap();
+    }
+
+    async fn send_batch(&self, id: &str, rules: &[(&str, &str)]) {
+        let rules: Vec<Value> = rules
+            .iter()
+            .map(|(rule_id, name)| json!({ "rule_id": rule_id, "name": name }))
+            .collect();
+        let (status, _, body) = self
+            .web
+            .call(
+                "POST",
+                "/api/commands",
+                Some(json!({
+                    "id": id,
+                    "kind": "rule_archive_batch",
+                    "payload": { "rules": rules },
+                })),
+            )
+            .await;
+        assert_eq!(status, StatusCode::ACCEPTED, "{body}");
+    }
+
+    async fn batch(&self, id: &str) -> Value {
+        let (status, text, body) = self
+            .web
+            .call("GET", &format!("/api/archive-batches/{id}"), None)
+            .await;
+        assert_eq!(status, StatusCode::OK, "{text}");
+        body
+    }
+
+    async fn batch_ends(&self, id: &str) -> Value {
+        for _ in 0..1500 {
+            let view = self.batch(id).await;
+            if view["state"] == "done" || view["state"] == "failed" {
+                return view;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        panic!("the batch {id} did not end: {}", self.batch(id).await);
+    }
+}
+
+#[tokio::test]
+async fn a_batch_of_two_rules_in_one_work_folder_moves_the_folder_once_with_the_last() {
+    let s = Scene::new(true).await;
+    let c = s
+        .channel(
+            "feed-a",
+            &[
+                ("Clevatess S02", "Clevatess/Season 02"),
+                ("Clevatess S03", "Clevatess/Season 03"),
+            ],
+        )
+        .await;
+    s.seeding(
+        1,
+        "Clevatess S02E01.mkv",
+        &s.collect.join("Clevatess/Season 02"),
+    );
+    s.seeding(
+        2,
+        "Clevatess S03E01.mkv",
+        &s.collect.join("Clevatess/Season 03"),
+    );
+    let process = Process::start(&s, &Wakes::default());
+
+    process
+        .send_batch(
+            "batch-one-folder",
+            &[
+                (&c.rules[0].id, "Clevatess S02"),
+                (&c.rules[1].id, "Clevatess S03"),
+            ],
+        )
+        .await;
+    let view = process.batch_ends("batch-one-folder").await;
+
+    assert_eq!(view["state"], "done", "{view}");
+    assert_eq!(
+        (view["total"].as_i64(), view["finished"].as_i64()),
+        (Some(2), Some(2))
+    );
+    // The first rule was archived while the second still saved in the folder:
+    // it stayed. The second moved it, with both seasons.
+    let first = s.command("batch-one-folder-0").await;
+    assert_eq!(first["outcome"]["result"], "kept", "{first}");
+    let second = s.command("batch-one-folder-1").await;
+    assert_eq!(second["outcome"]["result"], "moved", "{second}");
+    assert_eq!(s.rule(&c.rules[0].id).await["state"], "archived");
+    assert_eq!(s.rule(&c.rules[1].id).await["state"], "archived");
+    assert!(!s.collect.join("Clevatess").exists());
+    assert_eq!(
+        files(&s.archive),
+        [
+            "Clevatess/Season 02/Clevatess S02E01.mkv",
+            "Clevatess/Season 03/Clevatess S03E01.mkv"
+        ]
+    );
+    // One move: each torrent was set to its new place once, by the second rule.
+    assert_eq!(s.h.tr.calls_of("torrent-set-location").len(), 2);
+    process.stop().await;
+}
+
+#[tokio::test]
+async fn a_batch_the_process_left_midway_goes_on_with_the_rest_after_a_restart() {
+    let s = Scene::new(true).await;
+    let c = s
+        .channel(
+            "feed-a",
+            &[("Alpha", "Alpha/Season 01"), ("Beta", "Beta/Season 01")],
+        )
+        .await;
+    write(&s.collect.join("Alpha/Season 01/Alpha S01E01.mkv"), "video");
+    s.seeding(1, "Beta S01E01.mkv", &s.collect.join("Beta/Season 01"));
+    let wakes = Wakes::default();
+
+    // Transmission moves Beta's data and the process stops before it hears
+    // back. Alpha, which has no torrent, was archived before that.
+    let gate = s.h.tr.hold_answer("torrent-set-location");
+    let first = Process::start(&s, &wakes);
+    first
+        .send_batch(
+            "batch-restart-01",
+            &[(&c.rules[0].id, "Alpha"), (&c.rules[1].id, "Beta")],
+        )
+        .await;
+    gate.wait_arrived().await;
+    first.stop().await;
+    gate.release_all();
+
+    let store = CommandStore::new(s.h.db.clone());
+    let batch = store.get("batch-restart-01").await.unwrap().unwrap();
+    assert_eq!((batch.state, batch.attempts), (CommandState::Running, 1));
+    let alpha = store.get("batch-restart-01-0").await.unwrap().unwrap();
+    assert_eq!(alpha.state, CommandState::Done);
+    let beta = store.get("batch-restart-01-1").await.unwrap().unwrap();
+    assert_eq!(beta.state, CommandState::Running);
+    assert!(!s.collect.join("Alpha").exists());
+
+    // A new process claims what the old one left.
+    let second = Process::start(&s, &wakes);
+    let view = second.batch_ends("batch-restart-01").await;
+
+    assert_eq!(view["state"], "done", "{view}");
+    assert_eq!(view["finished"], 2);
+    let batch = store.get("batch-restart-01").await.unwrap().unwrap();
+    assert_eq!(batch.attempts, 2);
+    assert_eq!(
+        store.get("batch-restart-01-0").await.unwrap().unwrap(),
+        alpha,
+        "the archived rule's command was not run again"
+    );
+    let beta = store.get("batch-restart-01-1").await.unwrap().unwrap();
+    assert_eq!((beta.state, beta.attempts), (CommandState::Done, 2));
+    assert_eq!(s.rule(&c.rules[1].id).await["state"], "archived");
+    assert_eq!(
+        files(&s.archive),
+        [
+            "Alpha/Season 01/Alpha S01E01.mkv",
+            "Beta/Season 01/Beta S01E01.mkv"
+        ]
+    );
+    assert_eq!(
+        s.h.tr.calls_of("torrent-set-location").len(),
+        1,
+        "Beta's torrent was moved by the first process, not asked again"
+    );
+    second.stop().await;
 }

@@ -5,6 +5,7 @@
 //! accepted and the subtitle jobs. The web starts what it stored by ringing
 //! the worker part's loops ([`wake`]).
 
+pub mod archive_batch;
 pub mod wake;
 pub mod web;
 pub mod worker;

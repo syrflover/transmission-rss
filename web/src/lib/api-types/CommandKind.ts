@@ -5,4 +5,4 @@
  * them through [`CommandRequest`]; the web stores the kind as text, and the
  * tests of [`super::api_types`] keep this list and [`Request::read`] together.
  */
-export type CommandKind = "receive_once" | "receive_past" | "rule_archive" | "watch_rescan" | "episode_undo" | "anissia_captions";
+export type CommandKind = "receive_once" | "receive_past" | "rule_archive" | "watch_rescan" | "episode_undo" | "anissia_captions" | "rule_archive_batch";

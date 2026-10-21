@@ -23,6 +23,7 @@ pub mod api;
 #[cfg(test)]
 mod api_types;
 pub mod archive_api;
+pub mod archive_batch_api;
 pub mod artwork_api;
 pub mod browser_net;
 pub mod channels_api;

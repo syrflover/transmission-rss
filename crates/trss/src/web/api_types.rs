@@ -49,6 +49,7 @@ fn roots(v: &mut impl TypeVisitor) {
     v.visit::<commands_api::CommandRequest>();
     v.visit::<commands_api::CommandView>();
     v.visit::<trss_core::changes::Change>();
+    v.visit::<crate::archive_batch::BatchView>();
     v.visit::<archive_api::SuggestionList>();
     v.visit::<archive_api::KeepBody>();
     v.visit::<archive_api::Kept>();
@@ -218,6 +219,7 @@ fn command_requests_are_the_ones_the_web_reads() {
     use trss_library::watch_rescan::{self, WatchRescan};
 
     use super::commands_api::{CommandKind, CommandPayload, CommandRequest, PastRequest, Request};
+    use crate::archive_batch::{self, ArchiveBatch, BatchRule};
 
     // The kind each request the server reads is listed under. It has no
     // wildcard, so a `Request` added without its `CommandKind` does not
@@ -230,6 +232,7 @@ fn command_requests_are_the_ones_the_web_reads() {
             Request::WatchRescan(_) => CommandKind::WatchRescan,
             Request::EpisodeUndo(_) => CommandKind::EpisodeUndo,
             Request::AnissiaCaptions(_) => CommandKind::AnissiaCaptions,
+            Request::RuleArchiveBatch(_) => CommandKind::RuleArchiveBatch,
         }
     }
 
@@ -277,6 +280,16 @@ fn command_requests_are_the_ones_the_web_reads() {
             CommandKind::AnissiaCaptions,
             CommandPayload::AnissiaCaptions(AnissiaCaptions { anime_no: 5 }),
         ),
+        (
+            archive_batch::KIND,
+            CommandKind::RuleArchiveBatch,
+            CommandPayload::RuleArchiveBatch(ArchiveBatch {
+                rules: vec![BatchRule {
+                    rule_id: "r".into(),
+                    name: "n".into(),
+                }],
+            }),
+        ),
     ];
     for (kind, listed_kind, command) in sent {
         assert_eq!(serde_json::to_value(&listed_kind).unwrap(), json!(kind));
@@ -315,6 +328,7 @@ fn enums_serialize_as_their_codes() {
     use trss_library::store::setup::Step;
 
     use super::{archive_api::GroundKind, past_search_api::PollState, rules_api::HeldBy};
+    use crate::archive_batch::FailureKind;
 
     fn same<T: serde::Serialize + Copy>(all: &[T], code: impl Fn(T) -> &'static str) {
         for one in all {
@@ -386,6 +400,12 @@ fn enums_serialize_as_their_codes() {
     );
 
     // These took the place of string literals, not of a `code()`.
+    for (one, text) in [
+        (FailureKind::Refused, "refused"),
+        (FailureKind::ArchiveFailed, "archive_failed"),
+    ] {
+        assert_eq!(serde_json::to_value(one).unwrap(), json!(text));
+    }
     for (one, text) in [
         (GroundKind::Ended, "ended"),
         (GroundKind::Unlisted, "unlisted"),

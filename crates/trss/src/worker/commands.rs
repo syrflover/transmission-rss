@@ -52,9 +52,11 @@
 //! a stale turn only orders work that did not need ordering, or orders less.
 //!
 //! The commands that may add, move, rename or take labels off torrents (all
-//! but `watch_rescan`) then take the torrent gate ([`crate::worker::removal`]) and
+//! but `watch_rescan`, `anissia_captions` and `rule_archive_batch`, which touch
+//! none) then take the torrent gate ([`crate::worker::removal`]) and
 //! hold it until their end is written, so the cycle's removal of departed
-//! torrents never runs between their add and its record.
+//! torrents never runs between their add and its record. The `rule_archive`
+//! commands a batch stores take it on their own.
 //!
 //! # Starts that do not finish
 //!
@@ -133,6 +135,15 @@
 //! works in no folder and touches no torrent, so it waits for no turn and no
 //! gate; it asks Anissia at the app's shared pace.
 //!
+//! A `rule_archive_batch` command (`모두 보관`·`N개 보관` of the archive
+//! suggestions) archives the chosen rules in order, each through a
+//! `rule_archive` command of its own that it accepts and waits for
+//! ([`crate::archive_batch`]). It works in no folder and touches no torrent
+//! itself, so it takes no turn and no gate: its children do. It holds one of
+//! the [`MAX_COMMANDS_AT_ONCE`] places while it waits, and only one batch is
+//! open at a time. A shutdown leaves it `running`, and the next start runs it
+//! again, which finds the children stored and carries on from them.
+//!
 //! Each command kind has its own module below.
 
 use std::{
@@ -156,6 +167,7 @@ use trss_collect::commands::{
 use trss_library::watch_rescan;
 
 use super::{removal, Worker, WorkerError};
+use crate::archive_batch;
 
 /// How long a command left for later waits before its next start: as long as
 /// it waited for the worker's next look when the worker looked every few
@@ -198,6 +210,7 @@ enum Kind {
     WatchRescan,
     EpisodeUndo,
     AnissiaCaptions,
+    RuleArchiveBatch,
 }
 
 impl Kind {
@@ -209,6 +222,7 @@ impl Kind {
             watch_rescan::KIND => Kind::WatchRescan,
             episode_undo::KIND => Kind::EpisodeUndo,
             anissia_captions::KIND => Kind::AnissiaCaptions,
+            archive_batch::KIND => Kind::RuleArchiveBatch,
             _ => return None,
         })
     }
@@ -216,7 +230,10 @@ impl Kind {
     /// Whether the command may add, move, rename or take labels off torrents,
     /// and so takes the torrent gate ([`crate::worker::removal`]).
     fn touches_torrents(self) -> bool {
-        !matches!(self, Kind::WatchRescan | Kind::AnissiaCaptions)
+        !matches!(
+            self,
+            Kind::WatchRescan | Kind::AnissiaCaptions | Kind::RuleArchiveBatch
+        )
     }
 }
 
@@ -305,6 +322,11 @@ impl Worker {
     /// side by side (each in its turn), and returns once all have come out. A
     /// command that is left for later is not claimed again by the same look
     /// and does not count; the next look claims it at once.
+    ///
+    /// A `rule_archive_batch` cannot be carried out by one look: it stores
+    /// its rules' commands only after the look has claimed, and waits for
+    /// them, which the same look never claims. Use [`Worker::run`] (or the
+    /// loop behind it) wherever a batch may be among the commands.
     pub async fn run_commands(
         &self,
         cancel: &CancellationToken,
@@ -479,6 +501,8 @@ impl Worker {
                 .await
                 .map_err(|e| text(&e)),
             Kind::AnissiaCaptions => Ok(anissia_captions::section()),
+            // Its children take the turns.
+            Kind::RuleArchiveBatch => Ok(Section::new()),
         }
     }
 
@@ -623,6 +647,27 @@ impl Worker {
                         state: finished.state,
                         outcome: finished.outcome,
                         add_unconfirmed: false,
+                    }
+                });
+            }
+            Kind::RuleArchiveBatch => {
+                let (commands, channels) = (self.commands.clone(), self.ctx.channels.clone());
+                let wakes = self.wakes.clone();
+                task.spawn(async move {
+                    let ctx = archive_batch::Ctx {
+                        commands: &commands,
+                        channels: &channels,
+                        wakes: &wakes,
+                        clock: &clock,
+                        reread_every: archive_batch::REREAD_EVERY,
+                    };
+                    match archive_batch::run(&ctx, &owned, &cancel).await {
+                        Ok(finished) => Ran::Ended {
+                            state: finished.state,
+                            outcome: finished.outcome,
+                            add_unconfirmed: false,
+                        },
+                        Err(err) => Ran::NotNow(err.to_string()),
                     }
                 });
             }

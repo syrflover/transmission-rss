@@ -324,6 +324,44 @@ async fn the_running_count_leaves_out_the_excluded_commands() {
 }
 
 #[tokio::test]
+async fn running_commands_are_counted_without_the_excluded_kinds() {
+    let (_dir, _db, commands) = store().await;
+    for (id, kind, subject) in [("a", "receive_once", "1"), ("b", "other_kind", "2")] {
+        let mut command = new(id, "{}", Some(subject));
+        command.kind = kind.to_owned();
+        commands.accept(command, 1_000).await.unwrap();
+    }
+    commands.claim_next(2_000).await.unwrap().unwrap();
+    commands
+        .claim_next_excluding(2_000, vec!["a".into()])
+        .await
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(
+        commands
+            .running_count_excluding_kinds(Vec::new(), vec!["other_kind".into()])
+            .await
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        commands
+            .running_count_excluding_kinds(vec!["a".into()], vec!["other_kind".into()])
+            .await
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        commands
+            .running_count_excluding_kinds(Vec::new(), Vec::new())
+            .await
+            .unwrap(),
+        2
+    );
+}
+
+#[tokio::test]
 async fn a_command_ends_once() {
     let (_dir, _db, commands) = store().await;
     commands
@@ -694,4 +732,49 @@ async fn noting_what_no_screen_shows_announces_nothing() {
     commands.note_original_name("cmd-1", "name").await.unwrap();
 
     assert!(listener.heard().is_empty());
+}
+
+#[tokio::test]
+async fn many_commands_are_read_by_id_in_one_query() {
+    let (_dir, _db, commands) = store().await;
+    for n in 1..=3 {
+        commands
+            .accept(
+                new(&format!("cmd-{n}"), &format!("{{\"n\":{n}}}"), None),
+                1_000,
+            )
+            .await
+            .unwrap();
+    }
+
+    let found = commands
+        .get_many(vec!["cmd-3".into(), "cmd-1".into(), "cmd-9".into()])
+        .await
+        .unwrap();
+
+    let mut ids: Vec<_> = found.keys().cloned().collect();
+    ids.sort();
+    assert_eq!(ids, ["cmd-1", "cmd-3"]);
+    assert_eq!(
+        found["cmd-3"],
+        commands.get("cmd-3").await.unwrap().unwrap()
+    );
+    assert!(commands.get_many(Vec::new()).await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn a_subscription_hears_what_the_store_announces() {
+    let (_dir, commands, _listener) = announcing_store().await;
+    let mut heard = commands.subscribe();
+
+    commands
+        .accept(new("cmd-1", "{}", None), 1_000)
+        .await
+        .unwrap();
+
+    let change = heard.try_recv().expect("the accept was announced");
+    assert_eq!(
+        (change.kind, change.id.as_str()),
+        (ChangeKind::Command, "cmd-1")
+    );
 }

@@ -20,6 +20,7 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/health", get(health))
         .merge(super::archive_api::routes())
+        .merge(super::archive_batch_api::routes())
         .merge(super::artwork_api::routes())
         .merge(super::channels_api::routes())
         .merge(super::commands_api::routes())
