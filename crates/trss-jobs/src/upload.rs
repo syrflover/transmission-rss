@@ -216,8 +216,9 @@ impl Uploads {
     /// Removes what a killed process left in the receive area: the folders
     /// `.tmp/<id>/` and `<id>/` whose name is a UUID (what an upload makes)
     /// that no job or file record names and that nothing wrote for `older_than`
-    /// (an upload or a receipt going on is younger, and a receipt's attempt
-    /// folder always has its record), and the folders `.tmp/winpng-<job id>/`
+    /// (an upload going on is younger; a receive attempt's folder of a release
+    /// before 0153 is named by its receipt's ID while the receipt is kept),
+    /// and the folders `.tmp/winpng-<job id>/`
     /// (the files a reading of a post's WinPNG images put down, which the
     /// runner removes after each item and a killed process does not) that
     /// nothing wrote for `older_than`: a reading going on writes into its
@@ -344,7 +345,7 @@ impl Uploads {
         };
         let dir = self
             .area
-            .at(&ReceiveArea::temp_dir(&uuid::Uuid::new_v4().to_string()));
+            .at(&ReceiveArea::upload_dir(&uuid::Uuid::new_v4().to_string()));
         tokio::fs::create_dir_all(&dir).await?;
         Ok(Staging {
             _slot: slot,

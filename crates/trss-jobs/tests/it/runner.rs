@@ -1,5 +1,5 @@
-//! The runner with the fake source, and its restarts from records left as a
-//! killed worker leaves them.
+//! The runner with the fake source, and its restarts from what a killed
+//! worker leaves.
 
 use crate::{
     world::{cut_and_restart, Base},
@@ -9,7 +9,7 @@ use std::{path::Path, time::Duration};
 
 use tokio_util::sync::CancellationToken;
 use trss_jobs::{
-    area::{self, ReceiveArea},
+    area::ReceiveArea,
     store::{FileRow, JobDetail},
     Created, FileState, ItemState, JobState, NewItem, NewJob, Runner, StepKind, StepState, Wait,
 };
@@ -130,13 +130,12 @@ async fn a_job_goes_from_found_to_receive_and_leaves_its_files_in_the_receive_ar
     assert!(at(StepKind::Open) < at(StepKind::Receive));
 
     assert_eq!(files_in(&s.area.at(&id)), ["ep1.ass", "ep2.ass"]);
-    assert!(files_in(&s.area.at(".tmp")).is_empty());
+    assert!(files_in(&s.area.at(".partial")).is_empty());
     let file = &d.items[0].files[0];
     assert_eq!(file.state, FileState::Done);
     let bytes = std::fs::read(s.area.at(file.path.as_deref().unwrap())).unwrap();
     assert_eq!(bytes, fake::ass("ep1"));
     assert_eq!(file.size, Some(bytes.len() as u64));
-    assert_eq!(file.expected_size, file.size);
 }
 
 #[tokio::test]
@@ -175,7 +174,7 @@ async fn a_job_with_one_of_three_failed_is_partial_with_the_reason() {
     assert!(d.items[2].reason.as_deref().unwrap().contains("크기"));
     assert_eq!(d.items[2].files[0].state, FileState::Failed);
     assert_eq!(files_in(&s.area.at(&id)), ["a.ass"]);
-    assert!(files_in(&s.area.at(".tmp")).is_empty());
+    assert!(files_in(&s.area.at(".partial")).is_empty());
 }
 
 #[tokio::test]
@@ -191,7 +190,6 @@ async fn a_file_two_posts_share_is_received_once() {
     assert_eq!(first.same_as, None);
     assert_eq!(second.same_as.as_deref(), Some(first.id.as_str()));
     assert_eq!(second.path, first.path);
-    assert_eq!(second.temp_dir, None);
 }
 
 #[tokio::test]
@@ -317,7 +315,7 @@ async fn a_shutdown_in_the_middle_of_a_file_leaves_the_job_running_and_the_next_
     let d = detail(&s, &id).await;
     assert_eq!(d.row.state, JobState::Running);
     assert_eq!(d.items[0].files[0].state, FileState::Abandoned);
-    assert!(files_in(&s.area.at(".tmp")).is_empty());
+    assert!(files_in(&s.area.at(".partial")).is_empty());
 
     // The next start only marks it; nothing runs it before a person restarts it.
     cut_and_restart(&s.store, &id).await;
@@ -332,7 +330,7 @@ async fn a_shutdown_in_the_middle_of_a_file_leaves_the_job_running_and_the_next_
 }
 
 // ---------------------------------------------------------------------------
-// Restarts from records a killed worker leaves
+// Restarts from what a killed worker leaves
 
 /// A job made, claimed and left `running` with one item `running`, as a
 /// worker that died while receiving its file leaves it.
@@ -351,16 +349,10 @@ async fn killed(s: &Setup, path: &str) -> (String, i64) {
     (id, item)
 }
 
-/// Records an attempt `intended` (with the announced length) and writes
-/// `bytes` (if any) as its temporary file.
-async fn intended(
-    s: &Setup,
-    item: i64,
-    key: &str,
-    name: &str,
-    expected: Option<u64>,
-    bytes: Option<&[u8]>,
-) -> FileRow {
+/// Records an attempt `intended`, as a run does before it fetches, and
+/// writes `bytes` (if any) in its folder of `.partial/`, as the run does
+/// while they come.
+async fn intended(s: &Setup, item: i64, key: &str, name: &str, bytes: Option<&[u8]>) -> FileRow {
     let id = uuid::Uuid::new_v4().to_string();
     let row = FileRow {
         id: id.clone(),
@@ -369,8 +361,6 @@ async fn intended(
         name: name.to_owned(),
         state: FileState::Intended,
         same_as: None,
-        temp_dir: Some(ReceiveArea::temp_dir(&id)),
-        expected_size: None,
         size: None,
         sha256: None,
         object: None,
@@ -396,222 +386,167 @@ async fn intended(
         unchanged_asset: None,
     };
     s.store.run.file_intend(row.clone()).await.unwrap();
-    s.store.run.file_expect(&id, expected, 971).await.unwrap();
     if let Some(bytes) = bytes {
-        let dir = s.area.at(row.temp_dir.as_deref().unwrap());
+        let dir = s.area.at(&ReceiveArea::partial_dir(&id));
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join(name), bytes).unwrap();
     }
     row
 }
 
-/// Takes an `intended` attempt with a whole temporary file to `fetched`,
-/// planning `path`.
-async fn fetched(s: &Setup, row: &FileRow, path: &str) {
-    let temp = s.area.at(row.temp_dir.as_deref().unwrap()).join(&row.name);
-    let (size, sha, object) = area::read_facts(&temp).unwrap();
-    s.store
-        .run
-        .file_fetched(&row.id, size, sha, object, path.to_owned(), 972)
-        .await
-        .unwrap();
-}
-
-fn object(path: &Path) -> String {
-    area::object_of(&std::fs::metadata(path).unwrap())
-}
-
-#[tokio::test]
-async fn an_intent_with_no_bytes_is_abandoned_and_received_anew() {
-    let s = setup().await;
-    let (id, item) = killed(&s, "/ok/a").await;
-    let row = intended(&s, item, "ok/a", "a.ass", None, None).await;
-    run(&s).await;
-
-    let d = detail(&s, &id).await;
-    assert_eq!(d.row.state, JobState::Done);
-    let states: Vec<_> = d.items[0]
-        .files
-        .iter()
-        .map(|f| (f.id.clone(), f.state))
-        .collect();
-    assert!(states.contains(&(row.id, FileState::Abandoned)));
-    assert_eq!(
-        states.iter().filter(|(_, s)| *s == FileState::Done).count(),
-        1
-    );
-}
-
-#[tokio::test]
-async fn bytes_known_to_stop_short_are_received_again_and_whole_ones_are_published_as_they_are() {
-    let s = setup().await;
-    let whole = fake::ass("a");
-
-    let (id, item) = killed(&s, "/ok/a").await;
-    let row = intended(
-        &s,
-        item,
-        "ok/a",
-        "a.ass",
-        Some(whole.len() as u64),
-        Some(&whole[..100]),
-    )
-    .await;
-    run(&s).await;
-    let d = detail(&s, &id).await;
-    assert_eq!(d.row.state, JobState::Done);
-    assert_eq!(d.items[0].files[0].state, FileState::Abandoned);
-    assert_eq!(d.items[0].files.len(), 2);
-    assert!(!s.area.at(row.temp_dir.as_deref().unwrap()).exists());
-
-    // A temporary file of the announced length is the file: published, not
-    // received a second time (the published file is the temporary file).
-    let s = setup().await;
-    let (id, item) = killed(&s, "/ok/a").await;
-    let row = intended(
-        &s,
-        item,
-        "ok/a",
-        "a.ass",
-        Some(whole.len() as u64),
-        Some(&whole),
-    )
-    .await;
-    let temp_object = object(&s.area.at(row.temp_dir.as_deref().unwrap()).join("a.ass"));
-    run(&s).await;
-    let d = detail(&s, &id).await;
-    assert_eq!(d.row.state, JobState::Done);
-    assert_eq!(d.items[0].files.len(), 1);
-    assert_eq!(d.items[0].files[0].state, FileState::Done);
-    assert_eq!(object(&s.area.at(&format!("{id}/a.ass"))), temp_object);
-}
-
-#[tokio::test]
-async fn bytes_with_no_announced_length_or_more_than_it_are_held_not_received_again() {
-    for expected in [None, Some(10)] {
-        let s = setup().await;
-        let (id, item) = killed(&s, "/ok/a").await;
-        let row = intended(&s, item, "ok/a", "a.ass", expected, Some(&fake::ass("a"))).await;
-        run(&s).await;
-
-        let d = detail(&s, &id).await;
-        assert_eq!(d.row.state, JobState::Held, "{expected:?}");
-        assert_eq!(d.items[0].state, ItemState::Held);
-        assert_eq!(d.items[0].files.len(), 1);
-        assert_eq!(d.items[0].files[0].state, FileState::Held);
-        // Its bytes stay where they were.
-        assert!(s
-            .area
-            .at(row.temp_dir.as_deref().unwrap())
-            .join("a.ass")
-            .exists());
-        assert_eq!(step(&d, StepKind::Receive), Some(StepState::Waiting));
-
-        // A held job is not taken up again by itself.
-        run(&s).await;
-        assert_eq!(detail(&s, &id).await.items[0].files.len(), 1);
-    }
-}
-
-#[tokio::test]
-async fn a_rename_done_before_its_record_is_found_by_its_object_and_bytes() {
-    let s = setup().await;
-    let (id, item) = killed(&s, "/ok/a").await;
-    let row = intended(&s, item, "ok/a", "a.ass", None, Some(&fake::ass("a"))).await;
-    let path = format!("{id}/a.ass");
-    fetched(&s, &row, &path).await;
-    // The rename happened; the worker died before writing `done`.
-    std::fs::create_dir_all(s.area.at(&id)).unwrap();
-    std::fs::rename(
-        s.area.at(row.temp_dir.as_deref().unwrap()).join("a.ass"),
-        s.area.at(&path),
-    )
-    .unwrap();
-    run(&s).await;
-
-    let d = detail(&s, &id).await;
-    assert_eq!(d.row.state, JobState::Done);
-    assert_eq!(d.items[0].files.len(), 1);
-    assert_eq!(d.items[0].files[0].state, FileState::Done);
-}
-
-#[tokio::test]
-async fn a_fetched_file_is_published_but_a_copy_with_the_same_bytes_at_its_path_is_held() {
-    // Fetched, the temporary file still there: published.
-    let s = setup().await;
-    let (id, item) = killed(&s, "/ok/a").await;
-    let row = intended(&s, item, "ok/a", "a.ass", None, Some(&fake::ass("a"))).await;
-    fetched(&s, &row, &format!("{id}/a.ass")).await;
-    run(&s).await;
-    assert_eq!(detail(&s, &id).await.row.state, JobState::Done);
-
-    // Fetched, the temporary file gone, the same bytes at the path but as
-    // another file: nothing says this job put them there.
-    let s = setup().await;
-    let (id, item) = killed(&s, "/ok/a").await;
-    let row = intended(&s, item, "ok/a", "a.ass", None, Some(&fake::ass("a"))).await;
-    let path = format!("{id}/a.ass");
-    fetched(&s, &row, &path).await;
-    std::fs::remove_dir_all(s.area.at(row.temp_dir.as_deref().unwrap())).unwrap();
-    std::fs::create_dir_all(s.area.at(&id)).unwrap();
-    std::fs::write(s.area.at(&path), fake::ass("a")).unwrap();
-    run(&s).await;
-    let d = detail(&s, &id).await;
-    assert_eq!(d.row.state, JobState::Held);
-    assert_eq!(d.items[0].files.len(), 1);
-}
-
-/// Rewrites the object the receipt recorded as a file system mounted again
-/// (after the machine restarted) shows the same file: another device number,
-/// the same inode.
-async fn mounted_again(s: &Setup, row: &FileRow) {
-    let id = row.id.clone();
+async fn sql(s: &Setup, statement: String) {
     s.store
         .run
         .db()
         .run(move |c| {
-            c.execute(
-                "UPDATE subtitle_job_files
-                    SET object = '999999' || substr(object, instr(object, ':'))
-                  WHERE id = ?1",
-                [id],
-            )
-            .map_err(trss_core::DbError::from)
+            c.execute_batch(&statement)
+                .map_err(trss_core::DbError::from)
         })
         .await
         .unwrap();
 }
 
+#[cfg(unix)]
+fn inode(path: &Path) -> u64 {
+    use std::os::unix::fs::MetadataExt;
+    std::fs::symlink_metadata(path).unwrap().ino()
+}
+
 #[tokio::test]
-async fn a_fetched_file_is_found_by_its_object_whatever_device_number_it_was_mounted_with() {
-    // The temporary file still there, or renamed to its path before `done`.
-    for renamed in [false, true] {
+async fn a_cut_attempt_is_forgotten_and_its_file_received_anew_whatever_bytes_it_left() {
+    let whole = fake::ass("a");
+    let page: &[u8] = b"<!DOCTYPE html><html><body>expired</body></html>";
+    let longer = [whole.as_slice(), b"more"].concat();
+    // No bytes, an empty file, bytes cut short, every byte, more bytes than
+    // the file has, and bytes that are no file: none of them is looked at.
+    let left: [Option<&[u8]>; 6] = [
+        None,
+        Some(b""),
+        Some(&whole[..100]),
+        Some(&whole),
+        Some(&longer),
+        Some(page),
+    ];
+    for bytes in left {
         let s = setup().await;
         let (id, item) = killed(&s, "/ok/a").await;
-        let row = intended(&s, item, "ok/a", "a.ass", None, Some(&fake::ass("a"))).await;
-        let path = format!("{id}/a.ass");
-        fetched(&s, &row, &path).await;
-        if renamed {
-            std::fs::create_dir_all(s.area.at(&id)).unwrap();
-            std::fs::rename(
-                s.area.at(row.temp_dir.as_deref().unwrap()).join("a.ass"),
-                s.area.at(&path),
-            )
-            .unwrap();
-        }
-        mounted_again(&s, &row).await;
+        let row = intended(&s, item, "ok/a", "a.ass", bytes).await;
+        run(&s).await;
+
+        let what = bytes.map(<[u8]>::len);
+        let d = detail(&s, &id).await;
+        assert_eq!(d.row.state, JobState::Done, "{what:?}");
+        // The cut attempt's receipt is gone and one new attempt received
+        // the file.
+        assert_eq!(d.items[0].files.len(), 1, "{what:?}");
+        let file = &d.items[0].files[0];
+        assert_ne!(file.id, row.id);
+        assert_eq!(file.state, FileState::Done);
+        assert_eq!(
+            std::fs::read(s.area.at(&format!("{id}/a.ass"))).unwrap(),
+            whole
+        );
+        assert_eq!(files_in(&s.area.at(&id)), ["a.ass"]);
+        // Its bytes went with it.
+        assert!(files_in(&s.area.at(".partial")).is_empty(), "{what:?}");
+        assert!(d
+            .events
+            .iter()
+            .any(|e| e.message == "끊긴 받기를 처음부터 다시 해요"
+                && e.detail.as_deref() == Some("받던 파일 1개")));
+    }
+}
+
+/// Leaves the receipt of `job`'s file `key`, which a run published, as a run
+/// cut between the publishing rename and its `done` leaves it: `intended`,
+/// naming no path. `legacy` leaves it as a release before 0153 did:
+/// `fetched`, naming the path it was published at.
+async fn cut_before_done(s: &Setup, job: &str, key: &str, legacy: bool) {
+    let set = match legacy {
+        true => "state = 'fetched', format = NULL",
+        false => "state = 'intended', path = NULL, size = NULL, sha256 = NULL, format = NULL",
+    };
+    sql(
+        s,
+        format!(
+            "UPDATE subtitle_job_files SET {set} WHERE job_id = '{job}' AND file_key = '{key}';
+             UPDATE subtitle_job_items SET state = 'running'
+              WHERE id = (SELECT item_id FROM subtitle_job_files
+                           WHERE job_id = '{job}' AND file_key = '{key}');
+             UPDATE subtitle_jobs SET state = 'running', stage = 'receive', finished_at = NULL
+              WHERE id = '{job}';"
+        ),
+    )
+    .await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_file_published_before_its_record_is_removed_and_received_anew_under_its_name() {
+    for legacy in [false, true] {
+        let s = setup().await;
+        let id = make(&s, "c1", &[("1", "/ok/a"), ("2", "/ok/b")]).await;
+        run(&s).await;
+        assert_eq!(detail(&s, &id).await.row.state, JobState::Done);
+        // The second item's file was renamed into place, and the worker died
+        // before its `done`. An unpacking's folder is there too.
+        cut_before_done(&s, &id, "ok/b", legacy).await;
+        let unpacked = s.area.at(&format!("{id}/.unpack/x/1"));
+        std::fs::create_dir_all(unpacked.parent().unwrap()).unwrap();
+        std::fs::write(&unpacked, b"member").unwrap();
+        let a = s.area.at(&format!("{id}/a.ass"));
+        let (a_before, b_before) = (inode(&a), inode(&s.area.at(&format!("{id}/b.ass"))));
+        cut_and_restart(&s.store, &id).await;
         run(&s).await;
 
         let d = detail(&s, &id).await;
+        assert_eq!(d.row.state, JobState::Done, "legacy {legacy}");
+        // The file no receipt named was removed and received again at its
+        // name: no `b (2).ass` beside it.
         assert_eq!(
-            d.row.state,
-            JobState::Done,
-            "renamed {renamed}: {:?}",
-            d.row.note
+            files_in(&s.area.at(&id)),
+            [".unpack", "a.ass", "b.ass"],
+            "legacy {legacy}"
         );
-        assert_eq!(d.items[0].files.len(), 1, "renamed {renamed}");
-        assert_eq!(d.items[0].files[0].state, FileState::Done);
+        let b = &d.items[1].files;
+        assert_eq!(b.len(), 1, "legacy {legacy}");
+        assert_eq!(b[0].state, FileState::Done);
+        assert_eq!(b[0].path.as_deref(), Some(format!("{id}/b.ass").as_str()));
+        assert_eq!(
+            std::fs::read(s.area.at(&format!("{id}/b.ass"))).unwrap(),
+            fake::ass("b")
+        );
+        assert_ne!(inode(&s.area.at(&format!("{id}/b.ass"))), b_before);
+        // What receipts name, and the unpacking's folder, stay as they were.
+        assert_eq!(inode(&a), a_before);
+        assert_eq!(std::fs::read(&unpacked).unwrap(), b"member");
+        assert!(d
+            .events
+            .iter()
+            .any(|e| e.message == "끊긴 받기를 처음부터 다시 해요"
+                && e.detail.as_deref() == Some("받던 파일 1개 · 기록에 없는 파일 1개 지움")));
     }
+}
+
+#[tokio::test]
+async fn what_a_cut_run_left_is_cleared_even_when_the_post_no_longer_opens() {
+    let s = setup().await;
+    let (id, item) = killed(&s, "/missing/a").await;
+    let row = intended(&s, item, "missing/a", "a.ass", Some(&fake::ass("a"))).await;
+    // Renamed into place before the worker died.
+    std::fs::create_dir_all(s.area.at(&id)).unwrap();
+    std::fs::rename(
+        s.area.at(&ReceiveArea::partial_dir(&row.id)).join("a.ass"),
+        s.area.at(&format!("{id}/a.ass")),
+    )
+    .unwrap();
+    run(&s).await;
+
+    let d = detail(&s, &id).await;
+    assert_eq!(d.items[0].state, ItemState::Failed);
+    assert!(d.items[0].files.is_empty());
+    assert!(files_in(&s.area.at(&id)).is_empty());
+    assert!(files_in(&s.area.at(".partial")).is_empty());
 }
 
 #[tokio::test]
@@ -651,7 +586,14 @@ async fn a_done_file_is_reused_after_its_bytes_are_checked_and_held_when_they_ch
             }
             true => {
                 assert_eq!(d.row.state, JobState::Held);
+                assert_eq!(d.items[0].state, ItemState::Held);
                 assert_eq!(d.items[0].files[0].state, FileState::Held);
+                assert_eq!(std::fs::read(&path).unwrap(), b"other bytes");
+                // A held job is not taken up again by itself.
+                run(&s).await;
+                let d = detail(&s, &id).await;
+                assert_eq!(d.row.state, JobState::Held);
+                assert_eq!(d.items[0].files.len(), 1);
                 assert_eq!(std::fs::read(&path).unwrap(), b"other bytes");
             }
         }
@@ -659,55 +601,7 @@ async fn a_done_file_is_reused_after_its_bytes_are_checked_and_held_when_they_ch
 }
 
 #[tokio::test]
-async fn an_unfinished_receipt_is_settled_from_the_disk_even_when_the_post_no_longer_opens() {
-    // The worker died after publishing; the post is gone when it comes back.
-    let s = setup().await;
-    let (id, item) = killed(&s, "/missing/a").await;
-    let row = intended(&s, item, "ok/a", "a.ass", None, Some(&fake::ass("a"))).await;
-    let path = format!("{id}/a.ass");
-    fetched(&s, &row, &path).await;
-    std::fs::create_dir_all(s.area.at(&id)).unwrap();
-    std::fs::rename(
-        s.area.at(row.temp_dir.as_deref().unwrap()).join("a.ass"),
-        s.area.at(&path),
-    )
-    .unwrap();
-    run(&s).await;
-
-    let d = detail(&s, &id).await;
-    // The receipt is done, not left `fetched`; the item fails on the post.
-    assert_eq!(d.items[0].files[0].state, FileState::Done);
-    assert_eq!(d.items[0].state, ItemState::Failed);
-
-    // One it cannot vouch for holds the item before the post is read.
-    let s = setup().await;
-    let (id, item) = killed(&s, "/missing/a").await;
-    intended(&s, item, "ok/a", "a.ass", None, Some(&fake::ass("a"))).await;
-    run(&s).await;
-    let d = detail(&s, &id).await;
-    assert_eq!(d.items[0].state, ItemState::Held);
-    assert_eq!(d.row.state, JobState::Held);
-}
-
-#[tokio::test]
-async fn an_empty_temporary_file_is_no_bytes_even_when_nothing_was_announced() {
-    let s = setup().await;
-    let (id, item) = killed(&s, "/ok/a").await;
-    let row = intended(&s, item, "ok/a", "a.ass", Some(0), Some(b"")).await;
-    run(&s).await;
-
-    let d = detail(&s, &id).await;
-    assert_eq!(d.row.state, JobState::Done);
-    let first = d.items[0].files.iter().find(|f| f.id == row.id).unwrap();
-    assert_eq!(first.state, FileState::Abandoned);
-    assert_eq!(
-        std::fs::read(s.area.at(&format!("{id}/a.ass"))).unwrap(),
-        fake::ass("a")
-    );
-}
-
-#[tokio::test]
-async fn an_item_with_an_abandoned_attempt_still_records_the_shared_file() {
+async fn an_item_with_a_cut_attempt_still_records_the_shared_file() {
     let s = setup().await;
     let id = make(&s, "c1", &[("11", "/shared/s/11"), ("12", "/shared/s/12")]).await;
     s.store.run.claim_next(950).await.unwrap().unwrap();
@@ -719,7 +613,7 @@ async fn an_item_with_an_abandoned_attempt_still_records_the_shared_file() {
         .set_item(items[1].id, ItemState::Running, None, None, 960)
         .await
         .unwrap();
-    intended(&s, items[1].id, "shared/s", "s.ass", None, None).await;
+    intended(&s, items[1].id, "shared/s", "s.ass", None).await;
     cut_and_restart(&s.store, &id).await;
     run(&s).await;
 
@@ -806,67 +700,6 @@ async fn a_job_that_ends_each_run_waiting_for_a_source_is_never_held_for_its_sta
 }
 
 #[tokio::test]
-async fn recovered_bytes_that_are_a_web_page_fail_as_not_a_file_and_are_received_anew() {
-    let page = b"<!DOCTYPE html><html><body>expired</body></html>";
-    // Whole as announced (`intended`), and recorded fetched with the
-    // temporary file still there.
-    for as_fetched in [false, true] {
-        let s = setup().await;
-        let (id, item) = killed(&s, "/ok/a").await;
-        let row = intended(
-            &s,
-            item,
-            "ok/a",
-            "a.ass",
-            Some(page.len() as u64),
-            Some(page),
-        )
-        .await;
-        if as_fetched {
-            fetched(&s, &row, &format!("{id}/a.ass")).await;
-        }
-        run(&s).await;
-
-        let d = detail(&s, &id).await;
-        assert_eq!(d.row.state, JobState::Done, "fetched: {as_fetched}");
-        let first = d.items[0].files.iter().find(|f| f.id == row.id).unwrap();
-        assert_eq!(first.state, FileState::Failed);
-        assert_eq!(first.failure, Some(trss_jobs::FailureKind::NotAFile));
-        assert!(first.reason.as_deref().unwrap().contains("HTML"));
-        assert!(!s.area.at(row.temp_dir.as_deref().unwrap()).exists());
-        // The new attempt's bytes are the file, checked.
-        assert_eq!(files_in(&s.area.at(&id)), ["a.ass"]);
-        let done = d.items[0]
-            .files
-            .iter()
-            .find(|f| f.state == FileState::Done)
-            .unwrap();
-        assert_eq!(done.format, Some(trss_jobs::Format::Ass));
-    }
-
-    // Published before its record, then found to be a web page: removed.
-    let s = setup().await;
-    let (id, item) = killed(&s, "/missing/a").await;
-    let row = intended(&s, item, "ok/a", "a.ass", None, Some(page)).await;
-    let path = format!("{id}/a.ass");
-    fetched(&s, &row, &path).await;
-    std::fs::create_dir_all(s.area.at(&id)).unwrap();
-    std::fs::rename(
-        s.area.at(row.temp_dir.as_deref().unwrap()).join("a.ass"),
-        s.area.at(&path),
-    )
-    .unwrap();
-    run(&s).await;
-    let d = detail(&s, &id).await;
-    assert_eq!(d.items[0].files[0].state, FileState::Failed);
-    assert_eq!(
-        d.items[0].files[0].failure,
-        Some(trss_jobs::FailureKind::NotAFile)
-    );
-    assert!(!s.area.at(&path).exists());
-}
-
-#[tokio::test]
 async fn a_received_file_records_its_format_and_a_short_file_fails_as_not_a_file() {
     let s = setup().await;
     let id = make(&s, "c1", &[("1", "/ok/a"), ("2", "/short/b")]).await;
@@ -879,140 +712,6 @@ async fn a_received_file_records_its_format_and_a_short_file_fails_as_not_a_file
     let short = &d.items[1].files[0];
     assert_eq!(short.failure, Some(trss_jobs::FailureKind::NotAFile));
     assert_eq!(short.response_size, Some(fake::ass("b").len() as u64 - 16));
-}
-
-/// Records a fetched attempt `failed` as a start does before it removes its
-/// bytes: the path still named.
-async fn failed_keeping_path(s: &Setup, row: &FileRow) {
-    let problem = trss_jobs::FileProblem {
-        reason: "받은 내용이 파일이 아니라 웹 페이지(HTML)예요".to_owned(),
-        class: Some(trss_jobs::FailureKind::NotAFile),
-        status: None,
-        content_type: None,
-        size: None,
-    };
-    s.store
-        .run
-        .file_fail(&row.id, FileState::Failed, problem, 973)
-        .await
-        .unwrap();
-}
-
-#[tokio::test]
-async fn a_failure_recorded_before_its_bytes_went_is_finished_by_the_next_start() {
-    let page: &[u8] = b"<!DOCTYPE html><html><body>expired</body></html>";
-    // Stopped with the bytes in the temporary file (failed while publishing)
-    // or at the path (failed when a recovered publish was checked).
-    for published in [false, true] {
-        let s = setup().await;
-        let (id, item) = killed(&s, "/ok/a").await;
-        let row = intended(&s, item, "ok/a", "a.ass", None, Some(page)).await;
-        let path = format!("{id}/a.ass");
-        fetched(&s, &row, &path).await;
-        if published {
-            std::fs::create_dir_all(s.area.at(&id)).unwrap();
-            std::fs::rename(
-                s.area.at(row.temp_dir.as_deref().unwrap()).join("a.ass"),
-                s.area.at(&path),
-            )
-            .unwrap();
-        }
-        failed_keeping_path(&s, &row).await;
-        run(&s).await;
-
-        let d = detail(&s, &id).await;
-        assert_eq!(d.row.state, JobState::Done, "published: {published}");
-        let first = d.items[0].files.iter().find(|f| f.id == row.id).unwrap();
-        assert_eq!(first.state, FileState::Failed);
-        assert_eq!(first.path, None);
-        assert!(!s.area.at(row.temp_dir.as_deref().unwrap()).exists());
-        // The page's bytes are gone and the name was free for the file.
-        assert_eq!(files_in(&s.area.at(&id)), ["a.ass"]);
-        assert_ne!(std::fs::read(s.area.at(&path)).unwrap(), page);
-        assert!(d
-            .events
-            .iter()
-            .any(|e| e.message.contains("받지 못한 파일을 마저 지웠어요")));
-    }
-
-    // Something else at the path is not the record's: it stays, and only the
-    // path's record goes.
-    let s = setup().await;
-    let (id, item) = killed(&s, "/ok/a").await;
-    let row = intended(&s, item, "ok/a", "a.ass", None, Some(page)).await;
-    let path = format!("{id}/a.ass");
-    fetched(&s, &row, &path).await;
-    std::fs::remove_dir_all(s.area.at(row.temp_dir.as_deref().unwrap())).unwrap();
-    std::fs::create_dir_all(s.area.at(&id)).unwrap();
-    std::fs::write(s.area.at(&path), page).unwrap();
-    failed_keeping_path(&s, &row).await;
-    run(&s).await;
-    let d = detail(&s, &id).await;
-    assert_eq!(d.row.state, JobState::Done);
-    assert_eq!(std::fs::read(s.area.at(&path)).unwrap(), page);
-    assert_eq!(files_in(&s.area.at(&id)), ["a (2).ass", "a.ass"]);
-}
-
-#[tokio::test]
-async fn a_failure_whose_bytes_were_left_is_finished_even_when_the_post_is_gone() {
-    let page: &[u8] = b"<!DOCTYPE html><html><body>expired</body></html>";
-    for published in [false, true] {
-        let s = setup().await;
-        let (id, item) = killed(&s, "/missing/a").await;
-        let row = intended(&s, item, "missing/a", "a.ass", None, Some(page)).await;
-        let path = format!("{id}/a.ass");
-        fetched(&s, &row, &path).await;
-        if published {
-            std::fs::create_dir_all(s.area.at(&id)).unwrap();
-            std::fs::rename(
-                s.area.at(row.temp_dir.as_deref().unwrap()).join("a.ass"),
-                s.area.at(&path),
-            )
-            .unwrap();
-        }
-        failed_keeping_path(&s, &row).await;
-        run(&s).await;
-
-        let d = detail(&s, &id).await;
-        assert_eq!(d.row.state, JobState::Failed, "published: {published}");
-        let first = d.items[0].files.iter().find(|f| f.id == row.id).unwrap();
-        assert_eq!(first.state, FileState::Failed);
-        assert_eq!(first.path, None);
-        assert!(!s.area.at(row.temp_dir.as_deref().unwrap()).exists());
-        assert!(!s.area.at(&path).exists());
-    }
-}
-
-#[cfg(unix)]
-#[tokio::test]
-async fn bytes_that_cannot_be_removed_hold_the_receipt_instead_of_counting_as_gone() {
-    use std::os::unix::fs::PermissionsExt;
-    let page: &[u8] = b"<!DOCTYPE html><html><body>expired</body></html>";
-    let s = setup().await;
-    let (id, item) = killed(&s, "/ok/a").await;
-    let row = intended(&s, item, "ok/a", "a.ass", None, Some(page)).await;
-    let path = format!("{id}/a.ass");
-    fetched(&s, &row, &path).await;
-    // Published before its record, found to be a web page, and its folder
-    // refuses the removal.
-    let folder = s.area.at(&id);
-    std::fs::create_dir_all(&folder).unwrap();
-    std::fs::rename(
-        s.area.at(row.temp_dir.as_deref().unwrap()).join("a.ass"),
-        s.area.at(&path),
-    )
-    .unwrap();
-    std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o555)).unwrap();
-    run(&s).await;
-    std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o755)).unwrap();
-
-    let d = detail(&s, &id).await;
-    assert_eq!(d.row.state, JobState::Held);
-    let first = &d.items[0].files[0];
-    assert_eq!(first.state, FileState::Held);
-    assert_eq!(first.path.as_deref(), Some(path.as_str()));
-    assert_eq!(first.failure, Some(trss_jobs::FailureKind::NotAFile));
-    assert_eq!(std::fs::read(s.area.at(&path)).unwrap(), page);
 }
 
 #[tokio::test]

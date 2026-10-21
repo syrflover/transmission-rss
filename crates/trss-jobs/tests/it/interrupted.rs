@@ -420,3 +420,39 @@ async fn a_find_job_cut_short_is_not_finished_until_it_is_restarted() {
     assert!(!d.row.finishing, "the ask was not taken");
     assert_eq!(d.row.state, JobState::Interrupted);
 }
+
+#[tokio::test]
+async fn the_start_empties_the_receive_attempts_folder_and_leaves_the_rest_of_the_area() {
+    let base = Base::new().await;
+    let made = |relative: &str| {
+        let path = base.area.at(relative);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, b"bytes").unwrap();
+        relative.to_owned()
+    };
+    // What attempts the earlier process cut short wrote.
+    made(".partial/6a1d7d88-3f0e-4a7f-8d57-2b6c4c0e9f02/a.ass");
+    made(".partial/9c2e4d6f-8a0b-4c1d-9e3f-7a5b1c2d4e04/b (2).zip");
+    made(".partial/stray");
+    // A site check's download, an upload's staging, an attempt of a release
+    // before 0153 and a job's received file: none of them is the start's.
+    let kept = [
+        made(".tmp/check-job-1/ep1.srt"),
+        made(".tmp/4f0c2f6e-1c1f-4a52-9a43-0a7b8f1d2c01/upload.ass"),
+        made(".tmp/0b9e1b5c-6a7d-4f29-8c3e-5d1f7a2b4c03/a.ass"),
+        made(".tmp/winpng-job/1/01.smi"),
+        made("job/a.ass"),
+    ];
+
+    assert_eq!(base.area.empty_partial().unwrap(), 3);
+    assert!(crate::world::tree(&base.area.at(".partial")).is_empty());
+    let mut left = crate::world::tree(base.area.root());
+    left.sort();
+    let mut kept = kept.to_vec();
+    kept.sort();
+    assert_eq!(left, kept);
+    // An empty or missing folder is nothing to remove.
+    assert_eq!(base.area.empty_partial().unwrap(), 0);
+    std::fs::remove_dir(base.area.at(".partial")).unwrap();
+    assert_eq!(base.area.empty_partial().unwrap(), 0);
+}

@@ -14,10 +14,16 @@
 //! - `.tmp/check-<job id>-<item id>/`: the file a server browser downloaded
 //!   when a person passed a site's check on the job's screen, until the item
 //!   received it ([`crate::screen`]).
-//! - `.tmp/<attempt id>/<name>`: the temporary file of one attempt to receive
-//!   a file. Nothing but that attempt writes there, and a published file
-//!   leaves it by a rename that never replaces anything
-//!   ([`trss_core::files::rename_noreplace`]).
+//! - `.tmp/<id>/`: the files of an upload while its body is read
+//!   ([`crate::upload`]). Releases before 0153 also put a receive attempt's
+//!   temporary file here; those folders are left to the upload sweep, which
+//!   removes one only once no receipt names it.
+//! - `.partial/<attempt id>/<name>`: the bytes of one attempt to receive a
+//!   file until they are published. Nothing but that attempt writes there, a
+//!   published file leaves it by a rename that never replaces anything
+//!   ([`trss_core::files::rename_noreplace`]), and `trss` empties the folder
+//!   when it starts ([`ReceiveArea::empty_partial`]): no attempt goes on
+//!   across a start.
 //!
 //! The area is the app's own; the library's folders are not touched here.
 
@@ -29,6 +35,9 @@ use std::{
 use sha2::{Digest, Sha256};
 pub use trss_core::files::hex;
 use trss_core::{app_data::RECEIVE_DIR, file_id::FileId};
+
+/// The folder of the receive attempts' bytes, relative to the area.
+const PARTIAL_DIR: &str = ".partial";
 
 /// The folder of received files.
 #[derive(Debug, Clone)]
@@ -74,9 +83,40 @@ impl ReceiveArea {
         format!("{job_id}/.unpack/{file_id}")
     }
 
-    /// An attempt's temporary folder, relative to the area.
-    pub fn temp_dir(attempt_id: &str) -> String {
-        format!(".tmp/{attempt_id}")
+    /// The folder an upload's files are written to while its body is read,
+    /// relative to the area.
+    pub fn upload_dir(upload_id: &str) -> String {
+        format!(".tmp/{upload_id}")
+    }
+
+    /// The folder of a receive attempt's bytes until they are published,
+    /// relative to the area.
+    pub fn partial_dir(attempt_id: &str) -> String {
+        format!("{PARTIAL_DIR}/{attempt_id}")
+    }
+
+    /// Removes everything in `.partial/`: what receive attempts a process
+    /// left when it stopped. `trss` calls it when it starts, before any job
+    /// runs, so no attempt is writing there. `.tmp/` is not touched. Returns
+    /// how many entries it removed.
+    pub fn empty_partial(&self) -> io::Result<usize> {
+        let dir = self.root.join(PARTIAL_DIR);
+        let entries = match std::fs::read_dir(&dir) {
+            Ok(entries) => entries,
+            Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(0),
+            Err(err) => return Err(err),
+        };
+        let mut removed = 0;
+        for entry in entries {
+            let entry = entry?;
+            // Not followed: a link is removed as itself.
+            match entry.file_type()?.is_dir() {
+                true => std::fs::remove_dir_all(entry.path())?,
+                false => std::fs::remove_file(entry.path())?,
+            }
+            removed += 1;
+        }
+        Ok(removed)
     }
 
     /// `relative` within the area.

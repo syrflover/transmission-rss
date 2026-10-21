@@ -355,6 +355,38 @@ async fn a_job_left_running_is_interrupted_before_the_web_serves() {
 }
 
 #[tokio::test]
+async fn the_start_empties_the_receive_attempts_folder_before_the_web_serves() {
+    // What emptying keeps is trss-jobs' rule (`interrupted` tests); this is
+    // when the process does it.
+    let h = Harness::new().await;
+    let receive = h.dir.path().join("receive");
+    let made = |relative: &str| {
+        let path = receive.join(relative);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, b"bytes").unwrap();
+        path
+    };
+    let cut = made(".partial/6a1d7d88-3f0e-4a7f-8d57-2b6c4c0e9f02/a.ass");
+    let check = made(".tmp/check-job-1/ep1.srt");
+
+    let mut p = Proc::spawn(&h, "p", &[]);
+    p.wait_output("trss listening").await;
+    assert!(!cut.exists());
+    assert!(std::fs::read_dir(receive.join(".partial"))
+        .unwrap()
+        .next()
+        .is_none());
+    assert!(check.exists());
+    let output = p.output();
+    let emptied = output
+        .find("trss: removed 1 unfinished receive attempts")
+        .unwrap_or_else(|| panic!("{output}"));
+    assert!(emptied < output.find("trss listening").unwrap(), "{output}");
+    p.sigterm();
+    assert!(p.wait_exit(Duration::from_secs(10)).await.success());
+}
+
+#[tokio::test]
 async fn logs_and_history_never_contain_secret_query_values() {
     let h = harness_with_channel_a().await;
     // A feed answering 500 and one whose server is not there: errors that

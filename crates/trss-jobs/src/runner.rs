@@ -57,14 +57,13 @@
 //!
 //! # One receipt, and a restart
 //!
-//! Each effect on a file is preceded by a record of its intent and followed by
-//! a record of its result, and a `trss` that dies leaves its job `running`:
-//! the next one to start makes it `interrupted` ([`JobRun::interrupt_running`])
-//! and leaves it so until a person restarts it
-//! ([`crate::JobRequests::restart`]), which puts it `running` again, and the
-//! jobs' loop claims it ([`JobRun::claim_next`]). The steps of a receipt, and
-//! what the run after a restart does with an unfinished one (the table of
-//! records against the disk), are the `receive` module's.
+//! A `trss` that dies leaves its job `running`: the next one to start makes
+//! it `interrupted` ([`JobRun::interrupt_running`]) and leaves it so until a
+//! person restarts it ([`crate::JobRequests::restart`]), which puts it
+//! `running` again, and the jobs' loop claims it ([`JobRun::claim_next`]).
+//! The steps of a receipt, and how a run that receives first clears what a
+//! run cut short left so the files are received anew, are the `receive`
+//! module's.
 
 use std::{
     path::PathBuf,
@@ -84,7 +83,7 @@ use url::Url;
 
 use crate::{
     area::ReceiveArea,
-    model::{FileState, ItemState, JobState, StepKind, StepState, Wait},
+    model::{ItemState, JobState, StepKind, StepState, Wait},
     place::{PlaceStore, Placement, Placer},
     screen::ScreenStore,
     store::{FileProblem, ItemRow, JobError, JobRun, JobViews, FIND, RELOCATE, UPLOAD},
@@ -133,7 +132,7 @@ pub struct Runner {
     /// Where a reading of images puts its files ([`Runner::staging`]).
     area: ReceiveArea,
     clock: Clock,
-    /// Receives, publishes and recovers the files of an item.
+    /// Receives and publishes the files of an item.
     receiver: Receiver,
     /// Reads the WinPNG images of a post; `None`: the worker has no server
     /// browser.
@@ -377,6 +376,12 @@ impl Runner {
         if find && !found {
             return self.tender.run_find(id, cancel).await;
         }
+        // What a run cut short left of its receipts goes before the job
+        // receives again. A find job's folder is the watch's, and a job
+        // with nothing to receive receives nothing.
+        if !received {
+            self.receiver.start_over(id).await?;
+        }
 
         for item in items {
             if !matches!(item.state, ItemState::Pending | ItemState::Running) {
@@ -422,31 +427,6 @@ impl Runner {
         self.store
             .set_item(item.id, ItemState::Running, None, None, now)
             .await?;
-
-        // What an earlier start left unfinished is compared with the disk
-        // first, whatever the post says now: a failure whose bytes were not
-        // yet gone is finished here too, even when the post no longer opens.
-        for unfinished in item.files.iter().filter(|r| {
-            matches!(r.state, FileState::Intended | FileState::Fetched)
-                || (r.state == FileState::Failed && r.path.is_some())
-        }) {
-            if let Some(reason) = self.receiver.recover(job, &ep, unfinished).await? {
-                let now = self.now();
-                self.store
-                    .set_step(
-                        job,
-                        StepKind::Receive,
-                        StepState::Waiting,
-                        Some(reason.clone()),
-                        now,
-                    )
-                    .await?;
-                self.store
-                    .set_item(item.id, ItemState::Held, None, Some(reason), now)
-                    .await?;
-                return Ok(ItemEnd::Settled);
-            }
-        }
 
         let fail = |reason: String, class: Option<FailureKind>| async move {
             let now = self.now();

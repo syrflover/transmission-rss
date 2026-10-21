@@ -186,7 +186,6 @@ async fn individual_links_give_only_the_chosen_episodes_file_and_the_fonts_once(
     assert_eq!(ass.format, Some(Format::Ass));
     let bytes = fake::ass("Seihantai 24");
     assert_eq!(ass.size, Some(bytes.len() as u64));
-    assert_eq!(ass.expected_size, Some(bytes.len() as u64));
     assert_eq!(
         ass.sha256.as_deref(),
         Some(area::hex(&Sha256::digest(&bytes)).as_str())
@@ -310,7 +309,7 @@ async fn a_confirmation_or_error_page_from_drive_is_a_classified_failure() {
     assert_eq!(s.server.drive_asked("1W0LRBy-gxCLtmDpQBd8kGYb79oh19YRe"), 1);
     assert!(s.server.seen().iter().all(|r| !r.query.contains("confirm")));
     assert!(files_in(&s.area.at(&confirm)).is_empty());
-    assert!(files_in(&s.area.at(".tmp")).is_empty());
+    assert!(files_in(&s.area.at(".partial")).is_empty());
 
     let d = detail(&s, &missing).await;
     assert_eq!(d.row.failure, Some(FailureKind::Missing));
@@ -522,9 +521,8 @@ async fn real_blogger_posts_are_received_from_drive() {
     }
     for f in d.items.iter().flat_map(|i| &i.files) {
         println!(
-            "{} state={:?} size={:?} expected={:?} format={:?} sha256={:?} status={:?} type={:?} snapshot={:?}",
-            f.name, f.state, f.size, f.expected_size, f.format, f.sha256, f.http_status,
-            f.content_type, f.snapshot
+            "{} state={:?} size={:?} format={:?} sha256={:?} status={:?} type={:?} snapshot={:?}",
+            f.name, f.state, f.size, f.format, f.sha256, f.http_status, f.content_type, f.snapshot
         );
     }
     assert_eq!(d.row.state, JobState::Done);

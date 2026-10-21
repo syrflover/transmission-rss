@@ -111,6 +111,16 @@ async fn run() -> Result<(), String> {
     let web_db = open().await?;
     // Cover images live in the app data folder: the database's folder.
     let app_data = AppData::for_database(&db_path);
+    let receive = ReceiveArea::in_app_data(app_data.root());
+    // Before any job runs: the bytes of the receive attempts the earlier
+    // process was writing. A job receives such a file anew, and an attempt
+    // never writes into another's folder, so one that cannot be emptied only
+    // takes room.
+    match receive.empty_partial() {
+        Ok(0) => {}
+        Ok(removed) => println!("trss: removed {removed} unfinished receive attempts"),
+        Err(e) => eprintln!("trss: cannot empty the receive attempts' folder: {e}"),
+    }
 
     // From here on SIGTERM and SIGINT stop the process the orderly way, the
     // waits of the start included.
@@ -149,7 +159,6 @@ async fn run() -> Result<(), String> {
         web_env.static_dir.display()
     );
 
-    let receive = ReceiveArea::in_app_data(app_data.root());
     // What the web stores for the worker part starts at once: the web rings
     // the loop that runs it.
     let wakes = Wakes::default();

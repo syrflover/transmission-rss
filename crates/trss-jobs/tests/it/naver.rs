@@ -155,7 +155,6 @@ async fn an_attachment_inside_the_inner_frame_is_received_with_the_posts_fonts()
     assert_eq!(file.state, FileState::Done);
     assert_eq!(file.format, Some(Format::Smi));
     assert_eq!(file.size, Some(smi.len() as u64));
-    assert_eq!(file.expected_size, Some(smi.len() as u64));
     assert_eq!(
         file.sha256.as_deref(),
         Some(area::hex(&Sha256::digest(&smi)).as_str())
@@ -353,9 +352,8 @@ async fn a_real_naver_post_is_received() {
     }
     for f in d.items.iter().flat_map(|i| &i.files) {
         println!(
-            "{} state={:?} size={:?} expected={:?} format={:?} sha256={:?} status={:?} type={:?} snapshot={:?}",
-            f.name, f.state, f.size, f.expected_size, f.format, f.sha256, f.http_status,
-            f.content_type, f.snapshot
+            "{} state={:?} size={:?} format={:?} sha256={:?} status={:?} type={:?} snapshot={:?}",
+            f.name, f.state, f.size, f.format, f.sha256, f.http_status, f.content_type, f.snapshot
         );
     }
     assert_eq!(d.row.state, JobState::Done);

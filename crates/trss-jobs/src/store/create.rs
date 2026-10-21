@@ -204,8 +204,9 @@ impl JobRequests {
         self.db.run(move |c| create_upload(c, &upload, now)).await
     }
 
-    /// Which of `ids` name a job or a file record (a receipt's attempt folder
-    /// is named by its file's ID).
+    /// Which of `ids` name a job or a file record (a receive attempt's folder
+    /// in `.tmp/`, which releases before 0153 made, is named by its file's
+    /// ID).
     pub async fn known_receive_ids(&self, ids: Vec<String>) -> Result<HashSet<String>, JobError> {
         self.db
             .run(move |c| {

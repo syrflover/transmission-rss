@@ -148,13 +148,12 @@ async fn a_tistory_post_goes_through_open_and_receive_and_leaves_its_zip_with_si
         assert_eq!(step(&d, kind), Some(StepState::Done), "{kind:?}");
     }
     assert_eq!(files_in(&s.area.at(&id)), ["Seihantai - 24.zip"]);
-    assert!(files_in(&s.area.at(".tmp")).is_empty());
+    assert!(files_in(&s.area.at(".partial")).is_empty());
 
     let file = &d.items[0].files[0];
     assert_eq!(file.state, FileState::Done);
     assert_eq!(file.format, Some(Format::Zip));
     assert_eq!(file.size, Some(zip.len() as u64));
-    assert_eq!(file.expected_size, Some(zip.len() as u64));
     assert_eq!(
         file.sha256.as_deref(),
         Some(area::hex(&Sha256::digest(&zip)).as_str())
@@ -215,7 +214,7 @@ async fn an_error_page_instead_of_the_attachment_fails_as_not_a_file_with_its_re
     assert_eq!(file.format, None);
     // Not received: its bytes are gone, nothing is in the job's folder.
     assert!(files_in(&s.area.at(&id)).is_empty());
-    assert!(files_in(&s.area.at(".tmp")).is_empty());
+    assert!(files_in(&s.area.at(".partial")).is_empty());
     assert!(d.events.iter().any(|e| e
         .detail
         .as_deref()
@@ -561,9 +560,8 @@ async fn a_real_tistory_post_is_received() {
     }
     for f in d.items.iter().flat_map(|i| &i.files) {
         println!(
-            "{} state={:?} size={:?} expected={:?} format={:?} sha256={:?} status={:?} type={:?} snapshot={:?}",
-            f.name, f.state, f.size, f.expected_size, f.format, f.sha256, f.http_status,
-            f.content_type, f.snapshot
+            "{} state={:?} size={:?} format={:?} sha256={:?} status={:?} type={:?} snapshot={:?}",
+            f.name, f.state, f.size, f.format, f.sha256, f.http_status, f.content_type, f.snapshot
         );
     }
     assert_eq!(d.row.state, JobState::Done);
@@ -601,6 +599,6 @@ async fn a_file_past_its_byte_limit_fails_as_not_a_file_and_leaves_no_bytes() {
     assert_eq!(file.path, None);
     // Not tried again: the limit is no network failure.
     assert_eq!(asked(&s, "big"), 1);
-    assert!(files_in(&s.area.at(".tmp")).is_empty());
+    assert!(files_in(&s.area.at(".partial")).is_empty());
     assert!(files_in(&s.area.at(&id)).is_empty());
 }

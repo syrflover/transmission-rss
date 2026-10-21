@@ -26,7 +26,7 @@ mod views;
 pub use create::{Created, MappingStamp, NewItem, NewJob, NewUpload, UploadedFile};
 pub use find::{AskedFinish, Found, NewFind, NOTHING_FOUND};
 pub use interrupt::{Restarted, INTERRUPTED, RESTARTED};
-pub use receipts::{snapshot_json, FileProblem};
+pub use receipts::{snapshot_json, FileProblem, Received};
 #[cfg(test)]
 pub(crate) use rows::blank_file;
 pub use rows::{

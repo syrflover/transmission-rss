@@ -222,8 +222,6 @@ pub struct FileRow {
     pub name: String,
     pub state: FileState,
     pub same_as: Option<String>,
-    pub temp_dir: Option<String>,
-    pub expected_size: Option<u64>,
     pub size: Option<u64>,
     pub sha256: Option<String>,
     pub object: Option<String>,
@@ -510,11 +508,10 @@ pub(super) fn upload_summary(c: &Connection, id: &str) -> Result<UploadSummary, 
 }
 
 pub(super) const FILE_COLUMNS: &str = "
-    SELECT id, item_id, file_key, name, state, same_as, temp_dir, expected_size, size, sha256,
-           object, path, reason, created_at, format, failure, http_status, content_type,
-           response_size, snapshot, kind, archive_type, folder, cleared_at, volume_of,
-           unpacked_at, unpack_error, unchanged_asset, unpack_tries, unpack_failure,
-           unpack_retry_at
+    SELECT id, item_id, file_key, name, state, same_as, size, sha256, object, path, reason,
+           created_at, format, failure, http_status, content_type, response_size, snapshot,
+           kind, archive_type, folder, cleared_at, volume_of, unpacked_at, unpack_error,
+           unchanged_asset, unpack_tries, unpack_failure, unpack_retry_at
     FROM subtitle_job_files";
 
 /// A failure class column.
@@ -554,37 +551,33 @@ pub(super) fn file_row(r: &Row<'_>) -> rusqlite::Result<FileRow> {
         name: r.get(3)?,
         state: r.get(4)?,
         same_as: r.get(5)?,
-        temp_dir: r.get(6)?,
-        expected_size: r
-            .get::<_, Option<i64>>(7)?
-            .and_then(|s| u64::try_from(s).ok()),
         size: r
-            .get::<_, Option<i64>>(8)?
+            .get::<_, Option<i64>>(6)?
             .and_then(|s| u64::try_from(s).ok()),
-        sha256: r.get(9)?,
-        object: r.get(10)?,
-        path: r.get(11)?,
-        reason: r.get(12)?,
-        created_at: r.get(13)?,
-        format: format_at(r, 14)?,
-        failure: failure_at(r, 15)?,
-        http_status: r.get(16)?,
-        content_type: r.get(17)?,
+        sha256: r.get(7)?,
+        object: r.get(8)?,
+        path: r.get(9)?,
+        reason: r.get(10)?,
+        created_at: r.get(11)?,
+        format: format_at(r, 12)?,
+        failure: failure_at(r, 13)?,
+        http_status: r.get(14)?,
+        content_type: r.get(15)?,
         response_size: r
-            .get::<_, Option<i64>>(18)?
+            .get::<_, Option<i64>>(16)?
             .and_then(|s| u64::try_from(s).ok()),
-        snapshot: r.get(19)?,
-        kind: kind_at(r, 20)?,
-        archive: archive_at(r, 21)?,
-        folder: r.get(22)?,
-        cleared_at: r.get(23)?,
-        volume_of: r.get(24)?,
-        unpacked_at: r.get(25)?,
-        unpack_error: r.get(26)?,
-        unchanged_asset: r.get(27)?,
-        unpack_tries: r.get(28)?,
-        unpack_failure: r.get(29)?,
-        unpack_retry_at: r.get(30)?,
+        snapshot: r.get(17)?,
+        kind: kind_at(r, 18)?,
+        archive: archive_at(r, 19)?,
+        folder: r.get(20)?,
+        cleared_at: r.get(21)?,
+        volume_of: r.get(22)?,
+        unpacked_at: r.get(23)?,
+        unpack_error: r.get(24)?,
+        unchanged_asset: r.get(25)?,
+        unpack_tries: r.get(26)?,
+        unpack_failure: r.get(27)?,
+        unpack_retry_at: r.get(28)?,
     })
 }
 
@@ -677,8 +670,6 @@ pub(crate) fn blank_file(state: FileState) -> FileRow {
         name: "a.zip".into(),
         state,
         same_as: None,
-        temp_dir: None,
-        expected_size: None,
         size: None,
         sha256: None,
         object: None,

@@ -1,5 +1,9 @@
-//! The records of the files a job receives: an intent before anything is
-//! fetched, then what came, so a restarted worker can reuse or hold them.
+//! The records of the files a job receives: an `intended` receipt while a
+//! file is being received, so the job's detail shows it, then what came. A
+//! file that is `done` is never received again; one an earlier run left
+//! unfinished is forgotten and received anew ([`JobRun::forget_unfinished`]).
+
+use std::collections::HashSet;
 
 use rusqlite::{params, Connection};
 use trss_core::Millis;
@@ -11,9 +15,9 @@ use super::{
 };
 use crate::model::FileState;
 
-/// Runs a write of a file receipt with every commit synced: the record of an
-/// intent must outlive a power loss as surely as the file effect after it,
-/// which is synced too. The connection's usual `NORMAL` comes back after.
+/// Runs a write of a file receipt with every commit synced: the record of a
+/// published file must outlive a power loss as surely as the file, which is
+/// synced too. The connection's usual `NORMAL` comes back after.
 fn durable(
     c: &Connection,
     write: impl FnOnce(&Connection) -> rusqlite::Result<usize>,
@@ -22,6 +26,16 @@ fn durable(
     let written = write(c);
     c.pragma_update(None, "synchronous", "NORMAL")?;
     Ok(written?)
+}
+
+/// What a receipt records when its file is published.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Received {
+    pub size: u64,
+    pub sha256: String,
+    /// Where the file is, relative to the receive area.
+    pub path: String,
+    pub format: Format,
 }
 
 /// Why an attempt to receive a file failed, with the facts of the answer.
@@ -106,7 +120,7 @@ impl JobRun {
             .await
     }
 
-    /// The paths in the receive area the job's receipts name or plan to.
+    /// The paths in the receive area the job's receipts name.
     pub async fn paths_of(&self, job_id: &str) -> Result<Vec<String>, JobError> {
         let id = job_id.to_owned();
         self.db
@@ -124,21 +138,19 @@ impl JobRun {
     }
 
     /// Records a Google Drive font that is not received because it did not
-    /// change ([`crate::place::unchanged`]): `done` at once, with no path and
-    /// no temporary folder, naming the stored font it uses
-    /// (`unchanged_asset`) with that font's size and SHA-256, and the snapshot
-    /// with what the `HEAD` said. Nothing is fetched, so no intent comes
-    /// before it.
+    /// change ([`crate::place::unchanged`]): `done` at once, with no path,
+    /// naming the stored font it uses (`unchanged_asset`) with that font's
+    /// size and SHA-256, and the snapshot with what the `HEAD` said. Nothing
+    /// is fetched, so nothing is `intended` before it.
     pub async fn file_unchanged(&self, file: FileRow) -> Result<(), JobError> {
         self.db
             .run(move |c| {
                 durable(c, |c| {
                     c.prepare_cached(
                         "INSERT INTO subtitle_job_files
-                         (id, job_id, item_id, file_key, name, state, expected_size, size,
-                          sha256, format, snapshot, created_at, updated_at, folder,
-                          unchanged_asset)
-                     SELECT ?1, job_id, ?2, ?3, ?4, 'done', ?5, ?6, ?7, ?8, ?9, ?10, ?10, ?11, ?12
+                         (id, job_id, item_id, file_key, name, state, size, sha256, format,
+                          snapshot, created_at, updated_at, folder, unchanged_asset)
+                     SELECT ?1, job_id, ?2, ?3, ?4, 'done', ?5, ?6, ?7, ?8, ?9, ?9, ?10, ?11
                      FROM subtitle_job_items WHERE id = ?2",
                     )?
                     .execute(params![
@@ -146,7 +158,6 @@ impl JobRun {
                         file.item_id,
                         file.file_key,
                         file.name,
-                        file.expected_size.map(|s| s as i64),
                         file.size.map(|s| s as i64),
                         file.sha256,
                         file.format.map(Format::code),
@@ -164,16 +175,17 @@ impl JobRun {
             .await
     }
 
-    /// Records the intent to receive a file before anything is fetched.
+    /// Records that a file is being received, before anything is fetched:
+    /// the job's detail shows it as `받는 중` while its episode runs.
     pub async fn file_intend(&self, file: FileRow) -> Result<(), JobError> {
         self.db
             .run(move |c| {
                 durable(c, |c| {
                     c.prepare_cached(
                         "INSERT INTO subtitle_job_files
-                         (id, job_id, item_id, file_key, name, state, temp_dir, snapshot,
-                          created_at, updated_at, folder)
-                     SELECT ?1, job_id, ?2, ?3, ?4, 'intended', ?5, ?7, ?6, ?6, ?8
+                         (id, job_id, item_id, file_key, name, state, snapshot, created_at,
+                          updated_at, folder)
+                     SELECT ?1, job_id, ?2, ?3, ?4, 'intended', ?6, ?5, ?5, ?7
                      FROM subtitle_job_items WHERE id = ?2",
                     )?
                     .execute(params![
@@ -181,7 +193,6 @@ impl JobRun {
                         file.item_id,
                         file.file_key,
                         file.name,
-                        file.temp_dir,
                         file.created_at,
                         file.snapshot,
                         file.folder
@@ -195,38 +206,12 @@ impl JobRun {
             .await
     }
 
-    /// The length the source announced, before the bytes come.
-    pub async fn file_expect(
-        &self,
-        id: &str,
-        size: Option<u64>,
-        now: Millis,
-    ) -> Result<(), JobError> {
-        let id = id.to_owned();
-        self.db
-            .run(move |c| {
-                durable(c, |c| {
-                    c.prepare_cached(
-                        "UPDATE subtitle_job_files SET expected_size = ?2, updated_at = ?3
-                          WHERE id = ?1",
-                    )?
-                    .execute(params![id, size.and_then(stored_size), now])
-                })
-                .map(|_| ())
-            })
-            .await
-    }
-
-    /// The answer the bytes come in: the length it announced, its status and
-    /// media type, what it added to the snapshot (`None` keeps it), and the
-    /// name it gave the file when the post gave none (`None` keeps the
-    /// post's). It is recorded before any byte is written, so the temporary
-    /// file a restart looks for has the recorded name.
-    #[allow(clippy::too_many_arguments)]
+    /// The answer the bytes come in: its status and media type, what it
+    /// added to the snapshot (`None` keeps it), and the name it gave the file
+    /// when the post gave none (`None` keeps the post's).
     pub async fn file_answer(
         &self,
         id: &str,
-        size: Option<u64>,
         status: Option<u16>,
         content_type: Option<String>,
         snapshot: Option<String>,
@@ -239,54 +224,18 @@ impl JobRun {
                 durable(c, |c| {
                     c.prepare_cached(
                         "UPDATE subtitle_job_files
-                         SET expected_size = ?2, http_status = ?3, content_type = ?4,
-                             snapshot = coalesce(?5, snapshot), name = coalesce(?7, name),
-                             updated_at = ?6
+                         SET http_status = ?2, content_type = ?3,
+                             snapshot = coalesce(?4, snapshot), name = coalesce(?6, name),
+                             updated_at = ?5
                          WHERE id = ?1",
                     )?
                     .execute(params![
                         id,
-                        size.and_then(stored_size),
                         kept_status(status),
                         content_type,
                         snapshot,
                         now,
                         name
-                    ])
-                })
-                .map(|_| ())
-            })
-            .await
-    }
-
-    /// The bytes are in the temporary file and synced: their length, hash, the
-    /// file's object and the path it is to be published at.
-    pub async fn file_fetched(
-        &self,
-        id: &str,
-        size: u64,
-        sha256: String,
-        object: String,
-        path: String,
-        now: Millis,
-    ) -> Result<(), JobError> {
-        let id = id.to_owned();
-        self.db
-            .run(move |c| {
-                durable(c, |c| {
-                    c.prepare_cached(
-                        "UPDATE subtitle_job_files
-                     SET state = 'fetched', size = ?2, sha256 = ?3, object = ?4, path = ?5,
-                         updated_at = ?6
-                     WHERE id = ?1",
-                    )?
-                    .execute(params![
-                        id,
-                        stored_size(size),
-                        sha256,
-                        object,
-                        path,
-                        now
                     ])
                 })
                 .map(|_| ())
@@ -317,18 +266,33 @@ impl JobRun {
             .await
     }
 
-    /// Ends a receipt `done`, its bytes checked to be `format`.
-    pub async fn file_done(&self, id: &str, format: Format, now: Millis) -> Result<(), JobError> {
+    /// Ends a receipt `done` once its bytes are published at `path`: their
+    /// length, SHA-256 and the `format` the check found. Synced before it
+    /// returns, as the file is.
+    pub async fn file_done(
+        &self,
+        id: &str,
+        received: Received,
+        now: Millis,
+    ) -> Result<(), JobError> {
         let id = id.to_owned();
         self.db
             .run(move |c| {
                 durable(c, |c| {
                     c.prepare_cached(
                         "UPDATE subtitle_job_files
-                         SET state = 'done', reason = NULL, format = ?2, updated_at = ?3
+                         SET state = 'done', reason = NULL, size = ?2, sha256 = ?3, path = ?4,
+                             format = ?5, updated_at = ?6
                          WHERE id = ?1",
                     )?
-                    .execute(params![id, format.code(), now])
+                    .execute(params![
+                        id,
+                        stored_size(received.size),
+                        received.sha256,
+                        received.path,
+                        received.format.code(),
+                        now
+                    ])
                 })
                 .map(|_| ())
             })
@@ -337,8 +301,6 @@ impl JobRun {
 
     /// Ends a receipt `failed`, or `abandoned` when it is to be tried again,
     /// for `problem`. The answer's facts it does not have stay as recorded.
-    /// A planned path stays until its bytes are gone ([`JobRun::file_clear_path`]):
-    /// a crash in between leaves a record that still names them.
     pub async fn file_fail(
         &self,
         id: &str,
@@ -374,19 +336,42 @@ impl JobRun {
             .await
     }
 
-    /// Frees a failed receipt's planned path once its bytes are gone, so the
-    /// name is free for the next attempt.
-    pub async fn file_clear_path(&self, id: &str, now: Millis) -> Result<(), JobError> {
-        let id = id.to_owned();
+    /// Forgets the receipts of the job's files that an earlier run left
+    /// being received (`intended`, or `fetched` from a release before 0153):
+    /// their files are received anew. Returns their IDs, which name their
+    /// attempts' folders ([`crate::area::ReceiveArea::partial_dir`]).
+    pub async fn forget_unfinished(&self, job_id: &str) -> Result<Vec<String>, JobError> {
+        let id = job_id.to_owned();
         self.db
             .run(move |c| {
-                durable(c, |c| {
-                    c.prepare_cached(
-                        "UPDATE subtitle_job_files SET path = NULL, updated_at = ?2 WHERE id = ?1",
-                    )?
-                    .execute(params![id, now])
-                })
-                .map(|_| ())
+                let mut stmt = c.prepare_cached(
+                    "DELETE FROM subtitle_job_files
+                     WHERE job_id = ?1 AND state IN ('intended', 'fetched')
+                     RETURNING id",
+                )?;
+                let rows = stmt
+                    .query_map([id], |r| r.get(0))?
+                    .collect::<Result<Vec<String>, _>>()?;
+                Ok(rows)
+            })
+            .await
+    }
+
+    /// The paths in `job_id`'s folder of the receive area that a receipt
+    /// names, whatever its job and state.
+    pub async fn named_paths(&self, job_id: &str) -> Result<HashSet<String>, JobError> {
+        let id = job_id.to_owned();
+        self.db
+            .run(move |c| {
+                let mut stmt = c.prepare_cached(
+                    "SELECT path FROM subtitle_job_files
+                     WHERE path IS NOT NULL
+                       AND (job_id = ?1 OR substr(path, 1, length(?1) + 1) = ?1 || '/')",
+                )?;
+                let rows = stmt
+                    .query_map([id], |r| r.get(0))?
+                    .collect::<Result<HashSet<String>, _>>()?;
+                Ok(rows)
             })
             .await
     }
@@ -406,10 +391,10 @@ impl JobRun {
                     c.prepare_cached(
                         "INSERT INTO subtitle_job_files
                          (id, job_id, item_id, file_key, name, state, same_as, size, sha256,
-                          object, path, format, http_status, content_type, snapshot,
-                          created_at, updated_at, folder, cleared_at, unchanged_asset)
-                     SELECT ?1, job_id, ?2, file_key, name, 'done', id, size, sha256, object,
-                            path, format, http_status, content_type, snapshot, ?3, ?3, folder,
+                          path, format, http_status, content_type, snapshot, created_at,
+                          updated_at, folder, cleared_at, unchanged_asset)
+                     SELECT ?1, job_id, ?2, file_key, name, 'done', id, size, sha256, path,
+                            format, http_status, content_type, snapshot, ?3, ?3, folder,
                             cleared_at, unchanged_asset
                      FROM subtitle_job_files WHERE id = ?4",
                     )?

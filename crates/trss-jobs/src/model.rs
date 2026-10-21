@@ -123,7 +123,11 @@ codes! {
 codes! {
     /// Where one receipt of a file is (see the schema's comment).
     FileState {
+        /// Being received: its bytes are not published yet. A run that
+        /// begins receiving removes the ones an earlier run left.
         Intended = "intended",
+        /// Written by releases before 0153 only: the bytes were complete and
+        /// recorded. Removed like `intended`.
         Fetched = "fetched",
         Done = "done",
         Held = "held",

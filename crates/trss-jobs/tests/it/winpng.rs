@@ -467,12 +467,13 @@ async fn a_file_out_of_an_image_is_not_read_again_by_a_recheck() {
 }
 
 #[tokio::test]
-async fn a_restart_publishes_a_file_that_came_whole_under_its_folder_and_reads_it_as_received() {
+async fn a_restart_receives_a_file_that_came_whole_anew_under_its_folder() {
     let reader = FakeReader::with(vec![Plan::Files(vec![(Some("회차"), "01.smi", SMI)])]);
     let s = setup(Some(reader)).await;
     let id = make(&s).await;
     // A worker that died after the bytes of a file came whole, before it
-    // published them: the job `running`, the receipt `intended`.
+    // published them: the job `running`, the receipt `intended`, the bytes
+    // in the attempt's folder.
     s.store.run.claim_next(950).await.unwrap().unwrap();
     let item = s.store.views.items(&id).await.unwrap()[0].id;
     s.store
@@ -481,7 +482,6 @@ async fn a_restart_publishes_a_file_that_came_whole_under_its_folder_and_reads_i
         .await
         .unwrap();
     let attempt = uuid::Uuid::new_v4().to_string();
-    let temp_rel = ReceiveArea::temp_dir(&attempt);
     s.store
         .run
         .file_intend(FileRow {
@@ -491,8 +491,6 @@ async fn a_restart_publishes_a_file_that_came_whole_under_its_folder_and_reads_i
             name: "01.smi".to_owned(),
             state: FileState::Intended,
             same_as: None,
-            temp_dir: Some(temp_rel.clone()),
-            expected_size: None,
             size: None,
             sha256: None,
             object: None,
@@ -519,33 +517,27 @@ async fn a_restart_publishes_a_file_that_came_whole_under_its_folder_and_reads_i
         })
         .await
         .unwrap();
-    s.store
-        .run
-        .file_expect(&attempt, Some(SMI.len() as u64), 971)
-        .await
-        .unwrap();
-    let temp = s.area.at(&temp_rel);
-    std::fs::create_dir_all(&temp).unwrap();
-    std::fs::write(temp.join("01.smi"), SMI).unwrap();
+    let partial = s.area.at(&ReceiveArea::partial_dir(&attempt));
+    std::fs::create_dir_all(&partial).unwrap();
+    std::fs::write(partial.join("01.smi"), SMI).unwrap();
 
     cut_and_restart(&s.store, &id).await;
     run(&s).await;
 
     let d = detail(&s, &id).await;
     assert_eq!(d.row.state, JobState::Done);
-    // The recovered file, found again by its key, is the item's one file.
-    let files: Vec<_> = d.items[0]
-        .files
-        .iter()
-        .filter(|f| f.state == FileState::Done)
-        .collect();
-    assert_eq!(files.len(), 1);
-    assert_eq!(files[0].id, attempt);
-    assert_eq!(files[0].folder.as_deref(), Some("회차"));
+    // The images are read again and the file received anew, under its
+    // folder; the cut attempt is gone, its receipt and its bytes.
+    assert_eq!(d.items[0].files.len(), 1);
+    let file = &d.items[0].files[0];
+    assert_eq!(file.state, FileState::Done);
+    assert_ne!(file.id, attempt);
+    assert_eq!(file.folder.as_deref(), Some("회차"));
     assert_eq!(
         tree(&s.area.at(&ReceiveArea::job_dir(&id))),
         ["회차/01.smi"]
     );
+    assert!(!partial.exists());
 }
 
 /// A post whose body has a picture on the CDN and a Drive folder link.
