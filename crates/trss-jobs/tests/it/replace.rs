@@ -9,6 +9,7 @@ use crate::{
 use std::{
     os::unix::fs::{MetadataExt, PermissionsExt},
     path::{Path, PathBuf},
+    sync::{Arc, Mutex},
 };
 
 use tokio_util::sync::CancellationToken;
@@ -946,6 +947,39 @@ async fn a_subtitle_changed_right_before_the_swap_is_swapped_back_and_the_new_co
     assert_eq!(next.paths[0].applied_id, None);
 }
 
+#[tokio::test]
+async fn an_unmanaged_subtitle_changed_right_before_the_swap_stays_and_its_import_is_kept() {
+    let s = setup().await;
+    let (job, plan) = unmanaged_waiting(&s).await;
+    decide(&s, &job, &plan, true).await;
+    // The person edits their subtitle after the import, right before the
+    // swap.
+    let edited = format!("{MINE}Dialogue: 0,0:00:03.00,0:00:04.00,Default,,0,0,0,,edited\n");
+    let (at, bytes) = (s.at(TARGET), edited.clone());
+    let _edit =
+        testing::before_rename_of(&s.at(TARGET), move || std::fs::write(at, bytes).unwrap());
+    run(&s).await;
+
+    // Swapped back and stale: the edited file is in its place, nothing is
+    // applied, and the bytes imported before the swap, the approved ones,
+    // stay stored as the unknown creator's: a copy more.
+    assert_eq!(s.read(TARGET), edited.as_bytes());
+    assert_eq!(s.temps(), Vec::<String>::new());
+    let v = versions(&s, &job).await;
+    assert_eq!(v[0].1, PlanState::Stale, "{v:?}");
+    assert_eq!(s.count("SELECT count(*) FROM subtitle_applied").await, 0);
+    assert_eq!(
+        s.read(".trss/subtitles/제작자 알 수 없음/Show S01E02.ass"),
+        MINE.as_bytes()
+    );
+    assert_eq!(
+        s.count("SELECT count(*) FROM subtitle_stored WHERE creator IS NULL")
+            .await,
+        1
+    );
+    waiting_for_approval(&detail(&s, &job).await);
+}
+
 /// A recorded object as a file system mounted again (after the machine
 /// restarted) shows the same file: another device number, the same inode.
 fn renumbered(column: &str) -> String {
@@ -1128,7 +1162,7 @@ async fn no_room_for_the_new_copy_stops_before_anything_beside_the_video_changes
 }
 
 #[tokio::test]
-async fn an_unmanaged_subtitle_that_cannot_be_imported_is_swapped_back_and_the_plan_fails() {
+async fn an_unmanaged_subtitle_that_cannot_be_imported_fails_the_plan_before_anything_changes() {
     let s = setup().await;
     let (job, plan) = unmanaged_waiting(&s).await;
     let original = inode(&s.at(TARGET));
@@ -1145,10 +1179,11 @@ async fn an_unmanaged_subtitle_that_cannot_be_imported_is_swapped_back_and_the_p
             .is_some_and(|r| r.contains("관리하지 않던 자막을 들이지 못해 교체하지 않았어요")),
         "{v:?}"
     );
-    // The import came after the swap: the file is back in its place, the
-    // same file, and the new copy swapped off it is gone.
+    // The import comes before the swap: the file never left its place,
+    // nothing went aside, and the staged new copy is gone.
     assert_eq!(s.read(TARGET), MINE.as_bytes());
     assert_eq!(inode(&s.at(TARGET)), original);
+    assert!(!s.at(".trss/aside").exists());
     assert_eq!(s.temps(), Vec::<String>::new());
     assert_eq!(s.count("SELECT count(*) FROM subtitle_applied").await, 0);
     assert_eq!(
@@ -1587,6 +1622,92 @@ async fn a_replacement_cut_before_its_swap_is_carried_out_anew_and_leaves_old_fo
         b"an earlier release's original"
     );
     let _ = plan;
+}
+
+#[tokio::test]
+async fn a_replacement_cut_after_importing_the_original_imports_it_once_and_replaces_once() {
+    let s = setup().await;
+    let (job, plan) = unmanaged_waiting(&s).await;
+    decide(&s, &job, &plan, true).await;
+    let original = inode(&s.at(TARGET));
+    let import = ".trss/subtitles/제작자 알 수 없음/Show S01E02.ass";
+    // The run is cut right before its swap: what the import and the path
+    // held then is kept, and the run stops there as a stopped process would.
+    // The import's bytes, if any, and the path's.
+    type Seen = Option<(Option<Vec<u8>>, Vec<u8>)>;
+    let seen: Arc<Mutex<Seen>> = Arc::default();
+    let (at_import, at_target, held) = (s.at(import), s.at(TARGET), seen.clone());
+    let _cut = testing::before_rename_of(&s.at(TARGET), move || {
+        let found = (
+            std::fs::read(at_import).ok(),
+            std::fs::read(at_target).unwrap(),
+        );
+        *held.lock().unwrap() = Some(found);
+        panic!("the run is cut right before its swap");
+    });
+    let runner = s.runner.clone();
+    let cut_short = tokio::spawn(async move { runner.run_ready(&CancellationToken::new()).await });
+    assert!(cut_short.await.unwrap_err().is_panic());
+
+    // The original was imported, and recorded, while it was still at its
+    // path: only the swap takes it off.
+    let found = seen.lock().unwrap().take();
+    assert_eq!(
+        found,
+        Some((Some(MINE.as_bytes().to_vec()), MINE.as_bytes().to_vec()))
+    );
+    let unknown = "SELECT count(*) FROM subtitle_stored WHERE creator IS NULL AND episode = 2";
+    assert_eq!(s.count(unknown).await, 1);
+    assert_eq!(inode(&s.at(TARGET)), original);
+    let imported = inode(&s.at(import));
+    let left = asides(&s);
+    assert_eq!(left.len(), 1, "the new copy waiting for the swap");
+
+    cut(&s, &job).await;
+    run(&s).await;
+    let d = detail(&s, &job).await;
+    assert_eq!(
+        d.row.state,
+        JobState::Done,
+        "{:?} {:?}",
+        d.row.note,
+        d.events
+    );
+    // Carried out once: the plan done, the new copy applied.
+    assert_eq!(versions(&s, &job).await.len(), 1);
+    assert_eq!(versions(&s, &job).await[0].1, PlanState::Done);
+    assert_eq!(s.read(TARGET), fake::ass("Show-02"));
+    assert_eq!(
+        s.count("SELECT count(*) FROM subtitle_applied WHERE removed_at IS NULL")
+            .await,
+        1
+    );
+    // The import was found, not made again: one stored subtitle, one asset
+    // and one file, the one the cut run wrote.
+    assert_eq!(s.count(unknown).await, 1);
+    assert_eq!(
+        s.count(
+            "SELECT count(*) FROM subtitle_assets
+              WHERE relative_path LIKE '.trss/subtitles/제작자 알 수 없음/%'"
+        )
+        .await,
+        1
+    );
+    let dir = s.at(".trss/subtitles/제작자 알 수 없음");
+    assert_eq!(names(&dir), ["Show S01E02.ass"]);
+    assert_eq!(inode(&s.at(import)), imported);
+    assert_eq!(
+        d.events
+            .iter()
+            .filter(|e| e.message.contains("보관본으로 들였어요"))
+            .count(),
+        1
+    );
+    // The original went once the replacement was recorded; the cut run's
+    // new copy stays aside, and nothing staged is left.
+    assert!(with_inode(&s.work(), original).is_empty());
+    assert_eq!(asides(&s), left);
+    assert_eq!(names(&s.at(".trss/staging")), Vec::<String>::new());
 }
 
 fn file_name(path: &str) -> String {

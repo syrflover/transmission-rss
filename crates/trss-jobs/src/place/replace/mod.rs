@@ -55,7 +55,16 @@
 //!    changed yet: a failure (no room) fails the plan, the stored copy not
 //!    being the recorded bytes makes it stale.
 //! 2. The plan is checked again.
-//! 3. A plan that `add`s publishes the new copy by a rename that replaces
+//! 3. A file the app did not manage at the path to replace is imported from
+//!    that path, as the stored subtitle of the creator nobody named, by a
+//!    store's write: copied and read back with the length and SHA-256 the
+//!    plan saw, then published by a rename that replaces nothing (or found
+//!    there with its bytes, or found recorded already). Nothing beside the
+//!    video changed yet: one that cannot be imported fails the plan, and a
+//!    file changed or gone meanwhile makes it stale. A plan that stops after
+//!    the import (the swap of 4 swaps back, say) leaves the import stored: a
+//!    copy more of that file under the creator nobody named.
+//! 4. A plan that `add`s publishes the new copy by a rename that replaces
 //!    nothing; a file there meanwhile makes it stale. A plan that `replace`s
 //!    moves the new copy into `.trss/aside/<ID>` ([`files::ASIDE_DIR`]), by a
 //!    rename that replaces nothing, and swaps it with the file at the path in
@@ -65,11 +74,6 @@
 //!    changed file is in its place again, the new copy goes and the plan is
 //!    stale. A path whose name differs in case from the target is renamed to
 //!    the target's name once swapped.
-//! 4. A file the app did not manage is imported from its file aside, as the
-//!    stored subtitle of the creator nobody named, by a store's write
-//!    (staged, then published by a rename that replaces nothing, or found
-//!    there with its bytes). One that cannot be is swapped back and the plan
-//!    fails.
 //! 5. Each earlier applied copy at another path is renamed into
 //!    `.trss/aside/<ID>`, replacing nothing, and checked the same way. One
 //!    that is not the approved file goes back; that one, or one that cannot
@@ -93,19 +97,21 @@
 //!
 //! | Cut | On disk | The next run |
 //! | --- | --- | --- |
-//! | before the new copy is aside | a staged copy at most | empties the staging folder and carries the plan out anew |
-//! | after the new copy is aside, before the swap | a copy of the new bytes in `.trss/aside/` | carries the plan out anew; that copy stays |
-//! | after the swap or the `add`'s publish, before the transaction of 6 | the new copy at its path; the file it took the place of in `.trss/aside/` | finds the path changed: the plan is stale, and the comparison records the new copy as applied ([`ADOPTED`]) |
-//! | after an import's publish, before its record | the same, and the import's file, unrecorded, under the name it took | the same; that file is recorded by the next import of its bytes there (`Choice::Adopt`) |
-//! | after an import's record | the same, and the import recorded | the same; the import stays recorded |
+//! | before an import's publish, or before the new copy is aside when nothing is imported | staged copies at most | empties the staging folder and carries the plan out anew |
+//! | after an import's publish, before its record | the same, and the import's file, unrecorded, under the name it took | carries the plan out anew; its import records that file (`Choice::Adopt`) |
+//! | after an import's record, before the new copy is aside | the same, and the import recorded | carries the plan out anew; its import finds that stored subtitle (`Choice::Reuse`) and records nothing more |
+//! | after the new copy is aside, before the swap | that, and a copy of the new bytes in `.trss/aside/` | carries the plan out anew; that copy stays |
+//! | after the swap or the `add`'s publish, before the transaction of 6 | the new copy at its path; the file it took the place of (imported by then when the app did not manage it) in `.trss/aside/` | finds the path changed: the plan is stale, and the comparison records the new copy as applied ([`ADOPTED`]) |
 //! | after an earlier applied copy is aside | the same, and that copy in `.trss/aside/` | the same; its applied record is not ended |
 //! | after the transaction of 6 | the plan done, its files in `.trss/aside/` | nothing: the row is applied |
 //!
-//! Nothing removes what a run cut short left in `.trss/aside/`: the file
-//! the swap took off may be a person's only copy of their subtitle (one not
-//! imported yet). A plan stale after a cut leaves the paths it did not reach
-//! to the next comparison of that episode. Releases before 0153 kept a
-//! replacement's files in `.trss/tmp/`, which nothing empties either.
+//! An import names no applied copy and nothing beside the video, so the
+//! check that starts the next run does not see it.
+//!
+//! Nothing removes what a run cut short left in `.trss/aside/`: nothing
+//! records whose file it is. A plan stale after a cut leaves the paths it did
+//! not reach to the next comparison of that episode. Releases before 0153
+//! kept a replacement's files in `.trss/tmp/`, which nothing empties either.
 
 pub mod diff;
 pub mod lines;
@@ -120,10 +126,7 @@ use std::{
 
 use trss_core::{
     file_id::same_recorded_file,
-    files::{
-        create_dir_all_synced, rename_exchange_synced, rename_noreplace, rename_noreplace_synced,
-        sync_renamed,
-    },
+    files::{create_dir_all_synced, rename_noreplace, rename_noreplace_synced, sync_renamed},
 };
 
 use super::{
@@ -143,6 +146,10 @@ use crate::{
     store::JobError,
 };
 use records::{Compared, Comparison, FileSeen, Imported, ImportedAsset, Plan, PlanPath, VideoSeen};
+
+/// Why a plan stops before anything beside the video changed: it fails
+/// (`Ok`, the reason) or goes stale (`Err`, what changed).
+type Stop = Result<String, String>;
 
 /// The error number of a rename of a file that is not there.
 const ENOENT: i32 = 2;
@@ -828,14 +835,24 @@ impl Placer {
             return self.back_out(row, &plan, Err(changed)).await;
         }
 
-        // 3 and 4. The new copy takes its path.
+        // 3. A file the app did not manage is kept as a stored subtitle,
+        // from its path, before anything takes it off: nothing beside the
+        // video changed yet when it cannot be.
         let replaced = plan.paths.iter().find(|p| p.action == PathAction::Replace);
+        if let Some(unmanaged) = replaced.filter(|p| p.applied_id.is_none()) {
+            if let Err(why) = self.import(facts, &plan, &unmanaged.path, staging).await? {
+                self.discard(&staged).await;
+                let why = why.map(|reason| {
+                    format!("관리하지 않던 자막을 들이지 못해 교체하지 않았어요: {reason}")
+                });
+                return self.back_out(row, &plan, why).await;
+            }
+        }
+
+        // 4. The new copy takes its path.
         let placed = match replaced {
             None => self.publish_added(row, &plan, &staged, &object).await?,
-            Some(replaced) => {
-                self.swap_in(facts, row, &plan, replaced, &staged, staging)
-                    .await?
-            }
+            Some(replaced) => self.swap_in(row, &plan, replaced, &staged).await?,
         };
         let (path, displaced) = match placed {
             ControlFlow::Continue(placed) => placed,
@@ -951,7 +968,7 @@ impl Placer {
         Ok(true)
     }
 
-    /// Step 3 of carrying out a plan that `add`s: the new copy, staged at
+    /// Step 4 of carrying out a plan that `add`s: the new copy, staged at
     /// `staged` (the file `object`), published at the plan's target. The
     /// path it is at, or whether the row is settled when the plan ended.
     async fn publish_added(
@@ -987,19 +1004,16 @@ impl Placer {
         Ok(ControlFlow::Break(ended))
     }
 
-    /// Steps 3 and 4 of carrying out a plan that `replace`s `replaced`: the
-    /// new copy, staged at `staged`, swapped with the file there, and that
-    /// file imported when the app did not manage it. The path the new copy is
-    /// at and the file it took off, or whether the row is settled when the
-    /// plan ended.
+    /// Step 4 of carrying out a plan that `replace`s `replaced`: the new
+    /// copy, staged at `staged`, swapped with the file there. The path the
+    /// new copy is at and the file it took off, or whether the row is
+    /// settled when the plan ended.
     async fn swap_in(
         &self,
-        facts: &JobFacts,
         row: &PlanRow,
         plan: &Plan,
         replaced: &PlanPath,
         staged: &Path,
-        staging: &files::Staging,
     ) -> Result<ControlFlow<bool, (String, Option<TakenOff>)>, JobError> {
         let ended = |settled| Ok(ControlFlow::Break(settled));
         let Some(seen) = replaced.file.clone() else {
@@ -1071,28 +1085,6 @@ impl Placer {
         if let Some(reason) = unsure {
             self.hold_plan(plan, &reason).await?;
             return ended(true);
-        }
-
-        // A file the app did not manage is kept as a stored subtitle before
-        // anything removes it; when it cannot be, it goes back.
-        if replaced.applied_id.is_none() {
-            if let Err(reason) = self
-                .import(facts, plan, &replaced.path, &aside, staging)
-                .await?
-            {
-                let (a, b) = (aside_at.clone(), path_at.clone());
-                if let Err(err) = blocking(move || rename_exchange_synced(&a, &b)).await {
-                    let reason = format!(
-                        "관리하지 않던 자막을 들이지 못했고 기존 자막을 되돌리지 못했어요: {reason} ({err})"
-                    );
-                    self.hold_plan(plan, &reason).await?;
-                    return ended(true);
-                }
-                self.discard(&aside_at).await;
-                let reason =
-                    format!("관리하지 않던 자막을 들이지 못해 교체하지 않았어요: {reason}");
-                return ended(self.back_out(row, plan, Ok(reason)).await?);
-            }
         }
 
         // The new copy goes by the target's name, which no file has (the
@@ -1191,14 +1183,9 @@ impl Placer {
     }
 
     /// Stops a plan before anything beside the video changed (or after it
-    /// was put back): the plan fails (`Ok`, the reason) or goes stale
-    /// (`Err`, what changed). Whether the row is settled for this run.
-    async fn back_out(
-        &self,
-        row: &PlanRow,
-        plan: &Plan,
-        why: Result<String, String>,
-    ) -> Result<bool, JobError> {
+    /// was put back) for `why` ([`Stop`]). Whether the row is settled for
+    /// this run.
+    async fn back_out(&self, row: &PlanRow, plan: &Plan, why: Stop) -> Result<bool, JobError> {
         match why {
             Ok(reason) => {
                 let (id, r, now) = (plan.id.clone(), reason.clone(), self.now());
@@ -1234,22 +1221,24 @@ impl Placer {
         .await
     }
 
-    /// Imports the bytes of the file at `path` the app did not manage, from
-    /// the file taken off it, now at `from` (relative to the work folder), as
-    /// the stored subtitle of the creator nobody named on the plan's episode
-    /// (`Err`: why not; nothing of it is left then but, at worst, an
+    /// Step 3 of carrying out: imports the bytes of the file at `path` the
+    /// app did not manage, from that path, as the stored subtitle of the
+    /// creator nobody named on the plan's episode. The bytes copied are the
+    /// ones the plan saw, or nothing is imported. An import done already (a
+    /// run cut short after it) is found, not made again. `Err`: why not,
+    /// as [`Placer::back_out`] takes it (the plan fails, or goes stale for a
+    /// file changed meanwhile); nothing of it is left then but, at worst, an
     /// unrecorded file of its bytes under the name it took, which the next
-    /// import records).
+    /// import records.
     async fn import(
         &self,
         facts: &JobFacts,
         plan: &Plan,
         path: &str,
-        from: &str,
         staging: &files::Staging,
-    ) -> Result<Result<(), String>, JobError> {
+    ) -> Result<Result<(), Stop>, JobError> {
         let Some(seen) = plan.path(path).and_then(|p| p.file.clone()) else {
-            return Ok(Err("계획에 없는 파일이에요".to_owned()));
+            return Ok(Err(Ok("계획에 없는 파일이에요".to_owned())));
         };
         let unknown = JobFacts {
             creator: None,
@@ -1259,7 +1248,7 @@ impl Placer {
             .creator_dir(&unknown, "work", files::SUBTITLES_DIR.to_owned())
             .await?;
         let folder = PathBuf::from(&plan.folder);
-        let from = files::within(&folder, from);
+        let from = files::within(&folder, path);
         let name = file_name(path).to_owned();
         let what = Imported {
             work_id: plan.work_id.clone(),
@@ -1332,14 +1321,12 @@ impl Placer {
                         .map(Ok);
                 }
                 Choice::Full => {
-                    return self
-                        .import_failed(staged, "보관할 이름을 정하지 못했어요".to_owned())
-                        .await
+                    let reason = "보관할 이름을 정하지 못했어요".to_owned();
+                    return self.import_failed(staged, Ok(reason)).await;
                 }
                 Choice::Unreadable(err) => {
-                    return self
-                        .import_failed(staged, format!("보관 폴더를 읽지 못했어요: {err}"))
-                        .await
+                    let reason = format!("보관 폴더를 읽지 못했어요: {err}");
+                    return self.import_failed(staged, Ok(reason)).await;
                 }
             };
             let target = format!("{dir}/{name}");
@@ -1348,18 +1335,26 @@ impl Placer {
                 None => {
                     let temp = match self.staged(staging, &plan.folder, true).await {
                         Ok(temp) => files::within(&folder, &temp),
-                        Err(err) => return self.import_failed(None, err.to_string()).await,
+                        Err(err) => return self.import_failed(None, Ok(err.to_string())).await,
                     };
                     let (source, at) = (from.clone(), temp.clone());
                     let (size, sha) = (seen.size, seen.sha256.clone());
-                    match blocking(move || files::copy_to_temp(&source, &at, size, &sha)).await {
-                        Copied::Ready(_) => temp,
-                        Copied::SourceChanged(reason) => {
-                            return self.import_failed(None, reason).await
+                    // The file the plan saw, or the plan is stale.
+                    let stop = match blocking(move || files::copy_to_temp(&source, &at, size, &sha))
+                        .await
+                    {
+                        Copied::Ready(_) => None,
+                        Copied::SourceChanged(_) => {
+                            Some(Err(format!("기존 자막이 비교한 뒤 바뀌었어요 ({path})")))
                         }
-                        Copied::Failed(err) => {
-                            return self.import_failed(Some(temp), err.to_string()).await
+                        Copied::Failed(err) if err.kind() == io::ErrorKind::NotFound => {
+                            Some(Err(format!("기존 자막이 없어졌어요 ({path})")))
                         }
+                        Copied::Failed(err) => Some(Ok(err.to_string())),
+                    };
+                    match stop {
+                        None => temp,
+                        Some(stop) => return self.import_failed(Some(temp), stop).await,
                     }
                 }
             };
@@ -1370,17 +1365,13 @@ impl Placer {
                 }
                 Published::Occupied => staged = Some(temp),
                 Published::Failed(err) => {
-                    return self
-                        .import_failed(Some(temp), format!("보관본을 쓰지 못했어요: {err}"))
-                        .await
+                    let reason = format!("보관본을 쓰지 못했어요: {err}");
+                    return self.import_failed(Some(temp), Ok(reason)).await;
                 }
             }
         }
-        self.import_failed(
-            staged,
-            "보관할 이름이 계속 다른 파일에 먼저 쓰였어요".to_owned(),
-        )
-        .await
+        let reason = "보관할 이름이 계속 다른 파일에 먼저 쓰였어요".to_owned();
+        self.import_failed(staged, Ok(reason)).await
     }
 
     /// An import that did not happen: its staged copy, if it has one, goes
@@ -1388,12 +1379,12 @@ impl Placer {
     async fn import_failed(
         &self,
         staged: Option<PathBuf>,
-        reason: String,
-    ) -> Result<Result<(), String>, JobError> {
+        why: Stop,
+    ) -> Result<Result<(), Stop>, JobError> {
         if let Some(staged) = staged {
             self.discard(&staged).await;
         }
-        Ok(Err(reason))
+        Ok(Err(why))
     }
 
     /// Records an import whose file is at `relative` with the bytes the plan
