@@ -234,7 +234,7 @@ impl axum::serve::Listener for GuardedListener {
                 if let Some(count) = self.log.refused(Instant::now()) {
                     let net = self.refused.map(|n| n.to_string()).unwrap_or_default();
                     eprintln!(
-                        "trss-web: refused {count} connection(s) from the server browser's network ({net}) since the last report"
+                        "trss: refused {count} connection(s) from the server browser's network ({net}) since the last report"
                     );
                 }
                 continue;

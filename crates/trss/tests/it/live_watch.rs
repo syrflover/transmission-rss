@@ -1,7 +1,7 @@
 //! What the worker does around the watching of the watch folders (ticket 0016):
 //! a reading an alert asked for holds the worker's lock and beats the heartbeat,
 //! an archive move and the alerts it raises do not interleave, the running
-//! worker watches the folders registered while it runs, and a real `trss-worker`
+//! worker watches the folders registered while it runs, and a real `trss`
 //! process records a new episode between cycles. A real worker, real temporary
 //! folders and the kernel's own alerts, the real web API for registering
 //! folders, a fake Transmission for the archive move.
@@ -471,17 +471,15 @@ async fn the_worker_process_records_a_new_episode_within_seconds_without_waiting
 
     let out = lib.h.dir.path().join("worker.out");
     let err = lib.h.dir.path().join("worker.err");
-    let mut child = Command::new(env!("CARGO_BIN_EXE_trss-worker"))
-        .current_dir(lib.h.dir.path())
-        .env("TRSS_DB_PATH", lib.h.db_path())
-        .env("TRANSMISSION_URL", lib.h.tr.url())
+    let mut child = lib
+        .h
+        .trss_process()
         // One cycle at the start and none after it for the whole test.
         .env("TRSS_WORKER_INTERVAL_SECS", "3600")
-        .env_remove("CHANNELS_CONFIG_URL")
         .stdout(fs::File::create(&out).unwrap())
         .stderr(fs::File::create(&err).unwrap())
         .spawn()
-        .expect("spawn trss-worker");
+        .expect("spawn trss");
     let output = || {
         format!(
             "{}{}",

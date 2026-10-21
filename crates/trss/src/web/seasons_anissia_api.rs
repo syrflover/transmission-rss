@@ -438,7 +438,7 @@ fn search_unavailable(error: AnissiaError) -> ApiError {
     const HINT_WAITING: &str = " 이미 불러온 편성표에서는 고를 수 있어요.";
     match error {
         AnissiaError::Invalid(detail) => {
-            eprintln!("trss-web: Anissia's full list: {detail}");
+            eprintln!("trss: Anissia's full list: {detail}");
             ApiError::Unavailable(format!(
                 "Anissia 전체 목록의 응답을 읽지 못해 검색하지 못했어요.{HINT}"
             ))

@@ -217,7 +217,7 @@ impl Harness {
 // --- the real web API, in process ---------------------------------------------------
 
 /// The `/api` router on the harness's own database handle, called without a
-/// socket. Requests go through the same handlers and store as `trss-web`.
+/// socket. Requests go through the same handlers and store as the `trss` web.
 pub struct WebApi {
     router: Router,
 }
@@ -266,6 +266,28 @@ impl Harness {
     /// The channels API on this harness's database.
     pub fn web_api(&self) -> WebApi {
         WebApi::new(self.db.clone())
+    }
+}
+
+// --- the real process ---------------------------------------------------------------
+
+impl Harness {
+    /// The `trss` binary on this harness's database and fake Transmission,
+    /// with the web on a free loopback port over a frontend build of one page.
+    /// The caller adds its output files and any other variable.
+    pub fn trss_process(&self) -> std::process::Command {
+        let static_dir = self.dir.path().join("web-dist");
+        std::fs::create_dir_all(&static_dir).unwrap();
+        std::fs::write(static_dir.join("index.html"), "<!doctype html>").unwrap();
+        let mut cmd = std::process::Command::new(env!("CARGO_BIN_EXE_trss"));
+        cmd.current_dir(self.dir.path())
+            .env("TRSS_DB_PATH", self.db_path())
+            .env("TRANSMISSION_URL", self.tr.url())
+            .env("TRSS_WEB_BIND", "127.0.0.1")
+            .env("TRSS_WEB_PORT", "0")
+            .env("TRSS_WEB_STATIC_DIR", &static_dir)
+            .env_remove("CHANNELS_CONFIG_URL");
+        cmd
     }
 }
 

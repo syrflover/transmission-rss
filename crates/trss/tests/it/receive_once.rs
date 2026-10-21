@@ -872,16 +872,13 @@ impl Proc {
     fn spawn(h: &Harness) -> Proc {
         let stdout = h.dir.path().join("w.out");
         let stderr = h.dir.path().join("w.err");
-        let child = Command::new(env!("CARGO_BIN_EXE_trss-worker"))
-            .current_dir(h.dir.path())
-            .env("TRSS_DB_PATH", h.db_path())
-            .env("TRANSMISSION_URL", h.tr.url())
+        let child = h
+            .trss_process()
             .env("TRSS_WORKER_INTERVAL_SECS", "3600")
-            .env_remove("CHANNELS_CONFIG_URL")
             .stdout(File::create(&stdout).unwrap())
             .stderr(File::create(&stderr).unwrap())
             .spawn()
-            .expect("spawn trss-worker");
+            .expect("spawn trss");
         Proc {
             child,
             stdout,

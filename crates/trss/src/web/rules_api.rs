@@ -471,8 +471,8 @@ pub(super) async fn ask_start(
 pub(super) async fn start_new_rule(state: &AppState, rule_id: &str, receive: Vec<i64>) {
     match ask_start(state, rule_id, rule_archive::Direction::Start, receive).await {
         Ok(true) => {}
-        Ok(false) => eprintln!("trss-web: rule {rule_id} already has a rule_archive command open"),
-        Err(e) => eprintln!("trss-web: cannot store the start of rule {rule_id}: {e:?}"),
+        Ok(false) => eprintln!("trss: rule {rule_id} already has a rule_archive command open"),
+        Err(e) => eprintln!("trss: cannot store the start of rule {rule_id}: {e:?}"),
     }
 }
 

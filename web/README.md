@@ -1,7 +1,7 @@
 # trss web frontend
 
 React + TypeScript + shadcn/ui (Tailwind CSS v4), built with Vite. The production
-build is a static folder (`dist/`) that the Rust `trss-web` binary serves; there is
+build is a static folder (`dist/`) that the Rust `trss` binary serves; there is
 no Node server at runtime.
 
 ## Commands
@@ -21,14 +21,15 @@ is bun's, so use bun to change dependencies.
 
 ```sh
 bun run build
-cargo run --bin trss-web      # http://127.0.0.1:8080, serves ./web/dist
+cargo run --bin trss          # http://127.0.0.1:8080, serves ./web/dist
 ```
 
-`trss-web` reads these environment variables:
+`trss` reads these environment variables for its web:
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `TRSS_DB_PATH` | (none, required) | Path of the SQLite database file the worker shares; the server does not start without it |
+| `TRSS_DB_PATH` | (none, required) | Path of the SQLite database file; the server does not start without it |
+| `TRANSMISSION_URL` | (none, required) | Transmission's RPC address, for the collection cycles that run in the same process; the server does not start without it. The other collection settings are in the readme's [Setup](../readme.md#setup) |
 | `TRSS_WEB_BIND` | `127.0.0.1` | IP address to listen on (there is no app login; bind wider only behind LAN/VPN/front-door auth) |
 | `TRSS_WEB_PORT` | `8080` | Port to listen on |
 | `TRSS_WEB_STATIC_DIR` | `web/dist` | Directory holding the frontend build (`index.html`, `assets/`) |

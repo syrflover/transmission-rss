@@ -684,11 +684,11 @@ async fn serve(
         Err(err) => {
             let reason = match err {
                 OpenError::Stuck => {
-                    eprintln!("trss-web: the page of job {job}'s run does not answer");
+                    eprintln!("trss: the page of job {job}'s run does not answer");
                     "stuck"
                 }
                 OpenError::Unreachable(why) => {
-                    eprintln!("trss-web: cannot reach the page of job {job}'s run: {why}");
+                    eprintln!("trss: cannot reach the page of job {job}'s run: {why}");
                     "unreachable"
                 }
             };

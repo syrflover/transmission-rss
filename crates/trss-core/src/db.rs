@@ -211,8 +211,9 @@ pub enum DbError {
 }
 
 /// Handle to the app database. Cheap to clone; all clones share one
-/// connection, so calls from one process are serialized. Another process
-/// (the web or the worker) uses its own connection and waits on SQLite's lock.
+/// connection, so calls through them are serialized. Another handle opened
+/// with [`Db::open`] (the web's in `trss`, or another process) has its own
+/// connection and waits on SQLite's lock.
 #[derive(Clone)]
 pub struct Db {
     conn: Arc<Mutex<Connection>>,

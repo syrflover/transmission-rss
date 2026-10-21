@@ -183,7 +183,7 @@ async fn refused(artwork: &Artwork, error: ActionError) -> ApiError {
             ApiError::invalid(trss_library::artwork::Rejected::TooLarge.message())
         }
         ActionError::Fetch(e) => {
-            eprintln!("trss-web: AniList image: {e}");
+            eprintln!("trss: AniList image: {e}");
             ApiError::invalid("AniList의 표지 이미지를 받지 못했어요. 잠시 뒤 다시 해 주세요.")
         }
         ActionError::Rejected(r) => ApiError::invalid(r.message()),

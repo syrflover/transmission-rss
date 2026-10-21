@@ -20,8 +20,9 @@
 //!
 //! # What the web checks
 //!
-//! The web sees the media folders read-only, so it checks what it can see and
-//! leaves writability to the worker, which finds out when it writes:
+//! The web only reads the media folders, so it checks what it can see and
+//! leaves writability to the commands and jobs, which find out when they
+//! write:
 //!
 //! - both folders are absolute paths to existing directories;
 //! - they are not the same folder and neither is inside the other, compared

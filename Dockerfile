@@ -10,9 +10,9 @@ COPY web/ ./
 RUN bun run build
 
 
-# Rust build: `trss-web` (web server), `trss-worker` (long-running collection
-# worker), `trss-extract` (the child process the worker unpacks a received
-# archive in, beside it) and `trss-probe` (the file probe, ticket 0060).
+# Rust build: `trss` (the web server and the collection worker in one
+# process), `trss-extract` (the child process trss unpacks a received archive
+# in, beside it) and `trss-probe` (the file probe, ticket 0060).
 #
 # The crates.io registry, the git checkouts and target/ are BuildKit cache
 # mounts that the builder keeps between builds, shared by the Rust stages here
@@ -40,8 +40,7 @@ RUN --mount=type=cache,id=trss-cargo-registry,target=/opt/cargo/registry,sharing
     stamp-sources.sh target/.source-stamps Cargo.toml Cargo.lock crates \
     && cargo build --release --locked \
     && mkdir /out \
-    && cp target/x86_64-unknown-linux-musl/release/trss-web \
-        target/x86_64-unknown-linux-musl/release/trss-worker \
+    && cp target/x86_64-unknown-linux-musl/release/trss \
         target/x86_64-unknown-linux-musl/release/trss-extract \
         target/x86_64-unknown-linux-musl/release/trss-probe \
         /out/
@@ -87,19 +86,15 @@ RUN apk update
 WORKDIR /usr/local/bin
 
 COPY --from=builder \
-    /out/trss-web \
-    /out/trss-worker \
+    /out/trss \
     /out/trss-extract \
     /out/trss-probe \
     ./
 
-# Static frontend that `trss-web` serves (no Node server at runtime).
+# Static frontend that `trss` serves (no Node server at runtime).
 COPY --from=web-builder /usr/src/web/dist /usr/local/share/trss/web
 
-# Defaults for `trss-web`; `trss-worker` ignores them.
-# The image runs the worker; run the web server by overriding the entrypoint
-# with `--entrypoint /usr/local/bin/trss-web` (docker-compose.trss.yml sets the
-# entrypoint of both services this way).
+# Where the web of `trss` listens and the frontend it serves.
 ENV TRSS_WEB_BIND=0.0.0.0 \
     TRSS_WEB_PORT=8080 \
     TRSS_WEB_STATIC_DIR=/usr/local/share/trss/web
@@ -109,7 +104,7 @@ EXPOSE 8080
 # trss writes there has the same owner (the players read it over NFS, which
 # shows the owner as numbers). The compose file's `user:` sets another uid and
 # gid from TRSS_UID and TRSS_GID. The data folder must belong to this user:
-# both binaries check at their start that they can write it.
+# `trss` checks at its start that it can write it.
 USER 1000:1000
 
-ENTRYPOINT [ "/usr/local/bin/trss-worker" ]
+ENTRYPOINT [ "/usr/local/bin/trss" ]

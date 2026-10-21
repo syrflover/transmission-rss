@@ -313,7 +313,7 @@ fn check_and_scan(
         return Ok(read);
     }
     discovery::scan(path).map_err(|e| {
-        eprintln!("trss-web: cannot read the watch folder {text}: {e}");
+        eprintln!("trss: cannot read the watch folder {text}: {e}");
         ApiError::invalid(format!("`{text}`를 읽지 못했어요. {}", e.message))
     })
 }

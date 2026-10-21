@@ -62,23 +62,21 @@ fn networks_of(service: &Value) -> Vec<&str> {
 }
 
 #[test]
-fn the_browser_shares_a_network_with_the_worker_and_the_web_and_is_not_on_trss_net() {
+fn the_browser_shares_a_network_with_trss_alone_and_is_not_on_trss_net() {
     let compose = compose();
-    // The pages the browser opens could try requests to trss-web (no sign-in)
+    // The pages the browser opens could try requests to trss (no sign-in)
     // and Transmission, which are on `trss_net`.
     assert_eq!(
         networks_of(service(&compose, "trss-browser")),
         ["browser_net"]
     );
-    // The worker reaches it there, and still reaches Transmission.
-    let worker = networks_of(service(&compose, "trss-worker"));
-    assert!(worker.contains(&"browser_net") && worker.contains(&"trss_net"));
+    // trss reaches it there, for the jobs and the remote screens, and still
+    // reaches Transmission; it refuses every connection from that network's
+    // addresses. Nothing else is on it.
     assert_eq!(
-        environment(service(&compose, "trss-worker"), "TRSS_BROWSER_URL"),
+        environment(service(&compose, "trss"), "TRSS_BROWSER_URL"),
         Some("http://trss-browser:9230")
     );
-    // The web reaches it there for the remote screens, and refuses every
-    // connection from that network's addresses. Nothing else is on it.
     let on_browser_net: Vec<&str> = compose["services"]
         .as_mapping()
         .unwrap()
@@ -86,14 +84,17 @@ fn the_browser_shares_a_network_with_the_worker_and_the_web_and_is_not_on_trss_n
         .filter(|(_, s)| networks_of(s).contains(&"browser_net"))
         .map(|(name, _)| name.as_str().unwrap())
         .collect();
-    assert_eq!(on_browser_net, ["trss-worker", "trss-web", "trss-browser"]);
+    assert_eq!(on_browser_net, ["trss", "trss-browser"]);
     // The web's published port must come in through `trss_net`, not through
-    // `browser_net`, whose gateway address the web refuses: `trss_net` gives
-    // the web its default gateway.
-    let web = service(&compose, "trss-web");
-    assert_eq!(networks_of(web), ["trss_net", "browser_net"]);
-    assert_eq!(web["networks"]["trss_net"]["gw_priority"].as_i64(), Some(1));
-    assert!(web["networks"]["browser_net"].get("gw_priority").is_none());
+    // `browser_net`, whose gateway address trss refuses: `trss_net` gives
+    // trss its default gateway.
+    let trss = service(&compose, "trss");
+    assert_eq!(networks_of(trss), ["trss_net", "browser_net"]);
+    assert_eq!(
+        trss["networks"]["trss_net"]["gw_priority"].as_i64(),
+        Some(1)
+    );
+    assert!(trss["networks"]["browser_net"].get("gw_priority").is_none());
     // The network is the project's own, and open to the internet, which the
     // pages need: not `internal`.
     let net = &compose["networks"]["browser_net"];
@@ -123,7 +124,7 @@ fn the_browser_container_has_the_memory_limit_and_no_cpu_limit() {
 }
 
 #[test]
-fn the_browser_container_shares_only_the_downloads_folder_with_the_worker() {
+fn the_browser_container_shares_only_the_downloads_folder_with_trss() {
     let compose = compose();
     let browser = service(&compose, "trss-browser");
     let volumes: Vec<&str> = browser["volumes"]
@@ -137,43 +138,40 @@ fn the_browser_container_shares_only_the_downloads_folder_with_the_worker() {
         ["${TRSS_DATA_DIR:-./data}/browser-downloads:/downloads"]
     );
 
-    // The worker sees that folder inside the data folder it mounts.
-    let worker = service(&compose, "trss-worker");
-    let data_mounted = worker["volumes"]
+    // trss sees that folder inside the data folder it mounts.
+    let trss = service(&compose, "trss");
+    let data_mounted = trss["volumes"]
         .as_sequence()
         .unwrap()
         .iter()
         .any(|v| v.as_str() == Some("${TRSS_DATA_DIR:-./data}:/data"));
     assert!(data_mounted);
     assert_eq!(
-        environment(worker, "TRSS_BROWSER_DOWNLOADS"),
+        environment(trss, "TRSS_BROWSER_DOWNLOADS"),
         Some("/data/browser-downloads")
     );
 }
 
 #[test]
-fn the_token_is_required_and_only_the_worker_the_web_and_the_browser_get_it() {
+fn the_token_is_required_and_only_trss_and_the_browser_get_it() {
     let compose = compose();
-    for name in ["trss-browser", "trss-worker", "trss-web"] {
+    for name in ["trss-browser", "trss"] {
         let token = environment(service(&compose, name), "TRSS_BROWSER_TOKEN").unwrap();
         assert!(
             token.starts_with("${TRSS_BROWSER_TOKEN:?"),
             "{name}: {token}"
         );
     }
-    for name in ["trss-worker", "trss-web"] {
-        assert_eq!(
-            environment(service(&compose, name), "TRSS_BROWSER_URL"),
-            Some("http://trss-browser:9230"),
-            "{name}"
-        );
-    }
+    assert_eq!(
+        environment(service(&compose, "trss"), "TRSS_BROWSER_URL"),
+        Some("http://trss-browser:9230")
+    );
     let others: Vec<&str> = compose["services"]
         .as_mapping()
         .unwrap()
         .iter()
         .map(|(name, _)| name.as_str().unwrap())
-        .filter(|name| !["trss-browser", "trss-worker", "trss-web"].contains(name))
+        .filter(|name| !["trss-browser", "trss"].contains(name))
         .filter(|name| environment(service(&compose, name), "TRSS_BROWSER_TOKEN").is_some())
         .collect();
     assert!(others.is_empty(), "{others:?}");

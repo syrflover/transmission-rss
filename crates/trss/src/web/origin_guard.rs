@@ -165,11 +165,11 @@ impl OriginGuard {
                     .take(NOTED_HOST_CHARS)
                     .collect();
                 eprintln!(
-                    "trss-web: refused {hosts} requests for a host name that is not allowed (latest {shown:?}) and {origins} from another origin so far; if the name is this server's, add it to {HOSTS_VAR}"
+                    "trss: refused {hosts} requests for a host name that is not allowed (latest {shown:?}) and {origins} from another origin so far; if the name is this server's, add it to {HOSTS_VAR}"
                 );
             }
             None => eprintln!(
-                "trss-web: refused {hosts} requests for a host name that is not allowed and {origins} from another origin so far"
+                "trss: refused {hosts} requests for a host name that is not allowed and {origins} from another origin so far"
             ),
         }
     }

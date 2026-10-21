@@ -397,7 +397,7 @@ async fn review(state: &AppState, content: &str) -> Result<Reviewed, ApiError> {
 }
 
 /// The import would set the collect folder to `folder`, which skips the
-/// settings screen. The web sees the media read-only, so it can check what the
+/// settings screen. The web only reads the media, so it can check what the
 /// screen checks: an existing directory it can open, at an absolute path.
 async fn check_folder_to_set(folder: String) -> Result<(), ApiError> {
     let checked = tokio::task::spawn_blocking(move || check_folders(&folder, None))

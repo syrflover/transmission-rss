@@ -1,4 +1,4 @@
-//! Local SQLite app state shared by `trss-web` and `trss-worker`.
+//! Local SQLite app state shared by the web and the worker of `trss`.
 //!
 //! The database (connection, pragmas, embedded migrations with the SQL of every
 //! table) and the settings live in `trss-core`; each feature keeps its own

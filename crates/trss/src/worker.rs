@@ -1,4 +1,5 @@
-//! The long-running collection worker, run by the `trss-worker` binary.
+//! The long-running collection worker, which the `trss` binary runs beside the
+//! [`web`](crate::web).
 //!
 //! Every interval (five minutes by default) the worker runs one *cycle*
 //! ([`cycle::run_cycle`]): it reads the channels and their rules from the app

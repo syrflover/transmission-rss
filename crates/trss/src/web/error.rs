@@ -97,7 +97,7 @@ impl IntoResponse for ApiError {
                 json!({ "error": "unavailable", "message": message }),
             ),
             ApiError::Internal(detail) => {
-                eprintln!("trss-web: internal error: {detail}");
+                eprintln!("trss: internal error: {detail}");
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     json!({ "error": "internal", "message": INTERNAL_MESSAGE }),
@@ -155,7 +155,7 @@ impl From<AnilistError> for ApiError {
             )),
             AnilistError::Store(e) => ApiError::Internal(e.to_string()),
             e => {
-                eprintln!("trss-web: AniList: {e}");
+                eprintln!("trss: AniList: {e}");
                 ApiError::invalid("AniList에 연결하지 못했어요. 잠시 뒤 다시 해 주세요.")
             }
         }

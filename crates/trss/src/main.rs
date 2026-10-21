@@ -1,7 +1,17 @@
 use std::{path::PathBuf, process::ExitCode};
 
+use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
-use trss::worker::{env::FAKE_SUBTITLE_SOURCE_VAR, Worker, WorkerEnv};
+use trss::{
+    web::{
+        self as web,
+        browser_net::{self, GuardedListener},
+        env::WebEnv,
+        screen_api::RemoteScreens,
+        AppState,
+    },
+    worker::{env::FAKE_SUBTITLE_SOURCE_VAR, Worker, WorkerEnv},
+};
 use trss_anilist::AnilistConfig;
 use trss_anissia::{Anissia, AnissiaConfig};
 use trss_collect::{
@@ -28,28 +38,131 @@ async fn main() -> ExitCode {
     match run().await {
         Ok(()) => ExitCode::SUCCESS,
         Err(message) => {
-            eprintln!("trss-worker: {message}");
+            eprintln!("trss: {message}");
             ExitCode::FAILURE
         }
     }
 }
 
+/// Serves the screens and the API, and runs the collection cycles, the
+/// commands the web accepts and the subtitle jobs beside them, until SIGTERM
+/// or SIGINT. The web still hands its commands to the worker part through the
+/// database and the wake socket, as when the two were two processes.
 async fn run() -> Result<(), String> {
-    let env = WorkerEnv::from_env().map_err(|e| e.to_string())?;
+    let worker_env = WorkerEnv::from_env().map_err(|e| e.to_string())?;
+    let web_env = WebEnv::from_env().map_err(|e| e.to_string())?;
     let anilist = AnilistConfig::from_env()?;
     let anissia_config = AnissiaConfig::from_env()?;
-
     let db_path: PathBuf = std::env::var_os(DB_PATH_ENV)
         .ok_or_else(|| format!("environment variable {DB_PATH_ENV} is not set"))?
         .into();
+
+    let index = web_env.static_dir.join("index.html");
+    if !index.is_file() {
+        return Err(format!(
+            "no frontend build at {} (set {} to the directory produced by `bun run build` in web/)",
+            web_env.static_dir.display(),
+            web::env::STATIC_DIR_VAR,
+        ));
+    }
+
     // Before anything is opened: a file an earlier deploy made as another user
     // stops the start here, with its path and the uid that is needed.
     check_app_data(&db_path).map_err(|e| e.to_string())?;
-    let db = Db::open(&db_path).await.map_err(|e| {
-        format!("cannot open the app database (set {DB_PATH_ENV} to a file on a local volume): {e}")
-    })?;
-
+    let open = || async {
+        Db::open(&db_path).await.map_err(|e| {
+            format!(
+                "cannot open the app database (set {DB_PATH_ENV} to a file on a local volume): {e}"
+            )
+        })
+    };
+    let db = open().await?;
+    // The web's own connection, as when it was a process of its own: the
+    // screens read beside a cycle's long write instead of waiting for it.
+    let web_db = open().await?;
+    // Cover images live in the app data folder: the database's folder.
     let app_data = AppData::for_database(&db_path);
+
+    // From here on SIGTERM and SIGINT stop the process the orderly way, the
+    // waits of the start included.
+    let cancel = CancellationToken::new();
+    tokio::spawn(shutdown_on_signal(cancel.clone()));
+
+    // The web first, so the screens answer while the worker part connects to
+    // the server browser.
+    //
+    // With the server browser, the web is on its network: every connection
+    // from there is refused, and a web that cannot tell which addresses those
+    // are does not start.
+    let refused = match &web_env.browser {
+        Some(access) => {
+            let Some(found) = cancel
+                .run_until_cancelled(browser_net::find(&access.url))
+                .await
+            else {
+                println!("trss stopped");
+                return Ok(());
+            };
+            let subnet = found.map_err(|e| {
+                format!("will not start without refusing the server browser's network: {e}")
+            })?;
+            println!("trss refuses connections from the server browser's network {subnet}");
+            Some(subnet)
+        }
+        None => None,
+    };
+    let listener = TcpListener::bind(web_env.addr)
+        .await
+        .map_err(|e| format!("cannot listen on {}: {e}", web_env.addr))?;
+    let addr = listener.local_addr().map_err(|e| e.to_string())?;
+    println!(
+        "trss listening on http://{addr} (static files: {})",
+        web_env.static_dir.display()
+    );
+
+    let receive = ReceiveArea::in_app_data(app_data.root());
+    let state = AppState::new(web_db.clone())
+        .with_artwork(Artwork::new(
+            web_db.clone(),
+            Some(app_data.clone()),
+            anilist.clone(),
+        ))
+        .with_anissia(Anissia::with_defaults(web_db, anissia_config.clone()))
+        .with_receive_area(&receive)
+        .with_worker_wake(wake_path_for(&db_path))
+        .with_web_hosts(web_env.hosts.clone());
+    let state = match &web_env.browser {
+        Some(access) => state.with_remote_screens(RemoteScreens::new(access)?),
+        None => state,
+    };
+    // What a killed process, or an upload cut short in this one, left in the
+    // receive area (a staging folder, or the folder of a job that was never
+    // recorded). The web takes the uploads, so it sweeps: at start and every
+    // hour. Anything an upload or a receipt going on owns is younger than the
+    // hour, or has a record.
+    let sweeping = state.uploads.keep_sweeping(
+        std::time::Duration::from_secs(3600),
+        std::time::Duration::from_secs(3600),
+        |result| match result {
+            Ok(removed) => println!("trss: removed {removed} abandoned upload folders"),
+            Err(e) => eprintln!("trss: cannot sweep the receive area: {e}"),
+        },
+    );
+    let router = web::router(&web_env.static_dir, state);
+    let serving = tokio::spawn({
+        let cancel = cancel.clone();
+        let listener = GuardedListener::new(listener, refused);
+        async move {
+            // A web that stops, or panics, stops the rest: the process is one
+            // unit.
+            let _stop_all = cancel.clone().drop_guard();
+            axum::serve(listener, router)
+                .with_graceful_shutdown(cancel.cancelled_owned())
+                .await
+                .map_err(|e| e.to_string())
+        }
+    });
+
     // The real sites are always on; the fake one only when asked for. One
     // Drive serves every source that links Drive files, so their requests to
     // Drive's hosts are spaced together. erulabo's files come only through
@@ -69,28 +182,32 @@ async fn run() -> Result<(), String> {
     // One worker at a time uses the browser container: a second one would
     // reset it and end the first one's runs. The lock lives as long as this
     // process (`browser_lock`).
-    let (browser, browser_lock) = match &env.browser {
+    let (browser, browser_lock) = match &worker_env.browser {
         Some(browser_env) => match trss::worker::browser::take_lock(&db_path)
             .map_err(|e| format!("cannot take the lock of the server browser: {e}"))?
         {
             Some(lock) => match trss_browser::prepare_downloads_root(&browser_env.downloads) {
-                Ok(()) => (
-                    Some(
-                        trss::worker::browser::connect(
-                            db.clone(),
-                            browser_env,
-                            trss_core::system_clock(),
-                        )
-                        .await?,
-                    ),
-                    Some(lock),
-                ),
+                Ok(()) => {
+                    let connecting = trss::worker::browser::connect(
+                        db.clone(),
+                        browser_env,
+                        trss_core::system_clock(),
+                    );
+                    let Some(connected) = cancel.run_until_cancelled(connecting).await else {
+                        // The web is winding down with the same token.
+                        sweeping.abort();
+                        let served = serving.await.map_err(|e| e.to_string())?;
+                        println!("trss stopped");
+                        return served;
+                    };
+                    (Some(connected?), Some(lock))
+                }
                 // A first start has a downloads folder Docker made as root.
-                // That is no reason to stop the whole worker (its restart
+                // That is no reason to stop the whole process (its restart
                 // policy would loop on it): it runs as it did without a
                 // browser, and the message says what to give the folder.
                 Err(reason) => {
-                    eprintln!("trss-worker: running without a server browser: {reason}");
+                    eprintln!("trss: running without a server browser: {reason}");
                     // Keep the lock: while this worker holds it no other one
                     // uses the browser, so the screens bound to an earlier
                     // worker's runs are no one's and are closed at the start.
@@ -99,7 +216,7 @@ async fn run() -> Result<(), String> {
             },
             None => {
                 eprintln!(
-                    "trss-worker: another worker uses the browser container; this one runs without a server browser"
+                    "trss: another worker uses the browser container; this one runs without a server browser"
                 );
                 (None, None)
             }
@@ -144,7 +261,7 @@ async fn run() -> Result<(), String> {
     let anissia_client = Anissia::with_defaults(db.clone(), anissia_config);
     let anissia = AnissiaQueue::new(anissia_client.clone(), AnissiaStore::new(db.clone()));
     let captions = CaptionObserver::new(anissia_client, AnissiaStore::new(db.clone()));
-    let mut worker = Worker::new(db, &env, lock_path_for(&db_path))
+    let mut worker = Worker::new(db, &worker_env, lock_path_for(&db_path))
         .map_err(|e| e.to_string())?
         .with_captions(captions.clone())
         .with_jobs(jobs)
@@ -156,9 +273,6 @@ async fn run() -> Result<(), String> {
     } else if browser_lock.is_some() {
         worker = worker.with_unused_browser_lock();
     }
-
-    let cancel = CancellationToken::new();
-    tokio::spawn(shutdown_on_signal(cancel.clone()));
 
     // Work covers: AniList searches and image fetches, one at a time, beside
     // the collection loop and outside its lock.
@@ -193,8 +307,8 @@ async fn run() -> Result<(), String> {
     });
 
     println!(
-        "trss-worker started: a cycle every {}s (database: {})",
-        env.interval.as_secs(),
+        "trss started: a cycle every {}s (database: {})",
+        worker_env.interval.as_secs(),
         db_path.display()
     );
 
@@ -203,18 +317,21 @@ async fn run() -> Result<(), String> {
     let _ = season_queue.await;
     let _ = anissia_queue.await;
     let _ = caption_queue.await;
+    let served = serving.await.map_err(|e| e.to_string())?;
+    sweeping.abort();
 
-    println!("trss-worker stopped");
-    Ok(())
+    println!("trss stopped");
+    served
 }
 
-/// Cancels `cancel` on SIGTERM or SIGINT, so a cycle in progress can wind down.
+/// Cancels `cancel` on SIGTERM or SIGINT, so a cycle in progress can wind down
+/// and the web stops taking connections.
 async fn shutdown_on_signal(cancel: CancellationToken) {
     let mut sigterm = match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
     {
         Ok(signal) => signal,
         Err(err) => {
-            eprintln!("trss-worker: cannot listen for SIGTERM: {err}");
+            eprintln!("trss: cannot listen for SIGTERM: {err}");
             return;
         }
     };

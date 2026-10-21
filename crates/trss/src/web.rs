@@ -1,4 +1,4 @@
-//! The web server, run by the `trss-web` binary.
+//! The web server, which the `trss` binary runs beside the [`worker`](crate::worker).
 //!
 //! It serves the JSON API under `/api` and the React single-page app's static
 //! build (a plain directory, see [`env::STATIC_DIR_VAR`]) from the same
@@ -90,30 +90,6 @@ pub fn router(static_dir: &Path, state: AppState) -> Router {
         .merge(assets)
         .fallback_service(pages)
         .layer(middleware::from_fn_with_state(guard, origin_guard::guard))
-}
-
-/// Resolves when the process is asked to stop (Ctrl-C, or SIGTERM from `docker stop`).
-pub async fn shutdown_signal() {
-    let ctrl_c = async {
-        tokio::signal::ctrl_c().await.ok();
-    };
-
-    #[cfg(unix)]
-    let terminate = async {
-        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
-            Ok(mut signal) => {
-                signal.recv().await;
-            }
-            Err(_) => std::future::pending::<()>().await,
-        }
-    };
-    #[cfg(not(unix))]
-    let terminate = std::future::pending::<()>();
-
-    tokio::select! {
-        _ = ctrl_c => {},
-        _ = terminate => {},
-    }
 }
 
 #[cfg(test)]

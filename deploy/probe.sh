@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 # Runs the file probe (crates/trss-probe, ticket 0060) in a one-off container
-# that looks like trss-worker's: the same image, the user 1000:1000, the same
-# memory limit (256M, no swap) and CPU limit, and the worker's mounts, with the
-# probe binary mounted read-only from the host. It works with a release whose
+# that looks like trss's: the same image, the user 1000:1000, the same memory
+# limit (384M, no swap) and CPU limit, and its mounts, with the probe binary
+# mounted read-only from the host. It works with a release whose
 # image has no probe in it; build the binary with
 #
 #   docker build --target probe-binary --output type=local,dest=probe-out .
 #
 # and copy probe-out/trss-probe and probe-out/trss-extract (the child program
-# of the worker's unpacking, for the probe's --unpack) next to this script on
-# the host.
+# of trss's unpacking, for the probe's --unpack) next to this script on the
+# host.
 #
 # Run it in the folder that holds docker-compose.trss.yml and its .env. It
 # reads MEDIA_DIR, TRSS_DATA_DIR, TRSS_VERSION, TRSS_UID and TRSS_GID from the
@@ -33,7 +33,7 @@
 #                    it is switched to 1000:1000 (ticket 0062), and the probe
 #                    makes files in it as 1000:1000. Pass the real one only
 #                    after that.
-#   --memory SIZE    the memory limit (default: 256m, as the worker's)
+#   --memory SIZE    the memory limit (default: 384m, as trss's)
 #
 # Everything after `--` goes to the probe, for example
 #
@@ -55,7 +55,7 @@ env_file=".env"
 image=""
 media_dir=""
 data_dir=""
-memory="256m"
+memory="384m"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -139,7 +139,7 @@ echo "media:   $media_dir"
 echo "data:    $data_dir (app data folder: $app_data)"
 echo "extract: ${extract:-none (trss-extract is not next to this script; --unpack needs it)}"
 [[ -z "$samples" ]] || echo "samples: $samples (at /samples)"
-echo "user:    $uid:$gid, memory $memory (swap the same), 0.25 CPU"
+echo "user:    $uid:$gid, memory $memory (swap the same), 0.5 CPU"
 if command -v findmnt >/dev/null; then
   echo "host mounts:"
   findmnt -T "$media_dir" -o TARGET,SOURCE,FSTYPE,OPTIONS | sed 's/^/  /'
@@ -153,7 +153,7 @@ mounts=()
 
 docker run --rm \
   --user "$uid:$gid" \
-  --memory "$memory" --memory-swap "$memory" --cpus 0.25 \
+  --memory "$memory" --memory-swap "$memory" --cpus 0.5 \
   --network none \
   -v "$media_dir":/downloads \
   -v "$data_dir":/data \

@@ -1,6 +1,6 @@
 # The server browser container: a virtual display and the launcher
 # (`trss-browserd`, crates/trss-browser) that starts one Chromium per run when
-# the worker asks and deletes its profile when the run ends. Idle, the
+# trss asks and deletes its profile when the run ends. Idle, the
 # container holds only Xvfb and the launcher; Chromium exists while a run does.
 #
 # A file of its own, not a target of Dockerfile: the app image stays Alpine
@@ -69,7 +69,7 @@ USER browser
 # port, no Docker socket, no capabilities, a memory limit) is the boundary.
 # The launcher listens on 0.0.0.0:9230 inside the container and answers only
 # requests with TRSS_BROWSER_TOKEN, which the image does not set: the launcher
-# refuses to start without it. Nothing is published; the worker reaches it over
+# refuses to start without it. Nothing is published; trss reaches it over
 # the compose network.
 ENV HOME=/home/browser \
     LANG=C.UTF-8 \

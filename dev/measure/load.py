@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""The loads of run.sh on the development environment's trss-web
+"""The loads of run.sh on the development environment's trss
 (127.0.0.1:8080).
 
     load.py web <rounds>   a browser's reads, six requests at a time: the library
                            list, every work's detail and cover, and the other
                            screens' lists, <rounds> times; prints one JSON line
-    load.py rescan         rescans every watch folder in turn through the
-                           worker's command; prints one JSON line
+    load.py rescan         rescans every watch folder in turn through its
+                           command; prints one JSON line
 """
 import json
 import statistics

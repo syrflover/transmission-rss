@@ -4,13 +4,13 @@
 # stopped, and a copy of a server's data.
 #
 #   dev/compose.sh pull [--force]   copy the server's database, covers and media file names
-#   dev/compose.sh up [--no-build]  build the images and start Transmission, trss-browser, trss-worker, trss-web
+#   dev/compose.sh up [--no-build]  build the images and start Transmission, trss-browser, trss
 #   dev/compose.sh down             stop and remove the containers (dev/local stays)
-#   dev/compose.sh logs [service]   follow the logs (default: trss-worker)
+#   dev/compose.sh logs [service]   follow the logs (default: trss)
 #   dev/compose.sh status           show the containers
 #
-# The worker also reads dev/trss.dev.yml, which turns on the fake subtitle
-# source (posts on fake.trss.invalid) for subtitle jobs.
+# trss also reads dev/trss.dev.yml, which turns on the fake subtitle source
+# (posts on fake.trss.invalid) for subtitle jobs.
 #
 # `pull` reaches the server over ssh: TRSS_DEV_SERVER (default j4105) and
 # TRSS_DEV_SERVER_DIR, the folder of its compose files relative to the remote
@@ -44,21 +44,28 @@ prepare() {
 }
 
 # Runs on the server. Writes a tar of the app data folder and the media file
-# names to stdout; everything else goes to stderr.
+# names to stdout; everything else goes to stderr. The app's containers are
+# `trss`, or `trss-worker` and `trss-web` on a server that runs a release from
+# before they were one; each of them mounts /data and /downloads. They are
+# found by their running containers rather than the compose file, which may
+# already be the new one while the old containers run.
 REMOTE_SCRIPT='
 set -euo pipefail
 cd "$SERVER_DIR"
+apps="$(docker ps --format "{{.Names}}" | { grep -xE "trss|trss-worker|trss-web" || true; } | tr "\n" " ")"
+app="${apps%% *}"
+[[ -n "$app" ]] || { echo "no trss container is running on the server" >&2; exit 1; }
 tmp="$(mktemp -d)"
-restart() { docker compose -f docker-compose.trss.yml start trss-worker trss-web >&2; }
+restart() { docker start $apps >&2; }
 trap "restart; rm -rf \"\$tmp\"" EXIT
 # Stopped, so the database and its WAL are one consistent state.
-docker compose -f docker-compose.trss.yml stop trss-worker trss-web >&2
-docker cp trss-worker:/data "$tmp/data" >&2
+docker stop $apps >&2
+docker cp "$app:/data" "$tmp/data" >&2
 restart
 trap "rm -rf \"\$tmp\"" EXIT
 rm -f "$tmp"/data/*.lock
-docker exec trss-worker find /downloads -mindepth 1 -type d >"$tmp/dirs.txt"
-docker exec trss-worker find /downloads -mindepth 1 -type f >"$tmp/files.txt"
+docker exec "$app" find /downloads -mindepth 1 -type d >"$tmp/dirs.txt"
+docker exec "$app" find /downloads -mindepth 1 -type f >"$tmp/files.txt"
 tar -C "$tmp" -cf - data dirs.txt files.txt
 '
 
@@ -79,7 +86,7 @@ pull() {
   mkdir -p "$LOCAL"
   staging="$(mktemp -d "$LOCAL/.pull.XXXXXX")"
   trap 'rm -rf "$staging"' EXIT
-  echo "Copying from $SERVER:~/$SERVER_DIR (trss-worker and trss-web stop for the copy)..." >&2
+  echo "Copying from $SERVER:~/$SERVER_DIR (trss stops for the copy)..." >&2
   ssh "$SERVER" "SERVER_DIR='$SERVER_DIR' bash -s" <<<"$REMOTE_SCRIPT" | tar -x -C "$staging"
   [[ -f "$staging/data/trss.db" ]] || { echo "the server sent no trss.db" >&2; exit 1; }
 
@@ -118,7 +125,7 @@ case "${1:-}" in
   pull) shift; pull "$@" ;;
   up) shift; up "$@" ;;
   down) down ;;
-  logs) docker logs -f "${2:-trss-worker}" ;;
+  logs) docker logs -f "${2:-trss}" ;;
   status) compose -f docker-compose.yml ps; trss ps ;;
   *) sed -n '6,10p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
 esac

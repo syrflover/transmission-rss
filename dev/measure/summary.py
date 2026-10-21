@@ -7,6 +7,10 @@ Each cell is the mean over the label's measurements, with the least and the
 most. <symfs> is the folder holding the image's /usr/local/bin (and, for a
 dynamic libc, the library and its debug file) for perf's symbols; without it
 the allocator rows are left out.
+
+A measurement of one `trss` process counts the whole process in both loads'
+rows; one made before (`trss-web` and `trss-worker`) counts the web in the
+web load's rows and the worker in the rescans'.
 """
 import json
 import re
@@ -65,33 +69,35 @@ def measurement(out, symfs):
         return st[(b, container)][key] - st[(a, container)][key]
 
     def total(key):
-        if key not in end["trss-web"]:
+        if key not in end[containers[0]]:
             return None
-        return end["trss-web"][key] + end["trss-worker"][key]
+        return sum(end[c][key] for c in containers)
 
-    end = {c: st[("rescan", c)] for c in ("trss-web", "trss-worker")}
+    one = ("rescan", "trss") in st
+    web_c, worker_c = ("trss", "trss") if one else ("trss-web", "trss-worker")
+    containers = ("trss",) if one else ("trss-web", "trss-worker")
+    end = {c: st[("rescan", c)] for c in containers}
     row = {
-        "web load CPU s": delta("trss-web", "warm", "web", "usage_usec") / 1e6,
-        "web load user s": delta("trss-web", "warm", "web", "user_usec") / 1e6,
-        "web load kernel s": delta("trss-web", "warm", "web", "system_usec") / 1e6,
-        "web load page faults": delta("trss-web", "warm", "web", "pgfault"),
+        "web load CPU s": delta(web_c, "warm", "web", "usage_usec") / 1e6,
+        "web load user s": delta(web_c, "warm", "web", "user_usec") / 1e6,
+        "web load kernel s": delta(web_c, "warm", "web", "system_usec") / 1e6,
+        "web load page faults": delta(web_c, "warm", "web", "pgfault"),
         "web load wall s": web["wall_s"],
         "web requests failed": web["errors"],
         "web p50 ms": web["p50_ms"],
         "web p95 ms": web["p95_ms"],
-        "rescan CPU s": delta("trss-worker", "web", "rescan", "usage_usec") / 1e6,
-        "rescan user s": delta("trss-worker", "web", "rescan", "user_usec") / 1e6,
-        "rescan kernel s": delta("trss-worker", "web", "rescan", "system_usec") / 1e6,
-        "rescan page faults": delta("trss-worker", "web", "rescan", "pgfault"),
+        "rescan CPU s": delta(worker_c, "web", "rescan", "usage_usec") / 1e6,
+        "rescan user s": delta(worker_c, "web", "rescan", "user_usec") / 1e6,
+        "rescan kernel s": delta(worker_c, "web", "rescan", "system_usec") / 1e6,
+        "rescan page faults": delta(worker_c, "web", "rescan", "pgfault"),
         "rescans not done": sum(s != "done" for r in rescans for s in r["states"]),
-        "web peak MiB": end["trss-web"]["mem_peak"] / 2**20,
-        "worker peak MiB": end["trss-worker"]["mem_peak"] / 2**20,
-        "memory.events max (web+worker)": total("ev_max"),
-        "oom_kill (web+worker)": total("oom_kill"),
+        **{f"{c} peak MiB": end[c]["mem_peak"] / 2**20 for c in containers},
+        "memory.events max (all containers)": total("ev_max"),
+        "oom_kill (all containers)": total("oom_kill"),
     }
     row = {k: v for k, v in row.items() if v is not None}
     if symfs:
-        for p in ("web", "worker"):
+        for p in ("trss",) if one else ("web", "worker"):
             alloc, parser = shares(out / f"{p}.perf", symfs)
             row[f"{p} user samples in the allocator %"] = alloc
             row[f"{p} user samples in the SQL parser %"] = parser

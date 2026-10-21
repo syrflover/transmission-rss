@@ -423,7 +423,7 @@ pub(super) async fn ask_anissia_captions(state: &AppState, anime_no: i64) {
             state.wake_worker();
         }
         Ok(false) => {}
-        Err(e) => eprintln!("trss-web: cannot ask for the subtitle lines of anime {anime_no}: {e}"),
+        Err(e) => eprintln!("trss: cannot ask for the subtitle lines of anime {anime_no}: {e}"),
     }
 }
 

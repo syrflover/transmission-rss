@@ -1358,7 +1358,7 @@ impl Hub {
             Err(fail) => {
                 self.view.lock().expect("view lock").resizing = false;
                 eprintln!(
-                    "trss-web: the remote screen of job {} could not change its size: {fail}",
+                    "trss: the remote screen of job {} could not change its size: {fail}",
                     self.job
                 );
                 self.end();
@@ -1454,10 +1454,7 @@ impl Hub {
                 .record_input(&self.job, &self.binding.run, now_millis())
                 .await
             {
-                eprintln!(
-                    "trss-web: cannot record the input of job {}: {err}",
-                    self.job
-                );
+                eprintln!("trss: cannot record the input of job {}: {err}", self.job);
             }
         }
     }

@@ -1,4 +1,4 @@
-//! The real `trss-worker` binary: signals, exclusivity between processes,
+//! The real `trss` binary: signals, exclusivity between processes,
 //! recovery when Transmission was down, and what it prints.
 
 use crate::common;
@@ -23,18 +23,14 @@ impl Proc {
     fn spawn(h: &Harness, name: &str, extra_env: &[(&str, &str)]) -> Proc {
         let stdout = h.dir.path().join(format!("{name}.out"));
         let stderr = h.dir.path().join(format!("{name}.err"));
-        let mut cmd = Command::new(env!("CARGO_BIN_EXE_trss-worker"));
-        cmd.current_dir(h.dir.path())
-            .env("TRSS_DB_PATH", h.db_path())
-            .env("TRANSMISSION_URL", h.tr.url())
-            .env_remove("CHANNELS_CONFIG_URL")
-            .stdout(File::create(&stdout).unwrap())
+        let mut cmd = h.trss_process();
+        cmd.stdout(File::create(&stdout).unwrap())
             .stderr(File::create(&stderr).unwrap());
         for (key, value) in extra_env {
             cmd.env(key, value);
         }
         Proc {
-            child: cmd.spawn().expect("spawn trss-worker"),
+            child: cmd.spawn().expect("spawn trss"),
             stdout,
             stderr,
         }
@@ -143,7 +139,7 @@ async fn sigterm_stops_an_idle_worker_cleanly() {
     assert!(status.success(), "{status:?}\n{}", worker.output());
     let output = worker.output();
     assert!(output.contains("SIGTERM received"), "{output}");
-    assert!(output.contains("trss-worker stopped"), "{output}");
+    assert!(output.contains("trss stopped"), "{output}");
 }
 
 #[tokio::test]
@@ -201,7 +197,7 @@ async fn sigterm_while_transmission_hangs_exits_within_the_grace_period() {
     assert!(asked.elapsed() < Duration::from_secs(9));
     let output = worker.output();
     assert!(output.contains("Cycle abandoned"), "{output}");
-    assert!(output.contains("trss-worker stopped"), "{output}");
+    assert!(output.contains("trss stopped"), "{output}");
     // Nothing was recorded for the items whose adds never answered.
     assert_eq!(count_result(&h, HistoryResult::Received).await, 0);
 }
@@ -237,8 +233,8 @@ async fn two_worker_processes_run_a_period_once() {
     let mut a = Proc::spawn(&h, "a", &[]);
     let mut b = Proc::spawn(&h, "b", &[]);
 
-    a.wait_output("trss-worker started").await;
-    b.wait_output("trss-worker started").await;
+    a.wait_output("trss started").await;
+    b.wait_output("trss started").await;
     wait_until("one cycle", || cycle_finished(&h)).await;
     wait_until("the other to have skipped", || async {
         let skipped = |p: &Proc| {
@@ -354,9 +350,8 @@ async fn logs_and_history_never_contain_secret_query_values() {
 async fn the_worker_needs_transmission_and_a_database_but_not_the_yaml_url() {
     let h = Harness::new().await;
     let run = |vars: &[(&str, &str)], remove: &[&str]| {
-        let mut cmd = Command::new(env!("CARGO_BIN_EXE_trss-worker"));
-        cmd.current_dir(h.dir.path())
-            .env_remove("CHANNELS_CONFIG_URL")
+        let mut cmd = h.trss_process();
+        cmd.env_remove("CHANNELS_CONFIG_URL")
             .env_remove("TRSS_DB_PATH")
             .env_remove("TRANSMISSION_URL")
             .stdin(Stdio::null());

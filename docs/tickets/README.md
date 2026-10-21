@@ -188,7 +188,7 @@
 | --- | --- | --- | --- |
 | [0144](0144-lighter-structure-baseline.md) | 구조를 바꾸기 전의 테스트·빌드 시간과 인계 코드 줄 수를 측정해요 | 완료 | 없음 |
 | [0145](0145-merge-web-and-worker-crates.md) | `trss-web`과 `trss-worker` 크레이트를 `trss` 크레이트 하나로 합쳐요 | 완료 | 0144 |
-| [0146](0146-one-trss-process-and-container.md) | web과 worker를 `trss` 프로세스 하나와 컨테이너 하나로 돌려요 | 대기 | 0145 |
+| [0146](0146-one-trss-process-and-container.md) | web과 worker를 `trss` 프로세스 하나와 컨테이너 하나로 돌려요 | 완료 | 0145 |
 | [0147](0147-commands-start-at-once.md) | 명령과 자막 작업을 적은 곳에서 바로 실행을 시작해요 | 대기 | 0146 |
 | [0148](0148-one-instance-lock-and-cycle-stall.md) | 잠금을 단일 실행 잠금 하나로 바꾸고 수집 멈춤을 수집 주기만으로 판정해요 | 대기 | 0147 |
 | [0149](0149-no-worker-in-texts.md) | 화면과 서버가 보내는 문구에서 worker를 빼요 | 대기 | 0146 |

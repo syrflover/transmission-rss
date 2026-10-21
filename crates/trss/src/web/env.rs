@@ -6,9 +6,9 @@ use std::{
 use crate::web::origin_guard::{AllowedHosts, HOSTS_VAR};
 use url::Url;
 
-/// Environment variable naming the address `trss-web` listens on.
+/// Environment variable naming the address the web listens on.
 pub const BIND_VAR: &str = "TRSS_WEB_BIND";
-/// Environment variable naming the port `trss-web` listens on.
+/// Environment variable naming the port the web listens on.
 pub const PORT_VAR: &str = "TRSS_WEB_PORT";
 /// Environment variable naming the directory that holds the frontend build.
 pub const STATIC_DIR_VAR: &str = "TRSS_WEB_STATIC_DIR";
@@ -53,7 +53,7 @@ impl std::fmt::Debug for BrowserAccess {
     }
 }
 
-/// Deployment settings of `trss-web`, read from the environment.
+/// Deployment settings of the web, read from the environment.
 ///
 /// There is no app login (access is limited by the network in front of the
 /// app), so the default bind address is loopback; a deployment that should be
