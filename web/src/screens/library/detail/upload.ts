@@ -10,14 +10,13 @@
  * the file, so an image named `a.ass` is sent and dropped there.
  */
 
+import type { UploadKind } from "../../../lib/api-types/UploadKind";
 import type { UploadLimits } from "../../../lib/api-types/UploadLimits";
 import { sizeText } from "../../../lib/size.ts";
 
 export type { UploadLimits };
 
-export type Kind = "subtitle" | "font" | "archive";
-
-export const KIND_LABEL: Record<Kind, string> = {
+export const KIND_LABEL: Record<UploadKind, string> = {
   subtitle: "자막",
   font: "폰트",
   archive: "압축 파일",
@@ -39,7 +38,7 @@ export const SKIPPED_REASON = "이름으로 보아 자막이나 폰트가 아니
  * file of its own in the package. The server tells the format by the first
  * bytes and drops a file that is none.
  */
-export function kindByName(name: string): Kind | null {
+export function kindByName(name: string): UploadKind | null {
   const base = name.slice(name.lastIndexOf("/") + 1).toLowerCase();
   const dot = base.lastIndexOf(".");
   if (dot <= 0) return null;
@@ -72,7 +71,7 @@ export interface Entry<F extends Chosen = Chosen> {
   /** What the server is told the file is called. */
   name: string;
   /** `null`: left out, and only its name is sent. */
-  kind: Kind | null;
+  kind: UploadKind | null;
 }
 
 export function entriesOf<F extends Chosen>(files: readonly F[], firstKey: number): Entry<F>[] {
@@ -87,7 +86,7 @@ export interface Plan<F extends Chosen = Chosen> {
   send: Entry<F>[];
   /** The files left out, whose names are sent. */
   skip: Entry<F>[];
-  counts: Record<Kind, number>;
+  counts: Record<UploadKind, number>;
   totalBytes: number;
   /** Why the upload cannot be sent, as sentences; empty when it can. */
   problems: string[];
@@ -96,10 +95,10 @@ export interface Plan<F extends Chosen = Chosen> {
 export function planOf<F extends Chosen>(entries: readonly Entry<F>[], limits: UploadLimits): Plan<F> {
   const send = entries.filter((e) => e.kind !== null);
   const skip = entries.filter((e) => e.kind === null);
-  const counts: Record<Kind, number> = { subtitle: 0, font: 0, archive: 0 };
+  const counts: Record<UploadKind, number> = { subtitle: 0, font: 0, archive: 0 };
   let totalBytes = 0;
   for (const e of send) {
-    counts[e.kind as Kind] += 1;
+    counts[e.kind as UploadKind] += 1;
     totalBytes += e.file.size;
   }
   const problems: string[] = [];
@@ -122,7 +121,7 @@ export function planOf<F extends Chosen>(entries: readonly Entry<F>[], limits: U
 }
 
 /** `자막 2개 · 폰트 1개`: the kinds that are there. */
-export function countsText(counts: Record<Kind, number>): string {
+export function countsText(counts: Record<UploadKind, number>): string {
   return (["subtitle", "font", "archive"] as const)
     .filter((kind) => counts[kind] > 0)
     .map((kind) => `${KIND_LABEL[kind]} ${counts[kind]}개`)

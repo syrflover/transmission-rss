@@ -8,6 +8,7 @@ use crate::place::replace::records::{Compared, Comparison, Format, Item, PlanVie
 /// What the open plans of a `교체 승인` to-do change, summed: the card's
 /// reason line.
 #[derive(Debug, Default, Serialize, PartialEq)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(rename = "ReplacementChanges"))]
 pub struct Changes {
     /// Dialogue lines.
     pub added: u64,

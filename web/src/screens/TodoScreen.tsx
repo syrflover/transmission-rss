@@ -12,7 +12,7 @@ import {
   fetchFollowSuggestions,
   fetchJobs,
   fetchTodos,
-  type FollowSuggestion,
+  type FollowSuggestionView,
   type JobGroups,
   type TodoList,
 } from "./todo/api";
@@ -61,7 +61,7 @@ export function TodoScreen() {
     { match: suggestionsChanged, retryMs: TODOS_RETRY_MS },
     "보관 제안을 불러오지 못했어요.",
   );
-  const follows = useRead<FollowSuggestion[]>(
+  const follows = useRead<FollowSuggestionView[]>(
     KEYS.follow,
     fetchFollowSuggestions,
     { match: suggestionsChanged, retryMs: TODOS_RETRY_MS },

@@ -3,6 +3,7 @@ import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ApiError } from "@/lib/api";
+import type { CollectionSettings } from "@/lib/api-types";
 import { useCached } from "@/lib/cached";
 import { collectFolderChanged, KEYS } from "@/screens/collect/cache";
 import {
@@ -12,13 +13,13 @@ import {
 } from "@/screens/collect/channels/styles";
 
 import { Banner, BTN } from "../parts";
-import { loadCollection, saveCollection, type Collection } from "./api";
+import { loadCollection, saveCollection } from "./api";
 
 const LOAD_FAILED = "수집 폴더를 불러오지 못했어요.";
 
 /** `수집 폴더`: where the worker saves what it receives, and the optional folder finished works move to. */
 export function CollectionPanel() {
-  const collection = useCached<Collection>(
+  const collection = useCached<CollectionSettings>(
     KEYS.collection,
     loadCollection,
     LOAD_FAILED,
@@ -71,8 +72,8 @@ function CollectionForm({
   stored,
   onSaved,
 }: {
-  stored: Collection;
-  onSaved: (next: Collection) => void;
+  stored: CollectionSettings;
+  onSaved: (next: CollectionSettings) => void;
 }) {
   const uid = useId();
   const [folder, setFolder] = useState(stored.folder ?? "");
@@ -81,7 +82,7 @@ function CollectionForm({
   const [known, setKnown] = useState(stored);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [conflict, setConflict] = useState<Collection | null>(null);
+  const [conflict, setConflict] = useState<CollectionSettings | null>(null);
   const [saved, setSaved] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const confirmRef = useRef<HTMLDivElement>(null);

@@ -1,8 +1,9 @@
 import type { ReactNode } from "react";
 
+import type { EpisodeSegment } from "@/lib/api-types";
 import { cn } from "@/lib/utils";
 
-import { episodeLabel, type EpisodeSegment } from "./episodeLine.ts";
+import { episodeLabel } from "./episodeLine.ts";
 import { SubtitleIcon } from "./icons";
 
 /**

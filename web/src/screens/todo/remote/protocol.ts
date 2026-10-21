@@ -1,84 +1,25 @@
 /**
- * The messages of a job's remote screen socket (`web/screen_api.rs` in `trss`
- * is the contract). Everything here is pure: the screen's component only
- * moves these between the socket and the page.
+ * The messages of a job's remote screen socket (`web/screen_api.rs` in `trss` is the contract). The shapes are generated
+ * from the Rust types (`lib/api-types`, `cargo types`): `ServerMessage` from the server's messages and `ClientMessage`
+ * from the ones it takes, so a message the server cannot send or read is not one this file knows. What is here is
+ * pure: the screen's component only moves these between the socket and the page. It imports the types by a relative
+ * path, type-only, so it runs under `node --test`.
  */
 
-/** What a device reports about the area that shows the remote page. */
-export interface Viewport {
-  /** CSS pixels. */
-  width: number;
-  height: number;
-  /** Device pixel ratio. */
-  dpr: number;
-  touch: boolean;
-}
+import type { ClientMessage, PageDialog, ServerMessage, Tab } from "../../../lib/api-types";
 
-/**
- * Why the server ended a socket: the page or its connection is gone, the job's binding changed, the run could not be
- * reached, the page did not answer when the screen opened, or too many screens are open on the binding already.
- */
-export type EndedReason = "browser" | "run" | "unreachable" | "stuck" | "replaced";
-
-/** One tab of the run: a page the server browser has open. */
-export interface Tab {
-  /** What a switch or close request names the page by. */
-  id: string;
-  /** The page's title, already cut by the server; empty when the page has none. */
-  title: string;
-  /** Only the host of the page's address, never a path or query; `null` for a page with none (`about:blank`). */
-  host: string | null;
-  /** The page the screen shows. */
-  shown: boolean;
-  /** The run's first page cannot be closed. */
-  closable: boolean;
-}
-
-/** The kinds of dialog a page shows: `alert("…")`, `confirm("…")`, `prompt("…")`, and the ask before leaving it. */
-export type DialogKind = "alert" | "confirm" | "prompt" | "beforeunload";
-
-/** A dialog the remote page shows, which no frame draws: the person answers it here. */
-export interface PageDialog {
-  /** What the answer names the dialog by. */
-  id: number;
-  kind: DialogKind;
-  /** The page's text, cut by the server; empty for `beforeunload`, whose text browsers no longer show. */
-  message: string;
-  /** Only the host of the frame that opened it; `null` for one with none. */
-  host: string | null;
-  /** A prompt's default text. */
-  prompt: string;
-}
-
-/** Whether a step back or forward is allowed on the page shown, and its host. */
-export interface Nav {
-  back: boolean;
-  forward: boolean;
-  host: string | null;
-}
-
-export type ServerMessage =
-  /** A change of size is done (or, on connecting, the size the page has now); `gen` names the frames of it. */
-  | ({ type: "viewport"; gen: number } & Viewport)
-  /** A JPEG frame of generation `gen`; `width` and `height` are the remote page's CSS pixels. */
-  | { type: "frame"; gen: number; width: number; height: number; data: string }
-  /** An input was dropped; `gen` is the generation the page is at. */
-  | { type: "dropped"; gen: number }
-  /** The state of the page shown; sent on connecting and whenever it changes. */
-  | ({ type: "nav" } & Nav)
-  /** The run's tabs in the order the worker listed them; sent on connecting and whenever they change. */
-  | { type: "tabs"; tabs: Tab[] }
-  /**
-   * Whether the page answers: `false` once it did not answer an input in time (inputs are not sent to it), `true` once
-   * it answers again. Sent on connecting and whenever it changes; never while the page never stalled.
-   */
-  | { type: "page"; responding: boolean }
-  /**
-   * The dialog the page shows, or `null` once it closed. Inputs, reloads and steps are not sent to the page meanwhile.
-   * Sent on connecting and whenever it changes.
-   */
-  | { type: "dialog"; dialog: PageDialog | null }
-  | { type: "ended"; reason: EndedReason };
+export type {
+  ClientMessage,
+  DialogKind,
+  EndedReason,
+  PageDialog,
+  PageNav,
+  ScreenLimits,
+  ServerMessage,
+  Tab,
+  TouchPoint,
+  Viewport,
+} from "../../../lib/api-types";
 
 const isNumber = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
 
@@ -158,69 +99,20 @@ export function parseServerMessage(text: string): ServerMessage | null {
   }
 }
 
-export type MouseEventName = "mousePressed" | "mouseReleased" | "mouseMoved" | "mouseWheel";
-export type MouseButton = "none" | "left" | "middle" | "right" | "back" | "forward";
-export type TouchEventName = "touchStart" | "touchMove" | "touchEnd" | "touchCancel";
-export type KeyEventName = "keyDown" | "keyUp" | "rawKeyDown" | "char";
-
-export interface TouchPoint {
-  x: number;
-  y: number;
-  id: number;
-}
+/*
+ * The server's `ClientMessage` is one enum tagged by `type`, so the parts the input code names are that union narrowed.
+ * An input is made before it is stamped with the generation of the frame it was made on.
+ */
+type MouseMessage = Extract<ClientMessage, { type: "mouse" }>;
+export type MouseEventName = MouseMessage["event"];
+export type MouseButton = NonNullable<MouseMessage["button"]>;
+export type TouchEventName = Extract<ClientMessage, { type: "touch" }>["event"];
+export type KeyEventName = Extract<ClientMessage, { type: "key" }>["event"];
 
 /** An input as the device makes it, before it is stamped with the generation of the frame it was made on. */
-export type InputBody =
-  | {
-      type: "mouse";
-      event: MouseEventName;
-      x: number;
-      y: number;
-      button?: MouseButton;
-      buttons?: number;
-      clickCount?: number;
-      modifiers?: number;
-      deltaX?: number;
-      deltaY?: number;
-    }
-  | { type: "touch"; event: TouchEventName; points: TouchPoint[]; modifiers?: number }
-  | {
-      type: "key";
-      event: KeyEventName;
-      key?: string;
-      code?: string;
-      text?: string;
-      keyCode?: number;
-      modifiers?: number;
-    }
-  | { type: "text"; text: string };
+export type InputBody = DistributiveOmit<Extract<ClientMessage, { gen: number }>, "gen">;
 
-export type ClientMessage =
-  | ({ type: "viewport" } & Viewport)
-  | { type: "reload" }
-  /** A step back or forward in the page's history; the server judges it again on the page's own history. */
-  | { type: "back" }
-  | { type: "forward" }
-  /** The answer to the dialog `id`: `accept` is 확인 (떠나기 for `beforeunload`); `text` answers an accepted prompt. */
-  | { type: "dialog"; id: number; accept: boolean; text?: string }
-  | (InputBody & { gen: number });
-
-/**
- * What the socket of a screen takes (`limits` of the job's screen): the device keeps within it so that the server need
- * not refuse a message or a size. The server drops a message over `max_message_bytes` by closing the socket.
- */
-export interface ScreenLimits {
-  /** The least and most width or height of the viewport, in CSS pixels. */
-  min_side: number;
-  max_side: number;
-  /** The least and most pixel ratio of the viewport. */
-  min_dpr: number;
-  max_dpr: number;
-  /** The most bytes of one message. */
-  max_message_bytes: number;
-  /** The most characters of a prompt's answer. */
-  max_prompt_text: number;
-}
+type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
 
 /** The text frame to send, or `null` when it would be too large for the socket (`maxBytes`). */
 export function encode(message: ClientMessage, maxBytes: number): string | null {

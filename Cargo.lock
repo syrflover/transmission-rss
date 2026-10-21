@@ -3173,6 +3173,7 @@ dependencies = [
  "trss-archive",
  "trss-browser",
  "trss-core",
+ "ts-rs",
  "url",
  "zip",
 ]

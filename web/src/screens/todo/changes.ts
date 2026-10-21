@@ -5,7 +5,7 @@ import type {
   ReplacementChanges,
   StyleChange,
   TimingLine,
-} from "./replacementTypes.ts";
+} from "../../lib/api-types";
 
 /**
  * What the content comparison of a replacement shows (`docs/specs/subtitles.md`, 교체 비교와 승인; the 교체 승인

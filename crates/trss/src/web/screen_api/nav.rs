@@ -9,8 +9,11 @@
 //! an address: [`tab_title`] replaces any title that may name one by nothing),
 //! and never in a log.
 
-use serde_json::{json, Value};
+use serde::Serialize;
+use serde_json::Value;
 use url::{Position, Url};
+
+use super::protocol::{Outgoing, Tab};
 
 /// The longest title of a tab, in characters; a longer one is cut.
 const TITLE_CHARS: usize = 40;
@@ -152,7 +155,8 @@ impl History {
 
 /// The state of the back and forward buttons and the host of the page shown:
 /// the `nav` message.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "PageNav"))]
 pub struct Nav {
     pub back: bool,
     pub forward: bool,
@@ -161,10 +165,7 @@ pub struct Nav {
 
 impl Nav {
     pub fn message(&self) -> String {
-        json!({
-            "type": "nav", "back": self.back, "forward": self.forward, "host": self.host,
-        })
-        .to_string()
+        Outgoing::Nav(self.clone()).text()
     }
 }
 
@@ -176,25 +177,27 @@ impl Nav {
 /// run's first page, which has no close control.
 pub fn tabs_message(pages: &[String], targets: &Value, shown: &str, first: Option<&str>) -> String {
     let infos = targets.as_array().map(Vec::as_slice).unwrap_or_default();
-    let tabs: Vec<Value> = pages
+    let tabs: Vec<Tab> = pages
         .iter()
         .filter_map(|id| {
             let info = infos.iter().find(|t| t["targetId"].as_str() == Some(id))?;
             let address = info["url"].as_str().unwrap_or_default();
-            Some(json!({
-                "id": id,
-                "title": tab_title(info["title"].as_str().unwrap_or_default(), address),
-                "host": host_of(address),
-                "shown": id == shown,
-                "closable": first != Some(id.as_str()),
-            }))
+            Some(Tab {
+                id: id.clone(),
+                title: tab_title(info["title"].as_str().unwrap_or_default(), address),
+                host: host_of(address),
+                shown: id == shown,
+                closable: first != Some(id.as_str()),
+            })
         })
         .collect();
-    json!({ "type": "tabs", "tabs": tabs }).to_string()
+    Outgoing::Tabs { tabs }.text()
 }
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
+
     use super::*;
 
     fn history(current: usize, urls: &[&str]) -> History {

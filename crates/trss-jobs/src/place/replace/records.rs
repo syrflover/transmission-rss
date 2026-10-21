@@ -4,8 +4,10 @@
 //! ([`durable`]).
 
 use rusqlite::{params, Connection, OptionalExtension, Row, TransactionBehavior};
+use serde::Serialize;
 use trss_core::Millis;
 // What the screens read of a comparison.
+use trss_subtitles::compare::{DialogueLine, TimingLine};
 pub use trss_subtitles::compare::{Diff, Encoding, Format, Item, NotCompared, Side};
 
 use crate::{
@@ -365,6 +367,15 @@ pub fn make_plan(
     })
 }
 
+/// The lines of a plan's difference as the table keeps them and the lines
+/// route answers (`GET /api/subtitle-jobs/{id}/replacements/{plan}/lines`).
+#[derive(Debug, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(rename = "ReplacementLines"))]
+pub struct ComparisonLines {
+    pub dialogue: Vec<DialogueLine>,
+    pub timing: Vec<TimingLine>,
+}
+
 /// A comparison as its table keeps it.
 struct Stored {
     path: String,
@@ -389,11 +400,8 @@ impl Stored {
             Compared::Diff(mut diff) => {
                 let dialogue = std::mem::take(&mut diff.dialogue.lines);
                 let timing = std::mem::take(&mut diff.timing.lines);
-                let lines = format!(
-                    "{{\"dialogue\":{},\"timing\":{}}}",
-                    serde_json::to_string(&dialogue).map_err(json)?,
-                    serde_json::to_string(&timing).map_err(json)?
-                );
+                let lines =
+                    serde_json::to_string(&ComparisonLines { dialogue, timing }).map_err(json)?;
                 Self {
                     path,
                     diff: Some(serde_json::to_string(&*diff).map_err(json)?),

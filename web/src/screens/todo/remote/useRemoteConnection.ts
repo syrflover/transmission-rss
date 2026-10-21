@@ -13,7 +13,7 @@ import {
   type ClientMessage,
   type EndedReason,
   type InputBody,
-  type Nav,
+  type PageNav,
   type PageDialog,
   type ScreenLimits,
   type ServerMessage,
@@ -53,7 +53,7 @@ export interface Connection {
   back: () => void;
   forward: () => void;
   /** The state of the page shown (what the buttons and the host show), as the server last said; `null` before it did. */
-  nav: Nav | null;
+  nav: PageNav | null;
   /** The run's tabs as the server last said; none before it did, and after another run's screen opened. */
   tabs: Tab[];
   /** Whether the page answers, as the server last said: inputs are not sent to one that does not. */
@@ -112,7 +112,7 @@ export function useRemoteConnection(options: {
   const [reason, setReason] = useState<EndedReason | null>(null);
   const [frame, setFrame] = useState<{ width: number; height: number } | null>(null);
   const [planned, setPlanned] = useState<Viewport | null>(null);
-  const [nav, setNav] = useState<Nav | null>(null);
+  const [nav, setNav] = useState<PageNav | null>(null);
   const [tabs, setTabs] = useState<Tab[]>([]);
   const [responding, setResponding] = useState(true);
   const [dialog, setDialog] = useState<PageDialog | null>(null);

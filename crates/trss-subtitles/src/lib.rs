@@ -322,7 +322,9 @@ pub struct Failure {
 }
 
 /// The classes of a failed receipt, the same for every source.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(rename_all = "snake_case")]
 pub enum FailureKind {
     /// The post or the file is gone (`원본 없음`).
     Missing,

@@ -1,4 +1,4 @@
-import type { Change } from "./api-types";
+import type { Change, StreamEvent } from "./api-types";
 
 /**
  * The one connection a tab keeps to the server's event stream (`GET
@@ -42,9 +42,12 @@ export interface Subscriber {
   reread: () => void;
 }
 
+/** The names of the stream's events (the generated `StreamEvent`, `GET /api/events`) and `error`, which the browser raises. */
+type EventName = StreamEvent["event"] | "error";
+
 /** What of the browser's `EventSource` the connection uses. */
 export interface EventSourceLike {
-  addEventListener(type: string, listener: (event: { data: string }) => void): void;
+  addEventListener(type: EventName, listener: (event: { data: string }) => void): void;
   close(): void;
   /** 0 connecting, 1 open, 2 closed (the browser gave up: it does not open the stream again by itself). */
   readonly readyState: number;
@@ -148,7 +151,7 @@ export function createEvents(deps: EventsDeps): Events {
       heard((data) => {
         let change: Change;
         try {
-          change = JSON.parse(data) as Change;
+          change = JSON.parse(data) as Extract<StreamEvent, { event: "change" }>["data"];
         } catch {
           // A change that cannot be read is one that was missed.
           resync();

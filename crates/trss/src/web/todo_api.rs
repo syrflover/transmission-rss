@@ -212,6 +212,7 @@ pub fn routes() -> Router<AppState> {
 }
 
 #[derive(Debug, Serialize, PartialEq)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 pub struct WorkLink {
     pub id: String,
     pub name: String,
@@ -374,8 +375,9 @@ pub fn failure_of(row: &Revision, base: Option<&FsPath>) -> RevisionFailure {
 }
 
 #[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 #[serde(tag = "kind", rename_all = "snake_case")]
-enum FailureItem {
+pub(super) enum FailureItem {
     Revision {
         at: i64,
         history_item_id: i64,
@@ -397,7 +399,8 @@ enum FailureItem {
 }
 
 #[derive(Serialize)]
-struct FailureList {
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub(super) struct FailureList {
     items: Vec<FailureItem>,
 }
 
@@ -449,7 +452,8 @@ async fn list(State(state): State<AppState>) -> Result<Json<FailureList>, ApiErr
 // `자막 구독`
 
 #[derive(Debug, Serialize, PartialEq)]
-struct FollowSuggestionView {
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub(super) struct FollowSuggestionView {
     work: WorkRefView,
     title: String,
     season: u32,
@@ -462,7 +466,8 @@ struct FollowSuggestionView {
 }
 
 #[derive(Debug, Serialize)]
-struct FollowSuggestions {
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub(super) struct FollowSuggestions {
     suggestions: Vec<FollowSuggestionView>,
 }
 
@@ -540,7 +545,8 @@ async fn todos(State(state): State<AppState>) -> Result<Json<TodoList>, ApiError
 }
 
 #[derive(Serialize)]
-struct TodoCount {
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub(super) struct TodoCount {
     count: usize,
 }
 

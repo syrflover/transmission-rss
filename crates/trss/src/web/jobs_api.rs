@@ -210,20 +210,23 @@ use axum::{
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
-use serde_json::json;
 
 use trss_collect::store::anissia::PickError;
 use trss_core::episode::{segments, shown as shown_episode, EpisodeNumber, EpisodeSegment};
+use trss_jobs::model::{AssetKind, Outcome, PlanAction, StepState, SubtitleFormat as StoredFormat};
 use trss_jobs::{
     place::{
-        unchanged,
+        episode::Assignment,
+        unchanged::{self, FontReceipt},
         unpack::{unpack_status, UnpackStatus},
     },
     store::{DonePage, FileRow, FileShown, JobDetail, JobRow, StepRow},
-    AskedFinish, Created, FileState, ItemState, NewFind, NewJob, Restarted, StepKind, Wait, FIND,
-    RELOCATE, UPLOAD,
+    todo::WorkRef,
+    AskedFinish, Created, FailureKind, FileState, Format as FileFormat, ItemState, JobState,
+    NewFind, NewJob, Restarted, StepKind, Wait, FIND, RELOCATE, UPLOAD,
 };
 use trss_library::store::seasons::{anissia::AnissiaLink, movie::MovieLink, SeasonError};
+use trss_subtitles::upload::{Archive as ArchiveType, Kind as UploadKind};
 
 use super::{artwork_api::image_url, commands_api::now_millis, ApiError, AppState};
 
@@ -261,15 +264,12 @@ fn internal(e: &dyn std::fmt::Display) -> ApiError {
     ApiError::Internal(e.to_string())
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq)]
-pub struct WorkRefView {
-    pub id: String,
-    /// The work title (작품명).
-    pub name: String,
-    pub cover_url: Option<String>,
-}
+/// The work a job is about ([`WorkRef`], which the to-dos name it by too).
+pub type WorkRefView = WorkRef;
 
+/// Items received, failed, and all of them.
 #[derive(Debug, Clone, Copy, Serialize, PartialEq)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "JobProgress"))]
 pub struct ProgressView {
     pub done: usize,
     pub failed: usize,
@@ -277,10 +277,13 @@ pub struct ProgressView {
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "JobRow"))]
 pub struct JobRowView {
     pub id: String,
-    /// `pick` (a person picked the candidates) or `auto` (the subscribed
-    /// creator's, received without a pick).
+    /// How the job came to be: `pick` (a person picked the candidates),
+    /// `auto` (the subscribed creator's, received without a pick), `upload`,
+    /// `find` or `relocate`.
+    #[cfg_attr(test, ts(type = r#""pick" | "auto" | "upload" | "find" | "relocate""#))]
     pub origin: String,
     /// For a revision of a received subtitle: the observation received before
     /// and the latest job that received it.
@@ -289,9 +292,12 @@ pub struct JobRowView {
     /// A revision of a subtitle file whose creator the user named (no earlier
     /// receipt exists, so `revision_of` and `revises_job` are `null`).
     pub revises_attributed: bool,
-    pub state: &'static str,
-    pub wait: Option<&'static str>,
-    pub stage: Option<&'static str>,
+    pub state: JobState,
+    pub wait: Option<Wait>,
+    /// The step a `running` job is at, or an `interrupted` job was cut in.
+    pub stage: Option<StepKind>,
+    /// One sentence about the state: why it waits, what failed, what is
+    /// unclear.
     pub note: Option<String>,
     pub state_at: i64,
     pub created_at: i64,
@@ -310,7 +316,8 @@ pub struct JobRowView {
     pub creator: Option<String>,
     pub source: Option<String>,
     pub progress: ProgressView,
-    pub failure: Option<&'static str>,
+    /// The class of the first failed item's failure, when it has one.
+    pub failure: Option<FailureKind>,
     /// For an upload or a find job: what it kept and dropped.
     pub upload: Option<UploadView>,
     /// A find job a person finished, which the worker ends once no download
@@ -322,7 +329,9 @@ pub struct JobRowView {
     pub receiving: bool,
 }
 
+/// What an upload or a find job kept, by kind, and how many files it dropped.
 #[derive(Debug, Clone, Copy, Serialize, PartialEq)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "UploadSummary"))]
 pub struct UploadView {
     pub subtitles: usize,
     pub fonts: usize,
@@ -347,9 +356,9 @@ fn view(row: &JobRow, covers: &HashMap<String, String>) -> JobRowView {
         revision_of: row.revision_of,
         revises_job: row.revises_job.clone(),
         revises_attributed: row.revises_attributed,
-        state: row.state.code(),
-        wait: row.wait.map(Wait::code),
-        stage: row.stage.map(StepKind::code),
+        state: row.state,
+        wait: row.wait,
+        stage: row.stage,
         note: row.note.clone(),
         state_at: row.state_at,
         created_at: row.created_at,
@@ -371,7 +380,7 @@ fn view(row: &JobRow, covers: &HashMap<String, String>) -> JobRowView {
             failed: row.progress.failed,
             total: row.progress.total,
         },
-        failure: row.failure.map(|f| f.code()),
+        failure: row.failure,
         upload: row.upload.map(|u| UploadView {
             subtitles: u.subtitles,
             fonts: u.fonts,
@@ -402,10 +411,14 @@ pub async fn covers_of<'a>(
         .map_err(|e| internal(&e))
 }
 
+/// A page of done jobs, newest first.
 #[derive(Debug, Serialize)]
-struct DonePageView {
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "DonePage"))]
+pub(super) struct DonePageView {
     items: Vec<JobRowView>,
+    /// What `after` takes for the next page; `null` at the end.
     next: Option<String>,
+    /// How many jobs are done in all.
     total: usize,
 }
 
@@ -418,11 +431,16 @@ async fn page_view(state: &AppState, page: DonePage) -> Result<DonePageView, Api
     })
 }
 
+/// The jobs by group.
 #[derive(Debug, Serialize)]
-struct Groups {
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "JobGroups"))]
+pub(super) struct Groups {
+    /// `failed`, `partial` and `interrupted`, newest first.
     failed: Vec<JobRowView>,
+    /// `waiting` (a person's check first), `held`, `pending`.
     waiting: Vec<JobRowView>,
     running: Vec<JobRowView>,
+    /// The first five done jobs.
     done: DonePageView,
 }
 
@@ -466,38 +484,82 @@ async fn done(
     Ok(Json(page_view(&state, page).await?))
 }
 
+/// Where a step is: the job's steps in the order it goes through them, those
+/// not reached `upcoming` with no time.
+#[derive(Debug, Clone, Copy, Serialize, PartialEq)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "StepProgress"))]
+#[serde(rename_all = "snake_case")]
+pub(super) enum StepShown {
+    /// The step is not reached.
+    Upcoming,
+    Current,
+    /// The step stopped for something (`인증` waiting for a person).
+    Waiting,
+    Done,
+    Failed,
+    /// A `받기` where some items failed.
+    Partial,
+}
+
+impl From<StepState> for StepShown {
+    fn from(state: StepState) -> Self {
+        match state {
+            StepState::Current => StepShown::Current,
+            StepState::Waiting => StepShown::Waiting,
+            StepState::Done => StepShown::Done,
+            StepState::Failed => StepShown::Failed,
+            StepState::Partial => StepShown::Partial,
+        }
+    }
+}
+
+/// A step as the job went through it.
 #[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "JobStep"))]
 struct StepView {
-    step: &'static str,
-    state: &'static str,
+    step: StepKind,
+    state: StepShown,
     at: Option<i64>,
     note: Option<String>,
 }
 
+/// One received file of an item.
 #[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "JobFile"))]
 struct FileView {
     /// The receipt's ID, which `placements` name.
     id: String,
     name: String,
     /// The folders the post shows the file in (`회차/2화`), when it does.
     folder: Option<String>,
-    state: &'static str,
+    /// `receiving` while bytes come in; `held`: its receipt could not be
+    /// confirmed after a restart.
+    state: FileShown,
+    /// Bytes received.
     size: Option<u64>,
     sha256: Option<String>,
+    /// Where it is in the receive area (absolute, as the server sees it);
+    /// `null` once it left the area, stored.
     path: Option<String>,
+    /// The episode of the item that received this same file, when another
+    /// item of the job did.
     shared_with: Option<String>,
     /// `shared_with` without the leading zeros of a whole number.
     shared_with_shown: Option<String>,
     reason: Option<String>,
-    format: Option<&'static str>,
-    failure: Option<&'static str>,
+    /// What its bytes were checked to be, once received.
+    format: Option<FileFormat>,
+    /// The class of a failed file's failure.
+    failure: Option<FailureKind>,
+    /// The answer's HTTP status and media type, when it came over HTTP.
     http_status: Option<u16>,
     content_type: Option<String>,
+    /// For a failure: how many bytes the answer that showed it had.
     response_size: Option<u64>,
     /// For an uploaded file: what its content check judged it to be.
-    kind: Option<&'static str>,
-    /// For an uploaded archive: its format (`zip`, `rar`, `7z`, `gz`, `bz2`, `xz`, `tar`).
-    archive: Option<&'static str>,
+    kind: Option<UploadKind>,
+    /// For an uploaded archive: its format, by its first bytes.
+    archive: Option<ArchiveType>,
     /// For a received archive: what came of unpacking it; `null` before it
     /// was tried, and for a file that is no archive.
     unpack: Option<UnpackView>,
@@ -512,14 +574,27 @@ struct FileView {
     new_assets: Option<usize>,
 }
 
+/// How an archive's unpacking stands.
+#[derive(Debug, Clone, Copy, Serialize, PartialEq)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "UnpackState"))]
+#[serde(rename_all = "snake_case")]
+pub(super) enum UnpackShown {
+    /// Its members were recorded.
+    Done,
+    /// It could not be unpacked (풀지 못함, with `reason`) and stays in the
+    /// receive area.
+    Failed,
+    /// A try this machine failed (with `reason`) waits for the next.
+    Retry,
+    /// A later volume of the split archive `first`, unpacked with it.
+    Volume,
+}
+
 /// What came of unpacking a received archive ([`trss_jobs::place::unpack`]).
 #[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "UnpackResult"))]
 struct UnpackView {
-    /// `done`: its members were recorded; `failed`: it could not be unpacked
-    /// (풀지 못함, with `reason`) and stays in the receive area; `retry`: a
-    /// try this machine failed (with `reason`) waits for the next; `volume`:
-    /// a later volume of the split archive `first`, unpacked with it.
-    state: &'static str,
+    state: UnpackShown,
     reason: Option<String>,
     /// How many tries failed for this machine (a full disk, a limit, the
     /// child), out of [`trss_jobs::place::unpack::UNPACK_TRIES`], and for
@@ -541,40 +616,51 @@ struct UnpackView {
     fonts: Option<usize>,
 }
 
+/// A file of an upload that was not kept, with why.
 #[derive(Debug, Serialize)]
-struct DroppedView {
-    name: String,
-    reason: String,
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "DroppedFile"))]
+pub(super) struct DroppedView {
+    pub(super) name: String,
+    pub(super) reason: String,
 }
 
+/// One episode of a job: one candidate the user picked.
 #[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "JobItem"))]
 struct ItemView {
     id: i64,
+    /// As Anissia writes it.
     episode: String,
     /// `episode` without the leading zeros of a whole number.
     episode_shown: String,
+    /// The post the candidate names: a public page, never a signed download
+    /// address.
     post_url: String,
-    state: &'static str,
-    wait: Option<&'static str>,
+    state: ItemState,
+    wait: Option<Wait>,
     reason: Option<String>,
-    failure: Option<&'static str>,
+    /// The class of a failed item's failure.
+    failure: Option<FailureKind>,
     /// For an item of a revision job whose files are the earlier receipt's
     /// bytes: that receipt's job. There is nothing to replace.
     unchanged_from: Option<String>,
     files: Vec<FileView>,
 }
 
-/// One row of a job's placement plan ([`trss_jobs::place`]).
+/// One row of a job's placement plan ([`trss_jobs::place`]): a received file
+/// as it was placed.
 #[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "Placement"))]
 struct PlacementView {
     position: i64,
     /// The receipt it was made from (a file's `id`).
     file_id: String,
     /// The received file's name (with its folder in a package).
     name: String,
-    kind: &'static str,
-    format: Option<&'static str>,
-    /// The season's episode it is on; `null` while a person has to say.
+    kind: AssetKind,
+    format: Option<StoredFormat>,
+    /// The season's episode it is on; `null` while a person has to say, or
+    /// for a file on no episode.
     episode: Option<i64>,
     /// The episode the candidate said.
     anissia_episode: Option<String>,
@@ -585,14 +671,14 @@ struct PlacementView {
     /// Whether `named` is the number of `episode` (`01` is episode 1, `13` is
     /// not): `false` when the name says none or the row is on no episode.
     named_is_episode: bool,
-    /// What put it on `episode`: `mapped` (the source's mapping) or
-    /// `explicit` (the same number, or a person's choice).
-    assignment: Option<&'static str>,
-    /// `apply`, `store` or `drop`.
-    action: &'static str,
-    /// `applied`, `stored`, `existing`, `no_video`, `held`, `failed`,
-    /// `dropped`; `null` while under way.
-    outcome: Option<&'static str>,
+    /// What put it on `episode`: its source's episode mapping (`mapped`), its
+    /// own number while the source has no mapping (`same_number`, which
+    /// follows the one decided later), or a person's choice or the same
+    /// number where no source is known (`explicit`).
+    assignment: Option<Assignment>,
+    action: PlanAction,
+    /// What came of it; `null` while under way.
+    outcome: Option<Outcome>,
     note: Option<String>,
     /// Server paths: the video it was put beside, its applied copy while it
     /// is there, and its stored file in the work folder's `.trss/` (in the
@@ -605,27 +691,38 @@ struct PlacementView {
     /// before, which it uses) or `new` (received and kept as a new file);
     /// `null` otherwise. A font only shared by another episode of the job is
     /// never `unchanged`.
-    font_receipt: Option<&'static str>,
+    font_receipt: Option<FontReceipt>,
 }
 
+/// One line of a job's log.
 #[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "LogEntry"))]
 struct LogView {
     at: i64,
+    /// What happened, as a sentence to show as is.
     message: String,
+    /// Shown dimmed beside it (a size, a host).
     detail: Option<String>,
 }
 
+/// One job with its steps, items, placements and log.
 #[derive(Debug, Serialize)]
-struct DetailView {
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "JobDetail"))]
+pub(super) struct DetailView {
     #[serde(flatten)]
     row: JobRowView,
     steps: Vec<StepView>,
     items: Vec<ItemView>,
+    /// For an upload or a find job: the files left out, in the order they
+    /// were named or downloaded.
     dropped: Vec<DroppedView>,
     /// What became of each received file: its episode, whether it was stored
     /// and applied, and where.
     placements: Vec<PlacementView>,
+    /// The job's folder in the receive area (absolute, as the server sees
+    /// it).
     receive_dir: String,
+    /// Newest first.
     log: Vec<LogView>,
     /// The remote screen of a job that waits for a site's check in the
     /// server browser ([`super::screen_api`]); `null` when it has none.
@@ -673,14 +770,14 @@ fn steps_view(steps: &[StepRow], row: &JobRow) -> Vec<StepView> {
         let row = row_of;
         Some(match row {
             Some(s) => StepView {
-                step: kind.code(),
-                state: s.state.code(),
+                step: kind,
+                state: s.state.into(),
                 at: Some(s.at),
                 note: s.note.clone(),
             },
             None => StepView {
-                step: kind.code(),
-                state: "upcoming",
+                step: kind,
+                state: StepShown::Upcoming,
                 at: None,
                 note: None,
             },
@@ -702,7 +799,7 @@ fn unpack_view(
         .volume_of
         .as_deref()
         .and_then(|first| names.get(first).copied());
-    let view = |state, tries| UnpackView {
+    let view = |state: UnpackShown, tries| UnpackView {
         state,
         reason: None,
         tries,
@@ -716,11 +813,11 @@ fn unpack_view(
     Some(match unpack_status(file, of.iter().copied(), first)? {
         UnpackStatus::Volume { first } => UnpackView {
             first,
-            ..view("volume", 0)
+            ..view(UnpackShown::Volume, 0)
         },
         UnpackStatus::Failed { reason, tries } => UnpackView {
             reason: Some(reason),
-            ..view("failed", tries)
+            ..view(UnpackShown::Failed, tries)
         },
         UnpackStatus::Retry {
             reason,
@@ -729,7 +826,7 @@ fn unpack_view(
         } => UnpackView {
             reason,
             retry_at,
-            ..view("retry", tries)
+            ..view(UnpackShown::Retry, tries)
         },
         UnpackStatus::Done {
             tries,
@@ -740,7 +837,7 @@ fn unpack_view(
             files: Some(files),
             subtitles: Some(subtitles),
             fonts: Some(fonts),
-            ..view("done", tries)
+            ..view(UnpackShown::Done, tries)
         },
     })
 }
@@ -753,12 +850,7 @@ fn file_view(
     unpacked: (&Unpacked<'_>, &HashMap<&str, &str>),
     new_assets: &HashMap<&str, usize>,
 ) -> Option<FileView> {
-    let shown = match file.shown(item)? {
-        FileShown::Receiving => "receiving",
-        FileShown::Held => "held",
-        FileShown::Done => "done",
-        FileShown::Failed => "failed",
-    };
+    let shown = file.shown(item)?;
     // Only a received file is at its path; a held one's path may hold
     // another file or nothing.
     let received = file.state == FileState::Done;
@@ -782,13 +874,13 @@ fn file_view(
         shared_with: shared_with.map(str::to_owned),
         shared_with_shown: shared_with.map(|ep| shown_episode(ep).to_owned()),
         reason: file.reason.clone(),
-        format: file.format.map(|f| f.code()),
-        failure: file.failure.map(|f| f.code()),
+        format: file.format,
+        failure: file.failure,
         http_status: file.http_status,
         content_type: file.content_type.clone(),
         response_size: file.response_size,
-        kind: file.kind.map(|k| k.code()),
-        archive: file.archive.map(|a| a.code()),
+        kind: file.kind,
+        archive: file.archive,
         unpack: unpack_view(file, unpacked.0, unpacked.1),
         unchanged: file.unchanged_asset.is_some(),
         new_assets: file
@@ -855,10 +947,10 @@ async fn detail(
             episode: item.episode.clone(),
             episode_shown: shown_episode(&item.episode).to_owned(),
             post_url: item.post_url.clone(),
-            state: item.state.code(),
-            wait: item.wait.map(Wait::code),
+            state: item.state,
+            wait: item.wait,
             reason: item.reason.clone(),
-            failure: item.failure.map(|f| f.code()),
+            failure: item.failure,
             unchanged_from: item.unchanged_from.clone(),
             files: item
                 .files
@@ -872,15 +964,12 @@ async fn detail(
         .collect();
     let confirm = placement::view(&state, &row, &plan).await?;
     let relocations = placement::relocations(&state, &row).await?;
-    let fonts: HashMap<i64, &'static str> = plan
+    let fonts: HashMap<i64, FontReceipt> = plan
         .iter()
         .filter_map(|p| {
             let made = made.get(&p.position).copied().unwrap_or(false);
             let receipt = receipts.get(p.file_id.as_str()).copied();
-            Some((
-                p.position,
-                unchanged::font_receipt(p, receipt, made)?.code(),
-            ))
+            Some((p.position, unchanged::font_receipt(p, receipt, made)?))
         })
         .collect();
     let placements = plan
@@ -903,16 +992,16 @@ async fn detail(
                 position: p.position,
                 file_id: p.file_id,
                 name: p.name,
-                kind: p.kind.code(),
-                format: p.format.map(|f| f.code()),
+                kind: p.kind,
+                format: p.format,
                 episode: p.placed.as_ref().map(|placed| placed.episode),
-                assignment: p.placed.map(|placed| placed.assignment.code()),
+                assignment: p.placed.map(|placed| placed.assignment),
                 anissia_episode: p.anissia_episode,
                 named_is_episode,
                 named: p.attachment_episode,
                 question: p.question,
-                action: p.action.code(),
-                outcome: p.outcome.map(|o| o.code()),
+                action: p.action,
+                outcome: p.outcome,
                 note: p.note,
                 video: full(at.video.clone()),
                 applied: full(at.applied.clone()),
@@ -1032,22 +1121,35 @@ pub(super) async fn movie_of(
     movie_link(state, work_id, episode).await.map(Some)
 }
 
+/// What creates a job: the candidates are the observation IDs of one creator,
+/// in the order the job lists them.
 #[derive(Debug, Deserialize, Serialize)]
-struct CreateRequest {
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "NewSubtitleJob"))]
+pub(super) struct CreateRequest {
+    /// Made by the browser for one action; the same ID with the same content
+    /// is the same job.
     id: String,
     work_id: String,
     season: u32,
     /// The movie (an episode of `season` 0) the candidates are for; the job
     /// puts every subtitle on it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(test, ts(optional = nullable))]
     movie: Option<u32>,
     candidates: Vec<i64>,
+}
+
+/// The job a request made (`202`) or found made already (`200`).
+#[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub(super) struct JobCreated {
+    pub(super) id: String,
 }
 
 async fn create(
     State(state): State<AppState>,
     Json(request): Json<CreateRequest>,
-) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+) -> Result<(StatusCode, Json<JobCreated>), ApiError> {
     if request.id.trim().is_empty() {
         return Err(ApiError::invalid("요청 ID가 비어 있어요."));
     }
@@ -1116,25 +1218,29 @@ async fn create(
     {
         Created::Created(id) => {
             state.wakes.jobs();
-            Ok((StatusCode::ACCEPTED, Json(json!({ "id": id }))))
+            Ok((StatusCode::ACCEPTED, Json(JobCreated { id })))
         }
-        Created::Existing(id) => Ok((StatusCode::OK, Json(json!({ "id": id })))),
+        Created::Existing(id) => Ok((StatusCode::OK, Json(JobCreated { id }))),
         Created::Mismatch(id) => Err(ApiError::Conflict {
             message: "같은 요청 ID로 다른 작업을 만든 적이 있어요. 화면을 새로고침해 주세요."
                 .to_owned(),
-            current: Some(json!({ "id": id })),
+            current: serde_json::to_value(JobCreated { id }).ok(),
         }),
     }
 }
 
+/// What makes a find job (직접 찾기): the browser's ID for the action, the
+/// season and a candidate source's ID.
 #[derive(Debug, Deserialize)]
-struct FindRequest {
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "NewFindJob"))]
+pub(super) struct FindRequest {
     id: String,
     work_id: String,
     season: u32,
     /// Refused: a movie's subtitles are not found by browsing a creator's
-    /// post.
+    /// post. The screens never send it.
     #[serde(default)]
+    #[cfg_attr(test, ts(skip))]
     movie: Option<u32>,
     /// The source ID of the creator.
     creator: String,
@@ -1143,7 +1249,7 @@ struct FindRequest {
 async fn create_find(
     State(state): State<AppState>,
     Json(request): Json<FindRequest>,
-) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+) -> Result<(StatusCode, Json<JobCreated>), ApiError> {
     let id = request.id.trim();
     if id.is_empty() {
         return Err(ApiError::invalid("요청 ID가 비어 있어요."));
@@ -1195,21 +1301,39 @@ async fn create_find(
     {
         Created::Created(id) => {
             state.wakes.jobs();
-            Ok((StatusCode::ACCEPTED, Json(json!({ "id": id }))))
+            Ok((StatusCode::ACCEPTED, Json(JobCreated { id })))
         }
-        Created::Existing(id) => Ok((StatusCode::OK, Json(json!({ "id": id })))),
+        Created::Existing(id) => Ok((StatusCode::OK, Json(JobCreated { id }))),
         Created::Mismatch(id) => Err(ApiError::Conflict {
             message: "같은 요청 ID로 다른 작업을 만든 적이 있어요. 화면을 새로고침해 주세요."
                 .to_owned(),
-            current: Some(json!({ "id": id })),
+            current: serde_json::to_value(JobCreated { id }).ok(),
         }),
     }
+}
+
+/// Where a find job stands once its 받기 was asked to end.
+#[derive(Debug, Clone, Copy, Serialize, PartialEq)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "FinishState"))]
+#[serde(rename_all = "snake_case")]
+pub(super) enum Finishing {
+    /// The job's 받기 ended before.
+    Done,
+    /// `finishing` on the job until its 받기 ended.
+    Finishing,
+}
+
+/// The answer to `받기 끝내기`.
+#[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "FinishAnswer"))]
+pub(super) struct FinishView {
+    state: Finishing,
 }
 
 async fn finish(
     State(state): State<AppState>,
     Path(id): Path<String>,
-) -> Result<Json<serde_json::Value>, ApiError> {
+) -> Result<Json<FinishView>, ApiError> {
     let asked = state
         .job_requests
         .ask_finish(&id, now_millis())
@@ -1226,19 +1350,34 @@ async fn finish(
                 current: None,
             })
         }
-        AskedFinish::Ended => "done",
+        AskedFinish::Ended => Finishing::Done,
         AskedFinish::Asked => {
             state.wakes.screens();
-            "finishing"
+            Finishing::Finishing
         }
     };
-    Ok(Json(json!({ "state": shown })))
+    Ok(Json(FinishView { state: shown }))
+}
+
+/// Where a restarted job is.
+#[derive(Debug, Clone, Copy, Serialize, PartialEq)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "RestartState"))]
+#[serde(rename_all = "snake_case")]
+pub(super) enum Restart {
+    Running,
+}
+
+/// The answer to `다시 시작`.
+#[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "RestartAnswer"))]
+pub(super) struct RestartView {
+    state: Restart,
 }
 
 async fn restart(
     State(state): State<AppState>,
     Path(id): Path<String>,
-) -> Result<Json<serde_json::Value>, ApiError> {
+) -> Result<Json<RestartView>, ApiError> {
     let restarted = state
         .job_requests
         .restart(&id, now_millis())
@@ -1252,7 +1391,9 @@ async fn restart(
         }),
         Restarted::Restarted => {
             state.wakes.jobs();
-            Ok(Json(json!({ "state": "running" })))
+            Ok(Json(RestartView {
+                state: Restart::Running,
+            }))
         }
     }
 }
@@ -1272,7 +1413,7 @@ pub async fn follow_now(state: &AppState) {
     }
 }
 
-mod placement;
-mod replacement;
+pub(super) mod placement;
+pub(super) mod replacement;
 #[cfg(test)]
 mod tests;

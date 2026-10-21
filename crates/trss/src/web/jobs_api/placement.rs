@@ -7,10 +7,9 @@ use axum::{
     Json,
 };
 use serde::{Deserialize, Serialize};
-use serde_json::json;
 
 use trss_jobs::{
-    model::{JobState, Wait},
+    model::{JobState, RemovalState, Wait},
     place::records::{Confirmed, PlanRow, RowPlacing},
     store::{JobRow, RELOCATE},
 };
@@ -19,9 +18,11 @@ use super::{internal, now_millis, ApiError, AppState};
 
 /// One episode a row can be placed on.
 #[derive(Debug, Serialize)]
-pub(super) struct EpisodeChoice {
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "ConfirmEpisode"))]
+pub(in crate::web) struct EpisodeChoice {
     episode: i64,
-    /// The name of the episode's video, when it has one.
+    /// The name of the episode's video when it has exactly one
+    /// (`Show S01E01.mkv`), else `null`.
     video: Option<String>,
     /// How many videos the library has for it: a subtitle goes beside one
     /// only when there is one.
@@ -31,14 +32,25 @@ pub(super) struct EpisodeChoice {
     subtitle: bool,
 }
 
+/// What a 배치 확인 asks about.
+#[derive(Debug, Clone, Copy, Serialize, PartialEq)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "ConfirmScope"))]
+#[serde(rename_all = "snake_case")]
+pub(in crate::web) enum Scope {
+    /// An upload's or a find job's plan before anything of it is kept.
+    Whole,
+    /// A relocation's plan before any copy moves, its rows and its removals
+    /// ([`RelocationView`]) confirmed as they are.
+    Relocate,
+    /// The rows a job asks about (보류한 줄).
+    Held,
+}
+
 /// The table of a job waiting for its 배치 확인.
 #[derive(Debug, Serialize)]
-pub(super) struct ConfirmView {
-    /// `whole`: an upload's or a find job's plan before anything of it is
-    /// kept; `relocate`: a relocation's plan before any copy moves, its rows
-    /// and its removals ([`RelocationView`]) confirmed as they are; `held`:
-    /// the rows a job asks about (보류한 줄).
-    scope: &'static str,
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "ConfirmView"))]
+pub(in crate::web) struct ConfirmView {
+    scope: Scope,
     /// The plan rows the person places, by position.
     positions: Vec<i64>,
     /// The season's episode count, when known.
@@ -121,9 +133,9 @@ pub(super) async fn view(
         .collect();
     Ok(Some(ConfirmView {
         scope: match whole {
-            true if row.origin == RELOCATE => "relocate",
-            true => "whole",
-            false => "held",
+            true if row.origin == RELOCATE => Scope::Relocate,
+            true => Scope::Whole,
+            false => Scope::Held,
         },
         positions: asked.iter().map(|r| r.position).collect(),
         total,
@@ -132,20 +144,21 @@ pub(super) async fn view(
 }
 
 /// One removal of a relocation job (재배치): an applied copy it takes off
-/// its old episode.
+/// its old episode once the person confirms.
 #[derive(Debug, Serialize)]
-pub(super) struct RelocationView {
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "Relocation"))]
+pub(in crate::web) struct RelocationView {
     id: String,
-    /// The row that applies the same stored subtitle on its new episode,
-    /// if the job has one.
+    /// The `position` of the row that applies the same stored subtitle on its
+    /// new episode; `null`: it is applied there already.
     position: Option<i64>,
     /// The episode the copy is on, and its path in the work folder.
     episode: i64,
     path: String,
     /// `planned` until the person confirms the relocation and until the
     /// copy is taken off; then `done` (taken off), `kept` (left where it is)
-    /// or `held`.
-    state: &'static str,
+    /// or `held` (what became of it is not known).
+    state: RemovalState,
     /// Why a `kept` or `held` copy is where it is.
     reason: Option<String>,
 }
@@ -170,14 +183,16 @@ pub(super) async fn relocations(
             position: r.position,
             episode: r.episode,
             path: r.path,
-            state: r.state.code(),
+            state: r.state,
             reason: r.reason,
         })
         .collect())
 }
 
+/// One row of the answer to a 배치 확인.
 #[derive(Debug, Deserialize)]
-pub(super) struct PlacingRequest {
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "PlacementChoice"))]
+pub(in crate::web) struct PlacingRequest {
     position: i64,
     /// The episode it goes on; `null`: on no episode.
     episode: Option<i64>,
@@ -185,14 +200,27 @@ pub(super) struct PlacingRequest {
     apply: bool,
 }
 
+/// A person's answer to a job's 배치 확인: one entry for each of
+/// `confirm.positions`, and for a relocation the `id` of each planned removal
+/// it showed.
 #[derive(Debug, Deserialize)]
-pub(super) struct ConfirmRequest {
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "ConfirmPlacementBody"))]
+pub(in crate::web) struct ConfirmRequest {
     /// Every row the table places.
     rows: Vec<PlacingRequest>,
     /// A relocation's removals the table showed, by `id`: another set is a
     /// plan the person did not see.
     #[serde(default)]
+    #[cfg_attr(test, ts(optional = nullable))]
     removals: Vec<String>,
+}
+
+/// What a confirmed 배치 확인 will do: how many files are applied and stored.
+#[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "PlacementConfirmed"))]
+pub(in crate::web) struct ConfirmedView {
+    applied: usize,
+    stored: usize,
 }
 
 /// `POST /api/subtitle-jobs/{id}/placement`: the person's 배치 확인 of the
@@ -201,7 +229,7 @@ pub(super) async fn confirm(
     State(state): State<AppState>,
     Path(id): Path<String>,
     Json(request): Json<ConfirmRequest>,
-) -> Result<Json<serde_json::Value>, ApiError> {
+) -> Result<Json<ConfirmedView>, ApiError> {
     let Some(row) = state
         .jobs
         .detail(&id)
@@ -239,7 +267,7 @@ pub(super) async fn confirm(
     match confirmed {
         Confirmed::Queued { applied, stored } => {
             state.wakes.jobs();
-            Ok(Json(json!({ "applied": applied, "stored": stored })))
+            Ok(Json(ConfirmedView { applied, stored }))
         }
         Confirmed::NotFound => Err(ApiError::not_found("작업을 찾지 못했어요.")),
         Confirmed::NotWaiting | Confirmed::Stale => Err(ApiError::Conflict {

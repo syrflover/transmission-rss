@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import type { ConfirmEpisode, ConfirmView, Placement } from "./placementTypes.ts";
+import type { ConfirmEpisode, ConfirmView, Placement } from "../../lib/api-types";
 import {
   NO_VIDEO,
   REPLACES,

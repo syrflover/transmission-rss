@@ -9,7 +9,7 @@ import { sizeText } from "@/lib/size";
 import { cn } from "@/lib/utils";
 
 import { btnAction, btnNeutral, hintClass, inputClass } from "../../collect/channels/styles";
-import { jobPath, uploadSubtitles, type UploadResult } from "../../todo/api";
+import { jobPath, uploadSubtitles, type UploadAnswer } from "../../todo/api";
 import { uploadKept } from "../../todo/format";
 import type { CandidateList } from "../api";
 import {
@@ -36,7 +36,7 @@ const UNKNOWN = "";
 type Phase =
   | { kind: "idle" }
   | { kind: "sending" }
-  | { kind: "made"; result: UploadResult }
+  | { kind: "made"; result: UploadAnswer }
   /** `network`: how many answers in a row did not come at all. */
   | { kind: "unconfirmed"; message: string; network: number }
   | { kind: "refused"; message: string };
@@ -342,8 +342,8 @@ function UploadStatus({ phase, onResend }: { phase: Phase; onResend: () => void 
       return null;
     case "made": {
       const { result } = phase;
-      const kept = result.kept ? uploadKept(result.kept) : null;
-      const dropped = result.dropped ?? [];
+      const kept = "kept" in result ? uploadKept(result.kept) : null;
+      const dropped = "dropped" in result ? result.dropped : [];
       return (
         <div role="status" className="flex flex-col gap-1.5 text-[12.5px] text-text-secondary">
           <p className="m-0">

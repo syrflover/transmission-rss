@@ -95,7 +95,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tokio::sync::{
     broadcast::{
@@ -109,6 +109,7 @@ use trss_browser::cdp::{CdpError, Connection, Event};
 use trss_jobs::ScreenStore;
 
 use super::nav::{host_of, tabs_message, History};
+use super::protocol::{DialogKind, EndedReason, Outgoing, PageDialog};
 use crate::web::commands_api::now_millis;
 
 /// The times a hub keeps (see the module docs and `super`).
@@ -198,7 +199,8 @@ pub(super) const DIALOG_TEXT: usize = 2000;
 const DISMISS_WITHIN: Duration = Duration::from_secs(2);
 
 /// What a device reports when it opens the screen or changes its size.
-#[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 pub struct Viewport {
     pub width: u32,
     pub height: u32,
@@ -244,46 +246,74 @@ pub fn admits(view: &View, gen: u64) -> bool {
 
 /// A message of a socket (see the protocol in [`super`]).
 #[derive(Debug, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "ClientMessage"))]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum Incoming {
     Viewport(Viewport),
     Mouse {
         gen: u64,
+        #[cfg_attr(
+            test,
+            ts(type = r#""mousePressed" | "mouseReleased" | "mouseMoved" | "mouseWheel""#)
+        )]
         event: String,
         x: f64,
         y: f64,
         #[serde(default)]
+        #[cfg_attr(
+            test,
+            ts(
+                type = r#""none" | "left" | "middle" | "right" | "back" | "forward" | null"#,
+                optional
+            )
+        )]
         button: Option<String>,
         #[serde(default)]
+        #[cfg_attr(test, ts(optional = nullable))]
         buttons: Option<u32>,
         #[serde(default, rename = "clickCount")]
+        #[cfg_attr(test, ts(optional = nullable))]
         click_count: Option<u32>,
         #[serde(default)]
+        #[cfg_attr(test, ts(optional = nullable))]
         modifiers: Option<u32>,
         #[serde(default, rename = "deltaX")]
+        #[cfg_attr(test, ts(optional = nullable))]
         delta_x: Option<f64>,
         #[serde(default, rename = "deltaY")]
+        #[cfg_attr(test, ts(optional = nullable))]
         delta_y: Option<f64>,
     },
     Touch {
         gen: u64,
+        #[cfg_attr(
+            test,
+            ts(type = r#""touchStart" | "touchMove" | "touchEnd" | "touchCancel""#)
+        )]
         event: String,
         points: Vec<TouchPoint>,
         #[serde(default)]
+        #[cfg_attr(test, ts(optional = nullable))]
         modifiers: Option<u32>,
     },
     Key {
         gen: u64,
+        #[cfg_attr(test, ts(type = r#""keyDown" | "keyUp" | "rawKeyDown" | "char""#))]
         event: String,
         #[serde(default)]
+        #[cfg_attr(test, ts(optional = nullable))]
         key: Option<String>,
         #[serde(default)]
+        #[cfg_attr(test, ts(optional = nullable))]
         code: Option<String>,
         #[serde(default)]
+        #[cfg_attr(test, ts(optional = nullable))]
         text: Option<String>,
         #[serde(default, rename = "keyCode")]
+        #[cfg_attr(test, ts(optional = nullable))]
         key_code: Option<u32>,
         #[serde(default)]
+        #[cfg_attr(test, ts(optional = nullable))]
         modifiers: Option<u32>,
     },
     Text {
@@ -299,6 +329,7 @@ pub enum Incoming {
         id: u64,
         accept: bool,
         #[serde(default)]
+        #[cfg_attr(test, ts(optional = nullable))]
         text: Option<String>,
     },
 }
@@ -319,10 +350,12 @@ impl Incoming {
 }
 
 #[derive(Debug, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 pub struct TouchPoint {
     pub x: f64,
     pub y: f64,
     #[serde(default)]
+    #[cfg_attr(test, ts(optional = nullable))]
     pub id: Option<u32>,
 }
 
@@ -497,7 +530,7 @@ struct Barrier {
 #[derive(Debug, Clone, Copy)]
 struct Shown {
     id: u64,
-    kind: &'static str,
+    kind: DialogKind,
     /// A `beforeunload` the hub answers itself (`leave`): never sent to the
     /// sockets.
     theirs: bool,
@@ -534,7 +567,7 @@ pub struct Hub {
     /// Cancelled when the page or the connection is gone, or the binding
     /// changed; `reason` says which (`browser`, `run`).
     ended: CancellationToken,
-    reason: Mutex<&'static str>,
+    reason: Mutex<EndedReason>,
     /// The dialog the page shows: inputs, reloads, steps and changes of
     /// size wait while it does (see the module docs).
     dialog: watch::Sender<Option<Shown>>,
@@ -689,7 +722,7 @@ impl Hub {
             input: tokio::sync::Mutex::default(),
             seats: Mutex::default(),
             ended: CancellationToken::new(),
-            reason: Mutex::new("browser"),
+            reason: Mutex::new(EndedReason::Browser),
             dialog: watch::Sender::new(None),
             dialogs: AtomicU64::new(0),
             left_at: Mutex::new(None),
@@ -769,17 +802,17 @@ impl Hub {
     }
 
     /// Why the hub ended: `browser` or `run`.
-    pub fn end_reason(&self) -> &'static str {
+    pub fn end_reason(&self) -> EndedReason {
         *self.reason.lock().expect("reason lock")
     }
 
     /// The page or the connection is gone: every socket of the hub ends.
     fn end(&self) {
-        self.end_because("browser");
+        self.end_because(EndedReason::Browser);
     }
 
     /// Every socket of the hub ends, for `reason` unless it had ended.
-    fn end_because(&self, reason: &'static str) {
+    fn end_because(&self, reason: EndedReason) {
         let mut why = self.reason.lock().expect("reason lock");
         if !self.ended.is_cancelled() {
             *why = reason;
@@ -873,7 +906,7 @@ impl Hub {
             return;
         }
         let mut params = json!({ "accept": accept });
-        if accept && kind == "prompt" {
+        if accept && kind == DialogKind::Prompt {
             params["promptText"] = json!(cut(text.as_deref().unwrap_or(""), DIALOG_TEXT));
         }
         let answer = self.send("Page.handleJavaScriptDialog", params).await;
@@ -905,13 +938,8 @@ impl Hub {
     /// told to the sockets. Waiting for a person is not a page that does not
     /// answer: a stall ends, and the size is applied once the dialog closed.
     fn dialog_opening(self: &Arc<Self>, params: &Value) {
-        let kind = match params["type"].as_str() {
-            Some("confirm") => "confirm",
-            Some("prompt") => "prompt",
-            Some("beforeunload") => "beforeunload",
-            _ => "alert",
-        };
-        let theirs = kind == "beforeunload"
+        let kind = DialogKind::of(params["type"].as_str());
+        let theirs = kind == DialogKind::Beforeunload
             && self
                 .left_at
                 .lock()
@@ -934,17 +962,16 @@ impl Hub {
         }
         // The message is what the page shows the person, as the frames are:
         // it is sent and never logged. Of the frame's address only the host.
-        let message = json!({
-            "type": "dialog",
-            "dialog": {
-                "id": id,
-                "kind": kind,
-                "message": cut(params["message"].as_str().unwrap_or(""), DIALOG_MESSAGE),
-                "host": params["url"].as_str().and_then(host_of),
-                "prompt": cut(params["defaultPrompt"].as_str().unwrap_or(""), DIALOG_TEXT),
-            },
-        });
-        self.publish(&self.dialog_message, message.to_string());
+        let message = Outgoing::Dialog {
+            dialog: Some(PageDialog {
+                id,
+                kind,
+                message: cut(params["message"].as_str().unwrap_or(""), DIALOG_MESSAGE),
+                host: params["url"].as_str().and_then(host_of),
+                prompt: cut(params["defaultPrompt"].as_str().unwrap_or(""), DIALOG_TEXT),
+            }),
+        };
+        self.publish(&self.dialog_message, message.text());
     }
 
     /// The dialog closed (answered, or the page went).
@@ -962,7 +989,7 @@ impl Hub {
         if !shown.theirs {
             self.publish(
                 &self.dialog_message,
-                json!({ "type": "dialog", "dialog": null }).to_string(),
+                Outgoing::Dialog { dialog: None }.text(),
             );
         }
         let hub = self.clone();
@@ -1005,9 +1032,11 @@ impl Hub {
         if self.stalled.swap(stalled, Ordering::SeqCst) == stalled {
             return false;
         }
-        let message: Arc<str> = json!({ "type": "page", "responding": !stalled })
-            .to_string()
-            .into();
+        let message: Arc<str> = Outgoing::Page {
+            responding: !stalled,
+        }
+        .text()
+        .into();
         *last = Some(message.clone());
         let _ = self.out.send(message);
         true
@@ -1322,13 +1351,7 @@ impl Hub {
         .await;
         match applied {
             Ok(after) => {
-                let viewport: Arc<str> = json!({
-                    "type": "viewport", "gen": gen,
-                    "width": viewport.width, "height": viewport.height,
-                    "dpr": viewport.dpr, "touch": viewport.touch,
-                })
-                .to_string()
-                .into();
+                let viewport: Arc<str> = Outgoing::viewport(gen, viewport).text().into();
                 let (done, finished) = oneshot::channel();
                 if self
                     .barriers
@@ -1481,11 +1504,13 @@ impl Hub {
         let Some(data) = params["data"].as_str() else {
             return;
         };
-        let message = json!({
-            "type": "frame", "gen": view.gen,
-            "width": width.round(), "height": height.round(), "data": data,
-        });
-        let _ = self.out.send(message.to_string().into());
+        let message = Outgoing::Frame {
+            gen: view.gen,
+            width: width.round(),
+            height: height.round(),
+            data,
+        };
+        let _ = self.out.send(message.text().into());
     }
 }
 
@@ -1493,8 +1518,8 @@ impl Hub {
 /// connection is gone), `run` (the job's binding changed), `unreachable`,
 /// `stuck` (the page did not answer when the screen opened) or `replaced` (a
 /// newer screen of the binding took this one's seat).
-pub fn ended_message(reason: &str) -> String {
-    json!({ "type": "ended", "reason": reason }).to_string()
+pub fn ended_message(reason: EndedReason) -> String {
+    Outgoing::Ended { reason }.text()
 }
 
 /// Asks a stalled page every [`Times::probe_every`] whether it answers again
@@ -1664,7 +1689,7 @@ async fn watch_binding(hub: std::sync::Weak<Hub>, every: Duration, stop: Cancell
             .and_then(|s| s.seat())
             .is_some_and(|seat| seat == hub.binding);
         if !still {
-            hub.end_because("run");
+            hub.end_because(EndedReason::Run);
             return;
         }
         // The worker changed the run's list of pages.

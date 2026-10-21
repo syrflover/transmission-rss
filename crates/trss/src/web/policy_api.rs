@@ -40,7 +40,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{commands_api::now_millis, ApiError, AppState};
 use trss_core::settings::{
-    policy::{FormatOrder, Policy, CONCURRENT_JOBS, IDLE_TIMEOUT_SECONDS},
+    policy::{FormatOrder, Policy, SubtitleFormat, CONCURRENT_JOBS, IDLE_TIMEOUT_SECONDS},
     SettingsError,
 };
 
@@ -52,28 +52,32 @@ pub fn routes() -> Router<AppState> {
 }
 
 #[derive(Debug, Clone, Serialize)]
-struct Range {
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "PolicyRange"))]
+pub(super) struct Range {
     min: u32,
     max: u32,
 }
 
 #[derive(Debug, Clone, Serialize)]
-struct Limits {
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "PolicyLimits"))]
+pub(super) struct Limits {
     idle_timeout_seconds: Range,
     max_concurrent_jobs: Range,
 }
 
 #[derive(Debug, Clone, Serialize)]
-struct OverrideView {
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "WorkFormatOrder"))]
+pub(super) struct OverrideView {
     work_id: String,
     /// The work title (작품명).
     name: String,
-    format_order: Vec<&'static str>,
+    format_order: Vec<SubtitleFormat>,
 }
 
 #[derive(Debug, Clone, Serialize)]
-struct PolicyView {
-    format_order: Vec<&'static str>,
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "Policy"))]
+pub(super) struct PolicyView {
+    format_order: Vec<SubtitleFormat>,
     idle_timeout_seconds: u32,
     max_concurrent_jobs: u32,
     version: i64,
@@ -82,15 +86,19 @@ struct PolicyView {
     overrides: Vec<OverrideView>,
 }
 
-fn codes(order: &FormatOrder) -> Vec<&'static str> {
-    order.formats().iter().map(|f| f.code()).collect()
+fn codes(order: &FormatOrder) -> Vec<SubtitleFormat> {
+    order.formats().to_vec()
 }
 
 #[derive(Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "PolicyBody"))]
 #[serde(deny_unknown_fields)]
-struct WriteBody {
+pub(super) struct WriteBody {
     /// The version the client saw.
     version: i64,
+    /// Read as strings so that a code the server does not know is refused
+    /// with the sentence of the order's own rule; the screen sends formats.
+    #[cfg_attr(test, ts(as = "Vec<SubtitleFormat>"))]
     format_order: Vec<String>,
     /// Any integer, so a negative one is refused with the range like any other
     /// out of it, not as a body that does not read.

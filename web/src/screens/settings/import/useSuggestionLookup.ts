@@ -2,15 +2,13 @@ import { useEffect, useState } from "react";
 
 import { api, ApiError } from "@/lib/api";
 
-import type { ImportPreview } from "@/lib/api-types";
+import type { Creators, ImportPreview, Schedule, ScheduleEntry } from "@/lib/api-types";
 
-/** What Anissia's schedule says about an anime. */
-export interface ScheduledAnime {
-  subject: string;
-  /** 0 (Sunday) to 6 (Saturday), 7 (`기타`) or 8 (`신작`). */
-  week: number;
-  air_time: string | null;
-}
+/**
+ * What Anissia's schedule says about an anime: the part of a generated schedule entry the review keeps. `week` is 0
+ * (Sunday) to 6 (Saturday), 7 (`기타`) or 8 (`신작`).
+ */
+export type ScheduledAnime = Pick<ScheduleEntry, "subject" | "week" | "air_time">;
 
 export interface SuggestionLookup {
   /** `loading` while Anissia is still being asked; the review is usable all the while. */
@@ -36,14 +34,6 @@ const NOTHING: SuggestionLookup = {
   unlisted: new Set(),
   problem: null,
 };
-
-interface ScheduleAnswer {
-  entries: { anime_no: number; week: number; subject: string; air_time: string | null }[];
-}
-
-interface CreatorsAnswer {
-  creators: { name: string }[];
-}
 
 /** The last week of Anissia's schedule: `신작`. */
 const LAST_WEEK = 8;
@@ -99,9 +89,9 @@ export function useSuggestionLookup(preview: ImportPreview | null): SuggestionLo
       publish({});
       const missing = new Set(animes);
       for (let week = 0; week <= LAST_WEEK && missing.size > 0; week += 1) {
-        let answer: ScheduleAnswer;
+        let answer: Schedule;
         try {
-          answer = await api<ScheduleAnswer>(`/anissia/schedule/${week}`);
+          answer = await api<Schedule>(`/anissia/schedule/${week}`);
         } catch (error) {
           stop(error);
           return;
@@ -121,7 +111,7 @@ export function useSuggestionLookup(preview: ImportPreview | null): SuggestionLo
       for (const animeNo of withCreator) {
         let names: string[] | null;
         try {
-          const answer = await api<CreatorsAnswer>(`/anissia/anime/${animeNo}/creators`);
+          const answer = await api<Creators>(`/anissia/anime/${animeNo}/creators`);
           names = answer.creators.map((creator) => creator.name);
         } catch (error) {
           publish({ creators: { ...current.creators, [animeNo]: null } });

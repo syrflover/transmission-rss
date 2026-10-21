@@ -8,7 +8,7 @@ import { suggestionTitle } from "../collect/archive/ground";
 import { btnNeutral } from "../collect/channels/styles";
 import { nameTitleLink } from "../collect/subs/Candidates";
 import { startDate } from "../collect/subs/format";
-import type { FollowSuggestion } from "./api";
+import type { FollowSuggestionView } from "./api";
 import { Tag } from "./badges";
 import { segmentsText } from "../library/detail/episodeKey.ts";
 
@@ -92,7 +92,7 @@ export function candidatesLink(workId: string, season: number, creatorId?: strin
 }
 
 /** `자막 구독`: the episodes and how many creators, never their names. */
-export function fromFollow(s: FollowSuggestion): Suggestion {
+export function fromFollow(s: FollowSuggestionView): Suggestion {
   return {
     id: `follow:${s.work.id}`,
     kind: "follow",
@@ -109,7 +109,7 @@ export function fromFollow(s: FollowSuggestion): Suggestion {
 export function suggestionRows(
   candidates: readonly TitleCandidate[],
   archives: readonly ArchiveSuggestion[],
-  follows: readonly FollowSuggestion[] = [],
+  follows: readonly FollowSuggestionView[] = [],
 ): Suggestion[] {
   return [...candidates.map(fromCandidate), ...archives.map(fromArchive), ...follows.map(fromFollow)].sort(
     (a, b) => b.order - a.order,

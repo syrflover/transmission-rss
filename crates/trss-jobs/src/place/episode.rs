@@ -10,7 +10,9 @@ use crate::mapping::{whole, Mapping};
 
 /// What puts a stored subtitle on an episode (`assignment` in
 /// `docs/specs/settings.md`, 보관 관계 필드).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(rename_all = "snake_case")]
 pub enum Assignment {
     /// The source's mapping from an observed episode: recomputed when the
     /// mapping changes.

@@ -14,6 +14,9 @@ test-support = ["dep:axum", "dep:futures", "dep:trss-archive", "trss-archive/tes
 # erulabo test (`tests/it/erulabo_sample.rs`, ignored) answers a fake post from
 # inside the browser. Not for the app.
 test-hooks = []
+# Derives `ts_rs::TS` for the types the API sends or takes, which the `trss`
+# tests turn into the screens' TypeScript types. Off in every build of the app.
+ts = ["dep:ts-rs"]
 
 [dependencies]
 trss-browser.workspace = true
@@ -33,6 +36,7 @@ serde = { workspace = true, features = ["derive"] }
 # attachment list (`aPostFiles`).
 serde_json.workspace = true
 thiserror.workspace = true
+ts-rs = { workspace = true, optional = true }
 tokio = { workspace = true, features = ["time", "sync", "fs", "io-util", "rt"] }
 url.workspace = true
 zip.workspace = true

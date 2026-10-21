@@ -1,53 +1,24 @@
 import { api } from "@/lib/api";
+import type { Policy, PolicyBody, PolicyRange, SubtitleFormat } from "@/lib/api-types";
 
 /** The cache key of the policy (`/api/settings/policy`), shared by the settings list row and its panel. */
 export const POLICY_KEY = "settings:policy";
 
-export type SubtitleFormat = "ass" | "srt" | "smi";
-
-export interface Range {
-  min: number;
-  max: number;
-}
-
-/** A work that orders the formats its own way; its subtitles change that, not the settings. */
-export interface PolicyOverride {
-  work_id: string;
-  /** The work title (작품명). */
-  name: string;
-  format_order: SubtitleFormat[];
-}
-
-/**
- * The common policy (`crates/trss/src/web/policy_api.rs`): the order of the
- * subtitle formats and the server browser's idle time and concurrent jobs, one
- * `version` for all three. `saved_at` is Unix milliseconds, `null` (and
- * `version` 0) while the defaults are in use. A save is sent against the
- * version seen, and a stale one answers `conflict` with this view as `current`.
+/*
+ * The shape of the policy is generated (`lib/api-types`, `cargo types`).
  */
-export interface Policy {
-  format_order: SubtitleFormat[];
-  idle_timeout_seconds: number;
-  max_concurrent_jobs: number;
-  version: number;
-  saved_at: number | null;
-  limits: { idle_timeout_seconds: Range; max_concurrent_jobs: Range };
-  overrides: PolicyOverride[];
-}
+export type { Policy, PolicyRange, SubtitleFormat, WorkFormatOrder } from "@/lib/api-types";
 
-/** What a save sends besides the version. */
-export interface PolicyValues {
-  format_order: SubtitleFormat[];
-  idle_timeout_seconds: number;
-  max_concurrent_jobs: number;
-}
+/** What a save sends besides the version: the form's values. */
+export type PolicyValues = Omit<PolicyBody, "version">;
 
 export function loadPolicy(signal?: AbortSignal): Promise<Policy> {
   return api<Policy>("/settings/policy", { signal });
 }
 
 export function savePolicy(version: number, values: PolicyValues): Promise<Policy> {
-  return api<Policy>("/settings/policy", { method: "PUT", body: { version, ...values } });
+  const body: PolicyBody = { version, ...values };
+  return api<Policy>("/settings/policy", { method: "PUT", body });
 }
 
 /** True when a `conflict` answer carries the stored policy, as `current`. */
@@ -85,7 +56,7 @@ export function idleMinutesText(seconds: number): string {
 }
 
 /** The idle time limits in whole minutes: the smallest and largest whole minute within the seconds. */
-export function idleMinuteRange(limits: Policy["limits"]): Range {
+export function idleMinuteRange(limits: Policy["limits"]): PolicyRange {
   return {
     min: Math.ceil(limits.idle_timeout_seconds.min / 60),
     max: Math.floor(limits.idle_timeout_seconds.max / 60),
@@ -93,7 +64,7 @@ export function idleMinuteRange(limits: Policy["limits"]): Range {
 }
 
 /** `text` as a whole number within `range`, or `null` when it is empty, not whole or out of range. */
-export function inRange(text: string, range: Range): number | null {
+export function inRange(text: string, range: PolicyRange): number | null {
   if (!/^\d+$/.test(text.trim())) return null;
   const value = Number(text);
   return value >= range.min && value <= range.max ? value : null;

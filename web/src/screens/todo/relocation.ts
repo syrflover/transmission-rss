@@ -1,4 +1,4 @@
-import type { ConfirmEpisode, ConfirmView, Placement, PlacementChoice, Relocation } from "./placementTypes.ts";
+import type { ConfirmEpisode, ConfirmView, Placement, PlacementChoice, Relocation } from "../../lib/api-types";
 import { videoText } from "./placementTable.ts";
 
 /**

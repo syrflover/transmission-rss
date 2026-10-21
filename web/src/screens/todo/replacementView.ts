@@ -2,7 +2,7 @@ import { when } from "../../lib/time.ts";
 import { sizeText } from "../../lib/size.ts";
 import { todoTags } from "./changes.ts";
 import { MOVIE_LABEL } from "../library/detail/movie.ts";
-import type { Replacement, ReplacementDecision, ReplacementPath, ReplacementVersion } from "./replacementTypes.ts";
+import type { Replacement, ReplacementDecision, ReplacementPath, ReplacementVersion } from "../../lib/api-types";
 
 /**
  * What the decision card of a job's replacement (`docs/specs/subtitles.md`, 교체 비교와 승인) shows, decided from

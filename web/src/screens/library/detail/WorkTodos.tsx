@@ -15,7 +15,7 @@ import {
   type PlacementCheckTodo,
   type ReceiveFailedTodo,
   type ReplacementTodo,
-  type Todo,
+  type TodoWithBadge,
   type TodoList,
   type VideoCheckTodo,
 } from "../../todo/api";
@@ -78,7 +78,7 @@ export function WorkTodos({
 
 type SeasonTag = (n: number | null, movie?: boolean) => ReactNode;
 
-function WorkTodoCard({ todo, season, onRefresh }: { todo: Todo; season: SeasonTag; onRefresh?: () => Promise<void> }) {
+function WorkTodoCard({ todo, season, onRefresh }: { todo: TodoWithBadge; season: SeasonTag; onRefresh?: () => Promise<void> }) {
   switch (todo.kind) {
     case "auth":
       return <AuthCard todo={todo} season={season} />;
@@ -96,7 +96,7 @@ function WorkTodoCard({ todo, season, onRefresh }: { todo: Todo; season: SeasonT
 }
 
 /** The kind badge and the time on top, the lines under them, and the button at the bottom right. */
-function Card({ todo, children, action }: { todo: Todo; children: ReactNode; action: ReactNode }) {
+function Card({ todo, children, action }: { todo: TodoWithBadge; children: ReactNode; action: ReactNode }) {
   const kind = todo.badge;
   return (
     <article

@@ -1,4 +1,4 @@
-import type { FailureClass, FileFormat, JobRow, ItemState, UploadSummary, Wait } from "./api";
+import type { FailureKind, FileFormat, ItemWait, JobRow, ItemState, UploadSummary } from "./api";
 import { sizeText } from "../../lib/size.ts";
 import { MOVIE_LABEL } from "../library/detail/movie.ts";
 import { findShown } from "./findState.ts";
@@ -6,7 +6,7 @@ import { findShown } from "./findState.ts";
 export { sizeText };
 
 /** What a failure class is called (`docs/specs/jobs.md`, 공통 수신 결과와 실패 분류). */
-export const FAILURE_LABEL: Record<FailureClass, string> = {
+export const FAILURE_LABEL: Record<FailureKind, string> = {
   missing: "원본 없음",
   expired: "만료",
   not_a_file: "파일 아님",
@@ -93,7 +93,7 @@ export function shownState(
   }
 }
 
-export function shownItem(state: ItemState, wait: Wait | null): Shown | "item-pending" {
+export function shownItem(state: ItemState, wait: ItemWait | null): Shown | "item-pending" {
   switch (state) {
     case "waiting":
       return wait === "auth" ? "auth" : "subtitle";

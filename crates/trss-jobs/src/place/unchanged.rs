@@ -92,7 +92,9 @@ pub struct KeptFont {
 }
 
 /// How a kept font was received (see the module docs).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(rename_all = "snake_case")]
 pub enum FontReceipt {
     /// Not received: its Google Drive file did not change (`받지 않음(바뀌지
     /// 않음)`).

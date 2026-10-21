@@ -3,7 +3,7 @@ import { useId, useState, type ComponentProps, type ComponentType } from "react"
 import { when } from "@/lib/time";
 import { cn } from "@/lib/utils";
 
-import type { Step, StepKind } from "./api";
+import type { JobStep, StepKind } from "./api";
 import { CheckIcon, ChevronIcon, CircleIcon, ClockIcon, DotIcon, WarningIcon } from "./icons";
 import { drawnStepState } from "./interrupted.ts";
 import { STEP_LABEL } from "./steps.ts";
@@ -14,7 +14,7 @@ const LABEL = STEP_LABEL satisfies Record<StepKind, string>;
 type IconType = ComponentType<ComponentProps<"svg">>;
 
 /** A step as the track draws it: the server's states, and the step an `interrupted` job was cut in. */
-type Drawn = Omit<Step, "state"> & { state: Step["state"] | "stopped" };
+type Drawn = Omit<JobStep, "state"> & { state: JobStep["state"] | "stopped" };
 
 const MARK: Record<Drawn["state"], { icon: IconType; tone: string; word: string }> = {
   done: { icon: CheckIcon, tone: "border-ok text-ok", word: "완료" },
@@ -53,7 +53,7 @@ function Mark({ state }: { state: Drawn["state"] }) {
  * horizontal track that wraps on a computer; on a phone it folds into one line
  * about the current step, which opens the whole list.
  */
-export function JobSteps({ steps: served, jobState }: { steps: readonly Step[]; jobState: string }) {
+export function JobSteps({ steps: served, jobState }: { steps: readonly JobStep[]; jobState: string }) {
   const [open, setOpen] = useState(false);
   const listId = useId();
   const steps: Drawn[] = served.map((s) => ({ ...s, state: drawnStepState(jobState, s.state) }));

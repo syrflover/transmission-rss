@@ -14,7 +14,7 @@ import {
   type PlacementCheckTodo,
   type ReceiveFailedTodo,
   type ReplacementTodo,
-  type Todo,
+  type TodoWithBadge,
   type VideoCheckTodo,
 } from "./api";
 import { Tag, TodoBadge } from "./badges";
@@ -57,7 +57,7 @@ export function episodeCheckReason(todo: EpisodeCheckTodo): string {
 }
 
 /** The cards of `처리 필요`, in the order the server gives (red kinds first). */
-export function TodoCards({ todos }: { todos: readonly Todo[] }) {
+export function TodoCards({ todos }: { todos: readonly TodoWithBadge[] }) {
   return (
     <ul
       aria-label="처리 필요"

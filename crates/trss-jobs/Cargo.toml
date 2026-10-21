@@ -6,7 +6,7 @@ edition.workspace = true
 [features]
 # Derives `ts_rs::TS` for the types the API sends or takes, which the `trss`
 # tests turn into the screens' TypeScript types. Off in every build of the app.
-ts = ["dep:ts-rs"]
+ts = ["dep:ts-rs", "trss-core/ts", "trss-subtitles/ts"]
 
 [dependencies]
 trss-core.workspace = true

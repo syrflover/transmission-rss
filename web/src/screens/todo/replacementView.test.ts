@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import type { Replacement, ReplacementVersion } from "./replacementTypes.ts";
+import type { Replacement, ReplacementVersion } from "../../lib/api-types";
 import {
   againNotice,
   asEpisodeList,

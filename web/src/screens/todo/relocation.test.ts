@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import type { ConfirmEpisode, ConfirmView, Placement, Relocation } from "./placementTypes.ts";
+import type { ConfirmEpisode, ConfirmView, Placement, Relocation } from "../../lib/api-types";
 import { NO_VIDEO, REPLACES } from "./placementTable.ts";
 import { ALREADY_THERE, applyLine, moves, relocationLead, relocationRequest, removalLine } from "./relocation.ts";
 

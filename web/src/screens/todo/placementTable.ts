@@ -1,4 +1,4 @@
-import type { ConfirmEpisode, ConfirmView, Placement, PlacementChoice } from "./placementTypes.ts";
+import type { ConfirmEpisode, ConfirmView, Placement, PlacementChoice } from "../../lib/api-types";
 
 /**
  * What the 배치 확인 table of a job (`docs/specs/subtitles.md`, 배치 확인) shows and sends, decided from the API's

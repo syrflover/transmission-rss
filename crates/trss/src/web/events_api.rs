@@ -40,6 +40,7 @@ use axum::{
     Router,
 };
 use futures::stream;
+use serde::Serialize;
 use tokio::sync::broadcast::{self, error::RecvError};
 use tokio_util::sync::CancellationToken;
 use trss_core::changes::Change;
@@ -66,8 +67,11 @@ async fn events(State(state): State<AppState>) -> impl IntoResponse {
     };
     (
         [("x-accel-buffering", "no")],
-        Sse::new(stream::unfold(feed, Feed::next))
-            .keep_alive(KeepAlive::new().interval(KEEP_ALIVE).event(named("alive"))),
+        Sse::new(stream::unfold(feed, Feed::next)).keep_alive(
+            KeepAlive::new()
+                .interval(KEEP_ALIVE)
+                .event(StreamEvent::Alive(NoData {}).sse()),
+        ),
     )
 }
 
@@ -84,16 +88,14 @@ impl Feed {
     async fn next(mut self) -> Option<(Result<Event, Infallible>, Feed)> {
         if !self.ready {
             self.ready = true;
-            return Some((Ok(named("ready")), self));
+            return Some((Ok(StreamEvent::Ready(NoData {}).sse()), self));
         }
         let event = tokio::select! {
             biased;
             _ = self.shutdown.cancelled() => return None,
             heard = self.changes.recv() => match heard {
-                Ok(change) => Event::default()
-                    .event("change")
-                    .data(serde_json::to_string(&change).expect("a change serializes")),
-                Err(RecvError::Lagged(_)) => named("lagged"),
+                Ok(change) => StreamEvent::Change(change).sse(),
+                Err(RecvError::Lagged(_)) => StreamEvent::Lagged(NoData {}).sse(),
                 Err(RecvError::Closed) => return None,
             },
         };
@@ -101,9 +103,47 @@ impl Feed {
     }
 }
 
-/// An event with no content of its own, which still has data to dispatch.
-fn named(name: &str) -> Event {
-    Event::default().event(name).data("{}")
+/// The data of an event with no content of its own, which still has data to
+/// dispatch.
+#[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(type = "Record<string, never>"))]
+pub struct NoData {}
+
+/// An event of the stream: its name (`event`) and its JSON `data`, as the web
+/// reads them. The web's `StreamEvent` is generated from it.
+#[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[serde(tag = "event", content = "data", rename_all = "lowercase")]
+pub enum StreamEvent {
+    Ready(NoData),
+    Change(Change),
+    Lagged(NoData),
+    Alive(NoData),
+}
+
+impl StreamEvent {
+    /// The event's name and its JSON data as the server sends them. The name
+    /// is the serialized `event`, so the wire and the generated type share
+    /// one source.
+    pub(super) fn wire(&self) -> (String, String) {
+        let tagged = serde_json::to_value(self).expect("an event serializes");
+        let name = tagged["event"]
+            .as_str()
+            .expect("an event is tagged with its name")
+            .to_owned();
+        let data = match self {
+            Self::Ready(none) | Self::Lagged(none) | Self::Alive(none) => {
+                serde_json::to_string(none)
+            }
+            Self::Change(change) => serde_json::to_string(change),
+        };
+        (name, data.expect("an event's data serializes"))
+    }
+
+    fn sse(&self) -> Event {
+        let (name, data) = self.wire();
+        Event::default().event(name).data(data)
+    }
 }
 
 #[cfg(test)]

@@ -9,13 +9,12 @@ use axum::{
     Json,
 };
 use serde::{Deserialize, Serialize};
-use serde_json::json;
 
 use trss_jobs::{
     model::{PathAction, PlanState, SubtitleFormat},
     place::replace::{
         records::{
-            Compared, Comparison, Decided, Decision, Diff, Encoding, NotCompared, PlanPath,
+            Compared, Comparison, Decided, Decision, Diff, Encoding, Format, NotCompared, PlanPath,
             PlanView, Side, StoredFacts,
         },
         NEW_REVISION,
@@ -27,17 +26,19 @@ use super::{internal, now_millis, ApiError, AppState};
 
 /// One subtitle of a decision card's version lines: `현재` or `새 자막`.
 #[derive(Debug, Serialize)]
-pub(super) struct VersionView {
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "ReplacementVersion"))]
+pub(in crate::web) struct VersionView {
     /// When the app received it (its post's receipt, else when it was
     /// stored); `null` for a file the app did not manage.
     received_at: Option<i64>,
     /// The file's change time, for a file the app did not manage.
     changed_at: Option<i64>,
+    /// Bytes.
     size: u64,
     /// Its dialogue lines, `null` when the app cannot count them.
     lines: Option<u64>,
     creator: Option<String>,
-    format: Option<&'static str>,
+    format: Option<SubtitleFormat>,
     /// The post it came from.
     post: Option<String>,
     encoding: Option<String>,
@@ -52,24 +53,34 @@ pub(super) struct VersionView {
     stored: Option<String>,
 }
 
+/// A change the person may not expect.
+#[derive(Debug, Clone, Copy, Serialize, PartialEq)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "ReplacementWarning"))]
+#[serde(rename_all = "snake_case")]
+pub(in crate::web) enum Warning {
+    /// A file the app did not manage is replaced; its bytes are kept as the
+    /// unknown creator's stored subtitle.
+    OverwriteUnmanaged,
+    /// An earlier applied copy at another path goes; its stored file stays.
+    RemoveApplied,
+}
+
 /// What the plan does to one path beside the video.
 #[derive(Debug, Serialize)]
-pub(super) struct PathView {
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "ReplacementPath"))]
+pub(in crate::web) struct PathView {
+    /// The full server path.
     path: String,
-    /// `add`, `replace`, `remove` or `keep`.
-    action: &'static str,
+    action: PathAction,
     managed: bool,
-    /// A change the person may not expect, shown with its exact path:
-    /// `overwrite_unmanaged` (a file the app did not manage is replaced; its
-    /// bytes are kept as the unknown creator's stored subtitle) or
-    /// `remove_applied` (an earlier applied copy at another path goes; its
-    /// stored file stays).
-    warning: Option<&'static str>,
+    /// A change the person may not expect, shown with its exact path.
+    warning: Option<Warning>,
 }
 
 /// Why the version before this one went stale.
 #[derive(Debug, Serialize)]
-pub(super) struct AgainView {
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "ReplacementAgain"))]
+pub(in crate::web) struct AgainView {
     reason: String,
     /// A newer revision from the same source came (`새 수정본 발견`).
     new_revision: bool,
@@ -79,8 +90,9 @@ pub(super) struct AgainView {
 /// was made with it. Without the dialogue and timing lines: the detail is
 /// polled, and a whole file's change is large (`lines`).
 #[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "Comparison"))]
 #[serde(tag = "state", rename_all = "lowercase")]
-pub(super) enum ComparisonView {
+pub(in crate::web) enum ComparisonView {
     /// The contents were not compared: why. Never shown as no difference.
     Unreadable {
         reason: String,
@@ -88,9 +100,11 @@ pub(super) enum ComparisonView {
     Compared(Box<ComparedView>),
 }
 
-/// The counts of a difference.
+/// The counts of a difference. Its dialogue and timing lines come from the
+/// lines route, not with the job.
 #[derive(Debug, Serialize)]
-pub(super) struct ComparedView {
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "ComparedDiff"))]
+pub(in crate::web) struct ComparedView {
     current: SideView,
     new: SideView,
     dialogue: DialogueView,
@@ -103,50 +117,86 @@ pub(super) struct ComparedView {
     not_compared: Vec<NotCompared>,
 }
 
+/// A subtitle format as the comparison names it.
+#[derive(Debug, Clone, Copy, Serialize, PartialEq)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "ComparedFormat"))]
+pub(in crate::web) enum FormatLabel {
+    #[serde(rename = "ASS")]
+    Ass,
+    #[serde(rename = "SRT")]
+    Srt,
+    #[serde(rename = "WebVTT")]
+    Vtt,
+    #[serde(rename = "SMI")]
+    Smi,
+}
+
+impl From<Format> for FormatLabel {
+    fn from(format: Format) -> Self {
+        match format {
+            Format::Ass => FormatLabel::Ass,
+            Format::Srt => FormatLabel::Srt,
+            Format::Vtt => FormatLabel::Vtt,
+            Format::Smi => FormatLabel::Smi,
+        }
+    }
+}
+
 /// What was read of one subtitle.
 #[derive(Debug, Serialize)]
-pub(super) struct SideView {
-    /// `ASS`, `SRT`, `WebVTT` or `SMI`.
-    format: &'static str,
-    /// `UTF-8`, `UTF-16` or `CP949`.
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "ComparedSide"))]
+pub(in crate::web) struct SideView {
+    format: FormatLabel,
     encoding: Encoding,
+    /// The cues of all its tracks.
     cues: u64,
 }
 
+/// The dialogue lines that differ.
 #[derive(Debug, Serialize)]
-pub(super) struct DialogueView {
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "DialogueCounts"))]
+pub(in crate::web) struct DialogueView {
     added: u64,
     changed: u64,
     removed: u64,
 }
 
+/// The lines whose start or end moved.
 #[derive(Debug, Serialize)]
-pub(super) struct TimingView {
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "TimingCount"))]
+pub(in crate::web) struct TimingView {
     count: u64,
 }
 
+/// The styles that differ.
 #[derive(Debug, Serialize)]
-pub(super) struct StylesView {
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "StylesDiff"))]
+pub(in crate::web) struct StylesView {
     added: Vec<String>,
     removed: Vec<String>,
     changed: Vec<StyleChangeView>,
 }
 
+/// A style the two files both have, with each field that differs.
 #[derive(Debug, Serialize)]
-pub(super) struct StyleChangeView {
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "StyleChange"))]
+pub(in crate::web) struct StyleChangeView {
     name: String,
     fields: Vec<FieldChangeView>,
 }
 
 #[derive(Debug, Serialize)]
-pub(super) struct FieldChangeView {
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "StyleFieldChange"))]
+pub(in crate::web) struct FieldChangeView {
     field: String,
     old: String,
     new: String,
 }
 
+/// The fonts that differ.
 #[derive(Debug, Serialize)]
-pub(super) struct FontsView {
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "FontsDiff"))]
+pub(in crate::web) struct FontsView {
     added: Vec<String>,
     removed: Vec<String>,
 }
@@ -163,7 +213,7 @@ impl ComparisonView {
 
     fn of_diff(diff: &Diff) -> Self {
         let side = |s: &Side| SideView {
-            format: s.format.label(),
+            format: s.format.into(),
             encoding: s.encoding,
             cues: s.cues,
         };
@@ -207,16 +257,29 @@ impl ComparisonView {
     }
 }
 
-/// A row's latest replacement plan.
+/// What limits a comparison.
+#[derive(Debug, Clone, Copy, Serialize, PartialEq)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "ReplacementLimit"))]
+#[serde(rename_all = "snake_case")]
+pub(in crate::web) enum Limit {
+    /// The current file is not the app's.
+    UnknownSource,
+    /// A file's lines could not be counted.
+    LinesUnknown,
+}
+
+/// A row's latest replacement plan (`docs/specs/subtitles.md`, 교체 비교와
+/// 승인).
 #[derive(Debug, Serialize)]
-pub(super) struct ReplacementView {
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "Replacement"))]
+pub(in crate::web) struct ReplacementView {
     /// The plan and its version, which a decision names: never shown.
     plan_id: String,
     version: i64,
+    /// The placement's `position` it belongs to.
     position: i64,
-    /// `open` (to decide), `approved`, `kept`, `done`, `stale`, `held` or
-    /// `failed`.
-    state: &'static str,
+    /// `open` is the one a person decides.
+    state: PlanState,
     /// Why it is `stale`, `held` or `failed`.
     reason: Option<String>,
     /// For `stale`: whether a newer revision from the same source came.
@@ -239,10 +302,8 @@ pub(super) struct ReplacementView {
     /// before the app compared contents.
     comparison: Option<ComparisonView>,
     paths: Vec<PathView>,
-    /// The limits of the comparison that hold: `unknown_source` (the
-    /// current file is not the app's), `lines_unknown` (a file's lines
-    /// could not be counted).
-    limits: Vec<&'static str>,
+    /// The limits of the comparison that hold, only those.
+    limits: Vec<Limit>,
 }
 
 /// The views of the job's latest plans.
@@ -276,8 +337,8 @@ fn view(v: &PlanView) -> ReplacementView {
             lines: file.lines,
             creator: facts.and_then(|f| f.creator.clone()),
             format: facts
-                .map(|f| f.format.code())
-                .or_else(|| SubtitleFormat::shown_for_name(&path.path).map(SubtitleFormat::code)),
+                .map(|f| f.format)
+                .or_else(|| SubtitleFormat::shown_for_name(&path.path)),
             post: facts.and_then(|f| f.post.clone()),
             encoding: facts.and_then(|f| f.encoding.clone()),
             managed: path.applied_id.is_some(),
@@ -291,7 +352,7 @@ fn view(v: &PlanView) -> ReplacementView {
         size: plan.asset_size,
         lines: plan.asset_lines,
         creator: f.creator.clone(),
-        format: Some(f.format.code()),
+        format: Some(f.format),
         post: f.post.clone(),
         encoding: f.encoding.clone(),
         managed: true,
@@ -306,17 +367,17 @@ fn view(v: &PlanView) -> ReplacementView {
     };
     let mut limits = Vec::new();
     if current.as_ref().is_some_and(|c| !c.managed) {
-        limits.push("unknown_source");
+        limits.push(Limit::UnknownSource);
     }
     let uncounted = |v: &Option<VersionView>| v.as_ref().is_some_and(|v| v.lines.is_none());
     if uncounted(&current) || uncounted(&new) {
-        limits.push("lines_unknown");
+        limits.push(Limit::LinesUnknown);
     }
     ReplacementView {
         plan_id: plan.id.clone(),
         version: plan.version,
         position: plan.position,
-        state: plan.state.code(),
+        state: plan.state,
         reason: plan.reason.clone(),
         new_revision: plan.state == PlanState::Stale
             && plan.reason.as_deref() == Some(NEW_REVISION),
@@ -336,11 +397,11 @@ fn view(v: &PlanView) -> ReplacementView {
             .iter()
             .map(|p| PathView {
                 path: full(&p.path),
-                action: p.action.code(),
+                action: p.action,
                 managed: p.applied_id.is_some(),
                 warning: match (p.action, p.applied_id.is_some()) {
-                    (PathAction::Replace, false) => Some("overwrite_unmanaged"),
-                    (PathAction::Remove, _) => Some("remove_applied"),
+                    (PathAction::Replace, false) => Some(Warning::OverwriteUnmanaged),
+                    (PathAction::Remove, _) => Some(Warning::RemoveApplied),
                     _ => None,
                 },
             })
@@ -374,11 +435,78 @@ pub(super) async fn lines(
     }
 }
 
+/// A person's decision on a replacement: `replace` (`새 자막으로 교체`) or
+/// `keep` (`현재 유지`), for the plan version the card showed.
 #[derive(Debug, Deserialize)]
-pub(super) struct DecideRequest {
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "DecideBody"))]
+pub(in crate::web) struct DecideRequest {
     version: i64,
-    /// `replace` (`새 자막으로 교체`) or `keep` (`현재 유지`).
+    /// Read as text, so that another word is refused with its sentence
+    /// ([`decision_of`]).
+    #[cfg_attr(test, ts(type = r#""replace" | "keep""#))]
     decision: String,
+}
+
+/// What a decision came to.
+#[derive(Debug, Clone, Copy, Serialize, PartialEq)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "DecisionState"))]
+#[serde(rename_all = "snake_case")]
+pub(in crate::web) enum Settled {
+    Approved,
+    Kept,
+}
+
+impl Settled {
+    /// The state a decision writes: only `approved` and `kept`.
+    fn of(to: PlanState) -> Settled {
+        match to {
+            PlanState::Approved => Settled::Approved,
+            _ => Settled::Kept,
+        }
+    }
+}
+
+/// The answer to a decision: the plan's new state.
+#[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "DecideAnswer"))]
+pub(in crate::web) struct DecideView {
+    state: Settled,
+}
+
+/// What became of one decision sent with others.
+#[derive(Debug, Clone, Copy, Serialize, PartialEq)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "DecisionResultState"))]
+#[serde(rename_all = "snake_case")]
+pub(in crate::web) enum Answered {
+    Approved,
+    Kept,
+    /// The plan changed since it was read: left as it is.
+    Stale,
+}
+
+/// What became of one decision sent with others: written, or `stale` for a
+/// plan that changed since it was read.
+#[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "DecisionResult"))]
+pub(in crate::web) struct ResultView {
+    plan: String,
+    state: Answered,
+}
+
+/// What several decisions came to, in request order.
+#[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "DecideManyAnswer"))]
+pub(in crate::web) struct ResultsView {
+    results: Vec<ResultView>,
+}
+
+/// `true` for `replace`, `false` for `keep`, else the refusal.
+fn decision_of(text: &str) -> Result<bool, ApiError> {
+    match text {
+        "replace" => Ok(true),
+        "keep" => Ok(false),
+        _ => Err(ApiError::invalid("결정은 replace나 keep이어야 해요.")),
+    }
 }
 
 /// `POST /api/subtitle-jobs/{id}/replacements/{plan}`: the person's decision
@@ -387,12 +515,8 @@ pub(super) async fn decide(
     State(state): State<AppState>,
     Path((id, plan)): Path<(String, String)>,
     Json(request): Json<DecideRequest>,
-) -> Result<Json<serde_json::Value>, ApiError> {
-    let replace = match request.decision.as_str() {
-        "replace" => true,
-        "keep" => false,
-        _ => return Err(ApiError::invalid("결정은 replace나 keep이어야 해요.")),
-    };
+) -> Result<Json<DecideView>, ApiError> {
+    let replace = decision_of(&request.decision)?;
     let decided = state
         .place
         .decide_replacement(&id, &plan, request.version, replace, now_millis())
@@ -401,7 +525,9 @@ pub(super) async fn decide(
     match decided {
         Decided::Done(to) => {
             state.wakes.jobs();
-            Ok(Json(json!({ "state": to.code() })))
+            Ok(Json(DecideView {
+                state: Settled::of(to),
+            }))
         }
         Decided::NotFound => Err(ApiError::not_found("교체 계획을 찾지 못했어요.")),
         Decided::Stale => Err(ApiError::Conflict {
@@ -414,16 +540,22 @@ pub(super) async fn decide(
 /// The most decisions one request carries: a season's episodes with room.
 const DECIDE_MAX: usize = 1000;
 
+/// Several decisions at once (`모두 교체`·`모두 유지`).
 #[derive(Debug, Deserialize)]
-pub(super) struct DecideManyRequest {
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "DecideManyBody"))]
+pub(in crate::web) struct DecideManyRequest {
     decisions: Vec<DecideManyItem>,
 }
 
+/// One of several decisions sent at once: the plan, the version the list
+/// showed, and what to do.
 #[derive(Debug, Deserialize)]
-pub(super) struct DecideManyItem {
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "ReplacementDecision"))]
+pub(in crate::web) struct DecideManyItem {
     plan: String,
     version: i64,
     /// `replace` or `keep`, as [`DecideRequest::decision`].
+    #[cfg_attr(test, ts(type = r#""replace" | "keep""#))]
     decision: String,
 }
 
@@ -437,7 +569,7 @@ pub(super) async fn decide_many(
     State(state): State<AppState>,
     Path(id): Path<String>,
     Json(request): Json<DecideManyRequest>,
-) -> Result<Json<serde_json::Value>, ApiError> {
+) -> Result<Json<ResultsView>, ApiError> {
     if request.decisions.is_empty() {
         return Err(ApiError::invalid("결정할 교체 계획이 없어요."));
     }
@@ -454,11 +586,7 @@ pub(super) async fn decide_many(
                 "같은 교체 계획을 두 번 결정할 수 없어요.",
             ));
         }
-        let replace = match item.decision.as_str() {
-            "replace" => true,
-            "keep" => false,
-            _ => return Err(ApiError::invalid("결정은 replace나 keep이어야 해요.")),
-        };
+        let replace = decision_of(&item.decision)?;
         decisions.push(Decision {
             plan_id: item.plan.clone(),
             version: item.version,
@@ -476,19 +604,22 @@ pub(super) async fn decide_many(
     if decided.iter().any(|d| matches!(d, Decided::Done(_))) {
         state.wakes.jobs();
     }
-    let results: Vec<_> = request
+    let results = request
         .decisions
         .iter()
         .zip(&decided)
-        .map(|(item, decided)| {
-            let state = match decided {
-                Decided::Done(to) => to.code(),
-                _ => "stale",
-            };
-            json!({ "plan": item.plan, "state": state })
+        .map(|(item, decided)| ResultView {
+            plan: item.plan.clone(),
+            state: match decided {
+                Decided::Done(to) => match Settled::of(*to) {
+                    Settled::Approved => Answered::Approved,
+                    Settled::Kept => Answered::Kept,
+                },
+                _ => Answered::Stale,
+            },
         })
         .collect();
-    Ok(Json(json!({ "results": results })))
+    Ok(Json(ResultsView { results }))
 }
 
 #[cfg(test)]

@@ -272,7 +272,9 @@ pub struct FileRow {
 }
 
 /// How a receipt of a file stands for a person ([`FileRow::shown`]).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(rename_all = "snake_case")]
 pub enum FileShown {
     /// Under way: its episode runs.
     Receiving,

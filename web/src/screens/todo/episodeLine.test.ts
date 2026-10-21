@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { episodeLabel, type EpisodeSegment } from "./episodeLine.ts";
+import type { EpisodeSegment } from "../../lib/api-types";
+import { episodeLabel } from "./episodeLine.ts";
 
 const seg = (text: string, count = 1, whole = true): EpisodeSegment => ({ text, count, whole });
 

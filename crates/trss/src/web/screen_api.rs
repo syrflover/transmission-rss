@@ -193,6 +193,7 @@
 
 mod hub;
 mod nav;
+mod protocol;
 
 use std::{
     collections::HashMap,
@@ -214,17 +215,16 @@ use axum::{
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
 use tokio::sync::broadcast::error::RecvError;
 use tokio_util::sync::CancellationToken;
 use trss_browser::client::LauncherClient;
-use trss_jobs::Screen;
+use trss_jobs::{Screen, ScreenState};
 
-pub use hub::{admits, Binding, Times, View, Viewport, MAX_SOCKETS};
+pub use hub::{admits, Binding, Incoming, Times, View, Viewport, MAX_SOCKETS};
 use hub::{
-    ended_message, Handled, Hub, Incoming, OpenError, DIALOG_TEXT, MAX_DPR, MAX_SIDE, MIN_DPR,
-    MIN_SIDE,
+    ended_message, Handled, Hub, OpenError, DIALOG_TEXT, MAX_DPR, MAX_SIDE, MIN_DPR, MIN_SIDE,
 };
+pub use protocol::{DialogKind, EndedReason, Outgoing};
 
 use super::{
     commands_api::now_millis,
@@ -369,10 +369,38 @@ impl RemoteScreens {
     }
 }
 
+/// How far a job's remote screen is.
+#[derive(Debug, Clone, Copy, Serialize, PartialEq)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "ScreenStateName"))]
+#[serde(rename_all = "snake_case")]
+pub enum ScreenShown {
+    /// A browser run shows the check: connect to `run`.
+    Ready,
+    /// The worker is bringing the page to the check.
+    Preparing,
+    /// No run shows it (`note` says why); opening the page prepares it
+    /// again.
+    Closed,
+    /// This server has no server browser.
+    Unavailable,
+}
+
+impl From<ScreenState> for ScreenShown {
+    fn from(state: ScreenState) -> Self {
+        match state {
+            ScreenState::Ready => ScreenShown::Ready,
+            ScreenState::Preparing => ScreenShown::Preparing,
+            ScreenState::Closed => ScreenShown::Closed,
+        }
+    }
+}
+
 /// A job's remote screen as the screens show it.
 #[derive(Debug, Clone, Serialize, PartialEq)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "JobScreen"))]
 pub struct ScreenView {
-    pub state: &'static str,
+    pub state: ScreenShown,
+    /// With `ready`: the run to connect to.
     pub run: Option<String>,
     /// When `run` was bound to the job (ms): tells another check of the job
     /// in the same run.
@@ -388,6 +416,7 @@ pub struct ScreenView {
 /// What the socket of a screen takes, which a device keeps within so that the
 /// server need not refuse it: the screen draws no copy of these numbers.
 #[derive(Debug, Clone, Copy, Serialize, PartialEq)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 pub struct ScreenLimits {
     /// The least width or height (CSS pixels) of the viewport it takes.
     pub min_side: u32,
@@ -418,7 +447,7 @@ const NO_BROWSER: &str =
 fn view_of(state: &AppState, screen: Screen) -> ScreenView {
     if state.remote.is_none() {
         return ScreenView {
-            state: "unavailable",
+            state: ScreenShown::Unavailable,
             run: None,
             bound: None,
             note: Some(NO_BROWSER.to_owned()),
@@ -427,7 +456,7 @@ fn view_of(state: &AppState, screen: Screen) -> ScreenView {
         };
     }
     ScreenView {
-        state: screen.state.code(),
+        state: screen.state.into(),
         limits: screen.run_id.is_some().then_some(LIMITS),
         run: screen.run_id,
         bound: screen.bound_at,
@@ -480,18 +509,30 @@ async fn prepare(
 /// The binding of the screen a person asks to close a page of, and the page
 /// (the one shown, when left out).
 #[derive(Debug, Deserialize)]
-struct CloseRequest {
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "CloseTabBody"))]
+pub(super) struct CloseRequest {
     run: String,
     bound: i64,
     #[serde(default)]
+    #[cfg_attr(test, ts(optional = nullable))]
     target: Option<String>,
 }
+
+/// What a request the worker answers later gets: nothing, as a body the
+/// screens can read as JSON.
+#[derive(Debug, Serialize)]
+#[cfg_attr(
+    test,
+    derive(ts_rs::TS),
+    ts(rename = "ScreenAsked", type = "Record<string, never>")
+)]
+pub(super) struct Asked {}
 
 async fn close(
     State(state): State<AppState>,
     Path(id): Path<String>,
     Json(request): Json<CloseRequest>,
-) -> Result<(StatusCode, Json<Value>), ApiError> {
+) -> Result<(StatusCode, Json<Asked>), ApiError> {
     let asked = state
         .screens
         .request_close(
@@ -509,7 +550,8 @@ async fn close(
 /// The binding of the screen a person asks to show another page of, and the
 /// page.
 #[derive(Debug, Deserialize)]
-struct SwitchRequest {
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "SwitchTabBody"))]
+pub(super) struct SwitchRequest {
     run: String,
     bound: i64,
     target: String,
@@ -519,7 +561,7 @@ async fn switch(
     State(state): State<AppState>,
     Path(id): Path<String>,
     Json(request): Json<SwitchRequest>,
-) -> Result<(StatusCode, Json<Value>), ApiError> {
+) -> Result<(StatusCode, Json<Asked>), ApiError> {
     let asked = state
         .screens
         .request_switch(
@@ -536,7 +578,8 @@ async fn switch(
 
 /// The binding of the screen whose run a person asks to start anew.
 #[derive(Debug, Deserialize)]
-struct RestartRequest {
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "RestartScreenBody"))]
+pub(super) struct RestartRequest {
     run: String,
     bound: i64,
 }
@@ -545,7 +588,7 @@ async fn restart(
     State(state): State<AppState>,
     Path(id): Path<String>,
     Json(request): Json<RestartRequest>,
-) -> Result<(StatusCode, Json<Value>), ApiError> {
+) -> Result<(StatusCode, Json<Asked>), ApiError> {
     let asked = state
         .screens
         .request_restart(&id, &request.run, request.bound, now_millis())
@@ -571,10 +614,10 @@ async fn answered(
     job: &str,
     asked: bool,
     message: &str,
-) -> Result<(StatusCode, Json<Value>), ApiError> {
+) -> Result<(StatusCode, Json<Asked>), ApiError> {
     if asked {
         // A body, as the screens read every answer of the API as JSON.
-        return Ok((StatusCode::ACCEPTED, Json(json!({}))));
+        return Ok((StatusCode::ACCEPTED, Json(Asked {})));
     }
     if !job_exists(state, job).await? {
         return Err(ApiError::not_found("작업을 찾지 못했어요."));
@@ -698,11 +741,11 @@ async fn serve(
             let reason = match err {
                 OpenError::Stuck => {
                     eprintln!("trss: the page of job {job}'s run does not answer");
-                    "stuck"
+                    EndedReason::Stuck
                 }
                 OpenError::Unreachable(why) => {
                     eprintln!("trss: cannot reach the page of job {job}'s run: {why}");
-                    "unreachable"
+                    EndedReason::Unreachable
                 }
             };
             let _ = deliver(&mut socket, Message::Text(ended_message(reason).into())).await;
@@ -714,11 +757,8 @@ async fn serve(
     let mut out = hub.subscribe();
     let view = hub.view();
     if let Some(v) = view.viewport {
-        let hello = json!({
-            "type": "viewport", "gen": view.gen, "width": v.width,
-            "height": v.height, "dpr": v.dpr, "touch": v.touch,
-        });
-        if !deliver(&mut socket, Message::Text(hello.to_string().into())).await {
+        let hello = Outgoing::viewport(view.gen, v);
+        if !deliver(&mut socket, Message::Text(hello.text().into())).await {
             return;
         }
     }
@@ -783,7 +823,7 @@ async fn serve(
                 Some(Ok(_)) | None | Some(Err(_)) => break,
             },
             Some(gen) = notes.recv() => {
-                let note = json!({ "type": "dropped", "gen": gen }).to_string();
+                let note = Outgoing::Dropped { gen }.text();
                 if !deliver(&mut socket, Message::Text(note.into())).await {
                     return;
                 }
@@ -800,7 +840,7 @@ async fn serve(
             // No answer: a dead connection, dropped without a close.
             _ = &mut answer_by, if pinged => return,
             _ = seat.replaced() => {
-                let ended = ended_message("replaced");
+                let ended = ended_message(EndedReason::Replaced);
                 if deliver(&mut socket, Message::Text(ended.into())).await {
                     let close = CloseFrame {
                         code: close_code::NORMAL,

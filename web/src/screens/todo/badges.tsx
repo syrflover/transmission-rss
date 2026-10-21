@@ -2,7 +2,7 @@ import type { ComponentProps, ComponentType, ReactNode } from "react";
 
 import { cn } from "@/lib/utils";
 
-import type { FailureClass, JobRow } from "./api";
+import type { FailureKind, JobRow } from "./api";
 import { CheckIcon, CircleIcon, ClockIcon, DownloadIcon, LockIcon, PauseIcon, WarningIcon } from "./icons";
 import { QuestionIcon } from "../library/icons";
 import { FAILURE_LABEL, type Shown } from "./format";
@@ -196,7 +196,7 @@ export function originSentence(job: Pick<JobRow, "origin">): string | null {
 }
 
 /** A failure's class before its reason (`원본 없음`, `만료`). */
-export function FailureTag({ failure, className }: { failure: FailureClass; className?: string }) {
+export function FailureTag({ failure, className }: { failure: FailureKind; className?: string }) {
   return (
     <span className={cn("mr-1.5 align-[1px]", className)}>
       <Tag>{FAILURE_LABEL[failure]}</Tag>

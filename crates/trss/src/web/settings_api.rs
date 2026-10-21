@@ -77,6 +77,7 @@ pub fn routes() -> Router<AppState> {
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "CollectionSettings"))]
 pub struct CollectionView {
     /// `null` until the collect folder is chosen.
     pub folder: Option<String>,
@@ -103,12 +104,14 @@ impl From<Option<CollectionSettings>> for CollectionView {
 }
 
 #[derive(Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "CollectionBody"))]
 #[serde(deny_unknown_fields)]
-struct WriteBody {
+pub(super) struct WriteBody {
     /// The version the client saw.
     version: i64,
     folder: String,
     #[serde(default)]
+    #[cfg_attr(test, ts(optional = nullable))]
     archive_folder: Option<String>,
 }
 

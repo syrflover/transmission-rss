@@ -29,10 +29,11 @@ use std::{
 use ts_rs::{Config, TypeVisitor, TS};
 
 use super::{
-    archive_api, artwork_api, channels_api, commands_api, error, history_api, import_api,
-    library_api, library_work_api, mapping_api, past_search_api, rules_api, save_folder_api,
-    schedule_api, seasons_anissia_api, seasons_api, setup_api, status_api, subscriptions_api,
-    subtitle_creator_api, video_check_api, watch_folders_api,
+    api, archive_api, artwork_api, channels_api, commands_api, error, events_api, history_api,
+    import_api, jobs_api, library_api, library_work_api, mapping_api, past_search_api, policy_api,
+    rules_api, save_folder_api, schedule_api, screen_api, seasons_anissia_api, seasons_api,
+    settings_api, setup_api, status_api, subscriptions_api, subtitle_creator_api,
+    subtitle_upload_api, todo_api, video_check_api, watch_folders_api,
 };
 
 /// Where the generated files are committed.
@@ -145,12 +146,49 @@ fn roots(v: &mut impl TypeVisitor) {
     v.visit::<import_api::PreviewResponse>();
     v.visit::<import_api::ApplyRequest>();
     v.visit::<import_api::ApplyResponse>();
+
+    // The rest of the screens' APIs, and the event stream.
+    v.visit::<api::Health>();
+    v.visit::<events_api::StreamEvent>();
+    v.visit::<policy_api::PolicyView>();
+    v.visit::<policy_api::WriteBody>();
+    v.visit::<settings_api::CollectionView>();
+    v.visit::<settings_api::WriteBody>();
+    v.visit::<todo_api::TodoCount>();
+    v.visit::<todo_api::FailureList>();
+    v.visit::<todo_api::FollowSuggestions>();
+    v.visit::<trss_jobs::todo::TodoList>();
+    v.visit::<jobs_api::Groups>();
+    v.visit::<jobs_api::DonePageView>();
+    v.visit::<jobs_api::DetailView>();
+    v.visit::<jobs_api::CreateRequest>();
+    v.visit::<jobs_api::FindRequest>();
+    v.visit::<jobs_api::JobCreated>();
+    v.visit::<jobs_api::FinishView>();
+    v.visit::<jobs_api::RestartView>();
+    v.visit::<jobs_api::placement::ConfirmRequest>();
+    v.visit::<jobs_api::placement::ConfirmedView>();
+    v.visit::<jobs_api::replacement::ComparisonView>();
+    v.visit::<trss_jobs::place::replace::records::ComparisonLines>();
+    v.visit::<jobs_api::replacement::DecideRequest>();
+    v.visit::<jobs_api::replacement::DecideView>();
+    v.visit::<jobs_api::replacement::DecideManyRequest>();
+    v.visit::<jobs_api::replacement::ResultsView>();
+    v.visit::<subtitle_upload_api::UploadAnswer>();
+    v.visit::<screen_api::ScreenView>();
+    v.visit::<screen_api::CloseRequest>();
+    v.visit::<screen_api::SwitchRequest>();
+    v.visit::<screen_api::RestartRequest>();
+    v.visit::<screen_api::Asked>();
+    v.visit::<screen_api::Outgoing<'static>>();
+    v.visit::<screen_api::Incoming>();
 }
 
 /// Writes every type of [`roots`] and the types they hold into `dir`, one file
 /// each, and an `index.ts` that exports them. Two Rust types that would give
-/// the same TypeScript name fail here instead of one hiding the other.
-fn generate(dir: &Path) {
+/// the same TypeScript name fail here instead of one hiding the other. Returns
+/// the Rust name (`std::any::type_name`) of every type written.
+fn generate(dir: &Path) -> Vec<&'static str> {
     struct Collect<'a> {
         config: &'a Config,
         /// TypeScript name to the Rust type that has it.
@@ -193,6 +231,7 @@ fn generate(dir: &Path) {
         index.push_str(&format!("export type {{ {name} }} from \"./{name}\";\n"));
     }
     fs::write(dir.join("index.ts"), index).expect("the index is written");
+    collect.seen.values().map(|(_, rust)| *rust).collect()
 }
 
 /// Every file of `dir` by name.
@@ -706,6 +745,485 @@ fn enums_serialize_as_their_codes() {
         (PollState::Done, "done"),
     ] {
         assert_eq!(serde_json::to_value(one).unwrap(), json!(text));
+    }
+}
+
+/// Every type a route of the API sends or takes as JSON is generated for the
+/// screens (`docs/specs/web-app.md`, 공통 라이브러리의 모듈 구성).
+///
+/// The check reads the sources of `web/`: each `Json<…>` of a handler names
+/// the types of its request or response. Each name is resolved to a full path
+/// (the module of the file that defines it, or what the file's `use` lines say)
+/// and must be the path of a type [`roots`] reaches, so a generated type of the
+/// same name elsewhere does not stand in for it. A name that cannot be
+/// resolved fails the test instead of being guessed.
+#[test]
+fn every_json_type_of_a_route_is_generated() {
+    /// Parses the tree of a `use` (`a::{b, c::d as e}`) into `(name, path)`
+    /// pairs; a glob gives the name `*`.
+    fn parse_use(
+        c: &[char],
+        i: &mut usize,
+        prefix: &[String],
+        out: &mut Vec<(String, Vec<String>)>,
+    ) {
+        let skip = |i: &mut usize| {
+            while *i < c.len() && c[*i].is_whitespace() {
+                *i += 1;
+            }
+        };
+        let ident = |i: &mut usize| {
+            let start = *i;
+            while *i < c.len() && (c[*i].is_alphanumeric() || c[*i] == '_' || c[*i] == '*') {
+                *i += 1;
+            }
+            c[start..*i].iter().collect::<String>()
+        };
+        loop {
+            skip(i);
+            if *i >= c.len() || c[*i] == '}' {
+                return;
+            }
+            let mut path = prefix.to_vec();
+            let mut grouped = false;
+            loop {
+                skip(i);
+                if c[*i] == '{' {
+                    *i += 1;
+                    parse_use(c, i, &path, out);
+                    skip(i);
+                    *i += 1; // the closing brace
+                    grouped = true;
+                    break;
+                }
+                path.push(ident(i));
+                skip(i);
+                if c[*i..].starts_with(&[':', ':']) {
+                    *i += 2;
+                } else {
+                    break;
+                }
+            }
+            if !grouped {
+                skip(i);
+                let mut name = path.last().cloned().unwrap_or_default();
+                if c[*i..].starts_with(&['a', 's', ' ']) {
+                    *i += 3;
+                    skip(i);
+                    name = ident(i);
+                }
+                if path.last().is_some_and(|l| l == "self") {
+                    path.pop();
+                    if name == "self" {
+                        name = path.last().cloned().unwrap_or_default();
+                    }
+                }
+                out.push((name, path));
+            }
+            skip(i);
+            if *i < c.len() && c[*i] == ',' {
+                *i += 1;
+            }
+        }
+    }
+
+    /// The `use` declarations of `code` as `(name, absolute path)` pairs,
+    /// relative paths resolved from `module`.
+    fn uses(code: &str, module: &[String]) -> Vec<(String, Vec<String>)> {
+        let mut found = Vec::new();
+        for line_start in code.match_indices('\n').map(|(at, _)| at + 1).chain([0]) {
+            let rest = &code[line_start..];
+            let rest = rest
+                .strip_prefix("pub(super) ")
+                .or_else(|| rest.strip_prefix("pub(crate) "))
+                .or_else(|| rest.strip_prefix("pub "))
+                .unwrap_or(rest);
+            let Some(rest) = rest.strip_prefix("use ") else {
+                continue;
+            };
+            let end = rest.find(';').expect("a use ends");
+            let chars: Vec<char> = rest[..end].chars().collect();
+            let mut parsed = Vec::new();
+            parse_use(&chars, &mut 0, &[], &mut parsed);
+            for (name, path) in parsed {
+                let mut absolute: Vec<String> = Vec::new();
+                let mut segments = path.into_iter().peekable();
+                match segments.peek().map(String::as_str) {
+                    Some("crate") => {
+                        segments.next();
+                        absolute.push("trss".into());
+                    }
+                    Some("self") => {
+                        segments.next();
+                        absolute.extend(module.iter().cloned());
+                    }
+                    Some("super") => {
+                        absolute.extend(module.iter().cloned());
+                        while segments.peek().is_some_and(|s| s == "super") {
+                            segments.next();
+                            absolute.pop();
+                        }
+                    }
+                    _ => {}
+                }
+                absolute.extend(segments);
+                found.push((name, absolute));
+            }
+        }
+        found
+    }
+
+    /// Whether `resolved` names `generated`: the same crate and name, and the
+    /// modules between in the same order (a re-export skips some).
+    fn names(resolved: &[String], generated: &[&str]) -> bool {
+        if resolved.first().map(String::as_str) != generated.first().copied()
+            || resolved.last().map(String::as_str) != generated.last().copied()
+        {
+            return false;
+        }
+        let mut rest = generated.iter();
+        resolved.iter().all(|r| rest.any(|g| g == r))
+    }
+
+    let temp = tempfile::tempdir().expect("a temporary directory");
+    // The definition path of every type generation reaches, without generics.
+    let generated: Vec<Vec<&str>> = generate(temp.path())
+        .into_iter()
+        .map(|full| full.split('<').next().unwrap().split("::").collect())
+        .collect();
+
+    // Not types of ours.
+    const STD: &[&str] = &[
+        "Json",
+        "JsonRejection",
+        "Result",
+        "Option",
+        "Vec",
+        "Box",
+        "HashMap",
+        "BTreeMap",
+        "String",
+        "Value",
+        "ApiError",
+        "StatusCode",
+        "bool",
+        "usize",
+        "u32",
+        "u64",
+        "i32",
+        "i64",
+        "f64",
+    ];
+
+    // Read as text on purpose: the screens write `CommandRequest`, which is
+    // generated, and `command_requests_are_the_ones_the_web_reads` keeps the
+    // two together.
+    const EXEMPT: &[&str] = &["trss::web::commands_api::CreateBody"];
+
+    let web = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/web");
+    let mut files = Vec::new();
+    let mut stack = vec![web.clone()];
+    while let Some(dir) = stack.pop() {
+        for entry in fs::read_dir(&dir).expect("a directory is read") {
+            let path = entry.expect("an entry is read").path();
+            if path.is_dir() {
+                // The tests' sources and fixtures are not routes.
+                if !matches!(
+                    path.file_name().and_then(|n| n.to_str()),
+                    Some("testing") | Some("tests")
+                ) {
+                    stack.push(path);
+                }
+            } else if path.extension().is_some_and(|e| e == "rs")
+                && path
+                    .file_name()
+                    .is_some_and(|n| n != "tests.rs" && n != "api_types.rs")
+            {
+                files.push(path);
+            }
+        }
+    }
+    files.sort();
+
+    // Every route module is merged into the router.
+    let router = fs::read_to_string(web.join("api.rs")).expect("api.rs is read");
+    for file in &files {
+        let name = file.file_stem().unwrap().to_string_lossy();
+        if file.parent() == Some(web.as_path()) && name.ends_with("_api") {
+            assert!(
+                router.contains(&format!("super::{name}::routes()")),
+                "`{name}` has routes the router does not merge"
+            );
+        }
+    }
+
+    let mut missing = Vec::new();
+    let mut unresolved = Vec::new();
+    let mut checked = 0;
+    for file in &files {
+        let text = fs::read_to_string(file).expect("a source is read");
+        // The part before the file's own tests module.
+        let code = text.split("#[cfg(test)]\nmod tests {").next().unwrap();
+        let relative = file.strip_prefix(&web).unwrap().with_extension("");
+        let mut module: Vec<String> = vec!["trss".into(), "web".into()];
+        module.extend(
+            relative
+                .components()
+                .map(|c| c.as_os_str().to_string_lossy().into_owned())
+                .filter(|c| c != "mod"),
+        );
+        let imported = uses(code, &module);
+        let defines = |name: &str| {
+            ["struct ", "enum "].iter().any(|kind| {
+                code.match_indices(&format!("{kind}{name}")).any(|(at, m)| {
+                    let before = code[..at].chars().next_back();
+                    let after = code[at + m.len()..].chars().next();
+                    !before.is_some_and(|c| c.is_alphanumeric() || c == '_')
+                        && !after.is_some_and(|c| c.is_alphanumeric() || c == '_')
+                })
+            })
+        };
+        let at_file = file.strip_prefix(&web).unwrap().display().to_string();
+        let mut rest = code;
+        while let Some(at) = rest.find("Json<") {
+            let inner_start = at + "Json<".len();
+            let mut depth = 1;
+            let mut end = inner_start;
+            for (i, c) in rest[inner_start..].char_indices() {
+                match c {
+                    '<' => depth += 1,
+                    '>' => depth -= 1,
+                    _ => {}
+                }
+                if depth == 0 {
+                    end = inner_start + i;
+                    break;
+                }
+            }
+            let inner = &rest[inner_start..end];
+            for word in inner
+                .split(|c: char| !(c.is_alphanumeric() || c == '_' || c == ':'))
+                .filter(|w| !w.is_empty())
+            {
+                let parts: Vec<&str> = word.split("::").collect();
+                let name = *parts.last().unwrap();
+                // A generic parameter (`Json<T>`) is a single capital letter.
+                if STD.contains(&name) || name.starts_with(char::is_lowercase) || name.len() == 1 {
+                    continue;
+                }
+                checked += 1;
+                // The path the file means by the word.
+                let resolved: Option<Vec<String>> = if parts.len() == 1 && defines(name) {
+                    let mut path = module.clone();
+                    path.push(name.to_owned());
+                    Some(path)
+                } else {
+                    imported
+                        .iter()
+                        .find(|(n, _)| n == parts[0])
+                        .map(|(_, path)| {
+                            let mut path = path.clone();
+                            path.extend(parts[1..].iter().map(|p| (*p).to_owned()));
+                            path
+                        })
+                };
+                match resolved {
+                    None => unresolved.push(format!("{at_file}: Json<{inner}> names `{word}`")),
+                    Some(path) => {
+                        if !EXEMPT.contains(&path.join("::").as_str())
+                            && !generated.iter().any(|g| names(&path, g))
+                        {
+                            missing
+                                .push(format!("{at_file}: Json<{inner}> is `{}`", path.join("::")));
+                        }
+                    }
+                }
+            }
+            rest = &rest[end..];
+        }
+    }
+    assert!(checked > 50, "only {checked} types were looked at");
+    assert!(
+        unresolved.is_empty(),
+        "the check cannot tell which type these name; import them with a `use` or define them in the file:\n{}",
+        unresolved.join("\n")
+    );
+    assert!(
+        missing.is_empty(),
+        "a route sends or takes JSON that the screens' generated types do not hold; derive `TS` on it and name it in `roots`:\n{}",
+        missing.join("\n")
+    );
+}
+
+/// The enums of the jobs, the upload, the replacement and the remote screen
+/// took the place of strings and of `code()` texts, so the JSON did not change.
+#[test]
+fn job_and_screen_enums_serialize_as_the_strings_they_replaced() {
+    use serde_json::json;
+    use trss_jobs::{
+        place::{episode::Assignment, unchanged::FontReceipt},
+        store::FileShown,
+    };
+    use trss_subtitles::{
+        compare::{Change as DialogueChange, Encoding, Format as ComparedFormat},
+        upload::{Archive, Kind as UploadKind},
+        verify::Format as FileFormat,
+        FailureKind as ReceiptFailure,
+    };
+
+    use super::{
+        events_api::{NoData, StreamEvent},
+        jobs_api::{
+            placement::Scope,
+            replacement::{Answered, FormatLabel, Limit, Settled, Warning},
+            Finishing, Restart, StepShown, UnpackShown,
+        },
+        screen_api::{DialogKind, EndedReason, ScreenShown},
+    };
+
+    fn same<T: serde::Serialize + Copy>(all: &[T], code: impl Fn(T) -> &'static str) {
+        for one in all {
+            assert_eq!(serde_json::to_value(one).unwrap(), json!(code(*one)));
+        }
+    }
+    fn texts<T: serde::Serialize + Copy>(all: &[(T, &str)]) {
+        for (one, text) in all {
+            assert_eq!(serde_json::to_value(one).unwrap(), json!(text));
+        }
+    }
+
+    // The codes the records and the API already had.
+    same(&FileFormat::ALL, FileFormat::code);
+    same(&Archive::ALL, Archive::code);
+    same(
+        &[UploadKind::Subtitle, UploadKind::Font, UploadKind::Archive],
+        UploadKind::code,
+    );
+    same(
+        &[
+            ReceiptFailure::Missing,
+            ReceiptFailure::Expired,
+            ReceiptFailure::NotAFile,
+            ReceiptFailure::Changed,
+            ReceiptFailure::Network,
+            ReceiptFailure::NoSubtitle,
+            ReceiptFailure::NeedsInput,
+        ],
+        ReceiptFailure::code,
+    );
+    // The comparison's format is named as the comparison names it.
+    for format in [
+        ComparedFormat::Ass,
+        ComparedFormat::Srt,
+        ComparedFormat::Vtt,
+        ComparedFormat::Smi,
+    ] {
+        assert_eq!(
+            serde_json::to_value(FormatLabel::from(format)).unwrap(),
+            json!(format.label())
+        );
+    }
+
+    // Strings the handlers wrote as literals.
+    texts(&[
+        (StepShown::Upcoming, "upcoming"),
+        (StepShown::Current, "current"),
+        (StepShown::Waiting, "waiting"),
+        (StepShown::Done, "done"),
+        (StepShown::Failed, "failed"),
+        (StepShown::Partial, "partial"),
+    ]);
+    texts(&[
+        (UnpackShown::Done, "done"),
+        (UnpackShown::Failed, "failed"),
+        (UnpackShown::Retry, "retry"),
+        (UnpackShown::Volume, "volume"),
+    ]);
+    texts(&[
+        (Finishing::Done, "done"),
+        (Finishing::Finishing, "finishing"),
+    ]);
+    texts(&[(Restart::Running, "running")]);
+    texts(&[
+        (FileShown::Receiving, "receiving"),
+        (FileShown::Held, "held"),
+        (FileShown::Done, "done"),
+        (FileShown::Failed, "failed"),
+    ]);
+    texts(&[
+        (Assignment::Mapped, "mapped"),
+        (Assignment::SameNumber, "same_number"),
+        (Assignment::Explicit, "explicit"),
+    ]);
+    texts(&[
+        (FontReceipt::Unchanged, "unchanged"),
+        (FontReceipt::Same, "same"),
+        (FontReceipt::New, "new"),
+    ]);
+    texts(&[
+        (Scope::Whole, "whole"),
+        (Scope::Relocate, "relocate"),
+        (Scope::Held, "held"),
+    ]);
+    texts(&[
+        (Warning::OverwriteUnmanaged, "overwrite_unmanaged"),
+        (Warning::RemoveApplied, "remove_applied"),
+    ]);
+    texts(&[
+        (Limit::UnknownSource, "unknown_source"),
+        (Limit::LinesUnknown, "lines_unknown"),
+    ]);
+    texts(&[(Settled::Approved, "approved"), (Settled::Kept, "kept")]);
+    texts(&[
+        (Answered::Approved, "approved"),
+        (Answered::Kept, "kept"),
+        (Answered::Stale, "stale"),
+    ]);
+    texts(&[
+        (DialogueChange::Added, "added"),
+        (DialogueChange::Changed, "changed"),
+        (DialogueChange::Removed, "removed"),
+    ]);
+    texts(&[
+        (Encoding::Utf8, "UTF-8"),
+        (Encoding::Utf16, "UTF-16"),
+        (Encoding::Cp949, "CP949"),
+    ]);
+    texts(&[
+        (ScreenShown::Ready, "ready"),
+        (ScreenShown::Preparing, "preparing"),
+        (ScreenShown::Closed, "closed"),
+        (ScreenShown::Unavailable, "unavailable"),
+    ]);
+    texts(&[
+        (EndedReason::Browser, "browser"),
+        (EndedReason::Run, "run"),
+        (EndedReason::Unreachable, "unreachable"),
+        (EndedReason::Stuck, "stuck"),
+        (EndedReason::Replaced, "replaced"),
+    ]);
+    texts(&[
+        (DialogKind::Alert, "alert"),
+        (DialogKind::Confirm, "confirm"),
+        (DialogKind::Prompt, "prompt"),
+        (DialogKind::Beforeunload, "beforeunload"),
+    ]);
+
+    // The names and data the stream sends its events under.
+    for (event, name, data) in [
+        (StreamEvent::Ready(NoData {}), "ready", "{}"),
+        (
+            StreamEvent::Change(trss_core::changes::Change {
+                kind: trss_core::changes::ChangeKind::Command,
+                id: Some("c1".into()),
+            }),
+            "change",
+            r#"{"kind":"command","id":"c1"}"#,
+        ),
+        (StreamEvent::Lagged(NoData {}), "lagged", "{}"),
+        (StreamEvent::Alive(NoData {}), "alive", "{}"),
+    ] {
+        assert_eq!(event.wire(), (name.to_owned(), data.to_owned()));
     }
 }
 

@@ -1,6 +1,7 @@
 import { Fragment } from "react";
 import { Link } from "react-router-dom";
 
+import type { CollectionSettings } from "@/lib/api-types";
 import { useCached } from "@/lib/cached";
 import { THEME_LABEL, useThemePreference } from "@/lib/theme";
 import { cn } from "@/lib/utils";
@@ -8,7 +9,7 @@ import { KEYS } from "@/screens/collect/cache";
 import { STORAGE_KEY } from "@/screens/library/api";
 import { cleanableCount, cleanableText, storageSummary, type StorageOverview } from "@/screens/library/storage";
 
-import { collectionSummary, loadCollection, type Collection } from "./collection/api";
+import { collectionSummary, loadCollection } from "./collection/api";
 import { foldersSummary, loadWatchFolders, type WatchFolderList } from "./folders/api";
 import { ChevronIcon } from "./icons";
 import { SETTINGS_ITEMS, type SettingsItem, type SettingsItemId } from "./items";
@@ -20,7 +21,7 @@ import type { ImportFlow } from "./import/useImportFlow";
 /** The collect folder row: the two folders' names, or that none is chosen yet. */
 function CollectionFacts() {
   // Shared with the panel: a save there updates this row at once.
-  const { data } = useCached<Collection>(KEYS.collection, loadCollection, "");
+  const { data } = useCached<CollectionSettings>(KEYS.collection, loadCollection, "");
   const summary = data ? collectionSummary(data) : null;
   return (
     <Facts>

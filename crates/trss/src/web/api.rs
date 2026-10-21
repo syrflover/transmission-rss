@@ -4,7 +4,7 @@ use axum::{
     routing::get,
     Json, Router,
 };
-use serde_json::json;
+use serde::Serialize;
 
 use super::{
     error::{ErrorBody, ErrorCode},
@@ -51,11 +51,21 @@ pub fn router() -> Router<AppState> {
         .fallback(not_found)
 }
 
-async fn health() -> Json<serde_json::Value> {
-    Json(json!({
-        "status": "ok",
-        "version": env!("CARGO_PKG_VERSION"),
-    }))
+/// `GET /api/health`: the process answers.
+#[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub(super) struct Health {
+    /// Always `ok`.
+    #[cfg_attr(test, ts(type = r#""ok""#))]
+    status: &'static str,
+    version: &'static str,
+}
+
+async fn health() -> Json<Health> {
+    Json(Health {
+        status: "ok",
+        version: env!("CARGO_PKG_VERSION"),
+    })
 }
 
 async fn not_found() -> Response {

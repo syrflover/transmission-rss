@@ -85,7 +85,7 @@ use axum::{
 };
 use bytes::Bytes;
 use futures::Stream;
-use serde_json::json;
+use serde::Serialize;
 
 use trss_jobs::{
     upload::{Dropped, Limits, UploadError, UploadRequest},
@@ -94,7 +94,7 @@ use trss_jobs::{
 
 use super::{
     commands_api::now_millis,
-    jobs_api::{linked_anime, linked_movie_anime, movie_of, season_link},
+    jobs_api::{linked_anime, linked_movie_anime, movie_of, season_link, DroppedView, JobCreated},
     ApiError, AppState,
 };
 
@@ -542,7 +542,7 @@ where
 async fn upload(
     State(state): State<AppState>,
     request: Request,
-) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+) -> Result<(StatusCode, Json<UploadAnswer>), ApiError> {
     let (parts, body) = request.into_parts();
     let declared = parts
         .headers
@@ -579,7 +579,7 @@ async fn receive(
     declared: Option<u64>,
     limits: &Limits,
     gauge: &Gauge,
-) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+) -> Result<(StatusCode, Json<UploadAnswer>), ApiError> {
     let mut multipart = Multipart::from_request(request, state).await.map_err(|_| {
         ApiError::invalid("올리는 내용을 읽지 못했어요. 화면을 새로고침한 뒤 다시 올려 주세요.")
     })?;
@@ -677,23 +677,26 @@ async fn receive(
             // What it kept is the worker's to unpack and analyse.
             state.wakes.jobs();
             Ok((
-            StatusCode::ACCEPTED,
-            Json(json!({
-                "id": job_id,
-                "kept": {
-                    "subtitles": counts.subtitles,
-                    "fonts": counts.fonts,
-                    "archives": counts.archives,
-                },
-                "dropped": dropped_view(&dropped),
-            })),
-        ))
+                StatusCode::ACCEPTED,
+                Json(UploadAnswer::Made(UploadMade {
+                    id: job_id,
+                    kept: KeptCounts {
+                        subtitles: counts.subtitles,
+                        fonts: counts.fonts,
+                        archives: counts.archives,
+                    },
+                    dropped: dropped_view(&dropped),
+                })),
+            ))
         }
-        Finished::Existing(id) => Ok((StatusCode::OK, Json(json!({ "id": id })))),
+        Finished::Existing(id) => Ok((
+            StatusCode::OK,
+            Json(UploadAnswer::Existing(JobCreated { id })),
+        )),
         Finished::Mismatch(id) => Err(ApiError::Conflict {
             message: "같은 요청 ID로 다른 파일을 올린 적이 있어요. 화면을 새로고침해 주세요."
                 .to_owned(),
-            current: Some(json!({ "id": id })),
+            current: serde_json::to_value(JobCreated { id }).ok(),
         }),
         Finished::Nothing { dropped } => Err(ApiError::invalid(match dropped.len() {
             0 => "올린 파일이 없어요. 받을 자막이나 폰트가 없어서 작업을 만들지 않았어요."
@@ -710,9 +713,40 @@ fn busy() -> ApiError {
     ApiError::Busy("지금 다른 자막 올리기를 받고 있어요. 잠시 뒤 다시 올려 주세요.".to_owned())
 }
 
-fn dropped_view(dropped: &[Dropped]) -> Vec<serde_json::Value> {
+fn dropped_view(dropped: &[Dropped]) -> Vec<DroppedView> {
     dropped
         .iter()
-        .map(|d| json!({ "name": d.name, "reason": d.reason }))
+        .map(|d| DroppedView {
+            name: d.name.clone(),
+            reason: d.reason.clone(),
+        })
         .collect()
+}
+
+/// The answer to an upload: `202` with what the job kept and what it left
+/// out, or `200` with the job the same command ID had made before.
+#[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "UploadAnswer"))]
+#[serde(untagged)]
+pub(super) enum UploadAnswer {
+    Made(UploadMade),
+    Existing(JobCreated),
+}
+
+/// The job a new upload made.
+#[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub(super) struct UploadMade {
+    id: String,
+    kept: KeptCounts,
+    dropped: Vec<DroppedView>,
+}
+
+/// How many files of each kind an upload kept.
+#[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub(super) struct KeptCounts {
+    subtitles: usize,
+    fonts: usize,
+    archives: usize,
 }

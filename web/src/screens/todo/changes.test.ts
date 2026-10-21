@@ -16,7 +16,7 @@ import {
   type ChangesView,
   type ItemView,
 } from "./changes.ts";
-import type { Comparison, DialogueLine, ReplacementChanges, TimingLine } from "./replacementTypes.ts";
+import type { Comparison, DialogueLine, ReplacementChanges, TimingLine } from "../../lib/api-types";
 import { when } from "../../lib/time.ts";
 
 type Compared = Extract<Comparison, { state: "compared" }>;

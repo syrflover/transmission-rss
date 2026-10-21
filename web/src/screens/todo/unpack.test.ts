@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { when } from "../../lib/time.ts";
-import { unpackText, type UnpackResult } from "./unpack.ts";
+import type { UnpackResult } from "../../lib/api-types";
+import { unpackText } from "./unpack.ts";
 
 const NOW = Date.UTC(2026, 9, 6, 3, 0); // 12:00 in Seoul
 const HOUR = 3_600_000;

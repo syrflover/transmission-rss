@@ -31,7 +31,9 @@ use std::{
 use crate::{Failure, FailureKind, MAX_FILE_BYTES};
 
 /// What received bytes are.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(rename = "FileFormat"))]
+#[serde(rename_all = "lowercase")]
 pub enum Format {
     Zip,
     Ass,

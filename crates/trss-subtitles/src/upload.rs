@@ -48,14 +48,22 @@ use crate::{
 pub const INFLATE_BUDGET: u64 = 2 << 30;
 
 /// The archive formats an upload keeps whole.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(rename = "ArchiveType"))]
 pub enum Archive {
+    #[serde(rename = "zip")]
     Zip,
+    #[serde(rename = "rar")]
     Rar,
+    #[serde(rename = "7z")]
     SevenZip,
+    #[serde(rename = "gz")]
     Gzip,
+    #[serde(rename = "bz2")]
     Bzip2,
+    #[serde(rename = "xz")]
     Xz,
+    #[serde(rename = "tar")]
     Tar,
 }
 
@@ -203,7 +211,9 @@ pub fn is_archive_name(name: &str) -> bool {
 }
 
 /// What a kept file is.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(rename = "UploadKind"))]
+#[serde(rename_all = "lowercase")]
 pub enum Kind {
     Subtitle,
     Font,

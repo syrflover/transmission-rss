@@ -1,33 +1,5 @@
+import type { UnpackResult } from "../../lib/api-types";
 import { when } from "../../lib/time.ts";
-
-/** What came of unpacking a received archive. */
-export interface UnpackResult {
-  /**
-   * `done`: its files were taken out; `failed`: it could not be unpacked (풀지 못함, with `reason`) and stays in
-   * the receive area; `retry`: a try this machine failed (a full disk, a limit; with `reason`) waits for the next;
-   * `volume`: a later volume of the split archive `first`, unpacked with it.
-   */
-  state: "done" | "failed" | "retry" | "volume";
-  reason: string | null;
-  /**
-   * How many tries failed for this machine, out of `max_tries`, and for `failed` the try after them that
-   * the archive's own reason ended; 0 for none.
-   */
-  tries: number;
-  /** How many tries an archive gets when this machine fails them (the worker's `UNPACK_TRIES`). */
-  max_tries: number;
-  /**
-   * For `retry`: when the next try goes at the latest; `null` once a worker started since, which tries it at once.
-   * A time gone by is the next run's too (the job is put back in line, or a person holds it).
-   */
-  retry_at: number | null;
-  /** For `volume`: the first volume's name. */
-  first: string | null;
-  /** For `done`: how many files it held, and how many of them are subtitles and fonts. */
-  files: number | null;
-  subtitles: number | null;
-  fonts: number | null;
-}
 
 /**
  * What came of unpacking an archive, in a phrase: `파일 14개를 풀었어요 (자막 12 · 폰트 2)`, `풀지 못함` (urgent,

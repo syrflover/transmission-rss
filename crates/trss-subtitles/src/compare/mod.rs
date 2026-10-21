@@ -161,6 +161,7 @@ impl Format {
 
 /// The encoding a file's bytes were read in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub enum Encoding {
     #[serde(rename = "UTF-8")]
     Utf8,
@@ -363,6 +364,7 @@ impl Dialogue {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(rename = "DialogueChange"))]
 #[serde(rename_all = "lowercase")]
 pub enum Change {
     Added,
@@ -371,21 +373,26 @@ pub enum Change {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct DialogueLine {
     pub kind: Change,
     /// The SMI language class, when a script has several.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(optional))]
     pub class: Option<String>,
     /// Absent for an added line.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(optional))]
     pub old: Option<Placed>,
     /// Absent for a removed line.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(optional))]
     pub new: Option<Placed>,
 }
 
 /// A line's compared text and where it is, in milliseconds.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(rename = "PlacedText"))]
 pub struct Placed {
     pub text: String,
     pub start: u64,
@@ -409,15 +416,19 @@ pub struct Timing {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct TimingLine {
     pub text: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(optional))]
     pub class: Option<String>,
     pub old: Span,
     pub new: Span,
 }
 
+/// Where a line is, in milliseconds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(rename = "TimeSpan"))]
 pub struct Span {
     pub start: u64,
     pub end: u64,
@@ -456,12 +467,15 @@ pub struct Fonts {
 
 /// A part of the comparison that could not be made.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct NotCompared {
     pub item: Item,
     pub reason: String,
 }
 
+/// A part of a comparison that can be left out.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(rename = "ComparedItem"))]
 #[serde(rename_all = "lowercase")]
 pub enum Item {
     Dialogue,

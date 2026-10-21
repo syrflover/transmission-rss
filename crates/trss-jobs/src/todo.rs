@@ -19,7 +19,7 @@ mod receive_failed;
 
 use std::collections::HashMap;
 
-use serde::{Serialize, Serializer};
+use serde::{ser::SerializeStruct, Serialize, Serializer};
 use thiserror::Error;
 
 use trss_collect::store::channels::ChannelError;
@@ -50,8 +50,9 @@ impl TodoError {
     }
 }
 
-/// The work a to-do is about, with its cover's address.
+/// The work a to-do or a subtitle job is about, with its cover's address.
 #[derive(Debug, Clone, Serialize, PartialEq)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct WorkRef {
     pub id: String,
     /// The work title (작품명).
@@ -60,6 +61,7 @@ pub struct WorkRef {
 }
 
 #[derive(Debug, Serialize, PartialEq)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Todo {
     Auth {
@@ -82,6 +84,8 @@ pub enum Todo {
     ReceiveFailed {
         key: String,
         at: i64,
+        /// `revision` or `add_failed`.
+        #[cfg_attr(feature = "ts", ts(type = r#""revision" | "add_failed""#))]
         context: &'static str,
         work: Option<WorkRef>,
         title: String,
@@ -118,6 +122,12 @@ pub enum Todo {
         /// The job is for a movie (an episode of season 0).
         movie: bool,
         creator: Option<String>,
+        /// How the job came to be: `pick`, `auto`, `upload`, `find` or
+        /// `relocate`.
+        #[cfg_attr(
+            feature = "ts",
+            ts(type = r#""pick" | "auto" | "upload" | "find" | "relocate""#)
+        )]
         origin: String,
         source: Option<String>,
         files: Vec<String>,
@@ -255,29 +265,48 @@ pub fn badges_by_work(todos: &[Todo]) -> HashMap<String, Vec<&'static str>> {
     badges
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct TodoList {
-    /// Each with its `badge`.
-    #[serde(serialize_with = "with_badges")]
+    /// Each with its `badge` ([`Needed`]).
+    #[cfg_attr(feature = "ts", ts(as = "Vec<Needed<'static>>"))]
     pub needs: Vec<Todo>,
     pub count: usize,
     /// Each work's kinds of to-do ([`badges_by_work`]).
+    #[cfg_attr(feature = "ts", ts(as = "HashMap<String, Vec<Badge>>"))]
     pub badges: HashMap<String, Vec<&'static str>>,
 }
 
-/// The to-dos with the badge each is named by ([`Todo::badge`]), so the
-/// screen shows the server's rule and does not make its own.
-fn with_badges<S: Serializer>(todos: &[Todo], serializer: S) -> Result<S::Ok, S::Error> {
-    #[derive(Serialize)]
-    struct Badged<'a> {
-        #[serde(flatten)]
-        todo: &'a Todo,
-        badge: &'static str,
+/// A to-do of the list with the badge it is named by ([`Todo::badge`]), so
+/// the screen shows the server's rule and does not make its own.
+#[derive(Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(rename = "TodoWithBadge"))]
+pub struct Needed<'a> {
+    #[serde(flatten)]
+    todo: &'a Todo,
+    badge: Badge,
+}
+
+/// The to-dos with the badge each is named by ([`Todo::badge`]).
+struct WithBadges<'a>(&'a [Todo]);
+
+impl Serialize for WithBadges<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_seq(self.0.iter().map(|todo| Needed {
+            todo,
+            badge: todo.badge_kind(),
+        }))
     }
-    serializer.collect_seq(todos.iter().map(|todo| Badged {
-        todo,
-        badge: todo.badge(),
-    }))
+}
+
+impl Serialize for TodoList {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let mut list = serializer.serialize_struct("TodoList", 3)?;
+        list.serialize_field("needs", &WithBadges(&self.needs))?;
+        list.serialize_field("count", &self.count)?;
+        list.serialize_field("badges", &self.badges)?;
+        list.end()
+    }
 }
 
 /// The to-dos that need the person: `auth` before `receive_failed`, that

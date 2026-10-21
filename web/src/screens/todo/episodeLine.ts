@@ -1,20 +1,10 @@
+import type { EpisodeSegment } from "../../lib/api-types/EpisodeSegment";
 import { MOVIE_LABEL } from "../library/detail/movie.ts";
 
 /**
- * The episodes of a to-do or a job in a line. Kept free of imports (but the import-free movie helpers) so the pure
- * helper and its test run without the app.
+ * The episodes of a to-do or a job in a line. Kept free of imports (but the import-free movie helpers and the generated
+ * `EpisodeSegment`, type-only) so the pure helper and its test run without the app.
  */
-
-/**
- * A run of episodes the server names: `1–4`, `7`, `SP` (`trss_core::episode::segments`). The screen only joins and
- * shortens them. `count` is how many episodes the run holds; `whole` is whether it is of whole numbers (`0` and `13.0`
- * included) rather than an episode of any other text.
- */
-export interface EpisodeSegment {
-  text: string;
-  count: number;
-  whole: boolean;
-}
 
 /** How many segments of the episode list the line names before it says `외 N개`. */
 const SEGMENTS = 3;
