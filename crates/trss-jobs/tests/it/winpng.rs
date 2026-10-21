@@ -4,7 +4,10 @@
 //! script is tested against a real viewer (`trss-subtitles`'s ignored
 //! `winpng_sample`).
 
-use crate::{world::Base, Handles};
+use crate::{
+    world::{cut_and_restart, Base},
+    Handles,
+};
 use std::{
     sync::{Arc, Mutex},
     time::Duration,
@@ -525,6 +528,7 @@ async fn a_restart_publishes_a_file_that_came_whole_under_its_folder_and_reads_i
     std::fs::create_dir_all(&temp).unwrap();
     std::fs::write(temp.join("01.smi"), SMI).unwrap();
 
+    cut_and_restart(&s.store, &id).await;
     run(&s).await;
 
     let d = detail(&s, &id).await;

@@ -33,7 +33,8 @@
 //! (`회차 대응이 바뀌었어요`): an approval is never used for another target.
 //! A job that waits for a person, a video or an approval goes back in line;
 //! a job a worker runs goes back in line when that run ends
-//! (`subtitle_jobs.remapped_at`).
+//! (`subtitle_jobs.remapped_at`), and so does an interrupted one when the run
+//! after its restart ends.
 //!
 //! # The relocation job
 //!
@@ -124,7 +125,8 @@ pub struct Remapped {
     pub stored: usize,
     /// Unfinished rows given another episode, or asked about.
     pub rows: usize,
-    /// The jobs that go back in line, now or when their run ends.
+    /// The jobs that go back in line, now or when their run ends (for an
+    /// interrupted one, the run after a person restarts it).
     pub jobs: Vec<String>,
     /// The source's relocation job that waits for a person, if it has one.
     pub relocation: Option<String>,
@@ -318,7 +320,9 @@ pub fn reevaluate_in(
     .execute(params![work_id, season, source_id])?;
     for (job, (state, wait)) in touched {
         let back = match state {
-            JobState::Running => {
+            // A run cut short goes on once a person restarts it, and its end
+            // takes the job back in line as any run's.
+            JobState::Running | JobState::Interrupted => {
                 c.prepare_cached("UPDATE subtitle_jobs SET remapped_at = ?2 WHERE id = ?1")?
                     .execute(params![job, now])?;
                 true

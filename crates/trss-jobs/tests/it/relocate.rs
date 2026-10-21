@@ -1195,6 +1195,43 @@ async fn a_run_whose_rows_a_mapping_change_moved_goes_back_in_line() {
 }
 
 #[tokio::test]
+async fn an_interrupted_job_whose_rows_a_mapping_change_moved_goes_back_in_line_after_its_restarted_run(
+) {
+    let s = setup().await;
+    std::fs::write(s.at(&copy(2)), MINE).unwrap();
+    let id = make(&s, "c1", "14", "/ok/Show-14", true).await;
+    run(&s).await;
+    // The process stopped while it ran the job, and the next start interrupted
+    // it; the mapping changes before a person restarts it.
+    s.sql(format!(
+        "UPDATE subtitle_jobs SET state = 'interrupted', wait = NULL WHERE id = '{id}'"
+    ))
+    .await;
+    remap(&s, -11).await;
+    assert_eq!(detail(&s, &id).await.row.state, JobState::Interrupted);
+
+    // The run after the restart ends waiting for the approval it counted:
+    // back in line, as a run the change came during.
+    assert_eq!(
+        s.store.requests.restart(&id, 2_400_000).await.unwrap(),
+        trss_jobs::Restarted::Restarted
+    );
+    let back = s
+        .store
+        .run
+        .settle(
+            &id,
+            JobState::Waiting,
+            Some(Wait::Approval),
+            Some(AWAITING_APPROVAL.to_owned()),
+            2_500_000,
+        )
+        .await
+        .unwrap();
+    assert_eq!(back, Some(relocate::REMAPPED));
+}
+
+#[tokio::test]
 async fn a_copy_recorded_after_a_mapping_change_moved_its_subtitle_is_planned_to_move() {
     let s = setup().await;
     let id = applied(&s, "c1", 14).await;

@@ -3,7 +3,7 @@
 //! 검사; `docs/tickets/0068-replacement-approval.md`).
 
 use crate::{
-    world::{Base, Shows},
+    world::{cut_and_restart, Base, Shows},
     Handles,
 };
 use std::{
@@ -1445,6 +1445,7 @@ async fn killed(
         plan.job_id
     ))
     .await;
+    cut_and_restart(&s.store, &plan.job_id).await;
     left_effect(
         s,
         plan,
@@ -1676,6 +1677,7 @@ async fn killed_after_importing_before_its_record_records_the_import_once() {
         "UPDATE subtitle_jobs SET state = 'running' WHERE id = '{job}'"
     ))
     .await;
+    cut_and_restart(&s.store, &job).await;
     #[rustfmt::skip]
     let effects = [
         ("e-apply", "apply", ".trss/tmp/a1", TARGET, new.clone(), apply_object),
@@ -1754,6 +1756,7 @@ async fn killed_after_setting_an_earlier_applied_copy_aside_before_its_record_en
         "UPDATE subtitle_jobs SET state = 'running' WHERE id = '{job}'"
     ))
     .await;
+    cut_and_restart(&s.store, &job).await;
     left_effect(
         &s,
         &plan,

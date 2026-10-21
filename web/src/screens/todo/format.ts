@@ -64,6 +64,7 @@ export type Shown =
   | "waiting"
   | "pending"
   | "held"
+  | "interrupted"
   | "open"
   | "receive"
   | "store"

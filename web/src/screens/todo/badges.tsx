@@ -60,6 +60,7 @@ const SHOWN: Record<Exclude<Shown, "done">, { tone: "urgent" | "neutral" | "chec
   waiting: { tone: "neutral", icon: ClockIcon, text: "대기" },
   pending: { tone: "neutral", icon: ClockIcon, text: "시작 대기" },
   held: { tone: "neutral", icon: PauseIcon, text: "보류" },
+  interrupted: { tone: "urgent", icon: PauseIcon, text: "중단됨" },
   open: { tone: "neutral", icon: DownloadIcon, text: "게시물 여는 중" },
   receive: { tone: "neutral", icon: DownloadIcon, text: "받는 중" },
   store: { tone: "neutral", icon: DownloadIcon, text: "보관하는 중" },

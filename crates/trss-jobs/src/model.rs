@@ -53,6 +53,9 @@ codes! {
         Failed = "failed",
         Partial = "partial",
         Done = "done",
+        /// The process stopped while the job ran a step. It stays where it was
+        /// cut (`stage`) until a person restarts it (`중단됨`).
+        Interrupted = "interrupted",
     }
 }
 
@@ -293,9 +296,27 @@ impl SubtitleFormat {
 
 impl JobState {
     /// A state the job leaves only by a person's action or a later ticket's
-    /// work, not by the runner.
+    /// work, not by the runner. An `interrupted` job is not finished: it
+    /// stops where the process cut it and goes on when a person restarts it,
+    /// as a `held` one does.
     pub fn is_finished(self) -> bool {
         matches!(self, JobState::Failed | JobState::Partial | JobState::Done)
+    }
+}
+
+impl StepKind {
+    /// The step as the screens and the job's log name it.
+    pub fn label(self) -> &'static str {
+        match self {
+            StepKind::Found => "후보 발견",
+            StepKind::Open => "게시물 열기",
+            StepKind::Auth => "인증",
+            StepKind::Receive => "받기",
+            StepKind::Placement => "배치 확인",
+            StepKind::Store => "보관",
+            StepKind::Apply => "적용",
+            StepKind::Approval => "교체 승인",
+        }
     }
 }
 

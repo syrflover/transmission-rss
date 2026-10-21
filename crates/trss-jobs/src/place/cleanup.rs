@@ -17,10 +17,11 @@
 //! first reason that holds ([`Cleanable::blocked`]), while a job may still
 //! use it:
 //! a plan row of it of a job that is pending or running ([`RUNNING_JOB`]),
-//! held ([`HELD_JOB`]), or waiting with the row not settled
-//! ([`WAITING_JOB`]); a replacement plan that puts it beside a video, open or
-//! approved ([`AWAITING_APPROVAL`]); or a file effect of a row of it that did
-//! not end ([`UNFINISHED_EFFECT`]). A row that waits for its video
+//! held ([`HELD_JOB`]), interrupted ([`INTERRUPTED_JOB`]), or waiting with
+//! the row not settled ([`WAITING_JOB`]); a replacement plan that puts it
+//! beside a video, open or approved ([`AWAITING_APPROVAL`]); or a file
+//! effect of a row of it that did not end ([`UNFINISHED_EFFECT`]). A row
+//! that waits for its video
 //! (`no_video`) does not keep it: a person may clean what waits for a video.
 //!
 //! The files that go with it ([`Cleanable::with`]) are its subtitle's file
@@ -121,6 +122,8 @@ use crate::{
 pub const RUNNING_JOB: &str = "진행 중인 작업이 이 보관본을 써요";
 /// … of a job that is held.
 pub const HELD_JOB: &str = "보류한 작업이 이 보관본을 써요";
+/// … of a job the process stopped in a step, which a person has to restart.
+pub const INTERRUPTED_JOB: &str = "중단된 작업이 이 보관본을 써요";
 /// … not settled, of a job that waits (회차 확인 among others).
 pub const WAITING_JOB: &str = "회차 확인을 기다리는 작업이 이 보관본을 써요";
 /// A replacement plan open or approved puts it beside a video.
@@ -264,6 +267,9 @@ fn blocked(c: &Connection, stored: &str) -> rusqlite::Result<Option<&'static str
     }
     if exists(c, &of_jobs("'held'"), [stored])? {
         return Ok(Some(HELD_JOB));
+    }
+    if exists(c, &of_jobs("'interrupted'"), [stored])? {
+        return Ok(Some(INTERRUPTED_JOB));
     }
     // A replacement waits as a waiting job too; name the approval.
     if exists(

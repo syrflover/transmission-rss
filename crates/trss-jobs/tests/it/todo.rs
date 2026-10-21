@@ -114,6 +114,36 @@ fn kinds(list: &trss_jobs::todo::TodoList) -> Vec<&'static str> {
         .collect()
 }
 
+/// A job the process cut short asks nothing of a person: it is a failure on
+/// the job list (`interrupted.rs`), never a to-do and never in the count.
+#[tokio::test]
+async fn an_interrupted_job_is_no_todo_and_leaves_the_count_as_it_was() {
+    let s = setup().await;
+    let job = s.make("c1", &[("1", "/auth/1")]).await;
+    s.run().await;
+    assert_eq!(s.state(&job).await, (JobState::Waiting, Some(Wait::Auth)));
+    let list = s.base.todo().await;
+    assert_eq!((kinds(&list), list.count), (vec!["auth"], 1));
+
+    // The same job, cut while it ran its step instead of waiting.
+    let id = job.clone();
+    s.base
+        .db
+        .run(move |c| {
+            c.execute(
+                "UPDATE subtitle_jobs SET state = 'interrupted', wait = NULL, stage = 'receive'
+                  WHERE id = ?1",
+                [id],
+            )
+            .map_err(trss_core::DbError::from)
+        })
+        .await
+        .unwrap();
+    let list = s.base.todo().await;
+    assert!(kinds(&list).is_empty());
+    assert_eq!((list.count, list.badges.len()), (0, 0));
+}
+
 #[tokio::test]
 async fn a_site_check_comes_before_a_receive_failure_and_the_count_has_both() {
     let s = setup().await;
@@ -723,7 +753,15 @@ async fn the_waits_the_store_lists_are_the_jobs_their_rows_say_wait() {
     let base = Base::new().await;
     let mut insert = String::new();
     let mut n = 0;
-    for state in ["pending", "running", "waiting", "held", "failed", "partial"] {
+    for state in [
+        "pending",
+        "running",
+        "waiting",
+        "held",
+        "failed",
+        "partial",
+        "interrupted",
+    ] {
         for wait in [
             "NULL",
             "'auth'",

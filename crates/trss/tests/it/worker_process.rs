@@ -268,6 +268,75 @@ async fn a_second_process_on_the_same_app_data_stops_before_it_runs_anything() {
 }
 
 #[tokio::test]
+async fn a_job_left_running_is_interrupted_before_the_web_serves() {
+    // That the conversion keeps each step and leaves the waiting jobs is
+    // trss-jobs' rule (`interrupted` tests); this is when the process makes it.
+    let h = Harness::new().await;
+    let job = trss_jobs::NewJob {
+        command_id: "c1".to_owned(),
+        request: "{}".to_owned(),
+        origin: "pick".to_owned(),
+        work_id: None,
+        season: Some(1),
+        movie: None,
+        anime_no: None,
+        source_id: None,
+        creator: Some("creator".to_owned()),
+        revision_of: None,
+        revises_attributed: false,
+        items: vec![trss_jobs::NewItem {
+            observation_id: None,
+            episode: "1".to_owned(),
+            post_url: "https://fake.trss.invalid/ok/ep1".to_owned(),
+            found_at: 500,
+        }],
+    };
+    let trss_jobs::Created::Created(id) = trss_jobs::JobRequests::new(h.db.clone())
+        .create(job, 900)
+        .await
+        .unwrap()
+    else {
+        panic!("the job was not created");
+    };
+    let state = || {
+        let id = id.clone();
+        h.db.run(move |c| {
+            c.query_row("SELECT state FROM subtitle_jobs WHERE id = ?1", [id], |r| {
+                r.get::<_, String>(0)
+            })
+            .map_err(trss_core::DbError::from)
+        })
+    };
+    // An earlier process left it running in its apply step.
+    let running = id.clone();
+    h.db.run(move |c| {
+        c.execute(
+            "UPDATE subtitle_jobs SET state = 'running', stage = 'apply' WHERE id = ?1",
+            [running],
+        )
+        .map_err(trss_core::DbError::from)
+    })
+    .await
+    .unwrap();
+
+    let mut p = Proc::spawn(&h, "p", &[]);
+    p.wait_output("trss listening").await;
+    // Interrupted before the web took a request: a person's restart then is
+    // never turned back by it.
+    assert_eq!(state().await.unwrap(), "interrupted");
+    let output = p.output();
+    let interrupted = output
+        .find("Subtitle jobs: 1 left running by an earlier process are interrupted")
+        .unwrap_or_else(|| panic!("{output}"));
+    assert!(
+        interrupted < output.find("trss listening").unwrap(),
+        "{output}"
+    );
+    p.sigterm();
+    assert!(p.wait_exit(Duration::from_secs(10)).await.success());
+}
+
+#[tokio::test]
 async fn logs_and_history_never_contain_secret_query_values() {
     let h = harness_with_channel_a().await;
     // A feed answering 500 and one whose server is not there: errors that

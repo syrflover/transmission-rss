@@ -10,12 +10,14 @@
 //! - [`create`]: making a job (a pick, an app-made job, an upload).
 //! - [`find`]: a find job, from its creation to the end of its 받기.
 //! - [`run`]: claiming a job and the state it goes through, with the log.
+//! - [`interrupt`]: a job the process stopped in a step, and a person's restart of it.
 //! - [`receipts`]: the records of the files a job receives.
 //! - [`views`]: what the lists and the detail of the jobs show.
 //! - [`rows`]: the row types and the mappers more than one of them shares.
 
 mod create;
 mod find;
+mod interrupt;
 mod receipts;
 mod rows;
 mod run;
@@ -23,6 +25,7 @@ mod views;
 
 pub use create::{Created, MappingStamp, NewItem, NewJob, NewUpload, UploadedFile};
 pub use find::{AskedFinish, Found, NewFind, NOTHING_FOUND};
+pub use interrupt::{Restarted, INTERRUPTED, RESTARTED};
 pub use receipts::{snapshot_json, FileProblem};
 #[cfg(test)]
 pub(crate) use rows::blank_file;

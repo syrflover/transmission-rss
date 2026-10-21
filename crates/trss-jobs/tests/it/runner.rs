@@ -1,7 +1,10 @@
 //! The runner with the fake source, and its restarts from records left as a
 //! killed worker leaves them.
 
-use crate::{world::Base, Handles};
+use crate::{
+    world::{cut_and_restart, Base},
+    Handles,
+};
 use std::{path::Path, time::Duration};
 
 use tokio_util::sync::CancellationToken;
@@ -290,7 +293,8 @@ async fn done_jobs_come_newest_first_a_page_at_a_time() {
 }
 
 #[tokio::test]
-async fn a_shutdown_in_the_middle_of_a_file_leaves_the_job_running_and_the_next_start_ends_it() {
+async fn a_shutdown_in_the_middle_of_a_file_leaves_the_job_running_and_the_next_start_interrupts_it_until_a_restart_ends_it(
+) {
     let s = setup().await;
     let id = make(&s, "c1", &[("1", "/ok/a?delay_ms=50")]).await;
 
@@ -315,6 +319,8 @@ async fn a_shutdown_in_the_middle_of_a_file_leaves_the_job_running_and_the_next_
     assert_eq!(d.items[0].files[0].state, FileState::Abandoned);
     assert!(files_in(&s.area.at(".tmp")).is_empty());
 
+    // The next start only marks it; nothing runs it before a person restarts it.
+    cut_and_restart(&s.store, &id).await;
     run(&s).await;
     let d = detail(&s, &id).await;
     assert_eq!(d.row.state, JobState::Done);
@@ -339,6 +345,9 @@ async fn killed(s: &Setup, path: &str) -> (String, i64) {
         .set_item(item, ItemState::Running, None, None, 960)
         .await
         .unwrap();
+    // The process died here; the next one found the job `interrupted`, and a
+    // person restarted it.
+    cut_and_restart(&s.store, &id).await;
     (id, item)
 }
 
@@ -627,6 +636,7 @@ async fn a_done_file_is_reused_after_its_bytes_are_checked_and_held_when_they_ch
             .settle(&id, JobState::Running, None, None, 2_000)
             .await
             .unwrap();
+        cut_and_restart(&s.store, &id).await;
         run(&s).await;
 
         let d = detail(&s, &id).await;
@@ -710,6 +720,7 @@ async fn an_item_with_an_abandoned_attempt_still_records_the_shared_file() {
         .await
         .unwrap();
     intended(&s, items[1].id, "shared/s", "s.ass", None, None).await;
+    cut_and_restart(&s.store, &id).await;
     run(&s).await;
 
     let d = detail(&s, &id).await;
@@ -744,6 +755,7 @@ async fn a_job_started_too_many_times_is_held_instead_of_blocking_the_line() {
             .begin_step(&stuck, StepKind::Open, 950)
             .await
             .unwrap();
+        cut_and_restart(&s.store, &stuck).await;
     }
     run(&s).await;
 

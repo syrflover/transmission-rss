@@ -92,6 +92,18 @@ async fn run() -> Result<(), String> {
         })
     };
     let db = open().await?;
+    // Before the web serves and before any job is claimed: one process runs
+    // the jobs, so a job the earlier one left running is interrupted until a
+    // person restarts it. Done first, a restart the web takes is never turned
+    // back, and a failure stops the start rather than let the jobs loop carry
+    // those jobs on.
+    let interrupted = JobRun::new(db.clone())
+        .interrupt_running(trss_core::system_clock()())
+        .await
+        .map_err(|e| format!("cannot interrupt the subtitle jobs left running: {e}"))?;
+    if interrupted > 0 {
+        println!("Subtitle jobs: {interrupted} left running by an earlier process are interrupted");
+    }
     // The web's own connection, as when it was a process of its own: the
     // screens read beside a cycle's long write instead of waiting for it.
     let web_db = open().await?;

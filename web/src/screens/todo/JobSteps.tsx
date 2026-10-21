@@ -5,35 +5,38 @@ import { cn } from "@/lib/utils";
 
 import type { Step, StepKind } from "./api";
 import { CheckIcon, ChevronIcon, CircleIcon, ClockIcon, DotIcon, WarningIcon } from "./icons";
+import { drawnStepState } from "./interrupted.ts";
+import { STEP_LABEL } from "./steps.ts";
 
-const LABEL: Record<StepKind, string> = {
-  found: "후보 발견",
-  open: "게시물 열기",
-  auth: "인증",
-  receive: "받기",
-  placement: "배치 확인",
-  store: "보관",
-  approval: "교체 승인",
-  apply: "적용",
-};
+/** Every step kind has a label: a kind added to `StepKind` without one does not compile. */
+const LABEL = STEP_LABEL satisfies Record<StepKind, string>;
 
 type IconType = ComponentType<ComponentProps<"svg">>;
 
-const MARK: Record<Step["state"], { icon: IconType; tone: string; word: string }> = {
+/** A step as the track draws it: the server's states, and the step an `interrupted` job was cut in. */
+type Drawn = Omit<Step, "state"> & { state: Step["state"] | "stopped" };
+
+const MARK: Record<Drawn["state"], { icon: IconType; tone: string; word: string }> = {
   done: { icon: CheckIcon, tone: "border-ok text-ok", word: "완료" },
   current: { icon: DotIcon, tone: "border-focus text-focus", word: "진행 중" },
   waiting: { icon: ClockIcon, tone: "border-text-muted border-dashed text-text-secondary", word: "대기" },
   failed: { icon: WarningIcon, tone: "border-urgent text-urgent", word: "실패" },
   partial: { icon: WarningIcon, tone: "border-urgent text-urgent", word: "일부 실패" },
+  stopped: { icon: WarningIcon, tone: "border-urgent text-urgent", word: "중단" },
   upcoming: { icon: CircleIcon, tone: "border-hairline text-text-muted", word: "예정" },
 };
 
 /** The step the job is at: one that is moving, stopped for something, or ended badly. */
-function isHere(step: Step): boolean {
-  return step.state === "current" || step.state === "waiting" || step.state === "failed" || step.state === "partial";
+function isHere(step: Drawn): boolean {
+  return step.state !== "done" && step.state !== "upcoming";
 }
 
-function Mark({ state }: { state: Step["state"] }) {
+/** A step that ended badly or was cut, drawn with the urgent border. */
+function isBad(step: Drawn): boolean {
+  return step.state === "failed" || step.state === "partial" || step.state === "stopped";
+}
+
+function Mark({ state }: { state: Drawn["state"] }) {
   const { icon: Icon, tone } = MARK[state];
   return (
     <span
@@ -50,9 +53,10 @@ function Mark({ state }: { state: Step["state"] }) {
  * horizontal track that wraps on a computer; on a phone it folds into one line
  * about the current step, which opens the whole list.
  */
-export function JobSteps({ steps }: { steps: readonly Step[] }) {
+export function JobSteps({ steps: served, jobState }: { steps: readonly Step[]; jobState: string }) {
   const [open, setOpen] = useState(false);
   const listId = useId();
+  const steps: Drawn[] = served.map((s) => ({ ...s, state: drawnStepState(jobState, s.state) }));
   const here = steps.find(isHere);
   // A finished job has no step it is at: the line speaks of the last one it went through.
   const summary = here ?? [...steps].reverse().find((s) => s.state === "done") ?? steps[0];
@@ -97,7 +101,7 @@ export function JobSteps({ steps }: { steps: readonly Step[] }) {
               aria-current={step === here ? "step" : undefined}
               className={cn(
                 "flex min-w-0 flex-col gap-1 rounded-card border bg-surface-1 px-3 py-2.5 shadow-(--card-shadow)",
-                step.state === "failed" || step.state === "partial"
+                isBad(step)
                   ? "border-urgent"
                   : step === here
                     ? "border-focus"

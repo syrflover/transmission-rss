@@ -1391,8 +1391,8 @@ pub struct StoredOnly {
     pub job_id: Option<String>,
     /// A job applies it by itself once the episode's video comes (`영상
     /// 대기`): one that waits for the video or a source, ended partly failed,
-    /// or is about to run. A job held or waiting for a person does not until
-    /// the person acts, so its row is not told so.
+    /// or is about to run. A job held, interrupted or waiting for a person
+    /// does not until the person acts, so its row is not told so.
     pub awaiting_video: bool,
     /// The job whose replacement plan to decide puts it beside the
     /// episode's video (`교체 승인`).
@@ -1821,7 +1821,8 @@ fn options_in(
         rows.extend(imported_by(c, stored_id)?);
     }
     let free = |(_, _, state, wait): &&Taker| {
-        state != "running" && state != "held" && wait.as_deref() != Some("approval")
+        !matches!(state.as_str(), "running" | "held" | "interrupted")
+            && wait.as_deref() != Some("approval")
     };
     let job = match rows.iter().find(free) {
         Some((job, position, ..)) => Ok((job.clone(), *position)),
@@ -1832,6 +1833,9 @@ fn options_in(
             }
             Some((_, _, state, ..)) if state == "held" => {
                 "이 보관본을 받은 작업이 보류 중이라 적용할 수 없어요."
+            }
+            Some((_, _, state, ..)) if state == "interrupted" => {
+                "이 보관본을 받은 작업이 중단됐어요. 작업 상세에서 다시 시작해 주세요."
             }
             Some(_) => {
                 "이 보관본을 받은 작업이 교체 승인을 기다리고 있어요. 작업 상세에서 정해 주세요."
@@ -1859,12 +1863,12 @@ fn options_in(
 }
 
 /// Asks the job that stored `stored_id` (its latest plan row of it whose job
-/// neither runs, is held nor waits for an approval) to apply it as `mode`
-/// says: the row goes back to `apply` with no outcome, marked as chosen by a
-/// person, and the job is queued again, in one synced transaction with its
-/// log line. Choosing it answers the job's question of which file the
-/// episode takes, if it asked one: the alternatives asked about are stored
-/// only.
+/// neither runs, is held or interrupted nor waits for an approval) to apply
+/// it as `mode` says: the row goes back to `apply` with no outcome, marked as
+/// chosen by a person, and the job is queued again, in one synced
+/// transaction with its log line. Choosing it answers the job's question of
+/// which file the episode takes, if it asked one: the alternatives asked
+/// about are stored only.
 ///
 /// [`Chosen::Apply`] on an episode with a subtitle is a replacement the
 /// worker plans for a person to compare and approve (`compare` in the
@@ -2056,7 +2060,10 @@ pub fn confirm_placement(
         let (positions, whole) = placeable(&facts, &rows);
         let waiting = match whole {
             true => state == "waiting" && wait.as_deref() == Some("placement"),
-            false => state != "running" && state != "held" && wait.as_deref() != Some("approval"),
+            false => {
+                !matches!(state.as_str(), "running" | "held" | "interrupted")
+                    && wait.as_deref() != Some("approval")
+            }
         };
         // A package of fonts and attachments alone has no row to place, and
         // the person confirms keeping it all the same.

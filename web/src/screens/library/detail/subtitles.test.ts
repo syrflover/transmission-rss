@@ -285,6 +285,13 @@ test("a job that stops for a person ends the wait and says what it waits for", (
   assert.equal(applyProgress({ state: "held", note: null }).kind, "waiting");
 });
 
+test("an interrupted job ends the wait as a failure that points at the job's screen", () => {
+  assert.deepEqual(applyProgress({ state: "interrupted", note: "무시되는 메모" }), {
+    kind: "failed",
+    text: "작업이 중단됐어요. 작업 상세에서 다시 시작해 주세요.",
+  });
+});
+
 test("a state this build does not know is waited for, not taken as the end", () => {
   assert.deepEqual(applyProgress({ state: "paused", note: null }), { kind: "running" });
 });

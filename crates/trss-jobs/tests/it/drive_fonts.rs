@@ -5,7 +5,7 @@
 //! and the restarts around a font not received.
 
 use crate::{
-    world::{ticking_clock, Base, Shows},
+    world::{cut_and_restart, ticking_clock, Base, Shows},
     Handles,
 };
 use std::{
@@ -673,6 +673,7 @@ async fn a_run_cut_before_the_font_was_recorded_asks_its_head_again() {
          UPDATE subtitle_job_items SET state = 'running' WHERE job_id = '{id}';"
     ))
     .await;
+    cut_and_restart(&s.store, &id).await;
     s.run().await;
     let d = s.detail(&id).await;
     assert_eq!(d.row.state, JobState::Done, "{:?}", d.row.note);
@@ -874,6 +875,7 @@ async fn a_font_found_unchanged_by_a_run_cut_short_is_not_told_as_bytes_checked(
          UPDATE subtitle_job_items SET state = 'running' WHERE job_id = '{id}';"
     ))
     .await;
+    cut_and_restart(&s.store, &id).await;
     s.run().await;
     let d = s.detail(&id).await;
     assert_eq!(d.row.state, JobState::Done, "{:?}", d.row.note);

@@ -236,6 +236,9 @@ export function applyProgress(job: JobGlance): ApplyProgress {
       return { kind: "failed", text: note ?? "적용하지 못했어요. 작업에서 까닭을 볼 수 있어요." };
     case "partial":
       return { kind: "failed", text: note ?? "일부만 적용했어요. 작업에서 까닭을 볼 수 있어요." };
+    // The process stopped in the middle of the job: it shows as a failure, and the job's own screen has `다시 시작`.
+    case "interrupted":
+      return { kind: "failed", text: "작업이 중단됐어요. 작업 상세에서 다시 시작해 주세요." };
     case "waiting":
     case "held":
       return { kind: "waiting", text: note ?? "사람이 할 일이 남았어요." };

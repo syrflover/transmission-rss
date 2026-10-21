@@ -2,6 +2,7 @@ import { Fragment, useEffect, useId, useRef } from "react";
 import { Link, useParams } from "react-router-dom";
 
 import { Button } from "@/components/ui/button";
+import { store } from "@/lib/cached";
 import { when } from "@/lib/time";
 import { cn } from "@/lib/utils";
 
@@ -13,6 +14,8 @@ import { fetchJob, jobPath, type JobDetail, type JobRow, type JobScreen } from "
 import { CountChip, FailureTag, OriginTags, StateBadge, Tag, originSentence } from "./badges";
 import { ended, episodeName, shownState } from "./format";
 import { FindFinish } from "./FindFinish";
+import { canRestart, interruptedText } from "./interrupted";
+import { RestartJob } from "./RestartJob";
 import { BackIcon } from "./icons";
 import { JobAuth } from "./JobAuth";
 import { JobResults, PackageResults } from "./JobResults";
@@ -97,6 +100,8 @@ function timeSentence(job: JobRow): string {
       return `${at} 실패`;
     case "partial":
       return `${at} 일부 실패`;
+    case "interrupted":
+      return `${at} 중단`;
     case "done":
       return job.origin === "upload"
         ? `${at} 올림`
@@ -198,6 +203,13 @@ function Page({ job, prepare }: { job: JobDetail; prepare: ScreenPrepare }) {
         </div>
       </header>
 
+      {canRestart(job) && (
+        <section className="flex flex-wrap items-center gap-3 rounded-card bg-surface-2 px-4 py-3 dark:bg-surface-1">
+          <p className="min-w-0 flex-1 text-[13.5px] leading-relaxed text-text-secondary">{interruptedText(job.stage)}</p>
+          <RestartJob jobId={job.id} reload={async () => store(KEYS.job(job.id), await fetchJob(job.id))} />
+        </section>
+      )}
+
       <ReplacementDecisions job={job} />
 
       {job.confirm !== null &&
@@ -219,7 +231,7 @@ function Page({ job, prepare }: { job: JobDetail; prepare: ScreenPrepare }) {
         ))}
 
       <div className={cn("mt-5", compact && "max-[720px]:mt-3")}>
-        <JobSteps steps={job.steps} />
+        <JobSteps steps={job.steps} jobState={job.state} />
       </div>
 
       {!find && screen !== null && <JobAuth jobId={job.id} screen={screen} prepare={prepare} />}

@@ -1494,6 +1494,38 @@ async fn another_creators_job_that_has_not_failed_holds_the_episode() {
 }
 
 #[tokio::test]
+async fn another_creators_interrupted_job_holds_the_episode_like_one_in_line() {
+    let w = World::new(Sub {
+        creator: Some("다른"),
+        ..Sub::default()
+    })
+    .await;
+    w.observe("다른", "4", "/ok/other4", "2026-10-02T11:00:00")
+        .await;
+    assert_eq!(w.evaluate().await.len(), 1);
+    // The process was cut in that job's receive step.
+    w.db.run::<_, DbError, _>(|c| {
+        c.execute_batch("UPDATE subtitle_jobs SET state = 'interrupted', stage = 'receive'")?;
+        Ok(())
+    })
+    .await
+    .unwrap();
+    let rule = w.rule_now().await;
+    w.channels
+        .set_creator(&rule.id, rule.version, Some("에루샤".into()))
+        .await
+        .unwrap();
+
+    w.observe("에루샤", "4", "/ok/ep4", "2026-10-02T12:00:00")
+        .await;
+    w.observe("에루샤", "5", "/ok/ep5", "2026-10-02T12:00:00")
+        .await;
+    let made = w.evaluate().await;
+    assert_eq!(made.len(), 1);
+    assert_eq!(w.detail(&made[0]).await.items[0].episode, "5");
+}
+
+#[tokio::test]
 async fn a_subscription_that_cannot_be_looked_at_does_not_stop_the_others() {
     // The mapping of the first work is the app's to write, and fails.
     let w = World::new(Sub::aired(FIRST, 12)).await;

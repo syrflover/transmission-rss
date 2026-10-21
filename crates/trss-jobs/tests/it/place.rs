@@ -2,7 +2,7 @@
 //! `trss_jobs::place`), with the restarts a killed worker leaves.
 
 use crate::{
-    world::{Base, Shows},
+    world::{cut_and_restart, Base, Shows},
     Handles,
 };
 use std::{
@@ -392,6 +392,31 @@ async fn a_subtitle_waiting_for_its_video_is_applied_once_the_library_has_it() {
     // Applied from what was stored: nothing was received again.
     assert_eq!(s.count("subtitle_job_files").await, receipts);
     assert_eq!(s.runner.requeue_awaiting_video().await.unwrap(), 0);
+}
+
+#[tokio::test]
+async fn a_job_cut_short_does_not_wait_for_a_video_until_it_is_restarted() {
+    let s = setup().await;
+    let id = awaiting_video(&s).await;
+    assert!(awaiting(&s).await);
+
+    // The process was cut in the job's apply step: it is not told as waiting
+    // for its video, and the video that comes does not put it in line.
+    let job = id.clone();
+    s.db.run(move |c| {
+        c.execute(
+            "UPDATE subtitle_jobs SET state = 'interrupted', wait = NULL, stage = 'apply'
+              WHERE id = ?1",
+            [job],
+        )
+        .map_err(trss_core::DbError::from)
+    })
+    .await
+    .unwrap();
+    assert!(!awaiting(&s).await);
+    video(&s, "03").await;
+    assert_eq!(s.runner.requeue_awaiting_video().await.unwrap(), 0);
+    assert_eq!(detail(&s, &id).await.row.state, JobState::Interrupted);
 }
 
 /// Whether the work's stored subtitle of episode 3 is told as waiting for its
@@ -907,6 +932,7 @@ async fn a_file_that_takes_the_name_before_publishing_is_kept_for_a_replacement_
 /// Puts `job` last in line, as a job a killed worker left `running` behind
 /// newer ones (made before this).
 async fn last_in_line(s: &Setup, job: &str) {
+    let id = job.to_owned();
     let job = job.to_owned();
     s.db.run(move |c| {
         c.execute(
@@ -917,6 +943,7 @@ async fn last_in_line(s: &Setup, job: &str) {
     })
     .await
     .unwrap();
+    cut_and_restart(&s.store, &id).await;
 }
 
 #[tokio::test]
@@ -1056,6 +1083,7 @@ async fn a_job_held_after_its_starts_holds_its_effects_and_frees_their_names() {
     })
     .await
     .unwrap();
+    cut_and_restart(&s.store, &id).await;
     run(&s).await;
 
     let d = detail(&s, &id).await;

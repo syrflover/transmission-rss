@@ -586,6 +586,32 @@ async fn the_creators_mapping_moves_the_names_onto_the_season_and_a_moved_row_is
 }
 
 #[tokio::test]
+async fn a_job_cut_short_does_not_take_a_placement_until_it_is_restarted() {
+    let s = setup().await;
+    let id = upload(&s, "u1", 1..=3, false).await;
+    s.run().await;
+    assert_eq!(s.detail(&id).await.row.wait, Some(Wait::Placement));
+    let job = id.clone();
+    s.db.run(move |c| {
+        c.execute(
+            "UPDATE subtitle_jobs SET state = 'interrupted', wait = NULL, stage = 'placement'
+              WHERE id = ?1",
+            [job],
+        )
+        .map_err(trss_core::DbError::from)
+    })
+    .await
+    .unwrap();
+    let all = [
+        ("Show - 01.ass", Some(1), true),
+        ("Show - 02.ass", Some(2), true),
+        ("Show - 03.ass", Some(3), true),
+    ];
+    assert_eq!(s.confirm(&id, &all).await, Confirmed::NotWaiting);
+    assert_eq!(s.detail(&id).await.row.state, JobState::Interrupted);
+}
+
+#[tokio::test]
 async fn a_table_that_cannot_be_kept_is_refused_and_one_of_other_rows_is_stale() {
     let s = setup().await;
     let id = upload(&s, "u1", 1..=3, false).await;

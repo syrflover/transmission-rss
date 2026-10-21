@@ -315,12 +315,14 @@ export function fetchTodoCount(signal?: AbortSignal): Promise<number> {
  * - `waiting`: it cannot go on until something happens (`wait` says what).
  * - `held`: a restart found a file whose receipt cannot be confirmed; it stops
  *   there rather than receive again or claim success (`보류`).
+ * - `interrupted`: the process stopped while the job ran a step (`stage` says which); it waits there until the
+ *   user starts it again (`다시 시작`, `restartJob`), and counts as a failure that is not finished (`중단됨`).
  * - `failed`: every item failed; `partial`: some failed and the rest were
  *   received (`일부 실패`).
  * - `done`: every item was received.
  */
 export type JobState =
-  "pending" | "running" | "waiting" | "held" | "failed" | "partial" | "done";
+  "pending" | "running" | "waiting" | "held" | "failed" | "partial" | "done" | "interrupted";
 
 /** What a `waiting` job or item waits for: a person's check (`인증 필요`) or a source it cannot read yet (`자막 대기`). */
 /**
@@ -382,7 +384,7 @@ export interface JobRow {
   revises_attributed: boolean;
   state: JobState;
   wait: Wait | null;
-  /** The step a `running` job is at. */
+  /** The step a `running` job is at, or an `interrupted` job was cut in. */
   stage: StepKind | null;
   /** One sentence about the state: why it waits, what failed, what is unclear. */
   note: string | null;
@@ -431,7 +433,7 @@ export interface DonePage {
 }
 
 export interface JobGroups {
-  /** `failed` and `partial`, newest first. */
+  /** `failed`, `partial` and `interrupted`, newest first. */
   failed: JobRow[];
   /** `waiting` (a person's check first), `held`, `pending`. */
   waiting: JobRow[];
@@ -762,6 +764,14 @@ export function finishJob(id: string): Promise<{ state: "done" | "finishing" }> 
     `/subtitle-jobs/${encodeURIComponent(id)}/finish`,
     { method: "POST" },
   );
+}
+
+/**
+ * Starts an `interrupted` job again (`다시 시작`): it is `running` from the step it was cut in, and the worker is rung.
+ * A job that is not interrupted any more is a `conflict`.
+ */
+export function restartJob(id: string): Promise<{ state: "running" }> {
+  return api<{ state: "running" }>(`/subtitle-jobs/${encodeURIComponent(id)}/restart`, { method: "POST" });
 }
 
 /** What an upload answers when it made the job now (`202`): the files kept by kind and the files dropped. */

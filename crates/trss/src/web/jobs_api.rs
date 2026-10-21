@@ -19,8 +19,9 @@
 //!   the season's Anissia anime's ([`trss_collect::store::anissia::AnissiaStore::candidates`])
 //!   and of one creator; the job copies their posts and episodes as they are.
 //! - `GET /api/subtitle-jobs` the jobs by group: `failed` (`failed`,
-//!   `partial`, newest first), `waiting` (`waiting` for a person's check,
-//!   then for a source, then `held`, then `pending`, each oldest first),
+//!   `partial` and `interrupted`, newest first), `waiting` (`waiting` for a
+//!   person's check, then for a source, then `held`, then `pending`, each
+//!   oldest first),
 //!   `running`, and the first five of `done` as a page.
 //! - `GET /api/subtitle-jobs/done?after=&limit=` the next page of `done`
 //!   (`limit` up to 50, 20 by default).
@@ -137,7 +138,14 @@
 //!   run is bound, after taking what a run left in its folder. `200`
 //!   `{ "state": "finishing" }` (`finishing` on the job until its 받기
 //!   ended), or `{ "state": "done" }` for a job whose 받기 ended before. `400` for a job that
-//!   is no find job, `404` for no job.
+//!   is no find job, `409` for one the process stopped in a step (it is
+//!   restarted first), `404` for no job.
+//! - `POST /api/subtitle-jobs/{id}/restart` a person restarts a job the
+//!   process stopped in the middle of a step (`다시 시작` on an `interrupted`
+//!   job, `중단됨`): it is `running` again with its stage, the jobs' loop is
+//!   rung, and it goes on from the step it was cut in. `200` `{ "state":
+//!   "running" }`, `409` for a job that is not `interrupted`, `404` for no
+//!   job.
 //!
 //! A failed job, item and file carry their failure's class as `failure`
 //! (`missing`, `expired`, `not_a_file`, `changed`, `network`; an item also
@@ -211,8 +219,8 @@ use trss_jobs::{
         unpack::{unpack_status, UnpackStatus},
     },
     store::{DonePage, FileRow, FileShown, JobDetail, JobRow, StepRow},
-    AskedFinish, Created, FileState, ItemState, NewFind, NewJob, StepKind, Wait, FIND, RELOCATE,
-    UPLOAD,
+    AskedFinish, Created, FileState, ItemState, NewFind, NewJob, Restarted, StepKind, Wait, FIND,
+    RELOCATE, UPLOAD,
 };
 use trss_library::store::seasons::{anissia::AnissiaLink, movie::MovieLink, SeasonError};
 
@@ -225,6 +233,7 @@ pub fn routes() -> Router<AppState> {
         .route("/subtitle-jobs/{id}", get(detail))
         .route("/subtitle-jobs/find", post(create_find))
         .route("/subtitle-jobs/{id}/finish", post(finish))
+        .route("/subtitle-jobs/{id}/restart", post(restart))
         .route(
             "/subtitle-jobs/{id}/replacements",
             post(replacement::decide_many),
@@ -1210,6 +1219,12 @@ async fn finish(
         AskedFinish::NotFind => {
             return Err(ApiError::invalid("직접 찾기 작업만 받기를 끝낼 수 있어요."))
         }
+        AskedFinish::Interrupted => {
+            return Err(ApiError::Conflict {
+                message: "중단된 작업이에요. 다시 시작한 뒤에 받기를 끝내 주세요.".to_owned(),
+                current: None,
+            })
+        }
         AskedFinish::Ended => "done",
         AskedFinish::Asked => {
             state.wakes.screens();
@@ -1217,6 +1232,28 @@ async fn finish(
         }
     };
     Ok(Json(json!({ "state": shown })))
+}
+
+async fn restart(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let restarted = state
+        .job_requests
+        .restart(&id, now_millis())
+        .await
+        .map_err(|e| internal(&e))?;
+    match restarted {
+        Restarted::Missing => Err(ApiError::not_found("작업을 찾지 못했어요.")),
+        Restarted::NotInterrupted(_) => Err(ApiError::Conflict {
+            message: "중단된 작업만 다시 시작할 수 있어요. 화면을 새로고침해 주세요.".to_owned(),
+            current: None,
+        }),
+        Restarted::Restarted => {
+            state.wakes.jobs();
+            Ok(Json(json!({ "state": "running" })))
+        }
+    }
 }
 
 /// Makes the subscribed creators' jobs now ([`trss_jobs::Follow::evaluate`])

@@ -4,7 +4,7 @@
 //! a worker killed while it unpacked unpacks again from what it received.
 
 use crate::{
-    world::{counting_clock, ticking_clock, Base, Shows},
+    world::{counting_clock, cut_and_restart, ticking_clock, Base, Shows},
     Handles,
 };
 use std::{
@@ -966,6 +966,7 @@ async fn the_volumes_of_a_split_archive_are_unpacked_and_cleared_together() {
     })
     .await
     .unwrap();
+    cut_and_restart(&s.store, &id).await;
     s.run().await;
     assert_eq!(s.detail(&id).await.row.state, JobState::Done);
     assert!(!s.area.at(&id).exists());

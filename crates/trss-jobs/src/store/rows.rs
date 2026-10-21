@@ -87,8 +87,8 @@ impl JobRow {
         self.state == JobState::Waiting && self.wait == Some(Wait::Placement)
     }
 
-    /// Where the job sits among the open jobs that are neither failed nor
-    /// running: a person's check first, then the other waits (a find job,
+    /// Where the job sits among the open jobs that are neither failed (an
+    /// `interrupted` job is one in the list) nor running: a person's check first, then the other waits (a find job,
     /// which waits for a person's browsing, among them), held, then pending.
     /// `None` for any other.
     fn waiting_rank(&self) -> Option<u8> {
@@ -112,7 +112,7 @@ pub(super) const WAITS_FOR_PLACEMENT: &str = "j.state = 'waiting' AND j.wait = '
 /// The jobs that are not done, in the groups the job list shows them in.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct OpenGroups {
-    /// `failed` and `partial`, the newest state change first.
+    /// `failed`, `partial` and `interrupted`, the newest state change first.
     pub failed: Vec<JobRow>,
     /// A person's check first, then the other waits, held, then pending
     /// (each oldest first).
@@ -128,7 +128,9 @@ impl OpenGroups {
         let mut waiting = Vec::new();
         for row in open {
             match row.state {
-                JobState::Failed | JobState::Partial => groups.failed.push(row),
+                JobState::Failed | JobState::Partial | JobState::Interrupted => {
+                    groups.failed.push(row)
+                }
                 JobState::Running => groups.running.push(row),
                 _ => waiting.extend(row.waiting_rank().map(|rank| (rank, row))),
             }
@@ -367,10 +369,11 @@ static JOB_COLUMNS: LazyLock<String> = LazyLock::new(|| {
              WHERE r.observation_id = j.revision_of AND r.state = 'done' AND rj.seq < j.seq
              ORDER BY r.id DESC LIMIT 1),
            j.revises_attributed,
-           j.finish_at IS NOT NULL AND j.state NOT IN ('done', 'failed', 'partial')
+           j.finish_at IS NOT NULL
+             AND j.state NOT IN ('done', 'failed', 'partial', 'interrupted')
              AND EXISTS (SELECT 1 FROM subtitle_job_items i
                          WHERE i.job_id = j.id AND i.state <> 'done'),
-           j.origin = 'find' AND j.state NOT IN ('done', 'failed', 'partial')
+           j.origin = 'find' AND j.state NOT IN ('done', 'failed', 'partial', 'interrupted')
              AND EXISTS (SELECT 1 FROM subtitle_job_items i
                          WHERE i.job_id = j.id AND i.state <> 'done'),
            j.movie

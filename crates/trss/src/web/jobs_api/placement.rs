@@ -71,8 +71,10 @@ pub(super) async fn view(
     let waiting = match whole {
         true => row.waits_for_placement(),
         false => {
-            !matches!(row.state, JobState::Running | JobState::Held)
-                && row.wait != Some(Wait::Approval)
+            !matches!(
+                row.state,
+                JobState::Running | JobState::Held | JobState::Interrupted
+            ) && row.wait != Some(Wait::Approval)
         }
     };
     // An upload's fonts and attachments alone are confirmed with no row.

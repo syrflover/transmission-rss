@@ -83,6 +83,9 @@ pub enum AskedFinish {
     NotFind,
     /// The job's 받기 had ended already.
     Ended,
+    /// The process stopped the job in the middle of a step: a person
+    /// restarts it first.
+    Interrupted,
     /// The request is written; the worker ends the job once no download of
     /// its run is on its way, or at its next look when no run is bound.
     Asked,
@@ -118,6 +121,9 @@ impl JobRequests {
                 };
                 if origin != FIND {
                     return Ok(AskedFinish::NotFind);
+                }
+                if state == JobState::Interrupted {
+                    return Ok(AskedFinish::Interrupted);
                 }
                 if state.is_finished() || received(&tx, &id)? {
                     return Ok(AskedFinish::Ended);

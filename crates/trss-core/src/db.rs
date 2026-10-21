@@ -195,6 +195,8 @@ const MIGRATIONS: &[Migration] = &[
     Migration::Sql(include_str!("../migrations/library/movies.sql")),
     // 64: no worker heartbeat: one process runs on the database and the board judges a stop by the cycles alone
     Migration::Sql(include_str!("../migrations/status/no_heartbeat.sql")),
+    // 65: a job the process stopped in the middle of a step is `interrupted` until a person restarts it
+    Migration::Remake(include_str!("../migrations/jobs/interrupted.sql")),
 ];
 
 #[derive(Debug, thiserror::Error)]
@@ -3309,6 +3311,87 @@ mod tests {
     }
 
     const BEFORE_MOVIES: usize = 62;
+
+    const BEFORE_INTERRUPTED: usize = 64;
+
+    // The remake of `subtitle_jobs` keeps the rows, the tables that refer to
+    // them, the indexes and the number `seq` has reached, and allows the new
+    // state.
+    #[tokio::test]
+    async fn the_interrupted_migration_keeps_the_jobs_their_children_and_their_indexes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("app.db");
+        let before = {
+            let conn = database_at(&path, BEFORE_INTERRUPTED);
+            conn.execute_batch(
+                "INSERT INTO subtitle_jobs
+                     (id, command_id, request, origin, state, stage, attempts, created_at,
+                      updated_at, state_at)
+                     VALUES ('j1', 'c1', '{}', 'pick', 'running', 'store', 2, 1, 2, 3),
+                            ('j2', 'c2', '{}', 'pick', 'waiting', NULL, 0, 1, 2, 3),
+                            ('j3', 'c3', '{}', 'pick', 'done', NULL, 1, 1, 2, 3);
+                 INSERT INTO subtitle_job_events (job_id, at, message) VALUES ('j1', 1, '시작');
+                 INSERT INTO subtitle_job_steps (job_id, step, state, at)
+                     VALUES ('j1', 'store', 'current', 1);
+                 -- The last job is deleted: the counter stays at 3.
+                 DELETE FROM subtitle_jobs WHERE id = 'j3';",
+            )
+            .unwrap();
+            schema_objects(&conn)
+        };
+
+        let db = Db::open(&path).await.unwrap();
+
+        assert_eq!(version_of(&db).await, MIGRATIONS.len());
+        db.run::<_, DbError, _>(move |c| {
+            let count = |c: &Connection, sql: &str| c.query_row(sql, [], |r| r.get::<_, i64>(0));
+            assert_eq!(count(c, "SELECT count(*) FROM subtitle_jobs")?, 2);
+            assert_eq!(
+                count(c, "SELECT attempts FROM subtitle_jobs WHERE id = 'j1'")?,
+                2
+            );
+            assert_eq!(count(c, "SELECT count(*) FROM subtitle_job_events")?, 1);
+            assert_eq!(count(c, "SELECT count(*) FROM subtitle_job_steps")?, 1);
+            assert_eq!(
+                c.query_row("SELECT stage FROM subtitle_jobs WHERE id = 'j1'", [], |r| r
+                    .get::<_, String>(0))?,
+                "store"
+            );
+            assert_eq!(schema_objects(c), before);
+
+            // The new state is allowed and an unknown one is not.
+            c.execute(
+                "UPDATE subtitle_jobs SET state = 'interrupted' WHERE id = 'j1'",
+                [],
+            )?;
+            assert!(c
+                .execute(
+                    "UPDATE subtitle_jobs SET state = 'broken' WHERE id = 'j1'",
+                    []
+                )
+                .is_err());
+
+            // The tables that refer to a job still do, and still go with it.
+            c.execute("DELETE FROM subtitle_jobs WHERE id = 'j1'", [])?;
+            assert_eq!(count(c, "SELECT count(*) FROM subtitle_job_events")?, 0);
+            assert_eq!(count(c, "SELECT count(*) FROM subtitle_job_steps")?, 0);
+
+            // No `seq` is given twice, deleted jobs' included.
+            c.execute(
+                "INSERT INTO subtitle_jobs (id, command_id, request, origin, state, created_at,
+                                            updated_at, state_at)
+                 VALUES ('j4', 'c4', '{}', 'pick', 'pending', 1, 1, 1)",
+                [],
+            )?;
+            assert_eq!(
+                count(c, "SELECT seq FROM subtitle_jobs WHERE id = 'j4'")?,
+                4
+            );
+            Ok(())
+        })
+        .await
+        .unwrap();
+    }
 
     #[tokio::test]
     async fn a_database_from_before_movies_keeps_its_rows_and_gets_movie_links_and_the_job_column()

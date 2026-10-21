@@ -93,7 +93,7 @@ Anissia의 회차 표시 `0`처럼 뜻을 확인하지 못한 값은 숫자 회�
   | 남기지 않는 것 | 서명 URL·토큰·쿠키는 기록하지 않아요. 읽은 값은 파일 키, 크기, `Last-Modified`(erulabo는 게시물의 수정 시각도)뿐이에요. erulabo의 Drive 파일 ID는 받을 때의 스냅샷에만 있고 재확인 기록·작업 요청·로그·오류·웹 API에는 없어요. |
 
   이 읽기의 한계는 다음과 같아요.
-  회차의 작업 가운데 보류·대기 중인 것이 하나라도 있으면 그동안 그 회차를 읽지 않아요.
+  회차의 작업 가운데 보류·중단·대기 중인 것이 하나라도 있으면 그동안 그 회차를 읽지 않아요.
   새 줄을 보고 만든 자동 수신 작업과 재확인 작업이 짧은 틈에 같은 회차에 둘 다 만들어질 수 있어요.
   작품을 합치면 이전 수신은 옛 작품 ID를 가져서 재확인에서 빠져요.
 
@@ -505,7 +505,7 @@ Tistory 게시물은 첨부를 모두 받아서 회차 하나를 골라도 파�
   - `추가 적용`은 그 회차에 적용본이 있는 제작자의 다른 형식일 때만 받아요. 그 회차의 어느 적용본도 지우지 않아요. 새 적용본이 갈 경로가 비어 있으면 승인 없이 바로 적용하고, 그 자리에 파일이 있으면(대소문자만 다른 이름도) 그 파일만 `교체`로 둔 계획을 만들어 승인을 기다려요. 이때도 화면은 작업 상세로 가요.
   - 화면이 작업 상세로 갈지(응답의 `compare`)는 라이브러리가 기록한 파일과 앱의 적용본으로 정해요. 감시기가 아직 기록하지 않은 파일이 있으면 작업은 계획을 만들지만, 화면은 `작업 보기` 링크만 보여줘요.
   - 교체하면서 들인 `제작자 알 수 없음` 보관본(교체 전에 영상 옆에 있던 파일)은 받은 작업이 없으므로, 그것을 들인 교체의 작업이 맡아요(0122, 2026-10-07). 고르는 순간 그 작업의 계획에 그 보관본의 줄이 생기고, 그 뒤는 받은 보관본과 같아요. 회차에 자막이 없으면 바로 적용하고, 있으면 교체 계획과 승인을 거치며, 승인하면 들인 바이트가 영상 옆에 다시 놓이고 그 자리에 있던 적용본은 원래 보관본으로 남아요.
-    그 작업이 진행 중이거나 보류 중이거나 교체 승인을 기다리면 다른 보관본처럼 고를 수 없고, 작업 기록이 없어졌으면 그 까닭을 보여줘요.
+    그 작업이 진행 중이거나 보류·중단됐거나 교체 승인을 기다리면 다른 보관본처럼 고를 수 없고, 작업 기록이 없어졌으면 그 까닭을 보여줘요.
 - 영상 옆에 이미 있는 자막의 바이트가 적용할 보관본과 같으면, 그 파일을 바꾸지 않고 그 보관본의 적용본으로 기록해요(0121, 2026-10-07).
   사람이 고른 보관본과 작업이 받아 처음 적용하는 보관본 모두 그래요. 교체 비교와 승인은 거치지 않고, 줄은 `이 회차에 같은 자막이 이미 있어 그 파일을 적용본으로 기록했어요`로 끝나요. 그 회차의 작업 화면은 이 설명을 그 회차의 줄에 보여주고, 다른 회차의 지난 설명을 적용 단계에 보여주지 않아요.
   - 바이트가 같은 파일이 여럿이면 새 적용본이 갈 경로의 파일(영상 이름 줄기와 형식의 확장자, 대소문자만 다른 이름 포함)을 먼저 고르고, 없으면 영상 폴더에서 이름순으로 처음 찾은 파일을 골라요.
@@ -995,7 +995,7 @@ worker를 다시 시작하면 기다리는 작업을 한 번 다시 살펴보고
 | 웹에서 비교·선택·복원 | 2026-10-08 서버: 사용자가 3화의 `교체 비교`를 누르고 2화의 보관본도 골라 둘 다 잘됐다고 했어요 ([0121]) | `trss-jobs` `tests/it/choose.rs` `another_creators_copy_on_an_episode_with_a_subtitle_is_compared_then_replaces_it`, `a_past_revision_is_restored_over_the_newer_one_which_stays_stored` | 서버에서 지난 수정본을 복원하거나 다른 형식을 고른 기록이 없어요. |
 | 고르기 동작 | (1)(2) 2026-10-07 서버: 사용자가 9–11화의 보관본을 회차 줄에서 적용했고 1화는 `자막` 카드에서 `교체 비교`를 눌렀어요 ([0083])<br>(3) 2026-10-08 개발(서버 DB 사본, 시험 자막): 11화는 `적용` 약 4초 뒤 새로고침 없이 자막 `보유`가 됐어요 ([0127])<br>(3) 2026-10-10 서버: Hanaori 7화의 C소라 보관본에서 `적용`을 누르자 작업이 09:32:22 UTC에 적용했고, 라이브러리가 3초 뒤 그 자막을 읽었으며, 줄이 새로고침 없이 바뀌었다고 사용자가 알렸어요 ([0114]) | `trss-jobs` `tests/it/choose.rs`: (2) `a_copy_on_an_episode_with_no_subtitle_is_applied_at_once_and_marked_chosen` (3) `another_creators_copy_on_an_episode_with_a_subtitle_is_compared_then_replaces_it` (4) `a_past_revision_is_restored_over_the_newer_one_which_stays_stored` (5) `the_creators_other_format_is_added_beside_the_applied_copy_with_no_approval` (6) `an_added_format_counts_only_its_own_name_among_the_subtitles_the_library_recorded`<br>(1) `trss` `web/library_work_api/tests.rs` `a_stored_subtitle_is_chosen_with_a_mode_and_a_bad_one_changes_nothing`<br>(7) `trss-jobs` `tests/it/replace.rs` `an_imported_copy_on_an_episode_with_a_subtitle_is_compared_then_put_back_beside_the_video` | (5) 추가 적용을 서버에서 쓴 기록이 없어요.<br>(6) 화면이 `작업 보기` 링크만 보이는 경우는 화면 판단 테스트로만 봤어요.<br>(7) 들인 작업이 진행 중이거나 보류 중이라 줄을 만들기 전에 막히는 경로는 시험하지 않았어요([0122]). |
 | 영상 옆 같은 바이트는 적용본으로 기록 | 2026-10-08 서버: 3화와 2화의 보관본을 고르자 두 회차의 자막이 `applied: 에루샤`로 나오고 남은 보관본과 `교체 비교`가 없어졌어요 ([0121])<br>(3) 2026-10-10 서버: 직접 찾기가 받은 `All Works Maid` 12화 보관본은 0083 보관본의 적용본인 같은 바이트의 파일을 이어받지 않고 보관만 했고, 그 보관본에 `교체 비교`가 남았어요 ([0114]) | `trss-jobs` `tests/it/choose.rs`: (1) `a_chosen_copy_whose_bytes_are_beside_the_video_becomes_its_applied_copy` (2) `the_identical_file_at_another_name_is_the_applied_copy_unless_the_targets_own_is_too` (3) `a_job_leaves_a_file_applied_for_another_copy_but_a_chosen_copy_takes_it_over` (6) `an_identical_file_is_not_recorded_as_applied_when_the_stored_file_is_gone_or_changed`<br>(5) `web` `src/screens/todo/appliedNote.test.ts` `an episode applied by adoption is told apart from one replaced before it` | (2) 바이트가 같은 파일이 여럿일 때 이름순으로 처음 찾은 파일을 고르는 쪽과 대소문자만 다른 이름은 테스트가 없어요.<br>(4) 같은 출처의 더 새 수정본이 있는 줄과 다른 작업의 미완 효과가 그 경로를 쓰는 줄을 보관만 하는 쪽은 테스트가 없어요.<br>사람이 고른 줄이 아닌 `records::adopt`와 보관본 회차 변경이 겹치는 짧은 틈은 시험하지 않았어요. 서버 5–8화는 영상 옆 자막과 보관본의 바이트가 같은지 보지 않았어요([0121]). 고르지 않은 보관본을 화면을 그릴 때 견주지 않는 점(사용자 결정, 2026-10-07)은 테스트가 없어요. |
-| 정리는 앱이 소유를 확인한 파일만 | 2026-10-05 개발(서버 DB 사본): 지난 수정본 `dev-1.ass`를 정리하자 파일이 사라지고 정리가 `done`이 됐어요 ([0073]) | `trss-jobs` `tests/it/cleanup.rs` `a_stored_subtitle_a_running_or_held_job_uses_is_not_cleanable`, `a_file_the_app_did_not_record_is_listed_nowhere_and_stays` | 서버에서 정리를 실행한 기록이 없어요. |
+| 정리는 앱이 소유를 확인한 파일만 | 2026-10-05 개발(서버 DB 사본): 지난 수정본 `dev-1.ass`를 정리하자 파일이 사라지고 정리가 `done`이 됐어요 ([0073]) | `trss-jobs` `tests/it/cleanup.rs` `a_stored_subtitle_a_running_held_or_interrupted_job_uses_is_not_cleanable`, `a_file_the_app_did_not_record_is_listed_nowhere_and_stays` | 서버에서 정리를 실행한 기록이 없어요. |
 | 적용 위치와 보관 위치의 구분 | 2026-10-07 서버: 작품 상세의 `자막` 카드가 코코렛 보관본을 영상 옆 적용본에 적용된 것으로 보였어요 ([0083]) | `web` `src/screens/library/detail/subtitles.test.ts` `` the applied copy is `적용` and shows where it is applied and where it is stored, apart `` | 적용됐다는 표시가 재생기의 트랙 선택을 뜻하지 않는다는 문구와, 숨김 폴더명을 접근 권한 보호로 안내하지 않는 점은 테스트가 없어요. |
 
 ### 폰트

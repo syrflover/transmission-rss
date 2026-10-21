@@ -907,6 +907,98 @@ async fn finishing_a_find_job_asks_the_worker_and_never_ends_it_here() {
 }
 
 #[tokio::test]
+async fn finishing_a_find_job_the_process_cut_short_is_refused_until_it_is_restarted() {
+    let (state, router) = app();
+    linked_season(&state).await;
+    let (_, made) = call(
+        &router,
+        Method::POST,
+        "/api/subtitle-jobs/find",
+        Some(find("f1", 1, "s1")),
+    )
+    .await;
+    let id = made["id"].as_str().unwrap().to_owned();
+    sql(
+        &state,
+        "UPDATE subtitle_jobs SET state = 'interrupted', stage = 'receive'",
+    )
+    .await;
+    let (status, answer) = call(
+        &router,
+        Method::POST,
+        &format!("/api/subtitle-jobs/{id}/finish"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(answer["error"], "conflict");
+    let (_, detail) = get(&router, &format!("/api/subtitle-jobs/{id}")).await;
+    assert_eq!(detail["finishing"], false);
+    assert_eq!(detail["state"], "interrupted");
+}
+
+#[tokio::test]
+async fn restarting_an_interrupted_job_runs_it_again_and_any_other_job_is_refused() {
+    let (state, router) = app();
+    linked_season(&state).await;
+    let (_, made) = call(
+        &router,
+        Method::POST,
+        "/api/subtitle-jobs",
+        Some(pick("p1", &[1])),
+    )
+    .await;
+    let id = made["id"].as_str().unwrap().to_owned();
+    let restart = format!("/api/subtitle-jobs/{id}/restart");
+
+    // A job in line is not interrupted: refused, and left as it was.
+    let (status, answer) = call(&router, Method::POST, &restart, None).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(answer["error"], "conflict");
+    assert!(answer["message"].as_str().is_some_and(|m| !m.is_empty()));
+    let (_, detail) = get(&router, &format!("/api/subtitle-jobs/{id}")).await;
+    assert_eq!(detail["state"], "pending");
+
+    // Cut in the receive step, it is on the list with the failures and keeps
+    // its step.
+    sql(
+        &state,
+        "UPDATE subtitle_jobs SET state = 'interrupted', stage = 'receive'",
+    )
+    .await;
+    let (_, groups) = get(&router, "/api/subtitle-jobs").await;
+    assert_eq!(groups["failed"][0]["id"], id.as_str());
+    assert_eq!(groups["failed"][0]["state"], "interrupted");
+    assert_eq!(groups["failed"][0]["stage"], "receive");
+    assert_eq!(groups["waiting"].as_array().map_or(0, Vec::len), 0);
+
+    let (status, answer) = call(&router, Method::POST, &restart, None).await;
+    assert_eq!(
+        (status, &answer),
+        (StatusCode::OK, &json!({ "state": "running" }))
+    );
+    let (_, detail) = get(&router, &format!("/api/subtitle-jobs/{id}")).await;
+    assert_eq!(detail["state"], "running");
+    assert_eq!(detail["stage"], "receive");
+    assert_eq!(detail["log"][0]["message"], "다시 시작했어요");
+    let (_, groups) = get(&router, "/api/subtitle-jobs").await;
+    assert_eq!(groups["failed"].as_array().map_or(0, Vec::len), 0);
+    assert_eq!(groups["running"][0]["id"], id.as_str());
+
+    // Asked again, it is running and refused; an unknown job is not found.
+    let (status, _) = call(&router, Method::POST, &restart, None).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    let (status, _) = call(
+        &router,
+        Method::POST,
+        "/api/subtitle-jobs/nope/restart",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
 async fn each_received_archive_says_what_came_of_unpacking_it() {
     let (state, router) = app();
     sql(

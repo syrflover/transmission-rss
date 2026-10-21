@@ -798,6 +798,19 @@ async fn the_works_copies_come_by_episode_and_newest_first_and_say_why_one_canno
         Err("이 보관본은 이미 영상 옆에 적용했어요.")
     );
 
+    // Every job interrupted: the copy says so, and where to restart the job.
+    s.sql("UPDATE subtitle_jobs SET state = 'interrupted'".into())
+        .await;
+    let cut = s.store.place.work_copies(WORK).await.unwrap();
+    for copy in [&cut[0], &cut[1]] {
+        assert_eq!(
+            copy.options.apply,
+            Err("이 보관본을 받은 작업이 중단됐어요. 작업 상세에서 다시 시작해 주세요."),
+            "{}",
+            copy.id
+        );
+    }
+
     // A copy a person cleaned is not listed.
     s.sql(format!(
         "UPDATE subtitle_stored SET cleaned_at = 5 WHERE id = '{other_c}'"

@@ -25,6 +25,26 @@ use trss_library::{
 };
 use trss_subtitles::Sources;
 
+/// What the start of a process and a person's `다시 시작` do to a job its
+/// earlier process left `running`: the job becomes `interrupted` in the step it
+/// was in, nothing is claimed, and the restart then puts it back to `running`
+/// from there. The tests of the records a dead worker leaves call it between
+/// leaving them and running the job.
+pub async fn cut_and_restart(store: &Handles, id: &str) {
+    use trss_jobs::{JobState, Restarted};
+    let stage = store.views.detail(id).await.unwrap().unwrap().row.stage;
+    assert!(store.run.interrupt_running(1_000).await.unwrap() >= 1);
+    let row = store.views.detail(id).await.unwrap().unwrap().row;
+    assert_eq!(row.state, JobState::Interrupted);
+    assert_eq!(row.stage, stage, "an interrupted job keeps its stage");
+    assert_eq!(
+        store.requests.restart(id, 1_010).await.unwrap(),
+        Restarted::Restarted
+    );
+    let row = store.views.detail(id).await.unwrap().unwrap().row;
+    assert_eq!((row.state, row.stage), (JobState::Running, stage));
+}
+
 /// A clock that starts at 1_000 and ticks 10 ms at every call, the first call
 /// giving the start.
 pub fn ticking_clock() -> Clock {

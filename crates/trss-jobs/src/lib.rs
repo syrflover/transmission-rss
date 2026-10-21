@@ -56,7 +56,7 @@ pub use runner::Runner;
 pub use screen::{Screen, ScreenState, ScreenStore};
 pub use store::{
     AskedFinish, Created, FileProblem, JobError, JobRequests, JobRun, JobViews, MappingStamp,
-    NewFind, NewItem, NewJob, AUTO, FIND, NOTHING_FOUND, RELOCATE, UPLOAD,
+    NewFind, NewItem, NewJob, Restarted, AUTO, FIND, NOTHING_FOUND, RELOCATE, UPLOAD,
 };
 pub use trss_archive::run::Unpacker;
 pub use trss_subtitles::{verify::Format, FailureKind};

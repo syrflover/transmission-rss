@@ -59,10 +59,12 @@
 //!
 //! Each effect on a file is preceded by a record of its intent and followed by
 //! a record of its result, and a `trss` that dies leaves its job `running`:
-//! the next one to start claims it again
-//! ([`JobRun::claim_next`]). The steps of a receipt, and what a restart does
-//! with an unfinished one (the table of records against the disk), are the
-//! `receive` module's.
+//! the next one to start makes it `interrupted` ([`JobRun::interrupt_running`])
+//! and leaves it so until a person restarts it
+//! ([`crate::JobRequests::restart`]), which puts it `running` again, and the
+//! jobs' loop claims it ([`JobRun::claim_next`]). The steps of a receipt, and
+//! what the run after a restart does with an unfinished one (the table of
+//! records against the disk), are the `receive` module's.
 
 use std::{
     path::PathBuf,
@@ -311,7 +313,10 @@ impl Runner {
 
     /// Runs the ready jobs one after the other until none is left or `cancel`
     /// fires. Returns how many runs ended. The caller runs it from one task at
-    /// a time, so a job it finds `running` was left by a process that died.
+    /// a time, and made the jobs a process left `running` `interrupted`
+    /// first ([`JobRun::interrupt_running`]), so a job it finds `running` is
+    /// one a person restarted after that, or one an earlier run of this
+    /// process left.
     pub async fn run_ready(&self, cancel: &CancellationToken) -> Result<usize, JobError> {
         let mut ran = 0;
         while !cancel.is_cancelled() {

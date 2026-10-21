@@ -483,10 +483,10 @@ async fn cleaning_a_revision_alone_with_its_font_and_attachment_removes_all_thre
     assert_eq!(storage[0].cleanable, 0);
 }
 
-// 완료 기준: 진행 중이거나 보류한 작업이 참조하는 보관본은 정리할 수 없고
+// 완료 기준: 진행 중이거나 보류하거나 중단된 작업이 참조하는 보관본은 정리할 수 없고
 // 까닭이 보여요.
 #[tokio::test]
-async fn a_stored_subtitle_a_running_or_held_job_uses_is_not_cleanable() {
+async fn a_stored_subtitle_a_running_held_or_interrupted_job_uses_is_not_cleanable() {
     let s = setup().await;
     let id = make_pack(&s, "c1", "2", &["Show - 02.ass", "Show - 05.ass"]).await;
     s.run().await;
@@ -499,6 +499,7 @@ async fn a_stored_subtitle_a_running_or_held_job_uses_is_not_cleanable() {
         ("pending", cleanup::RUNNING_JOB),
         ("running", cleanup::RUNNING_JOB),
         ("held", cleanup::HELD_JOB),
+        ("interrupted", cleanup::INTERRUPTED_JOB),
     ] {
         s.sql(format!(
             "UPDATE subtitle_jobs SET state = '{state}' WHERE id = '{id}'"

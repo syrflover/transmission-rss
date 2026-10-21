@@ -3,16 +3,20 @@ import { Link } from "react-router-dom";
 
 import { Button } from "@/components/ui/button";
 import { ApiError } from "@/lib/api";
+import { store } from "@/lib/cached";
 import { when } from "@/lib/time";
 import { cn } from "@/lib/utils";
 
 import { btnNeutral } from "../collect/channels/styles";
 import { coverOf } from "../library/model";
 import { Cover } from "../library/WorkItem";
-import { fetchDoneJobs, jobPath, type DonePage, type JobGroups, type JobRow } from "./api";
+import { fetchDoneJobs, fetchJobs, jobPath, type DonePage, type JobGroups, type JobRow } from "./api";
 import { CountChip, FailureTag, OriginTags, StateBadge, originSentence } from "./badges";
 import { episodeList, shownState, uploadKept } from "./format";
 import { ChevronIcon } from "./icons";
+import { canRestart, interruptedText } from "./interrupted";
+import { KEYS } from "./poll";
+import { RestartJob } from "./RestartJob";
 import { TargetLine } from "./TargetLine";
 
 /** The next page of done jobs is read this far before the end of the list comes into view. */
@@ -27,6 +31,8 @@ function timeLine(job: JobRow): string {
       return `${when(job.state_at)}부터`;
     case "running":
       return job.progress.total > 1 ? `${job.progress.done}/${job.progress.total}개 받음` : when(job.state_at);
+    case "interrupted":
+      return `${when(job.state_at)} 중단`;
     default:
       return when(job.state_at);
   }
@@ -60,6 +66,8 @@ function describe(job: JobRow): string {
         : "자막이 아직 출처에 연결되지 않아서 다시 확인하기를 기다려요.";
     case "held":
       return "다시 시작하는 사이 받던 파일을 확인하지 못해서 멈췄어요. 같은 파일을 두 번 받지 않으려고 보류했어요.";
+    case "interrupted":
+      return interruptedText(job.stage);
     case "failed":
       return "자막을 받지 못했어요. 작업 상세에서 회차별 이유를 볼 수 있어요.";
     case "partial":
@@ -145,6 +153,11 @@ function JobRowItem({ job }: { job: JobRow }) {
           )}
         />
       </button>
+      {canRestart(job) && (
+        <div className="flex flex-wrap items-center gap-2 px-3 pb-2.5 pl-[76px] max-[720px]:pl-3">
+          <RestartJob jobId={job.id} reload={async () => store(KEYS.jobs, await fetchJobs())} />
+        </div>
+      )}
       {open && (
         <div
           id={detailId}
