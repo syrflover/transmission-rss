@@ -359,6 +359,67 @@ pub fn staging(r: &mut Report, label: &str, dir: &Path, sub: &str, final_name: &
     }
 }
 
+/// A file staged in the subfolder `sub` of `dir` and the file `current_name`
+/// in `dir` swapped with `renameat2(RENAME_EXCHANGE)`: the new file takes the
+/// name in one step and the old one ends in the subfolder, which is how a
+/// subtitle beside its video is replaced (ticket 0151). Both files are made
+/// here; the subfolder must exist.
+pub fn exchange(r: &mut Report, label: &str, dir: &Path, sub: &str, current_name: &str) {
+    let staged = dir.join(sub).join("new");
+    let current = dir.join(current_name);
+    let made = fsync_file(&staged, b"new").and_then(|()| fsync_file(&current, b"current"));
+    let (ok, text) = result_text(made);
+    r.check(
+        ok,
+        &format!("{label}: make a file in the subfolder and one beside it"),
+        text,
+    );
+    if !ok {
+        return;
+    }
+    let (staged_id, current_id) = (identity(&staged), identity(&current));
+    if let Err(e) = renameat_with(CWD, &staged, CWD, &current, RenameFlags::EXCHANGE) {
+        let hint = if e == Errno::INVAL || e == Errno::OPNOTSUPP {
+            ", the filesystem does not support RENAME_EXCHANGE"
+        } else {
+            ""
+        };
+        r.check(
+            false,
+            &format!("{label}: renameat2(RENAME_EXCHANGE) of the two"),
+            format!("{}{hint}", errno_text(e)),
+        );
+        return;
+    }
+    r.check(
+        true,
+        &format!("{label}: renameat2(RENAME_EXCHANGE) of the two"),
+        "ok",
+    );
+    let swapped = fs::read(&current).is_ok_and(|bytes| bytes == b"new")
+        && fs::read(&staged).is_ok_and(|bytes| bytes == b"current");
+    r.check(
+        swapped,
+        &format!("{label}: each name has the other's contents"),
+        "checked",
+    );
+    let (after_current, after_staged) = (identity(&current), identity(&staged));
+    r.check(
+        staged_id.is_ok()
+            && after_current.as_ref().ok() == staged_id.as_ref().ok()
+            && after_staged.as_ref().ok() == current_id.as_ref().ok(),
+        &format!("{label}: dev:inode moved with the contents"),
+        format!(
+            "{:?} -> {:?}",
+            (staged_id.as_ref().ok(), current_id.as_ref().ok()),
+            (after_current.as_ref().ok(), after_staged.as_ref().ok())
+        ),
+    );
+    let synced = trss_archive::sync_dir(dir).and_then(|()| trss_archive::sync_dir(&dir.join(sub)));
+    let (ok, text) = result_text(synced);
+    r.check(ok, &format!("{label}: fsync both folders"), text);
+}
+
 /// A file in `from` renamed into `to`, which are two folders the app uses
 /// (the data folder and the media): it must fail with `EXDEV` where they are
 /// on different mounts, which is why a file is staged next to where it ends.
@@ -397,7 +458,8 @@ pub fn across_mounts(r: &mut Report, from: &Path, to: &Path, different: Option<b
 }
 
 /// Makes a test subfolder in an existing work folder, which stands for the
-/// `.trss/` the app makes there, and stages a file through it.
+/// `.trss/` the app makes there, stages a file through it, and swaps a file
+/// in it with one beside the videos ([`exchange`]).
 pub fn work_folder(r: &mut Report, work: &Path, owner: Owner, cleanup: &mut Cleanup) {
     let label = format!("work folder {}", work.display());
     let meta = match fs::symlink_metadata(work) {
@@ -420,10 +482,13 @@ pub fn work_folder(r: &mut Report, work: &Path, owner: Owner, cleanup: &mut Clea
     let name = unique_name();
     let sub = work.join(&name);
     let final_name = format!("{name}-final");
+    let current_name = format!("{name}-current");
     // Tracked first: whatever happens next, they are removed.
     cleanup.track(&sub);
     cleanup.track(&work.join(&final_name));
+    cleanup.track(&work.join(&current_name));
     staging(r, &label, work, &name, &final_name, owner);
+    exchange(r, &label, work, &name, &current_name);
 }
 
 #[cfg(test)]
@@ -474,6 +539,19 @@ mod tests {
             .map(|e| e.unwrap().file_name())
             .collect();
         assert_eq!(names, ["ep01.mkv"]);
+    }
+
+    #[test]
+    fn an_exchange_puts_the_staged_file_in_place_and_the_old_one_in_the_subfolder() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir(dir.path().join("sub")).unwrap();
+        let mut r = Report::default();
+
+        exchange(&mut r, "test", dir.path(), "sub", "ep01.ass");
+
+        assert_eq!(r.failed(), 0);
+        assert_eq!(fs::read(dir.path().join("ep01.ass")).unwrap(), b"new");
+        assert_eq!(fs::read(dir.path().join("sub/new")).unwrap(), b"current");
     }
 
     #[test]

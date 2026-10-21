@@ -28,8 +28,9 @@ usage: trss-probe [options]
   --data DIR          a folder on the app data disk, for the data-to-media
                       rename (default /data)
   --work DIR          an existing work folder that Transmission made, to make a
-                      test subfolder in (repeatable; the probe adds nothing
-                      else there and removes the subfolder)
+                      test subfolder in and swap two files with
+                      RENAME_EXCHANGE (repeatable; the probe adds only
+                      .trss-probe-* names there and removes them)
   --size-mib N        the size of the memory test's file (default 300; 0 skips
                       the test)
   --unpack FILE[,FILE...]

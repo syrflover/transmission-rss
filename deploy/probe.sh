@@ -43,7 +43,10 @@
 #     --unpack /samples/split.part1.rar,/samples/split.part2.rar
 #
 # The probe's options are in `trss-probe --help`. It makes folders named
-# `.trss-probe-*` under the folders it is given and removes them again.
+# `.trss-probe-*` under the folders it is given and removes them again. In a
+# work folder given with --work it also swaps two files of its own with
+# renameat2(RENAME_EXCHANGE), which replacing a subtitle relies on (ticket
+# 0151), and says so when the filesystem does not support it.
 set -euo pipefail
 
 here="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"

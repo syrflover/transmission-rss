@@ -1,6 +1,6 @@
 # 0151 서버의 미디어 파일시스템이 `RENAME_EXCHANGE`를 지원하는지 `trss-probe`로 확인해요
 
-- 상태: 대기
+- 상태: 진행 중(서버 실행을 기다려요)
 - 출처: [구조 가볍게 하기 명세의 끊긴 자막 작업](lighter-structure.md#끊긴-자막-작업)의 교체, [명세의 가정](lighter-structure.md#가정)
 - 막는 티켓: [0144](0144-lighter-structure-baseline.md)(기준값)
 
@@ -15,7 +15,21 @@
 ## 완료 기준
 
 - [ ] probe가 작품 폴더에서 파일 두 개를 `RENAME_EXCHANGE`로 맞바꾸고, 두 이름이 서로의 내용을 가졌는지 확인해요. 지원하지 않는 파일시스템에서는 `RENAME_NOREPLACE`처럼 그렇다고 알려요. 확인이 남긴 파일은 지워요.
-- [ ] 로컬 파일시스템에서 probe의 테스트가 이 확인을 돌려요.
+- [x] 로컬 파일시스템에서 probe의 테스트가 이 확인을 돌려요.
 - [ ] 사용자 승인을 받아 서버(j4105)의 미디어 폴더에 있는 작품 폴더 하나에서 probe를 돌리고, 결과를 날짜, 작품 폴더, 파일시스템 종류와 함께 이 티켓의 결과에 적어요. 원본 출력은 `dev/local/measure/0151/`에 있어요.
 - [ ] 지원하면 [명세의 가정](lighter-structure.md#가정)에서 이 가정을 확인한 것으로 고쳐요. 지원하지 않으면 교체를 어떻게 할지 사용자 결정을 받아 명세와 0153을 고쳐요.
-- [ ] `deploy/probe.sh`의 설명이 새 확인을 적어요.
+- [x] `deploy/probe.sh`의 설명이 새 확인을 적어요.
+
+## 결과
+
+### 로컬 확인
+
+2026-10-21에 probe가 작품 폴더에서 하는 일에 맞바꾸기를 더했어요. 시험 하위 폴더 안의 파일(새 파일 역할)과 작품 폴더 바로 아래의 파일(지금 파일 역할)을 `renameat2(RENAME_EXCHANGE)`로 맞바꾸고, 두 이름이 서로의 내용과 `장치:inode`를 가졌는지 본 뒤 두 폴더를 `fsync`해요. 맞바꿀 두 파일은 probe가 `.trss-probe-*` 이름으로 만들고 끝에 지워요. 맞바꾸기가 `EINVAL`이나 `EOPNOTSUPP`로 실패하면 파일시스템이 지원하지 않는다고 알려요. `deploy/probe.sh`의 설명과 `trss-probe --help`의 `--work` 설명에 이 확인을 적었어요.
+
+- `trss-probe`의 테스트 25개가 통과했어요. 새 테스트 `an_exchange_puts_the_staged_file_in_place_and_the_old_one_in_the_subfolder`가 맞바꾼 뒤의 내용을 보고, 기존 `a_work_folder_gets_a_test_subfolder_that_is_removed_and_nothing_else_changes`가 작품 폴더에 남는 것이 없는지 봐요.
+- `docker build --target probe-binary`로 만든 정적 실행 파일을 `probe.sh`로 돌렸어요. 임시 `.env`와 작품 폴더 하나를 둔 대역 폴더에서 이미지는 개발용 `local`, 메모리 검사는 끈 채(`--size-mib 0`)였어요. 59개 항목이 모두 통과했고, 만든 파일과 폴더는 모두 지워졌어요. 원본 출력은 이 PC의 `dev/local/measure/0151/probe-standin.txt`에 있어요.
+
+이 확인으로 알 수 없는 것이에요.
+
+- 대역 폴더는 이 PC의 `/tmp`라서 서버의 xfs가 맞바꾸기를 지원하는지는 서버에서 돌려야 알아요(2026-10-21).
+- 지원하지 않는 파일시스템에서 알리는 경로는 돌려 보지 않았어요(2026-10-21). 그런 파일시스템을 이 PC에 쉽게 만들 수 없었어요.
