@@ -145,6 +145,16 @@ pub fn video(facts: &Facts) -> VideoState {
     }
 }
 
+/// The first moment after `facts.now` at which [`video`] says otherwise than it
+/// does now, because time passes and nothing is written: `방영 전` becomes `영상
+/// 대기` when the episode airs. Nothing is written when that happens, so the
+/// server announces it (`trss::deadlines`). The other lines change only when
+/// something is written, or at the deadlines of what they are made of (the
+/// cycle's and the look at Transmission's).
+pub fn video_changes_at(facts: &Facts) -> Option<Millis> {
+    (video(facts) == VideoState::Upcoming).then_some(facts.instant)
+}
+
 /// The subtitle line, or `None` when the card has none: the subscription takes
 /// no subtitles (`받지 않음`), or its video is off, which leaves subtitles
 /// nothing to wait for (`자막 받기` is disabled then), or the anime is `결방`.
@@ -217,6 +227,61 @@ mod tests {
             }),
             VideoState::Received
         );
+    }
+
+    #[test]
+    fn an_upcoming_video_line_changes_when_the_episode_airs_and_no_other_does() {
+        let upcoming = Facts {
+            instant: 2_000,
+            ..facts()
+        };
+        assert_eq!(video(&upcoming), VideoState::Upcoming);
+        assert_eq!(video_changes_at(&upcoming), Some(2_000));
+        // Just before, at and after the air time, by the rule itself.
+        for (now, line) in [
+            (1_999, VideoState::Upcoming),
+            (2_000, VideoState::Waiting),
+            (2_001, VideoState::Waiting),
+        ] {
+            assert_eq!(video(&Facts { now, ..upcoming }), line, "at {now}");
+        }
+        // Asked at the moment it comes, or after, there is none ahead.
+        assert_eq!(
+            video_changes_at(&Facts {
+                now: 2_000,
+                ..upcoming
+            }),
+            None
+        );
+        assert_eq!(
+            video_changes_at(&Facts {
+                now: 2_001,
+                ..upcoming
+            }),
+            None
+        );
+        // The lines that are not `방영 전` do not change with the clock alone.
+        for other in [
+            Facts {
+                paused: true,
+                ..upcoming
+            },
+            Facts {
+                off: true,
+                ..upcoming
+            },
+            Facts {
+                video_held: true,
+                ..upcoming
+            },
+            Facts {
+                downloading: true,
+                ..upcoming
+            },
+            facts(),
+        ] {
+            assert_eq!(video_changes_at(&other), None, "{:?}", video(&other));
+        }
     }
 
     #[test]

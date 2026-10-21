@@ -4,6 +4,8 @@ import { Dialog } from "radix-ui";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ApiError } from "@/lib/api";
+import { createRereader } from "@/lib/rereads";
+import { sharedEvents } from "@/lib/sharedEvents";
 import { sizeText } from "@/lib/size";
 import { cn } from "@/lib/utils";
 
@@ -18,10 +20,8 @@ import {
   type ArtworkState,
 } from "../api";
 import type { Work } from "../model";
+import { COVER_VIEW_RETRY_MS, workCoverChanged } from "./listens";
 import { Cover } from "../WorkItem";
-
-/** How often an open cover view reads the state again while the app is still searching or receiving. */
-const PENDING_POLL_MS = 3000;
 
 const FAILED = "표지 상태를 불러오지 못했어요.";
 
@@ -97,28 +97,40 @@ export function CoverDialog({
   const onChangedRef = useRef(onChanged);
   onChangedRef.current = onChanged;
 
-  // Read the state when the view opens, and again while something is pending.
+  // Read the state when the view opens, and again when the server says the cover changed (`listens.ts`) while
+  // something is pending (the app is still searching or receiving). Listening starts before the first read, so a
+  // cover received meanwhile is not missed.
   const pending = state?.pending ?? null;
   useEffect(() => {
     if (!open) return;
-    const controller = new AbortController();
-    const read = () =>
-      loadArtwork(workId, controller.signal).then(
-        (next) => {
-          setState(next);
-          setLoadError(null);
-          onChangedRef.current(next.image?.status === "available" ? next.image.url : null);
-        },
-        (e: unknown) => {
-          if (controller.signal.aborted) return;
-          setLoadError(e instanceof ApiError ? e.message : FAILED);
-        },
-      );
-    void read();
-    const timer = pending ? setInterval(() => void read(), PENDING_POLL_MS) : undefined;
+    const rereader = createRereader({
+      read: async (signal) => {
+        let next: ArtworkState;
+        try {
+          next = await loadArtwork(workId, signal);
+        } catch (e) {
+          if (!signal.aborted) setLoadError(e instanceof ApiError ? e.message : FAILED);
+          throw e;
+        }
+        if (signal.aborted) return;
+        setState(next);
+        setLoadError(null);
+        onChangedRef.current(next.image?.status === "available" ? next.image.url : null);
+      },
+      retryMs: () => (pending ? COVER_VIEW_RETRY_MS : null),
+      gone: (e) => e instanceof ApiError && e.code === "not_found",
+      hidden: () => document.hidden,
+    });
+    const stopListening = pending
+      ? sharedEvents().subscribe({
+          match: (change) => workCoverChanged(change, workId),
+          reread: () => rereader.request(),
+        })
+      : () => {};
+    rereader.start();
     return () => {
-      controller.abort();
-      clearInterval(timer);
+      stopListening();
+      rereader.stop();
     };
   }, [open, workId, pending]);
 

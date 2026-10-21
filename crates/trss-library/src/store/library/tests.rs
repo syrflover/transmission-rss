@@ -1657,3 +1657,59 @@ async fn the_generation_changes_with_what_a_video_lookup_can_answer_and_only_the
         "a folder unregistered"
     );
 }
+
+// 화면 알림(0156): 이번 주 편성은 `library`에 작품이 가진 영상과 자막을 다시 읽어요. 스캔이 새
+// 영상이나 자막을 기록하면 그 작품의 ID로 가요.
+#[tokio::test]
+async fn a_scan_that_finds_a_video_or_a_subtitle_is_announced_for_the_work() {
+    let changes = trss_core::changes::Changes::default();
+    let mut heard = changes.subscribe();
+    let store = LibraryStore::new(Db::open_blocking_announcing(":memory:", changes).unwrap());
+    let mut drain = || {
+        let mut told = BTreeSet::new();
+        while let Ok(change) = heard.try_recv() {
+            told.insert((change.kind.name(), change.id));
+        }
+        told
+    };
+    let (folder, _) = store
+        .add_folder(
+            "/w".into(),
+            scan(vec![work("A", vec![video(1, "01", "A S01E01.mkv")])]),
+            100,
+            &[],
+        )
+        .await
+        .unwrap();
+    let id = store.works(&folder.id).await.unwrap()[0].id.clone();
+    drain();
+
+    // A subtitle beside the episode's video.
+    let with_subtitle = work(
+        "A",
+        vec![
+            video(1, "01", "A S01E01.mkv"),
+            subtitle(1, "01", "A S01E01.ko.ass"),
+        ],
+    );
+    store
+        .record_scan(&folder.id, Ok(scan(vec![with_subtitle])), 200)
+        .await
+        .unwrap();
+    assert!(drain().contains(&("library", Some(id.clone()))));
+
+    // The next episode's video.
+    let with_next = work(
+        "A",
+        vec![
+            video(1, "01", "A S01E01.mkv"),
+            subtitle(1, "01", "A S01E01.ko.ass"),
+            video(1, "02", "A S01E02.mkv"),
+        ],
+    );
+    store
+        .record_scan(&folder.id, Ok(scan(vec![with_next])), 300)
+        .await
+        .unwrap();
+    assert!(drain().contains(&("library", Some(id))));
+}

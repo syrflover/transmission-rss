@@ -293,6 +293,67 @@ impl World {
 }
 
 #[test]
+fn the_next_quiet_deadline_is_the_first_moment_a_rule_is_quiet_by_the_clock() {
+    let mut world = World::with(vec![
+        rule("r1", Some("Work")),
+        rule("r2", Some("Other")),
+        // These have no deadline: archived, or waiting for its title.
+        Rule {
+            state: RuleState::Archived,
+            ..rule("r3", Some("Gone"))
+        },
+        rule("r4", None),
+    ])
+    .received("r1", NOW - 3 * WEEK)
+    .received("r2", NOW - 2 * WEEK)
+    .received("r3", NOW - 1)
+    .received("r4", NOW - 1);
+    // The feed is read every day, so a week from now it has the 28 days after r1's moment.
+    world
+        .read_floors
+        .insert("c1".into(), read_day(NOW + WEEK) - 27);
+    let channels = world.channels();
+    let facts = world.facts(&channels);
+
+    // r1's four weeks end a week from now.
+    let at = facts.next_quiet_deadline().unwrap();
+    assert_eq!(at, NOW - 3 * WEEK + QUIET);
+    // By the rule itself: not due a millisecond before, due at it.
+    let ahead = |now| Facts {
+        now,
+        ..world.facts(&channels)
+    };
+    assert!(ahead(at - 1).channels_to_read().is_empty());
+    assert_eq!(ahead(at).channels_to_read(), ["c1"]);
+    assert_eq!(ahead(at - 1).quiet_due(&channels[0].rules[0]), None);
+    assert!(ahead(at).quiet_due(&channels[0].rules[0]).is_some());
+    // Asked at any moment before it, it names the same one; asked at it, the next rule's.
+    assert_eq!(ahead(at - 1).next_quiet_deadline(), Some(at));
+    assert_eq!(
+        ahead(at).next_quiet_deadline(),
+        Some(NOW - 2 * WEEK + QUIET)
+    );
+    assert_eq!(ahead(NOW - 2 * WEEK + QUIET).next_quiet_deadline(), None);
+}
+
+#[test]
+fn a_rule_counted_from_when_it_started_or_resumed_has_its_deadline_there() {
+    let mut resumed = rule("r1", Some("Work"));
+    resumed.resumed_at = Some(NOW - 2 * WEEK);
+    let world = World::with(vec![resumed]).received("r1", NOW - 20 * WEEK);
+    let channels = world.channels();
+    assert_eq!(
+        world.facts(&channels).next_quiet_deadline(),
+        Some(NOW - 2 * WEEK + QUIET)
+    );
+    // Nothing says when it started: no deadline.
+    let mut world = World::with(vec![rule("r1", Some("Work"))]);
+    world.first_read.clear();
+    let channels = world.channels();
+    assert_eq!(world.facts(&channels).next_quiet_deadline(), None);
+}
+
+#[test]
 fn the_quiet_ground_says_where_the_weeks_count_from() {
     let world = World::with(vec![rule("r1", Some("Work"))]).received("r1", NOW - 6 * WEEK);
     let found = world.suggest(&[]);

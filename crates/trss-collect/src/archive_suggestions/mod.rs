@@ -264,6 +264,30 @@ impl Facts<'_> {
         .max()
     }
 
+    /// The first moment after `self.now` at which a rule's four weeks are over
+    /// by the clock, which is what [`Facts::quiet_due`] asks first: that moment
+    /// is [`QUIET`] after the moment the rule's weeks count from. Nothing is
+    /// written when it comes, so the server announces it (`trss::deadlines`).
+    /// `None` when no rule has one ahead.
+    ///
+    /// It is a bound, not a promise that a suggestion appears: the other
+    /// conditions (the days the feed was read, the items of the last four
+    /// weeks) are not asked, so the screen may read again and find nothing new.
+    /// An item that was in the last four weeks and leaves them also lets a rule
+    /// become quiet, at [`QUIET`] after the item was first seen; that moment is
+    /// not named here (it takes the titles of the channel), and the cycle that
+    /// ends next announces it.
+    pub fn next_quiet_deadline(&self) -> Option<Millis> {
+        self.channels
+            .iter()
+            .flat_map(|cwr| &cwr.rules)
+            .filter(|rule| is_suggestible(rule))
+            .filter_map(|rule| self.quiet_since(rule))
+            .map(|since| since.saturating_add(QUIET))
+            .filter(|&at| at > self.now)
+            .min()
+    }
+
     /// Whether the user chose to keep collecting on the ground.
     fn is_kept(&self, rule: &Rule, ground: &Ground) -> bool {
         self.kept.contains(&(rule.id.clone(), ground.key()))

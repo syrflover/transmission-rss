@@ -6,6 +6,7 @@ mod common;
 mod anissia_captions;
 mod archive_move;
 mod collect_folder;
+mod deadlines;
 mod episode_offset;
 mod library_watch;
 mod live_watch;

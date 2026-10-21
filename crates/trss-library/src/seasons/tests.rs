@@ -23,6 +23,7 @@ use crate::{
     },
 };
 use trss_anilist::fake::Fake;
+use trss_core::changes::{Change, Changes};
 
 const HOUR: i64 = 60 * 60 * 1000;
 const DAY: i64 = 24 * HOUR;
@@ -73,10 +74,41 @@ fn media(id: i64, title: &str, status: &str, episodes: Option<i64>) -> Value {
     })
 }
 
+/// What a database that announces its writes has announced
+/// ([`Env::announcing`]), once each, as the event stream names it: the kind and
+/// the ID.
+struct Heard(tokio::sync::broadcast::Receiver<Change>);
+
+impl Heard {
+    fn drain(&mut self) -> BTreeSet<(&'static str, Option<String>)> {
+        let mut told = BTreeSet::new();
+        while let Ok(change) = self.0.try_recv() {
+            told.insert((change.kind.name(), change.id));
+        }
+        told
+    }
+}
+
 impl Env {
     async fn new(works: &[(&str, &[u32])]) -> Env {
         let dir = tempfile::tempdir().unwrap();
         let db = Db::open(dir.path().join("trss.db")).await.unwrap();
+        Env::over(dir, db, works).await
+    }
+
+    /// [`Env::new`] over a database whose writes are announced, and what it
+    /// announces from now on. The screens listen to those (`docs/tickets/0156`).
+    async fn announcing(works: &[(&str, &[u32])]) -> (Env, Heard) {
+        let dir = tempfile::tempdir().unwrap();
+        let changes = Changes::default();
+        let heard = Heard(changes.subscribe());
+        let db = Db::open_announcing(dir.path().join("trss.db"), changes)
+            .await
+            .unwrap();
+        (Env::over(dir, db, works).await, heard)
+    }
+
+    async fn over(dir: tempfile::TempDir, db: Db, works: &[(&str, &[u32])]) -> Env {
         let fake = Fake::start().await;
         let clock = Arc::new(AtomicI64::new(1_000_000));
         let reading = clock.clone();
@@ -199,6 +231,23 @@ async fn one_exact_title_links_the_first_season_as_auto_with_its_values() {
         .await
         .unwrap();
     assert!(env.drain().await.is_empty());
+}
+
+// 화면 알림(0156): 작품 상세의 시즌 정보는 그 작품의 `season_info` 이벤트에 다시 읽어요. 앱이
+// 시즌의 항목을 찾아 잇고 값을 받으면 그 작품의 ID로 가요.
+#[tokio::test]
+async fn a_season_whose_entry_is_found_and_stored_is_announced_for_the_work() {
+    let (env, mut heard) = Env::announcing(&[("Lycoris Recoil", &[1])]).await;
+    let id = env.id("Lycoris Recoil").await;
+    env.serve(
+        "Lycoris Recoil",
+        vec![media(1, "Lycoris Recoil", "FINISHED", Some(13))],
+    );
+    heard.drain();
+
+    assert_eq!(env.drain().await, [Ran::Linked(1)]);
+
+    assert!(heard.drain().contains(&("season_info", Some(id))));
 }
 
 #[tokio::test]

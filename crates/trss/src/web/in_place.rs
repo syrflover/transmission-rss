@@ -32,7 +32,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use super::{commands_api::now_millis, ApiError, AppState};
+use super::{ApiError, AppState};
 use trss_collect::{
     commands::receive_once::{self, NotRetryable},
     plan::rule_destination,
@@ -55,6 +55,22 @@ mod tests;
 /// the worker not running or not reaching Transmission, and the torrent may
 /// be gone since.
 pub const LISTING_FRESH_FOR: Millis = 30 * 60 * 1000;
+
+/// Whether a list taken at `taken_at` is recent enough at `now` to say a
+/// torrent is there ([`LISTING_FRESH_FOR`]).
+pub fn listing_is_fresh(taken_at: Millis, now: Millis) -> bool {
+    now.saturating_sub(taken_at) <= LISTING_FRESH_FOR
+}
+
+/// The first moment after `now` at which [`listing_is_fresh`] is no longer
+/// true for a list taken at `taken_at`, and with it the evidence that gates
+/// the `다시 받기` offers. Nothing is written when that happens, so the server
+/// announces it (`trss::deadlines`). `None` when the list is not fresh at `now`
+/// already.
+pub fn listing_stale_at(taken_at: Millis, now: Millis) -> Option<Millis> {
+    let at = taken_at.saturating_add(LISTING_FRESH_FOR).saturating_add(1);
+    (at > now).then_some(at)
+}
 
 /// An episode whose place holds a revision as high as the one to receive.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -119,13 +135,15 @@ impl Blocked {
 
 impl<'a> Evidence<'a> {
     pub async fn load(state: &'a AppState) -> Result<Evidence<'a>, ApiError> {
-        let now = now_millis();
+        // The server's clock, as the screens read it, so the moment
+        // `listing_stale_at` names is the one this reads by.
+        let now = state.anissia.now();
         let listing = state
             .status
             .torrent_listing()
             .await
             .map_err(internal)?
-            .filter(|listing| now.saturating_sub(listing.taken_at) <= LISTING_FRESH_FOR);
+            .filter(|listing| listing_is_fresh(listing.taken_at, now));
         let collect = state
             .settings
             .collection()

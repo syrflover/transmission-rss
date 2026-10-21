@@ -6,6 +6,7 @@
 //! the worker part's loops ([`wake`]).
 
 pub mod archive_batch;
+pub mod deadlines;
 pub mod wake;
 pub mod web;
 pub mod worker;

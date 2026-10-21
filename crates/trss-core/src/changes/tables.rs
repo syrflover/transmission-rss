@@ -157,12 +157,12 @@ pub(crate) const TABLES: &[(&str, Announced)] = &[
     ("transmission_downloading", any(CollectStatus)),
     (
         "transmission_listing",
-        Not("when Transmission's torrents were listed, which only the past search reads and announces its own progress"),
+        Not("when Transmission's torrents were listed, which the past search, the `다시 받기` offers and the deadlines read; the cycle writes it before its end, which is announced"),
     ),
     ("transmission_snapshot", any(CollectStatus)),
     (
         "transmission_torrents",
-        Not("every torrent Transmission holds, which only the past search reads and announces its own progress"),
+        Not("every torrent Transmission holds, which the past search and the `다시 받기` offers read; written with `transmission_listing`"),
     ),
     ("unread_works", any(Library)),
     ("unrecognized_checks", row(Library, "work_id")),

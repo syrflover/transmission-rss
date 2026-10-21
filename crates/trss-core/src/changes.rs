@@ -78,7 +78,10 @@ pub enum ChangeKind {
     /// The ID is the history item's; none when the row names no item.
     History,
     /// What the collection board shows: the collection cycle, the channels'
-    /// reads and Transmission's snapshot. There is no ID.
+    /// reads and Transmission's snapshot. There is no ID. Also announced, by
+    /// `trss::deadlines` and not by a write, at the moments the clock alone
+    /// changes what the screens that read these show (a collection that
+    /// stalls, an episode that airs, a new Seoul day).
     CollectStatus,
     /// The app-wide settings and the first run's checklist. There is no ID.
     Settings,

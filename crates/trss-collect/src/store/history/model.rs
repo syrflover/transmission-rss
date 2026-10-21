@@ -325,4 +325,22 @@ impl CycleState {
             }
         }
     }
+
+    /// The first moment after `now` at which [`CycleState::is_running`] or
+    /// [`CycleState::is_stalled`] answers otherwise than it does at `now`,
+    /// with nothing written to the cycle: the moment the passing of time makes
+    /// it stalled. Nothing is written when that happens, so the server
+    /// announces it (`trss::deadlines`). `None` once it has come.
+    ///
+    /// It mirrors the two rules above: a cycle without an end stops running,
+    /// and is stalled, from the millisecond after [`running_bound`]; a finished
+    /// one is stalled from the millisecond after twice the interval.
+    pub fn next_change(&self, interval_ms: i64, now: Millis) -> Option<Millis> {
+        let after = match self.finished_at {
+            None => running_bound(interval_ms),
+            Some(_) => interval_ms.saturating_mul(2),
+        };
+        let at = self.started_at.saturating_add(after).saturating_add(1);
+        (at > now).then_some(at)
+    }
 }

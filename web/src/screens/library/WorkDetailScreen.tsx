@@ -4,6 +4,8 @@ import { Link, useLocation, useNavigate, useParams, useSearchParams } from "reac
 import { Button } from "@/components/ui/button";
 import { forget, forgetPrefix, store, useCached } from "@/lib/cached";
 import { useMediaQuery, PHONE_QUERY } from "@/lib/media";
+import { createRereader } from "@/lib/rereads";
+import { sharedEvents } from "@/lib/sharedEvents";
 
 import { EmptyState, ScreenFrame, usePageTitle } from "../ScreenFrame";
 import { btnNeutral } from "../collect/channels/styles";
@@ -22,6 +24,7 @@ import {
 import { CandidateSection } from "./detail/CandidateSection";
 import { useCandidates } from "./detail/candidates";
 import { CoverDialog } from "./detail/CoverDialog";
+import { COVER_RETRY_MS, workCoverChanged } from "./detail/listens";
 import { EpisodeList } from "./detail/EpisodeList";
 import { defaultSeason, rowId } from "./detail/model";
 import { MOVIE_EPISODE } from "./detail/movie.ts";
@@ -40,9 +43,6 @@ import { FILES_HASH } from "./storage.ts";
 import { Cover, FROM_LIBRARY } from "./WorkItem";
 
 const LOAD_FAILED = "작품을 불러오지 못했어요.";
-
-/** How often the page reads a cover that is still being received. */
-const COVER_POLL_MS = 3000;
 
 /** The two-column layout starts here; below it the cards fold under the episode list. */
 const WIDE_QUERY = "(min-width: 1100px)";
@@ -90,28 +90,33 @@ function WorkPage({ workId }: { workId: string }) {
     }
   };
 
-  // A cover that follows a season's link keeps its old image until the worker has received the new one, even
-  // after the cover view or the link dialog is closed: read the cover now and then until it is there.
+  // A cover that follows a season's link keeps its old image until trss has received the new one, even after the
+  // cover view or the link dialog is closed: the work is read again when the server says the work's cover changed
+  // (`detail/listens.ts`). Listening starts before the first read, so a cover received meanwhile is not missed.
   const coverPending = work.data?.cover_pending ?? false;
   const coverUrl = useRef<string | null>(null);
   coverUrl.current = work.data?.cover_url ?? null;
   const updateWork = work.update;
   useEffect(() => {
     if (!coverPending) return;
-    const controller = new AbortController();
-    const timer = setInterval(() => {
-      loadWork(workId, controller.signal).then(
-        (fresh) => {
-          if (!fresh) return;
-          if (fresh.cover_url !== coverUrl.current) forgetPrefix(LIST_PREFIX);
-          updateWork((w) => (w ? { ...w, cover_url: fresh.cover_url, cover_pending: fresh.cover_pending } : w));
-        },
-        () => {},
-      );
-    }, COVER_POLL_MS);
+    const rereader = createRereader({
+      read: async (signal) => {
+        const fresh = await loadWork(workId, signal);
+        if (signal.aborted || !fresh) return;
+        if (fresh.cover_url !== coverUrl.current) forgetPrefix(LIST_PREFIX);
+        updateWork((w) => (w ? { ...w, cover_url: fresh.cover_url, cover_pending: fresh.cover_pending } : w));
+      },
+      retryMs: () => COVER_RETRY_MS,
+      hidden: () => document.hidden,
+    });
+    const stopListening = sharedEvents().subscribe({
+      match: (change) => workCoverChanged(change, workId),
+      reread: () => rereader.request(),
+    });
+    rereader.start();
     return () => {
-      clearInterval(timer);
-      controller.abort();
+      stopListening();
+      rereader.stop();
     };
   }, [workId, coverPending, updateWork]);
 

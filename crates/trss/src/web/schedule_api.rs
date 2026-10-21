@@ -319,6 +319,23 @@ async fn downloading_by_rule<'a>(
 
 /// The week `now` (Unix ms) is in, as the home screen shows it.
 pub async fn week_at(state: &AppState, now: Millis) -> Result<WeekView, ApiError> {
+    Ok(build_week(state, now).await?.0)
+}
+
+/// The first moment after `now` (Unix ms) at which a card's video line may
+/// change with nothing written: `방영 전` becomes `영상 대기` when the episode
+/// airs ([`state::video_changes_at`]). It is the air time of the earliest card
+/// of a subscription that is neither paused nor `결방`, whether or not the
+/// library holds the episode or Transmission is downloading it, because those
+/// can end before the episode airs and the screen has to hear of the air time
+/// then. The other thing the week changes with the clock alone is the Seoul
+/// day, which is the day's start (`trss::deadlines`).
+pub async fn next_video_change(state: &AppState, now: Millis) -> Result<Option<Millis>, ApiError> {
+    Ok(build_week(state, now).await?.1)
+}
+
+/// [`week_at`], and what [`next_video_change`] answers.
+async fn build_week(state: &AppState, now: Millis) -> Result<(WeekView, Option<Millis>), ApiError> {
     let today = day_of(now);
     let start = week_start(today);
     let current = Quarter::at(now);
@@ -388,6 +405,7 @@ pub async fn week_at(state: &AppState, now: Millis) -> Result<WeekView, ApiError
     let downloading = downloading_by_rule(state, now, &airings).await?;
 
     let mut by_day: HashMap<i64, Vec<Card>> = HashMap::new();
+    let mut video_changes_at: Option<Millis> = None;
     for Airing { rule, anime, slot } in airings {
         let Some(subscription) = &rule.subscription else {
             continue;
@@ -424,6 +442,19 @@ pub async fn week_at(state: &AppState, now: Millis) -> Result<WeekView, ApiError
                     .is_some_and(|set| set.contains(&i64::from(e)))
             }),
         };
+        // As if nothing were held or downloading yet: a video that is held
+        // or downloading now may be gone by the time the episode airs, and one
+        // `영상 대기` too many costs a read, where one missed leaves the card
+        // saying `방영 전`.
+        let unreceived = Facts {
+            video_held: false,
+            downloading: false,
+            ..facts
+        };
+        video_changes_at = [video_changes_at, state::video_changes_at(&unreceived)]
+            .into_iter()
+            .flatten()
+            .min();
         by_day.entry(slot.day).or_default().push(Card {
             rule_id: rule.id.clone(),
             anime_no: anime.anime_no,
@@ -460,7 +491,7 @@ pub async fn week_at(state: &AppState, now: Millis) -> Result<WeekView, ApiError
         })
         .collect();
 
-    Ok(WeekView {
+    let week = WeekView {
         start: date_text(start),
         end: date_text(start + 6),
         today: date_text(today),
@@ -471,5 +502,6 @@ pub async fn week_at(state: &AppState, now: Millis) -> Result<WeekView, ApiError
             subscriptions: coming,
             title_waiting,
         },
-    })
+    };
+    Ok((week, video_changes_at))
 }

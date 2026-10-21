@@ -452,3 +452,40 @@ async fn the_view_says_what_archiving_would_do_with_the_work_folder() {
         "{held}"
     );
 }
+
+#[tokio::test]
+async fn the_next_quiet_deadline_is_where_the_rules_four_weeks_end_by_the_clock() {
+    let app = App::new().await;
+    assert_eq!(next_quiet_deadline(&app.state, NOW).await.unwrap(), None);
+    // The feed was read long ago, the rule began two weeks ago and has received
+    // nothing: its four weeks end two weeks from now.
+    app.record(
+        NOW - 52 * WEEK,
+        "[Other] Old - 01",
+        HistoryResult::NoMatch,
+        None,
+    )
+    .await;
+    let rule = app.rule("Work", "Work/Season 01").await;
+    app.restamp(&rule, NOW - 2 * WEEK).await;
+
+    let deadline = NOW + 2 * WEEK;
+    assert_eq!(
+        next_quiet_deadline(&app.state, NOW).await.unwrap(),
+        Some(deadline)
+    );
+    assert_eq!(
+        next_quiet_deadline(&app.state, deadline - 1).await.unwrap(),
+        Some(deadline)
+    );
+    // From the moment it is over there is none ahead, and the suggestion is
+    // what the screen reads then.
+    assert_eq!(
+        next_quiet_deadline(&app.state, deadline).await.unwrap(),
+        None
+    );
+    assert!(app.suggestions().await.is_empty());
+    app.at(deadline + 1);
+    app.read_to_now().await;
+    assert_eq!(app.suggestions().await.len(), 1);
+}

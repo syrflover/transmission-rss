@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
 
-import { useCached } from "@/lib/cached";
+import { patch } from "@/lib/cached";
 import { quarterName } from "@/lib/quarter";
 import { clock } from "@/lib/time";
+import { useRead } from "@/lib/useRead";
 import type { FirstRun, Home, Step, Week } from "@/lib/api-types";
 
 import { EmptyState, ScreenFrame } from "./ScreenFrame";
@@ -12,25 +13,12 @@ import { monthDay } from "./schedule/format";
 import { SideColumn, SummaryLine } from "./schedule/Side";
 import { BTN } from "./settings/parts";
 import { loadHome, setSkipped, WEEK_KEY } from "./schedule/api";
+import { SCHEDULE_RETRY_MS, scheduleChanged } from "./schedule/listens";
 
-const POLL_MS = 30_000;
 /** From this width the collection status sits beside the schedule; below it, a line above. */
 const WIDE = "(min-width: 980px)";
 
 const STEP_NAME: Record<Step, string> = { folder: "감시 폴더 등록", import: "기존 설정 가져오기" };
-
-/** Reads the screen again every {@link POLL_MS} and when the page becomes visible. */
-function usePolling(reload: () => void) {
-  useEffect(() => {
-    const timer = window.setInterval(reload, POLL_MS);
-    const onVisible = () => document.visibilityState === "visible" && reload();
-    document.addEventListener("visibilitychange", onVisible);
-    return () => {
-      window.clearInterval(timer);
-      document.removeEventListener("visibilitychange", onVisible);
-    };
-  }, [reload]);
-}
 
 function useWide(): boolean {
   const [wide, setWide] = useState(() => window.matchMedia(WIDE).matches);
@@ -84,8 +72,14 @@ function SkippedNotice({ step, onUndo, busy }: { step: Step; onUndo: () => void;
  * install the `처음 설정` checklist takes their place.
  */
 export function ScheduleScreen() {
-  const { data, error, slow, reload, update } = useCached(WEEK_KEY, loadHome, "이번 주 편성을 불러오지 못했어요.");
-  usePolling(reload);
+  // Read again when the server says what the schedule shows changed, not on a timer (`schedule/listens.ts`).
+  const { data, error, slow, reread: reload } = useRead(
+    WEEK_KEY,
+    loadHome,
+    { match: scheduleChanged, retryMs: SCHEDULE_RETRY_MS },
+    "이번 주 편성을 불러오지 못했어요.",
+  );
+  const update = (change: (home: Home) => Home) => patch<Home>(WEEK_KEY, change);
   const wide = useWide();
   const [skipped, setSkippedStep] = useState<Step | null>(null);
   const [undoing, setUndoing] = useState(false);

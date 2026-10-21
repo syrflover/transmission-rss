@@ -2,7 +2,15 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { jobChanged, jobListChanged, suggestionsChanged, todosChanged } from "../screens/todo/listens.ts";
-import { applyChanged, candidatesChanged, cleanupChanged } from "../screens/library/detail/listens.ts";
+import { boardChanged } from "../screens/collect/status/listens.ts";
+import {
+  applyChanged,
+  candidatesChanged,
+  cleanupChanged,
+  seasonInfoChanged,
+  workCoverChanged,
+} from "../screens/library/detail/listens.ts";
+import { scheduleChanged } from "../screens/schedule/listens.ts";
 import type { Change } from "./api-types";
 import { createEvents, type EventSourceLike } from "./events.ts";
 import { createRereader, type RereaderOptions } from "./rereads.ts";
@@ -335,7 +343,7 @@ test("the job detail reads again for its job and screen, and for its work, not f
   assert.equal(jobChanged(change("subtitle_job", "j1"), "j1", null), true);
 });
 
-test("the to-dos read again for the kinds they are gathered from, and not for a remote screen or the board", () => {
+test("the to-dos read again for the kinds they are gathered from and for the old list of torrents, and not for a remote screen", () => {
   for (const kind of [
     "subtitle_job",
     "subtitle_store",
@@ -345,11 +353,13 @@ test("the to-dos read again for the kinds they are gathered from, and not for a 
     "history",
     "rules",
     "anissia",
+    // The list of Transmission's torrents getting too old, which the server announces with no write behind it.
+    "collect_status",
     "settings",
   ] as const) {
     assert.equal(todosChanged(change(kind, null)), true, kind);
   }
-  for (const kind of ["subtitle_screen", "collect_status", "command", "past_search", "season_info"] as const) {
+  for (const kind of ["subtitle_screen", "command", "past_search", "season_info"] as const) {
     assert.equal(todosChanged(change(kind, null)), false, kind);
   }
   assert.equal(suggestionsChanged(change("collect_status", null)), true);
@@ -383,4 +393,124 @@ test("the stored-file clean and the apply line read again for their work and job
   assert.equal(applyChanged(change("library", "w1"), "j1", "w1"), true);
   assert.equal(applyChanged(change("library", "w2"), "j1", "w1"), false);
   assert.equal(applyChanged(change("subtitle_store", null), "j1", "w1"), true);
+});
+
+test("the schedule reads again for what its cards are made of and for the clock, not for jobs or a remote screen", () => {
+  for (const kind of [
+    "collect_status",
+    "library",
+    "rules",
+    "anissia",
+    "season_info",
+    "artwork",
+    "history",
+    "settings",
+  ] as const) {
+    assert.equal(scheduleChanged(change(kind, null)), true, kind);
+    assert.equal(scheduleChanged(change(kind, "x")), true, kind);
+  }
+  for (const kind of [
+    "subtitle_job",
+    "subtitle_screen",
+    "subtitle_store",
+    "subtitle_mapping",
+    "command",
+    "past_search",
+  ] as const) {
+    assert.equal(scheduleChanged(change(kind, null)), false, kind);
+  }
+});
+
+test("the board reads again for the cycle, the channels, the history and the settings, not for the library", () => {
+  for (const kind of ["collect_status", "rules", "history", "settings"] as const) {
+    assert.equal(boardChanged(change(kind, null)), true, kind);
+    assert.equal(boardChanged(change(kind, "x")), true, kind);
+  }
+  for (const kind of ["library", "anissia", "season_info", "artwork", "subtitle_job", "command"] as const) {
+    assert.equal(boardChanged(change(kind, null)), false, kind);
+  }
+});
+
+test("the cover and the season info read again for their work, and for a change that names no work", () => {
+  assert.equal(workCoverChanged(change("artwork", "w1"), "w1"), true);
+  assert.equal(workCoverChanged(change("artwork", null), "w1"), true);
+  assert.equal(workCoverChanged(change("artwork", "w2"), "w1"), false);
+  assert.equal(workCoverChanged(change("library", "w1"), "w1"), false);
+  assert.equal(workCoverChanged(change("season_info", "w1"), "w1"), false);
+
+  assert.equal(seasonInfoChanged(change("season_info", "w1"), "w1"), true);
+  // An AniList entry belongs to no work: its change is every work's.
+  assert.equal(seasonInfoChanged(change("season_info", null), "w1"), true);
+  assert.equal(seasonInfoChanged(change("season_info", "w2"), "w1"), false);
+  assert.equal(seasonInfoChanged(change("artwork", "w1"), "w1"), false);
+});
+
+test("a collection cycle's burst reads the schedule and the board once more, and the server's deadline event reads them", async () => {
+  for (const match of [scheduleChanged, boardChanged]) {
+    const s = screen(match);
+    s.holdReads();
+    s.rereader.start();
+    await settle();
+    assert.equal(s.log.started, 1);
+
+    // What one cycle announces within milliseconds, none of it new (docs/tickets/0164-db-change-events.md).
+    s.source().change("collect_status", null);
+    for (let i = 0; i < 250; i++) s.source().change("history", String(i));
+    for (let i = 0; i < 3; i++) s.source().change("collect_status", null);
+    await settle();
+    assert.equal(s.log.started, 1);
+    await s.finish();
+    assert.equal(s.log.started, 2);
+    await s.finish();
+    assert.deepEqual(s.log, { started: 2, ended: 2, concurrent: 0, mostAtOnce: 1 });
+
+    // The server announces the cycle's stall with no write behind it: `collect_status` without an ID.
+    s.stopHolding();
+    s.source().change("collect_status", null);
+    await settle();
+    assert.equal(s.log.started, 3);
+    s.stop();
+  }
+});
+
+test("a cover or season info that arrives during a read is read once more after it", async () => {
+  const cover = screen((c) => workCoverChanged(c, "w1"));
+  cover.holdReads();
+  cover.rereader.start();
+  await settle();
+  for (let i = 0; i < 20; i++) cover.source().change("artwork", "w1");
+  cover.source().change("artwork", "w2");
+  await settle();
+  assert.equal(cover.log.started, 1);
+  await cover.finish();
+  assert.equal(cover.log.started, 2);
+  await cover.finish();
+  assert.equal(cover.log.started, 2);
+  cover.stop();
+
+  const info = screen((c) => seasonInfoChanged(c, "w1"));
+  info.holdReads();
+  info.rereader.start();
+  await settle();
+  for (let i = 0; i < 20; i++) info.source().change("season_info", i % 2 === 0 ? "w1" : null);
+  await settle();
+  await info.finish();
+  assert.equal(info.log.started, 2);
+  await info.finish();
+  assert.equal(info.log.started, 2);
+  info.stop();
+});
+
+test("the to-dos read once more when the server announces that the list of torrents got too old", async () => {
+  const s = screen(todosChanged);
+  s.rereader.start();
+  await settle();
+  assert.equal(s.log.started, 1);
+
+  // No write is behind it: `collect_status` without an ID (`crates/trss/src/deadlines.rs`).
+  s.source().change("collect_status", null);
+  await settle();
+  assert.equal(s.log.started, 2);
+  s.stop();
+  s.rereader.stop();
 });

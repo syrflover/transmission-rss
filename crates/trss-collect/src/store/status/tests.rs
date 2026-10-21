@@ -374,6 +374,7 @@ fn a_day_is_unix_ms_over_a_day() {
 async fn the_torrent_listing_is_none_until_the_worker_writes_one_and_is_replaced_as_a_whole() {
     let store = StatusStore::new(db().await);
     assert_eq!(store.torrent_listing().await.unwrap(), None);
+    assert_eq!(store.torrent_listing_taken_at().await.unwrap(), None);
 
     store
         .record_listing(100, ids(&["AAA", "bbb", "aaa", ""]))
@@ -386,6 +387,7 @@ async fn the_torrent_listing_is_none_until_the_worker_writes_one_and_is_replaced
     assert!(listing.holds("BBB") && !listing.holds("ccc"));
 
     // A look at an empty Transmission is a list too, not "no list".
+    assert_eq!(store.torrent_listing_taken_at().await.unwrap(), Some(100));
     store.record_listing(200, vec![]).await.unwrap();
     assert_eq!(
         store.torrent_listing().await.unwrap(),
@@ -497,6 +499,48 @@ fn a_look_is_believed_for_three_intervals_and_a_busy_workers_look_ages_only_up_t
 }
 
 #[test]
+fn the_next_stale_moment_of_a_look_is_the_first_moment_it_is_not_believed() {
+    const MINUTE: i64 = 60_000;
+    let look = TransmissionCounts {
+        downloading: 1,
+        seeding: 0,
+        taken_at: 1_000_000,
+    };
+    let at = |minutes: i64| look.taken_at + minutes * MINUTE;
+    let interval = 5 * MINUTE;
+
+    // No cycle runs: believed up to three intervals, not from the millisecond after.
+    let stale = look.next_stale(interval, at(1), None).unwrap();
+    assert_eq!(stale, at(15) + 1);
+    assert!(look.look_is_fresh(interval, stale - 1, None));
+    assert!(!look.look_is_fresh(interval, stale, None));
+    // Asked from any moment it is believed, it names the same moment.
+    for now in [look.taken_at, at(14), stale - 1] {
+        assert_eq!(
+            look.next_stale(interval, now, None),
+            Some(stale),
+            "asked at {now}"
+        );
+    }
+    // From that moment on there is none: it is not believed any more.
+    assert_eq!(look.next_stale(interval, stale, None), None);
+    assert_eq!(look.next_stale(interval, at(60), None), None);
+
+    // A cycle that began within the allowance holds the look at its age at the
+    // start, however long it goes on: time does not age it. The cycle ceasing
+    // to run is the cycle's moment, and the look is asked again then.
+    assert_eq!(look.next_stale(interval, at(60), Some(at(15))), None);
+    // A cycle that began after the allowance ran out does not hold the look.
+    assert_eq!(look.next_stale(interval, at(60), Some(at(15) + 1)), None);
+    // A cycle that starts after `now` (a clock a little behind) counts `now` until
+    // it has begun, so the look ages until the allowance is out.
+    assert_eq!(
+        look.next_stale(interval, at(10), Some(at(60))),
+        Some(at(15) + 1)
+    );
+}
+
+#[test]
 fn a_look_four_minutes_old_is_kept_only_by_a_busy_workers_cycle_that_began_within_three_intervals()
 {
     const MINUTE: i64 = 60_000;
@@ -593,4 +637,40 @@ fn a_look_counts_each_status_by_its_kind_and_lists_the_downloading_hashes_and_al
     let nothing = TransmissionLook::of(&[], 5);
     assert_eq!(nothing.counts.downloading + nothing.counts.seeding, 0);
     assert!(nothing.downloading.is_empty() && nothing.everything.is_empty());
+}
+
+/// What a database that announces its writes has announced, once each, as the
+/// event stream names it: the kind and the ID (`None` for no ID).
+fn drain(
+    heard: &mut tokio::sync::broadcast::Receiver<trss_core::changes::Change>,
+) -> std::collections::BTreeSet<(&'static str, Option<String>)> {
+    let mut told = std::collections::BTreeSet::new();
+    while let Ok(change) = heard.try_recv() {
+        told.insert((change.kind.name(), change.id));
+    }
+    told
+}
+
+// 화면 알림(0156): 수집 상태판은 Transmission의 상태가 바뀔 때 `collect_status`(ID 없음)에
+// 다시 읽어요. 워커가 Transmission을 본 결과를 적는 것이 그 이벤트로 가요.
+#[tokio::test]
+async fn transmissions_counts_that_are_recorded_are_announced_as_a_collect_status_change_without_an_id(
+) {
+    let changes = trss_core::changes::Changes::default();
+    let mut heard = changes.subscribe();
+    let store = StatusStore::new(Db::open_blocking_announcing(":memory:", changes).unwrap());
+
+    store
+        .record_transmission(
+            TransmissionCounts {
+                downloading: 2,
+                seeding: 1,
+                taken_at: 100,
+            },
+            ids(&["aa", "bb"]),
+        )
+        .await
+        .unwrap();
+
+    assert!(drain(&mut heard).contains(&("collect_status", None)));
 }

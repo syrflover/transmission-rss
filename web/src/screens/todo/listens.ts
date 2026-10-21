@@ -58,7 +58,10 @@ export function jobChanged(change: Change, jobId: string, work: string | null | 
  * replacement compares with (`subtitle_store`), the subscribed creators'
  * mappings (`subtitle_mapping`), the library's videos and works (`library`,
  * `artwork`), the collection's failures (`history`, `rules`), the Anissia
- * titles (`anissia`) and the collect folder (`settings`).
+ * titles (`anissia`) and the collect folder (`settings`). The `다시 받기` offers
+ * on the failures also depend on how old the worker's list of Transmission's
+ * torrents is (`collect_status`): the server announces that kind, with no ID,
+ * when the list gets too old (`crates/trss/src/deadlines.rs`).
  */
 const TODOS: readonly ChangeKind[] = [
   "subtitle_job",
@@ -69,6 +72,7 @@ const TODOS: readonly ChangeKind[] = [
   "history",
   "rules",
   "anissia",
+  "collect_status",
   "settings",
 ];
 

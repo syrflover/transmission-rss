@@ -26,7 +26,7 @@
 //! it is not suggested again on them, and a ground that is new to it is. It
 //! changes nothing else about the rule.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use axum::{
     extract::{rejection::JsonRejection, State},
@@ -67,15 +67,42 @@ struct Gathered {
     last_received: HashMap<String, Millis>,
 }
 
-/// Gathers the facts and decides. Bounded work: one indexed lookup per rule for
-/// its last receive, one per channel for its first read and one for its read
-/// days (at most 28 rows), and, only for the channels with a rule that is
-/// quiet and not kept, the titles since the start of its window (the last 4
-/// weeks, or back to the first of its last 28 read days when the feed was not
-/// read on some of them; at most [`WINDOW_TITLES`] of them, read through the
-/// channel's index), never the whole history.
-async fn gather(state: &AppState) -> Result<Gathered, ApiError> {
-    let now = state.anissia.now();
+/// What the facts of the suggestions are made of, as of `now`.
+struct Inputs {
+    now: Millis,
+    /// No rule is followed by title, so there is nothing to suggest and the
+    /// rest was not read.
+    no_rules: bool,
+    all: Vec<ChannelWithRules>,
+    animes: HashMap<i64, trss_anissia::Anime>,
+    unlisted: HashSet<i64>,
+    last_received: HashMap<String, Millis>,
+    started: HashMap<String, Millis>,
+    first_read: HashMap<String, Millis>,
+    read_floors: HashMap<String, i64>,
+    kept: HashSet<(String, String)>,
+}
+
+impl Inputs {
+    fn facts(&self) -> Facts<'_> {
+        Facts {
+            now: self.now,
+            channels: &self.all,
+            animes: &self.animes,
+            unlisted: &self.unlisted,
+            last_received: &self.last_received,
+            started: &self.started,
+            first_read: &self.first_read,
+            read_floors: &self.read_floors,
+            kept: &self.kept,
+        }
+    }
+}
+
+/// Reads what the facts are made of: bounded work, one indexed lookup per rule
+/// for its last receive, one per channel for its first read and one for its
+/// read days (at most 28 rows).
+async fn read_inputs(state: &AppState, now: Millis) -> Result<Inputs, ApiError> {
     let all = state
         .channels
         .list_channels_with_rules()
@@ -88,11 +115,17 @@ async fn gather(state: &AppState) -> Result<Gathered, ApiError> {
         .map(|r| r.id.clone())
         .collect();
     if rule_ids.is_empty() {
-        return Ok(Gathered {
+        return Ok(Inputs {
+            now,
+            no_rules: true,
             all,
             animes: HashMap::new(),
-            suggestions: Vec::new(),
+            unlisted: HashSet::new(),
             last_received: HashMap::new(),
+            started: HashMap::new(),
+            first_read: HashMap::new(),
+            read_floors: HashMap::new(),
+            kept: HashSet::new(),
         });
     }
     let nos: Vec<i64> = all
@@ -128,18 +161,37 @@ async fn gather(state: &AppState) -> Result<Gathered, ApiError> {
         .kept_archive_grounds()
         .await
         .map_err(ApiError::from)?;
-
-    let facts = Facts {
+    Ok(Inputs {
         now,
-        channels: &all,
-        animes: &animes,
-        unlisted: &unlisted,
-        last_received: &last_received,
-        started: &started,
-        first_read: &first_read,
-        read_floors: &read_floors,
-        kept: &kept,
-    };
+        no_rules: false,
+        all,
+        animes,
+        unlisted,
+        last_received,
+        started,
+        first_read,
+        read_floors,
+        kept,
+    })
+}
+
+/// Gathers the facts and decides. Bounded work (see [`read_inputs`]) and, only
+/// for the channels with a rule that is quiet and not kept, the titles since
+/// the start of its window (the last 4 weeks, or back to the first of its last
+/// 28 read days when the feed was not read on some of them; at most
+/// [`WINDOW_TITLES`] of them, read through the channel's index), never the
+/// whole history.
+async fn gather(state: &AppState) -> Result<Gathered, ApiError> {
+    let inputs = read_inputs(state, state.anissia.now()).await?;
+    if inputs.no_rules {
+        return Ok(Gathered {
+            all: inputs.all,
+            animes: HashMap::new(),
+            suggestions: Vec::new(),
+            last_received: HashMap::new(),
+        });
+    }
+    let facts = inputs.facts();
 
     let mut recent: HashMap<String, Recent> = HashMap::new();
     for channel_id in facts.channels_to_read() {
@@ -157,7 +209,12 @@ async fn gather(state: &AppState) -> Result<Gathered, ApiError> {
                 "Archive suggestions: channel {channel_id} recorded more than {WINDOW_TITLES} items in the last 4 weeks; its rules get no `새 항목 없음` suggestion"
             );
         }
-        let Some(cwr) = all.iter().find(|c| c.channel.id == channel_id).cloned() else {
+        let Some(cwr) = inputs
+            .all
+            .iter()
+            .find(|c| c.channel.id == channel_id)
+            .cloned()
+        else {
             continue;
         };
         // Matching every title against every rule is the work of a moment, but
@@ -169,11 +226,28 @@ async fn gather(state: &AppState) -> Result<Gathered, ApiError> {
     }
     let suggestions = facts.suggestions(&recent);
     Ok(Gathered {
-        all,
-        animes,
+        all: inputs.all,
+        animes: inputs.animes,
         suggestions,
-        last_received,
+        last_received: inputs.last_received,
     })
+}
+
+/// The first moment after `now` (Unix ms) at which a rule's four quiet weeks
+/// are over by the clock ([`Facts::next_quiet_deadline`]), which makes the
+/// suggestions differ from the ones read before it with nothing written.
+/// The other deadline the suggestions have, the Seoul day on which an anime's
+/// end date has passed, is the day's start (`trss::deadlines`). Reads only
+/// what [`gather`] reads before it asks for titles.
+pub async fn next_quiet_deadline(
+    state: &AppState,
+    now: Millis,
+) -> Result<Option<Millis>, ApiError> {
+    let inputs = read_inputs(state, now).await?;
+    if inputs.no_rules {
+        return Ok(None);
+    }
+    Ok(inputs.facts().next_quiet_deadline())
 }
 
 /// The rules to suggest archiving as they are now, with the grounds that are

@@ -81,3 +81,32 @@ export function applyChanged(change: Change, jobId: string, workId: string): boo
       return false;
   }
 }
+
+/**
+ * Whether `change` is about the cover of the work `workId` (`work_artwork`): the
+ * work page's `cover_url` and `cover_pending` (`GET /api/library/works/{id}`) and
+ * the cover view (`GET /api/library/works/{id}/artwork`) are read from the row
+ * the worker writes when it has received the image.
+ */
+export function workCoverChanged(change: Change, workId: string): boolean {
+  return change.kind === "artwork" && aboutTarget(change, workId);
+}
+
+/**
+ * Whether `change` is about the season info of the work `workId` (`GET
+ * /api/library/works/{id}/seasons/{n}/info`): the season's link, the AniList
+ * entries it names and the search the app still has to do for it. An AniList
+ * entry belongs to no work, so its change has no ID and is every work's.
+ */
+export function seasonInfoChanged(change: Change, workId: string): boolean {
+  return change.kind === "season_info" && aboutTarget(change, workId);
+}
+
+/** How long to wait before reading the work's cover again after a read that failed, in milliseconds. */
+export const COVER_RETRY_MS = 3000;
+
+/** ...and the cover view. */
+export const COVER_VIEW_RETRY_MS = 3000;
+
+/** ...and the season info. */
+export const SEASON_INFO_RETRY_MS = 4000;

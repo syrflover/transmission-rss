@@ -1,10 +1,10 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { ApiError, type ApiErrorCode } from "@/lib/api";
 import type { Change } from "@/lib/api-types";
 import { peek, store, useAfterDelay, useStored, versionOf } from "@/lib/cached";
 
-import { createRereader } from "./rereads";
+import { createRereader, type Rereader } from "./rereads";
 import { sharedEvents } from "./sharedEvents";
 
 export interface Read<T> {
@@ -16,6 +16,8 @@ export interface Read<T> {
   code: ApiErrorCode | null;
   /** Nothing is cached and the first load has taken longer than `SLOW_MS`. */
   slow: boolean;
+  /** Reads now, or once more when a read is on its way (a screen that changed what it reads itself). */
+  reread: () => void;
 }
 
 /** When to read again. */
@@ -71,6 +73,8 @@ export function useRead<T>(
   failureRef.current = failure;
   const listenRef = useRef(listen);
   listenRef.current = listen;
+  const rereaderRef = useRef<Rereader | null>(null);
+  const reread = useCallback(() => rereaderRef.current?.request(), []);
 
   useEffect(() => {
     const rereader = createRereader({
@@ -105,14 +109,22 @@ export function useRead<T>(
       reread: () => rereader.request(),
     });
     setStatus((prev) => (prev.key === key ? prev : { key, error: null, code: null }));
+    rereaderRef.current = rereader;
     rereader.start();
     return () => {
       stopListening();
       rereader.stop();
+      if (rereaderRef.current === rereader) rereaderRef.current = null;
     };
   }, [key]);
 
   const mine = status.key === key;
   const error = mine ? status.error : null;
-  return { data, error, code: mine ? status.code : null, slow: useAfterDelay(data === undefined && error === null) };
+  return {
+    data,
+    error,
+    code: mine ? status.code : null,
+    slow: useAfterDelay(data === undefined && error === null),
+    reread,
+  };
 }

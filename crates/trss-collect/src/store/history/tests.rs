@@ -1337,6 +1337,94 @@ fn an_unfinished_cycle_runs_until_the_larger_of_half_an_hour_and_ten_intervals_a
     run(&stalled, CycleState::is_stalled);
 }
 
+/// The next change a cycle's stall has is the first moment its answers differ
+/// from those of every moment before it, found here by asking at the moments
+/// around it.
+#[test]
+fn the_next_change_of_a_cycle_is_the_first_moment_it_is_stalled_or_stops_running() {
+    let cases = [
+        (
+            "an unfinished cycle with a short interval",
+            cycle(NOON, None),
+            MINUTE,
+        ),
+        (
+            "an unfinished cycle with a long interval",
+            cycle(NOON, None),
+            10 * MINUTE,
+        ),
+        (
+            "a finished cycle",
+            cycle(NOON, Some(NOON + 1_000)),
+            20 * MINUTE,
+        ),
+        (
+            "a finished cycle with a short interval",
+            cycle(NOON, Some(NOON + 1_000)),
+            MINUTE,
+        ),
+    ];
+    for (what, state, interval) in cases {
+        let answers = |now| {
+            (
+                state.is_running(interval, now),
+                state.is_stalled(interval, now),
+            )
+        };
+        let at = state
+            .next_change(interval, state.started_at)
+            .unwrap_or_else(|| panic!("{what}: no change ahead"));
+        assert_eq!(
+            answers(at - 1),
+            answers(state.started_at),
+            "{what}: just before"
+        );
+        assert_ne!(answers(at), answers(at - 1), "{what}: at it");
+        assert_eq!(answers(at + 1), answers(at), "{what}: just after");
+        // Asked from any moment before it, it names that moment; from it on there is none.
+        for now in [state.started_at, at - MINUTE, at - 1] {
+            assert_eq!(
+                state.next_change(interval, now),
+                Some(at),
+                "{what}: asked at {now}"
+            );
+        }
+        assert_eq!(state.next_change(interval, at), None, "{what}: asked at it");
+        assert_eq!(
+            state.next_change(interval, at + 1),
+            None,
+            "{what}: asked after it"
+        );
+    }
+}
+
+#[test]
+fn the_next_change_is_where_the_two_rules_put_it() {
+    // The rules in numbers: 5 minute interval, started at NOON.
+    let interval = 5 * MINUTE;
+    // Running until 50 minutes in, stalled from the millisecond after.
+    assert_eq!(
+        cycle(NOON, None).next_change(interval, NOON + MINUTE),
+        Some(NOON + 50 * MINUTE + 1)
+    );
+    // A finished cycle is stalled from the millisecond after two intervals.
+    assert_eq!(
+        cycle(NOON, Some(NOON + 1_000)).next_change(interval, NOON + MINUTE),
+        Some(NOON + 10 * MINUTE + 1)
+    );
+    // A cycle that already is stalled has no change ahead.
+    assert_eq!(
+        cycle(NOON, None).next_change(interval, NOON + 51 * MINUTE),
+        None
+    );
+    // A bound too large to count never comes.
+    assert_eq!(
+        cycle(NOON, None).next_change(i64::MAX, NOON),
+        Some(i64::MAX)
+    );
+    assert!(!cycle(NOON, None).is_stalled(i64::MAX, i64::MAX - 1));
+}
+
 #[test]
 fn a_finished_cycle_is_not_running() {
     let finished = cycle(NOON - MINUTE, Some(NOON - MINUTE + 1_000));
@@ -2087,4 +2175,35 @@ async fn the_newest_titles_of_a_channel_are_read_up_to_the_limit() {
         .await
         .unwrap()
         .is_empty());
+}
+
+/// What a database that announces its writes has announced, once each, as the
+/// event stream names it: the kind and the ID (`None` for no ID).
+fn drain(
+    heard: &mut tokio::sync::broadcast::Receiver<trss_core::changes::Change>,
+) -> std::collections::BTreeSet<(&'static str, Option<String>)> {
+    let mut told = std::collections::BTreeSet::new();
+    while let Ok(change) = heard.try_recv() {
+        told.insert((change.kind.name(), change.id));
+    }
+    told
+}
+
+// 화면 알림(0156): 이번 주 편성과 수집 상태판은 `collect_status`(ID 없음)에 다시 읽어요.
+// 수집 주기가 시작하고 끝나는 기록이 그 이벤트로 가요.
+#[tokio::test]
+async fn a_cycle_that_begins_and_ends_is_announced_as_a_collect_status_change_without_an_id() {
+    let changes = trss_core::changes::Changes::default();
+    let mut heard = changes.subscribe();
+    let dir = tempfile::tempdir().unwrap();
+    let db = Db::open_announcing(dir.path().join("app.db"), changes)
+        .await
+        .unwrap();
+    let history = HistoryStore::new(db);
+
+    history.begin_cycle(1_000).await.unwrap();
+    assert!(drain(&mut heard).contains(&("collect_status", None)));
+
+    history.finish_cycle(2_000).await.unwrap();
+    assert!(drain(&mut heard).contains(&("collect_status", None)));
 }

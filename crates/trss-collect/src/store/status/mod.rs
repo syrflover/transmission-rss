@@ -113,6 +113,33 @@ impl TransmissionCounts {
         seen_until.saturating_sub(self.taken_at)
             <= interval_ms.saturating_mul(DOWNLOADING_FRESH_CYCLES)
     }
+
+    /// The first moment after `now` at which [`TransmissionCounts::look_is_fresh`]
+    /// is no longer true, given the same `busy_cycle_started_at` and nothing
+    /// written: the moment the look gets too old. Nothing is written when that
+    /// happens, so the server announces it (`trss::deadlines`). `None` when the
+    /// look is not fresh at `now` already, and when time does not age it: the
+    /// age of a look counted up to a cycle that began before the allowance
+    /// ran out does not grow. That cycle ceasing to run is the cycle's own
+    /// moment ([`CycleState::next_change`](crate::store::history::CycleState::next_change)).
+    pub fn next_stale(
+        &self,
+        interval_ms: i64,
+        now: Millis,
+        busy_cycle_started_at: Option<Millis>,
+    ) -> Option<Millis> {
+        if !self.look_is_fresh(interval_ms, now, busy_cycle_started_at) {
+            return None;
+        }
+        // Fresh while the age counted up to `seen_until` is within the allowance.
+        let last_fresh = self
+            .taken_at
+            .saturating_add(interval_ms.saturating_mul(DOWNLOADING_FRESH_CYCLES));
+        if busy_cycle_started_at.is_some_and(|started| started <= last_fresh) {
+            return None;
+        }
+        Some(last_fresh.saturating_add(1))
+    }
 }
 
 /// What one look at Transmission's torrent list leaves for the status board and
@@ -301,6 +328,20 @@ impl StatusStore {
                     .query_map([], |r| r.get(0))?
                     .collect::<rusqlite::Result<HashSet<String>>>()?;
                 Ok(Some(TorrentListing { taken_at, hashes }))
+            })
+            .await
+    }
+
+    /// When the worker took the list [`StatusStore::torrent_listing`] gives, or
+    /// `None` while it has written none: the same list, without its hashes.
+    pub async fn torrent_listing_taken_at(&self) -> Result<Option<Millis>, StatusError> {
+        self.db
+            .run(|c| {
+                Ok::<_, StatusError>(
+                    c.prepare_cached("SELECT taken_at FROM transmission_listing WHERE id = 1")?
+                        .query_row([], |r| r.get(0))
+                        .optional()?,
+                )
             })
             .await
     }

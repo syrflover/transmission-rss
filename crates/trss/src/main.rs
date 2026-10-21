@@ -3,6 +3,7 @@ use std::{io, path::PathBuf, process::ExitCode};
 use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
 use trss::{
+    deadlines::Deadlines,
     wake::Wakes,
     web::{
         self as web,
@@ -231,6 +232,11 @@ async fn run() -> Result<(), String> {
             Err(e) => eprintln!("trss: cannot sweep the receive area: {e}"),
         },
     );
+    // What the web decides from the clock when it reads (a stalled collection,
+    // an episode's air time, the Seoul day) changes with nothing written, so
+    // this tells the screens when it does.
+    let deadlines =
+        tokio::spawn(Deadlines::new(state.clone(), trss_core::system_clock()).run(cancel.clone()));
     let router = web::router(&web_env.static_dir, state);
     let serving = tokio::spawn({
         let cancel = cancel.clone();
@@ -275,6 +281,7 @@ async fn run() -> Result<(), String> {
                 let Some(connected) = cancel.run_until_cancelled(connecting).await else {
                     // The web is winding down with the same token.
                     sweeping.abort();
+                    let _ = deadlines.await;
                     let served = serving.await.map_err(|e| e.to_string())?;
                     println!("trss stopped");
                     return served;
@@ -386,6 +393,7 @@ async fn run() -> Result<(), String> {
     let _ = caption_queue.await;
     let served = serving.await.map_err(|e| e.to_string())?;
     sweeping.abort();
+    let _ = deadlines.await;
 
     println!("trss stopped");
     served

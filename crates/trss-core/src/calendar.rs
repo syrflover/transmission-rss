@@ -32,6 +32,14 @@ pub fn day_start(day: i64) -> Millis {
     day * DAY_MS - KST_OFFSET_MS
 }
 
+/// The moment (Unix ms) the next Seoul day begins after `ms`: what a state that
+/// is decided by the Seoul day ([`day_of`], and so by the week and the quarter)
+/// changes at. A moment that is the start of a day gets the start of the day
+/// after it.
+pub fn next_day_start(ms: Millis) -> Millis {
+    day_start(day_of(ms) + 1)
+}
+
 /// The day count of a civil date (proleptic Gregorian).
 pub fn days_from_civil(year: i32, month: u32, day: u32) -> i64 {
     let y = i64::from(year) - i64::from(month <= 2);
@@ -74,6 +82,22 @@ mod tests {
             assert_eq!(days_from_civil(y, m, d), day, "{y}-{m}-{d}");
         }
         assert_eq!(date_text(days_from_civil(2024, 2, 29)), "2024-02-29");
+    }
+
+    #[test]
+    fn the_next_day_begins_at_the_next_seoul_midnight() {
+        let day = days_from_civil(2026, 10, 1);
+        let start = day_start(day);
+        // Just before the midnight that ends the day, at it, and just after.
+        assert_eq!(next_day_start(start), start + DAY_MS);
+        assert_eq!(next_day_start(start + DAY_MS - 1), start + DAY_MS);
+        assert_eq!(next_day_start(start + DAY_MS), start + 2 * DAY_MS);
+        // The day it names is the next day, and no moment before it is in it.
+        let next = next_day_start(start + 12 * 3_600_000);
+        assert_eq!(day_of(next), day + 1);
+        assert_eq!(day_of(next - 1), day);
+        // One millisecond before the epoch is 08:59 of the Seoul day 0.
+        assert_eq!(next_day_start(-1), day_start(1));
     }
 
     #[test]

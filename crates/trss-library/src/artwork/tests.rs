@@ -27,7 +27,11 @@ use crate::{
     },
 };
 use trss_anilist::fake::Fake;
-use trss_core::{files::testing, DbError};
+use trss_core::{
+    changes::{Change, Changes},
+    files::testing,
+    DbError,
+};
 
 struct Env {
     dir: TempDir,
@@ -53,10 +57,41 @@ fn scan(names: &[&str]) -> Scan {
     }
 }
 
+/// What a database that announces its writes has announced
+/// ([`Env::announcing`]), once each, as the event stream names it: the kind and
+/// the ID.
+struct Heard(tokio::sync::broadcast::Receiver<Change>);
+
+impl Heard {
+    fn drain(&mut self) -> BTreeSet<(&'static str, Option<String>)> {
+        let mut told = BTreeSet::new();
+        while let Ok(change) = self.0.try_recv() {
+            told.insert((change.kind.name(), change.id));
+        }
+        told
+    }
+}
+
 impl Env {
     async fn new(names: &[&str]) -> Env {
         let dir = tempfile::tempdir().unwrap();
         let db = Db::open(dir.path().join("trss.db")).await.unwrap();
+        Env::over(dir, db, names).await
+    }
+
+    /// [`Env::new`] over a database whose writes are announced, and what it
+    /// announces from now on. The screens listen to those (`docs/tickets/0156`).
+    async fn announcing(names: &[&str]) -> (Env, Heard) {
+        let dir = tempfile::tempdir().unwrap();
+        let changes = Changes::default();
+        let heard = Heard(changes.subscribe());
+        let db = Db::open_announcing(dir.path().join("trss.db"), changes)
+            .await
+            .unwrap();
+        (Env::over(dir, db, names).await, heard)
+    }
+
+    async fn over(dir: TempDir, db: Db, names: &[&str]) -> Env {
         let fake = Fake::start().await;
         let art = Artwork::new(db.clone(), Some(AppData::new(dir.path())), fake.config())
             .with_spacing(Duration::ZERO);
@@ -182,6 +217,30 @@ async fn one_exact_title_is_selected_and_shown_only_after_its_bytes_are_verified
     assert_eq!(env.files().len(), 1);
     assert!(env.staging().is_empty());
     assert_eq!(env.art.run_next().await, None);
+}
+
+// 화면 알림(0156): 작품 상세의 표지와 표지 고르기 대화 상자는 그 작품의 `artwork` 이벤트에
+// 다시 읽어요. 검색이 항목을 고를 때와 이미지가 확인돼 표지가 될 때가 모두 그 작품의 ID로 가요.
+#[tokio::test]
+async fn a_cover_that_is_chosen_and_the_image_that_then_arrives_are_announced_for_the_work() {
+    let (env, mut heard) = Env::announcing(&["Lycoris Recoil"]).await;
+    let work = env.id("Lycoris Recoil").await;
+    env.fake.add_search(
+        "Lycoris Recoil",
+        vec![env.fake.entry(143270, "Lycoris Recoil", &[])],
+        &samples::jpeg(),
+    );
+    heard.drain();
+
+    // The search chooses the entry: the cover is still empty and pending.
+    assert_eq!(env.art.run_next().await, Some(Ran::Recorded));
+    assert!(env.selection("Lycoris Recoil").await.image.is_none());
+    assert!(heard.drain().contains(&("artwork", Some(work.clone()))));
+
+    // The image is received and verified: the screen has a cover to show.
+    assert_eq!(env.art.run_next().await, Some(Ran::Recorded));
+    assert!(env.selection("Lycoris Recoil").await.image.is_some());
+    assert!(heard.drain().contains(&("artwork", Some(work))));
 }
 
 #[tokio::test]

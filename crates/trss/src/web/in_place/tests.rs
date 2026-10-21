@@ -13,14 +13,19 @@ use axum::{
 };
 use serde_json::{json, Value};
 
-use super::Evidence;
+use super::{listing_is_fresh, listing_stale_at, Evidence, LISTING_FRESH_FOR};
 use crate::web::{commands_api::now_millis, testing, AppState};
+use std::sync::{
+    atomic::{AtomicI64, Ordering},
+    Arc,
+};
+use trss_anissia::Anissia;
 use trss_collect::store::{
     channels::{Channel, ChannelInput, Rule, RuleInput, RuleState},
     history::{HistoryItem, HistoryResult, Observation},
     revisions::{NewRevision, OldVideo, RevisionState, Step},
 };
-use trss_core::Db;
+use trss_core::{Clock, Db};
 
 const EPISODE_NAME: &str = "Show S01E14.mkv";
 const STOPPED: &str =
@@ -391,6 +396,54 @@ async fn a_higher_item_held_by_transmission_at_the_episode_name_holds_the_episod
         w.listing(MINUTE, &[&hash]).await;
         assert_eq!(w.held(&item).await, Some(3), "{kind:?}");
     }
+}
+
+/// The listing is believed for [`LISTING_FRESH_FOR`] and not a millisecond
+/// longer, and the moment `listing_stale_at` names (which the server announces)
+/// is the first one it is not, on the server's clock.
+#[tokio::test]
+async fn a_listing_is_believed_up_to_its_deadline_and_not_after() {
+    let taken = 1_000_000;
+    assert_eq!(
+        listing_stale_at(taken, taken),
+        Some(taken + LISTING_FRESH_FOR + 1)
+    );
+    for (now, fresh) in [
+        (taken, true),
+        (taken + LISTING_FRESH_FOR - 1, true),
+        (taken + LISTING_FRESH_FOR, true),
+        (taken + LISTING_FRESH_FOR + 1, false),
+    ] {
+        assert_eq!(listing_is_fresh(taken, now), fresh, "at {now}");
+        // The moment is ahead exactly while the listing is fresh.
+        assert_eq!(listing_stale_at(taken, now).is_some(), fresh, "at {now}");
+    }
+    assert_eq!(listing_stale_at(taken, taken + LISTING_FRESH_FOR + 1), None);
+    // Asked about a list from the future, the age is nothing.
+    assert!(listing_is_fresh(taken, taken - 5));
+
+    // What the screens read follows the state's clock.
+    let mut w = World::new().await;
+    let now = Arc::new(AtomicI64::new(now_millis()));
+    let clock: Clock = {
+        let now = now.clone();
+        Arc::new(move || now.load(Ordering::SeqCst))
+    };
+    let anissia = Anissia::new(w.state.db().clone(), Default::default(), clock);
+    w.state = w.state.clone().with_anissia(anissia);
+    let item = w.unknown_v2().await;
+    let hash = w.placed(title(14, 3)).await;
+    let taken = now.load(Ordering::SeqCst);
+    w.state
+        .status
+        .record_listing(taken, vec![hash.clone()])
+        .await
+        .unwrap();
+    assert_eq!(w.held(&item).await, Some(3));
+    now.store(taken + LISTING_FRESH_FOR, Ordering::SeqCst);
+    assert_eq!(w.held(&item).await, Some(3));
+    now.store(taken + LISTING_FRESH_FOR + 1, Ordering::SeqCst);
+    assert_eq!(w.held(&item).await, None);
 }
 
 /// Evidence that is one thing short holds nothing: the worker looks at the

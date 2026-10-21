@@ -1,8 +1,8 @@
-import { useEffect, useId, useState, type ReactNode } from "react";
+import { useId, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 
-import { useCached } from "@/lib/cached";
 import { when } from "@/lib/time";
+import { useRead } from "@/lib/useRead";
 import { cn } from "@/lib/utils";
 import { WEEKDAYS_SHORT } from "@/lib/weekday";
 import type { Board } from "@/lib/api-types";
@@ -10,8 +10,8 @@ import type { Board } from "@/lib/api-types";
 import { KEYS } from "../cache";
 import { channelName } from "../rules/api";
 import { loadBoard, STALLED, STALLED_SHORT } from "./api";
+import { BOARD_RETRY_MS, boardChanged } from "./listens";
 
-const POLL_MS = 30_000;
 /** The history filter the `실패·중복` link opens. */
 export const PROBLEMS_HREF = "/collect/history?result=add_failed,version_unknown,duplicate";
 
@@ -25,19 +25,16 @@ export interface Load {
 
 /**
  * The board: the copy from the last visit shows at once and is read again
- * behind it, then every {@link POLL_MS} and when the page becomes visible.
+ * behind it, then whenever the server says what the board shows changed
+ * (`listens.ts`), not on a timer.
  */
 export function useBoard(): Load {
-  const { data, error, slow, reload } = useCached(KEYS.status, loadBoard, "상태를 불러오지 못했어요.");
-  useEffect(() => {
-    const timer = window.setInterval(reload, POLL_MS);
-    const onVisible = () => document.visibilityState === "visible" && reload();
-    document.addEventListener("visibilitychange", onVisible);
-    return () => {
-      window.clearInterval(timer);
-      document.removeEventListener("visibilitychange", onVisible);
-    };
-  }, [reload]);
+  const { data, error, slow } = useRead(
+    KEYS.status,
+    loadBoard,
+    { match: boardChanged, retryMs: BOARD_RETRY_MS },
+    "상태를 불러오지 못했어요.",
+  );
   return { board: data, failed: error !== null, slow };
 }
 

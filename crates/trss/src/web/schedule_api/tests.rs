@@ -11,7 +11,7 @@ use serde_json::Value;
 
 use trss_core::{Clock, Db};
 
-use crate::web::{testing, AppState};
+use crate::web::{schedule_api::next_video_change, testing, AppState};
 use trss_anissia::{Anime, Anissia};
 use trss_collect::store::{
     channels::{Channel, ChannelInput, NewSubscription, Rule, RuleInput, RuleState, SubtitleMode},
@@ -762,4 +762,80 @@ async fn the_week_changes_with_the_day() {
     assert_eq!(body["week"]["start"], "2026-10-05");
     assert_eq!(body["week"]["days"][0]["today"], true);
     assert_eq!(card_titles(&body["week"]["days"][0]), ["월요"]);
+}
+
+#[tokio::test]
+async fn the_next_video_change_is_the_earliest_air_time_of_a_card_that_is_not_paused_or_off() {
+    const HOUR: i64 = 60 * 60 * 1000;
+    let app = App::new().await;
+    assert_eq!(next_video_change(&app.state, NOW).await.unwrap(), None);
+    // Thursday: 10:00 aired two hours ago, 14:00 and 22:00 are ahead, and
+    // 13:00 is a paused rule's, which has no `방영 전` to leave.
+    app.subscribe(
+        anime(1, "지남", 4, Some("10:00"), Some("2026-07-02")),
+        rule("A"),
+        SubtitleMode::None,
+        None,
+    )
+    .await;
+    app.subscribe(
+        anime(2, "오후", 4, Some("14:00"), Some("2026-07-02")),
+        rule("B"),
+        SubtitleMode::None,
+        None,
+    )
+    .await;
+    app.subscribe(
+        anime(3, "저녁", 4, Some("22:00"), Some("2026-07-02")),
+        rule("C"),
+        SubtitleMode::None,
+        None,
+    )
+    .await;
+    app.subscribe(
+        anime(4, "멈춤", 4, Some("13:00"), Some("2026-07-02")),
+        RuleInput {
+            state: RuleState::Paused,
+            ..rule("D")
+        },
+        SubtitleMode::None,
+        None,
+    )
+    .await;
+
+    // A video the library holds can be taken away before the episode airs.
+    app.subscribe(
+        anime(5, "보유", 4, Some("18:00"), Some("2026-07-02")),
+        rule("E"),
+        SubtitleMode::None,
+        Some("VideoOnly"),
+    )
+    .await;
+
+    // The 14:00 episode: two hours away, then the 18:00 and 22:00 ones, then none. At the
+    // moment an episode airs it is `영상 대기` already, so it is not ahead.
+    assert_eq!(
+        next_video_change(&app.state, NOW).await.unwrap(),
+        Some(NOW + 2 * HOUR)
+    );
+    assert_eq!(
+        next_video_change(&app.state, NOW + 2 * HOUR - 1)
+            .await
+            .unwrap(),
+        Some(NOW + 2 * HOUR)
+    );
+    assert_eq!(
+        next_video_change(&app.state, NOW + 2 * HOUR).await.unwrap(),
+        Some(NOW + 6 * HOUR)
+    );
+    assert_eq!(
+        next_video_change(&app.state, NOW + 6 * HOUR).await.unwrap(),
+        Some(NOW + 10 * HOUR)
+    );
+    assert_eq!(
+        next_video_change(&app.state, NOW + 10 * HOUR)
+            .await
+            .unwrap(),
+        None
+    );
 }

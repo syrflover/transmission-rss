@@ -142,9 +142,9 @@ async fn status(
     query: Result<Query<StatusQuery>, QueryRejection>,
 ) -> Result<Json<Board>, ApiError> {
     let Query(q) = query.map_err(|_| ApiError::invalid("조회 조건을 읽지 못했어요."))?;
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| d.as_millis() as Millis);
+    // The server's clock, as the schedule and the suggestions read it, so the
+    // moments `trss::deadlines` announces are the ones this reads by.
+    let now = state.anissia.now();
     Ok(Json(board(&state, now, q.tz_offset).await?))
 }
 

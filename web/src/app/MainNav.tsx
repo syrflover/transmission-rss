@@ -6,7 +6,7 @@ import { MENU, type MenuItem } from "./menu";
 import { NavBadge } from "./NavBadge";
 import { useTodoCount } from "./todo-count";
 
-/** The count badge of a menu entry. Only 할 일 has one, so only it reads (and polls) the count. */
+/** The count badge of a menu entry. Only 할 일 has one, so only it reads the count (when the server says to-dos changed). */
 function ItemBadge({ item, className }: { item: MenuItem; className?: string }) {
   return item.id === "todo" ? <TodoBadge className={className} /> : null;
 }

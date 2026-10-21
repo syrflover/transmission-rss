@@ -2,16 +2,16 @@ import { useEffect, useRef, useState, type ComponentType, type ReactNode } from 
 
 import { Button } from "@/components/ui/button";
 import { ApiError } from "@/lib/api";
+import { createRereader } from "@/lib/rereads";
+import { sharedEvents } from "@/lib/sharedEvents";
 import { cn } from "@/lib/utils";
 
 import { btnAction, btnNeutral, hintClass } from "../../collect/channels/styles";
 import { loadSeasonInfo, setSeasonLinks, type SeasonInfo, type SeasonSuggestion } from "../api";
 import { CalendarIcon, ExternalIcon, FilmIcon, StudioIcon, TagIcon } from "../icons";
+import { SEASON_INFO_RETRY_MS, seasonInfoChanged } from "./listens";
 import { SeasonLinksDialog } from "./SeasonLinksDialog";
 import { airingBadge, airingText, episodesText, fuzzyDate } from "./model";
-
-/** How often the info is read again while the app still has the season's search to do. */
-const PENDING_POLL_MS = 4000;
 
 function Cell({
   icon: Icon,
@@ -67,23 +67,30 @@ export function SeasonInfoSection({
   const onChangedRef = useRef(onChanged);
   onChangedRef.current = onChanged;
 
-  // While the app's search for this season is pending, read the info now and then.
+  // While the app's search for this season is pending, the info is read again when the server says the work's season
+  // info changed (`listens.ts`). Listening starts before the first read, so a search that ends meanwhile is not missed.
   const pending = info.pending !== null;
   const { season, version } = info;
   useEffect(() => {
     if (!pending) return;
-    const controller = new AbortController();
-    const timer = setInterval(() => {
-      loadSeasonInfo(workId, season, controller.signal).then(
-        (next) => {
-          if (next.version !== version || next.pending === null) onChangedRef.current(next);
-        },
-        () => {},
-      );
-    }, PENDING_POLL_MS);
+    const rereader = createRereader({
+      read: async (signal) => {
+        const next = await loadSeasonInfo(workId, season, signal);
+        if (signal.aborted) return;
+        if (next.version !== version || next.pending === null) onChangedRef.current(next);
+      },
+      retryMs: () => SEASON_INFO_RETRY_MS,
+      gone: (e) => e instanceof ApiError && e.code === "not_found",
+      hidden: () => document.hidden,
+    });
+    const stopListening = sharedEvents().subscribe({
+      match: (change) => seasonInfoChanged(change, workId),
+      reread: () => rereader.request(),
+    });
+    rereader.start();
     return () => {
-      clearInterval(timer);
-      controller.abort();
+      stopListening();
+      rereader.stop();
     };
   }, [workId, season, version, pending]);
 
