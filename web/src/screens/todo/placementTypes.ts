@@ -94,10 +94,10 @@ export interface Relocation {
   episode: number;
   path: string;
   /**
-   * `planned` until the person confirms; then `intended` and `set_aside` while it is taken off, `done` (taken off),
-   * `kept` (left where it is) or `held` (what became of it is not known).
+   * `planned` until the person confirms and until the copy is taken off; then `done` (taken off), `kept` (left where it
+   * is) or `held` (what became of it is not known).
    */
-  state: "planned" | "intended" | "set_aside" | "done" | "kept" | "held";
+  state: "planned" | "done" | "kept" | "held";
   /** Why a `kept` or `held` copy is where it is. */
   reason: string | null;
 }

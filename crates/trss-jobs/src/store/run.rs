@@ -440,11 +440,12 @@ impl JobRun {
                      WHERE job_id = ?1 AND state = 'current'",
                 )?
                 .execute(params![id, note, now])?;
-                // A relocation's removals under way are not known to have
-                // ended: it holds them. A replacement records nothing before
-                // it changes a file: its approved plans stay approved, and the
-                // job's next run checks them again from the start.
-                relocate::hold_under_way(&tx, &id, &note, now)?;
+                // A relocation's removals not done yet keep their copies,
+                // which a later relocation may move. Neither they nor a
+                // replacement record anything before they change a file:
+                // approved plans stay approved, and the job's next run checks
+                // them again from the start.
+                relocate::keep_unstarted(&tx, &id, &note, now)?;
                 tx.prepare_cached(
                     "UPDATE subtitle_jobs
                      SET state = 'held', wait = NULL, note = ?2, stage = NULL, state_at = ?3,

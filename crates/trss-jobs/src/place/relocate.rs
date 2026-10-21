@@ -57,26 +57,43 @@
 //!
 //! # Taking a copy off
 //!
-//! A removal looks again first: a copy already removed is done; a copy whose
-//! stored subtitle is back on its episode, a path another effect under way
-//! uses, a copy whose stored subtitle's file is not in the work folder as
-//! recorded (the copy may be the last of its bytes; an empty mount point
-//! has none, so its copies are not taken for gone) or a copy a person
+//! A removal looks again first: a copy recorded removed is done, and so is
+//! one whose path is empty (`이미 없어요`) once its stored subtitle's file is
+//! found in the work folder as recorded (an empty mount point has none, so
+//! its copies are not taken for gone). A copy whose stored subtitle is back
+//! on its episode, a copy whose stored subtitle's file is not there as
+//! recorded (the copy may be the last of its bytes) or a copy a person
 //! changed (its bytes are not the applied ones) is kept where it is. Then
-//! the copy is renamed, replacing nothing, to `.trss/tmp/<removal>.aside` (`intended` before, `set_aside` once it is
-//! found to be the applied bytes there), that file is removed, and the
-//! removal is `done` with the applied copy recorded removed. The stored
+//! the copy is renamed, replacing nothing, to `.trss/aside/<new ID>`
+//! ([`files::ASIDE_DIR`]) and checked there ([`aside::set_aside`]): a file
+//! that is not the applied bytes goes back on its path, and the removal is
+//! `kept`. The applied bytes are removed, then the removal is `done` with
+//! the applied copy recorded removed, in one synced transaction. The stored
 //! subtitle keeps its bytes, so no copy of them is made first, and the
 //! bytes alone say a file is the applied copy (see [`Applied::expected`]).
 //!
-//! | Record | On disk | Then |
+//! Nothing is recorded before the file moves. A run cut short (a process
+//! that stopped, or a run that ended with an error, after which the same
+//! process takes the job again) is done again by the job's next run, which
+//! looks at each removal still `planned` anew:
+//!
+//! | Cut | Left | Done again |
 //! | --- | --- | --- |
-//! | `intended` | the aside file, the applied bytes | `set_aside`, then removed |
-//! | `intended` | the aside file, anything else | put back on its path (`kept`), or `held` when that path is taken |
-//! | `intended` | no aside file, the copy on its path | taken off anew |
-//! | `intended` | no aside file, nothing on its path | `done`: it is gone (once the stored file is found as recorded; `kept` otherwise) |
-//! | `intended` | no aside file, another file on its path | `kept` |
-//! | `set_aside` | the aside file or none | removed, `done` |
+//! | before the rename | the copy on its path | taken off anew |
+//! | after the rename, before the file is removed | the copy in `.trss/aside/<ID>`, its path empty | `done` (`이미 없어요`); the file stays in `.trss/aside/`, which the app never empties |
+//! | after the file is removed, before the record | nothing | `done` (`이미 없어요`) |
+//!
+//! A mapping change while a copy is taken off may bring its stored subtitle
+//! back on the copy's episode after the removal looked: the record that ends
+//! the removal then brings the source's relocation up to date ([`sync_in`]),
+//! which plans to apply the subtitle there again.
+//!
+//! Releases before ticket 0153 recorded a removal `intended` before the
+//! rename and `set_aside` after it, the file in `.trss/tmp/<removal>.aside`.
+//! Such a removal is not taken off and reads as `kept`
+//! ([`LEFT_BY_AN_EARLIER_RELEASE`]); its copy is not planned again, since
+//! the table keeps one such removal of a copy at a time. Nothing here looks
+//! in `.trss/tmp/`.
 //!
 //! A held removal holds the rows it touches, with its files as they are: its
 //! own row (the copy may still be on its old episode) and every row applied
@@ -388,10 +405,10 @@ struct Move {
 /// mapped stored subtitle that is on another episode than the stored
 /// subtitle, but one another relocation than `waiting` (the source's job
 /// that waits for its confirmation) plans or is taking off, or one whose
-/// removal is held. A stored subtitle no job row names (there is nothing to
-/// apply it from) is left out. A copy on the stored subtitle's episode that a
-/// removal has started taking off (its episode changed back after the start)
-/// does not count as applied there: it is going.
+/// removal is held. A removal an earlier release left `intended` or
+/// `set_aside` keeps its copy out too: the table's unique index counts it as
+/// the copy's one removal under way (see the module docs). A stored subtitle
+/// no job row names (there is nothing to apply it from) is left out.
 fn wanted(
     c: &Connection,
     work_id: &str,
@@ -403,11 +420,7 @@ fn wanted(
         "SELECT s.id, s.episode, a.id, a.episode, a.path,
                 EXISTS (SELECT 1 FROM subtitle_applied b
                          WHERE b.stored_id = s.id AND b.removed_at IS NULL
-                           AND b.episode = s.episode
-                           AND NOT EXISTS (
-                               SELECT 1 FROM subtitle_relocations r
-                                WHERE r.applied_id = b.id
-                                  AND r.state IN ('intended', 'set_aside'))),
+                           AND b.episode = s.episode),
                 EXISTS (SELECT 1 FROM subtitle_job_plan p WHERE p.stored_id = s.id)
            FROM subtitle_applied a JOIN subtitle_stored s ON s.id = a.stored_id
           WHERE s.work_id = ?1 AND s.season = ?2 AND s.source_id = ?3
@@ -711,18 +724,23 @@ pub struct Removal {
     pub episode: i64,
     pub path: String,
     pub state: RemovalState,
-    pub folder: Option<String>,
-    pub aside: Option<String>,
     pub reason: Option<String>,
 }
 
-/// The job's removals, by the episode they take a copy off.
+/// Why a removal an earlier release left under way (`intended` or
+/// `set_aside`) reads as `kept` (see the module docs).
+pub const LEFT_BY_AN_EARLIER_RELEASE: &str = "이전 버전에서 지우다 끊겨 그대로 뒀어요";
+
+/// The job's removals, by the episode they take a copy off. One an earlier
+/// release left under way is `kept` ([`LEFT_BY_AN_EARLIER_RELEASE`]).
 pub fn removals(c: &Connection, job_id: &str) -> rusqlite::Result<Vec<Removal>> {
     let mut stmt = c.prepare_cached(
-        "SELECT id, job_id, position, applied_id, episode, path, state, folder, aside, reason
+        "SELECT id, job_id, position, applied_id, episode, path,
+                CASE WHEN state IN ('intended', 'set_aside') THEN 'kept' ELSE state END,
+                CASE WHEN state IN ('intended', 'set_aside') THEN ?2 ELSE reason END
            FROM subtitle_relocations WHERE job_id = ?1 ORDER BY episode, path, id",
     )?;
-    let rows = stmt.query_map([job_id], |r| {
+    let rows = stmt.query_map(params![job_id, LEFT_BY_AN_EARLIER_RELEASE], |r| {
         Ok(Removal {
             id: r.get(0)?,
             job_id: r.get(1)?,
@@ -731,9 +749,7 @@ pub fn removals(c: &Connection, job_id: &str) -> rusqlite::Result<Vec<Removal>> 
             episode: r.get(4)?,
             path: r.get(5)?,
             state: r.get(6)?,
-            folder: r.get(7)?,
-            aside: r.get(8)?,
-            reason: r.get(9)?,
+            reason: r.get(7)?,
         })
     })?;
     rows.collect()
@@ -783,38 +799,15 @@ fn set_state(
     })
 }
 
-/// Marks the removal `intended`, unless its copy is recorded removed or its
-/// stored subtitle is on the copy's episode now: a mapping change committed
-/// after the looks before it is seen in the statement that marks it.
-/// Whether it was marked.
-fn intend(
-    c: &mut Connection,
-    id: &str,
-    folder: &str,
-    aside: &str,
-    now: Millis,
-) -> Result<bool, JobError> {
-    durable(c, |c| {
-        let marked = c
-            .prepare_cached(
-                "UPDATE subtitle_relocations
-                SET state = 'intended', folder = ?2, aside = ?3, reason = NULL, updated_at = ?4
-              WHERE id = ?1 AND state IN ('planned', 'intended')
-                AND EXISTS (
-                    SELECT 1 FROM subtitle_applied a JOIN subtitle_stored s ON s.id = a.stored_id
-                     WHERE a.id = subtitle_relocations.applied_id AND a.removed_at IS NULL
-                       AND s.episode IS NOT a.episode)",
-            )?
-            .execute(params![id, folder, aside, now])?;
-        Ok(marked == 1)
-    })
-}
-
 /// The removal is done, and its applied copy recorded removed (unless it
-/// was already), in one synced transaction.
+/// was already), in one synced transaction. When the copy's stored subtitle
+/// is on the copy's episode by now (a mapping change committed after the
+/// removal looked), the source's relocation is brought up to date in the
+/// same transaction ([`sync_in`]): the copy no longer counts as applied
+/// there.
 fn done(c: &mut Connection, removal: &Removal, now: Millis) -> Result<(), JobError> {
     durable(c, |c| {
-        let tx = c.transaction()?;
+        let tx = c.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         tx.prepare_cached(
             "UPDATE subtitle_relocations SET state = 'done', reason = NULL, updated_at = ?2
               WHERE id = ?1",
@@ -824,6 +817,20 @@ fn done(c: &mut Connection, removal: &Removal, now: Millis) -> Result<(), JobErr
             "UPDATE subtitle_applied SET removed_at = ?2 WHERE id = ?1 AND removed_at IS NULL",
         )?
         .execute(params![removal.applied_id, now])?;
+        let back: Option<(String, u32, String)> = tx
+            .prepare_cached(
+                "SELECT s.work_id, s.season, s.source_id
+                   FROM subtitle_applied a JOIN subtitle_stored s ON s.id = a.stored_id
+                  WHERE a.id = ?1 AND s.episode IS a.episode AND s.assignment = 'mapped'
+                    AND s.source_id IS NOT NULL AND s.cleaned_at IS NULL",
+            )?
+            .query_row([&removal.applied_id], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+            })
+            .optional()?;
+        if let Some((work_id, season, source_id)) = back {
+            sync_in(&tx, &work_id, season, &source_id, now)?;
+        }
         tx.commit()?;
         Ok(())
     })
@@ -886,20 +893,20 @@ pub(super) fn hold_rows(c: &mut Connection, job: &str, now: Millis) -> Result<us
     })
 }
 
-/// Holds a job's removals under way in the open transaction `tx` (the copy
-/// may be aside); one not started keeps its copy, which a later relocation
-/// may move.
-pub(crate) fn hold_under_way(
+/// Ends the job's removals not done yet `kept`, with `note`, in the open
+/// transaction `tx`, for a job held because its runs keep being cut short:
+/// each copy stays where the runs left it (on its path, or in
+/// `.trss/aside/` after a cut between its rename and its record), and a
+/// later relocation may move a copy still on its path.
+pub(crate) fn keep_unstarted(
     tx: &rusqlite::Transaction,
     job_id: &str,
     note: &str,
     now: Millis,
 ) -> rusqlite::Result<()> {
     tx.prepare_cached(
-        "UPDATE subtitle_relocations
-            SET state = CASE state WHEN 'planned' THEN 'kept' ELSE 'held' END,
-                reason = ?2, updated_at = ?3
-          WHERE job_id = ?1 AND state IN ('planned', 'intended', 'set_aside')",
+        "UPDATE subtitle_relocations SET state = 'kept', reason = ?2, updated_at = ?3
+          WHERE job_id = ?1 AND state = 'planned'",
     )?
     .execute(params![job_id, note, now])?;
     Ok(())
@@ -936,11 +943,7 @@ impl Placer {
         let all = self.read(move |c| removals(c, &id)).await?;
         let mut any = false;
         for removal in all {
-            let state = removal.state;
-            if !matches!(
-                state,
-                RemovalState::Planned | RemovalState::Intended | RemovalState::SetAside
-            ) {
+            if removal.state != RemovalState::Planned {
                 continue;
             }
             if !any {
@@ -968,63 +971,11 @@ impl Placer {
                 )
                 .await;
         };
-        // Where an earlier start left it.
-        let (folder, aside) = match (removal.state, &removal.folder, &removal.aside) {
-            (RemovalState::Intended | RemovalState::SetAside, Some(f), Some(a)) => {
-                (f.clone(), a.clone())
-            }
-            _ => (
-                folder.to_owned(),
-                format!("{}/{}.aside", files::TEMP_DIR, removal.id),
-            ),
-        };
-        let base = Path::new(&folder).to_path_buf();
+        let base = Path::new(folder).to_path_buf();
         let at = files::within(&base, &removal.path);
-        let aside_at = files::within(&base, &aside);
         let label = format!("{}화 적용본 {}", removal.episode, removal.path);
-
-        if removal.state == RemovalState::SetAside {
-            return self.remove_aside(&removal, &aside_at, &label).await;
-        }
-        if removal.state == RemovalState::Intended {
-            let a = aside_at.clone();
-            if blocking(move || trss_core::files::occupied(&a))
-                .await
-                .unwrap_or(true)
-            {
-                // Renamed before the record that it was found aside.
-                let (expected, to, back) = (copy.clone(), aside_at.clone(), at.clone());
-                let checked = blocking(move || aside::check(&to, &back, &expected.expected()));
-                return self
-                    .settle(&removal, checked.await, &aside_at, &label)
-                    .await;
-            }
-            // Not renamed: looked at anew below.
-        }
-
         if copy.removed {
             return self.gone(&removal, &label).await;
-        }
-        if copy.back {
-            return self.end(&removal, RemovalState::Kept, BACK_HERE).await;
-        }
-        let (f, lower, own) = (
-            folder.clone(),
-            removal.path.to_lowercase(),
-            removal.id.clone(),
-        );
-        if self
-            .read(move |c| records::busy_targets(c, &f, Some(&own)))
-            .await?
-            .contains(&lower)
-        {
-            return self
-                .end(
-                    &removal,
-                    RemovalState::Kept,
-                    "다른 작업이 이 경로의 파일을 바꾸는 중이라 그대로 뒀어요",
-                )
-                .await;
         }
         // The stored subtitle keeps the bytes taken off: its file must be
         // there as recorded, in this folder (an empty mount point has none).
@@ -1038,48 +989,31 @@ impl Placer {
             })
         })
         .await;
+        let (a, expected) = (at.clone(), copy.clone());
+        let look = match blocking(move || aside::look(&a, &expected.expected())).await {
+            // A person removed it, or a run cut short after renaming it
+            // aside left it in `.trss/aside/`.
+            Look::Gone if intact => return self.gone(&removal, &label).await,
+            look => look,
+        };
+        if copy.back {
+            return self.end(&removal, RemovalState::Kept, BACK_HERE).await;
+        }
         if !intact {
             return self.end(&removal, RemovalState::Kept, STORED_MISSING).await;
         }
-        let (a, expected) = (at.clone(), copy.clone());
-        match blocking(move || aside::look(&a, &expected.expected())).await {
-            Look::Gone => return self.gone(&removal, &label).await,
+        match look {
             Look::Differs => return self.end(&removal, RemovalState::Kept, CHANGED).await,
             Look::Unreadable(err) => {
                 let why = format!("적용본을 확인하지 못해 그대로 뒀어요: {err}");
                 return self.end(&removal, RemovalState::Kept, &why).await;
             }
-            Look::Expected => {}
+            Look::Expected | Look::Gone => {}
         }
-        let (id, f, a, now) = (
-            removal.id.clone(),
-            folder.clone(),
-            aside.clone(),
-            self.now(),
+        let aside_at = files::within(
+            &base,
+            &format!("{}/{}", files::ASIDE_DIR, uuid::Uuid::new_v4()),
         );
-        let marked = self.write(move |c| intend(c, &id, &f, &a, now)).await?;
-        let applied_id = removal.applied_id.clone();
-        let Some(copy) = self.read(move |c| applied_of(c, &applied_id)).await? else {
-            return self
-                .end(
-                    &removal,
-                    RemovalState::Held,
-                    "적용본의 기록을 찾지 못했어요",
-                )
-                .await;
-        };
-        if !marked {
-            return match (copy.removed, copy.back) {
-                (true, _) => self.gone(&removal, &label).await,
-                (false, true) => self.end(&removal, RemovalState::Kept, BACK_HERE).await,
-                // The mapping moved away and back while it looked: the copy
-                // stays, and a later relocation may plan it again.
-                (false, false) => {
-                    let why = "회차 대응이 바뀌는 사이라 그대로 뒀어요";
-                    self.end(&removal, RemovalState::Kept, why).await
-                }
-            };
-        }
         let (from, to, expected) = (at.clone(), aside_at.clone(), copy.clone());
         let moved = blocking(move || {
             // A folder that cannot be made fails the rename the same way.
@@ -1091,75 +1025,41 @@ impl Placer {
         .await;
         match moved {
             Moved::Missing => self.gone(&removal, &label).await,
-            // `rename_noreplace_synced` answered `NotFound` for the rename and
-            // for a sync alike, and both were taken for a copy that is gone.
+            // A sync that answered `NotFound` after the rename is taken for a
+            // copy that is gone, as a rename that did.
             Moved::Unsynced(err) if err.kind() == std::io::ErrorKind::NotFound => {
                 self.gone(&removal, &label).await
             }
-            // Either nothing moved, or the move is not known to be on disk:
-            // the next run looks at both paths again.
-            Moved::NotMoved(err) | Moved::Unsynced(err) => {
-                let a = aside_at.clone();
-                if blocking(move || trss_core::files::occupied(&a))
-                    .await
-                    .unwrap_or(true)
-                {
-                    return self
-                        .end(
-                            &removal,
-                            RemovalState::Held,
-                            &format!("{label}을 옮긴 뒤 폴더를 동기화하지 못했어요: {err}"),
-                        )
-                        .await;
-                }
-                self.end(
-                    &removal,
-                    RemovalState::Kept,
-                    &format!("적용본을 옮기지 못해 그대로 뒀어요: {err}"),
-                )
-                .await
+            Moved::NotMoved(err) => {
+                let why = format!("적용본을 옮기지 못해 그대로 뒀어요: {err}");
+                self.end(&removal, RemovalState::Kept, &why).await
             }
-            Moved::Checked(checked) => self.settle(&removal, checked, &aside_at, &label).await,
-        }
-    }
-
-    /// Ends the removal by what was found aside: the applied bytes are
-    /// recorded set aside and removed; another file went back on its path.
-    async fn settle(
-        &self,
-        removal: &Removal,
-        checked: Check,
-        aside_at: &Path,
-        label: &str,
-    ) -> Result<(), JobError> {
-        match checked {
-            Check::Expected => {
-                self.mark_aside(removal).await?;
-                self.remove_aside(removal, aside_at, label).await
+            // Moved, and the move is not known to be on disk: the file stays
+            // aside, unchecked.
+            Moved::Unsynced(err) => {
+                let why = format!("{label}을 옮긴 뒤 폴더를 동기화하지 못했어요: {err}");
+                self.end(&removal, RemovalState::Held, &why).await
             }
-            Check::Gone => self.gone(removal, label).await,
-            Check::PutBack => self.end(removal, RemovalState::Kept, CHANGED).await,
-            Check::PutBackUnsynced(err) => {
+            Moved::Checked(Check::Expected) => {
+                self.remove_taken_off(&removal, &aside_at, &label).await
+            }
+            Moved::Checked(Check::Gone) => self.gone(&removal, &label).await,
+            Moved::Checked(Check::PutBack) => self.end(&removal, RemovalState::Kept, CHANGED).await,
+            Moved::Checked(Check::PutBackUnsynced(err)) => {
                 let why = format!("{label}을 되돌린 뒤 폴더를 동기화하지 못했어요: {err}");
-                self.end(removal, RemovalState::Held, &why).await
+                self.end(&removal, RemovalState::Held, &why).await
             }
-            Check::NotPutBack(err) => {
+            Moved::Checked(Check::NotPutBack(err)) => {
                 let why = format!(
                     "옮긴 {label}이 적용한 파일과 달라 되돌리려 했지만 하지 못했어요: {err}"
                 );
-                self.end(removal, RemovalState::Held, &why).await
+                self.end(&removal, RemovalState::Held, &why).await
             }
         }
     }
 
-    async fn mark_aside(&self, removal: &Removal) -> Result<(), JobError> {
-        let (id, now) = (removal.id.clone(), self.now());
-        self.write(move |c| set_state(c, &id, RemovalState::SetAside, None, now))
-            .await
-    }
-
-    /// Removes the copy set aside; the removal is done.
-    async fn remove_aside(
+    /// Removes the copy renamed aside, then records the removal `done`.
+    async fn remove_taken_off(
         &self,
         removal: &Removal,
         aside: &Path,
@@ -1182,7 +1082,8 @@ impl Placer {
             .await
     }
 
-    /// The copy is not on the disk any more: a person removed it.
+    /// The copy is not on its path any more: a person removed it, or a run
+    /// cut short after renaming it aside left it in `.trss/aside/`.
     async fn gone(&self, removal: &Removal, label: &str) -> Result<(), JobError> {
         let (r, now) = (removal.clone(), self.now());
         self.write(move |c| done(c, &r, now)).await?;
@@ -1260,10 +1161,13 @@ pub fn look_again(c: &mut Connection, job_id: &str, now: Millis) -> Result<(), J
 /// What a relocation job came to, for its last note: how many copies it took
 /// off and how many it left where they are, and whether it applied any on
 /// the new episodes (one whose new episodes had them already only took off).
+/// A removal an earlier release left under way counts as left where it is,
+/// as [`removals`] reads it.
 pub fn outcome_note(c: &Connection, job_id: &str) -> rusqlite::Result<Option<String>> {
     let (done, kept, applied): (i64, i64, bool) = c
         .prepare_cached(
-            "SELECT count(*) FILTER (WHERE state = 'done'), count(*) FILTER (WHERE state = 'kept'),
+            "SELECT count(*) FILTER (WHERE state = 'done'),
+                count(*) FILTER (WHERE state IN ('kept', 'intended', 'set_aside')),
                 EXISTS (SELECT 1 FROM subtitle_job_plan
                          WHERE job_id = ?1 AND outcome = 'applied' AND note IS NOT ?2)
            FROM subtitle_relocations WHERE job_id = ?1",

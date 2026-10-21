@@ -32,17 +32,14 @@ use crate::area::{hex, read_facts};
 pub const TRSS_DIR: &str = ".trss";
 /// Where stored subtitles and fonts go, relative to the work folder.
 pub const SUBTITLES_DIR: &str = ".trss/subtitles";
-/// Where a relocation's files are kept for the while they are taken off
-/// ([`super::relocate`]), relative to the work folder. Releases before 0153
-/// also staged stores, applies and replacements there, and kept a
-/// replacement's protective copies and the files it set aside; nothing
-/// empties it.
-pub const TEMP_DIR: &str = ".trss/tmp";
 /// Where a replacement keeps the files it takes off the paths beside a
 /// video, and its new copy for the while before it swaps it in
-/// ([`super::replace`]), relative to the work folder: `<ID>`, a new one each.
-/// A run removes what it put there once its records are written; nothing
-/// else removes anything there, so what a run cut short left stays.
+/// ([`super::replace`]), and a relocation the applied copy it takes off
+/// until it removes it ([`super::relocate`]), relative to the work folder:
+/// `<ID>`, a new one each. A run removes what it put there once it is done
+/// with it; nothing else removes anything there, so what a run cut short
+/// left stays. Releases before 0153 used `.trss/tmp/` for these and for
+/// their staged copies; nothing touches that folder now.
 pub const ASIDE_DIR: &str = ".trss/aside";
 /// Where a store or an apply writes its new copy before publishing it,
 /// relative to the work folder. Only those writes are there, and a run

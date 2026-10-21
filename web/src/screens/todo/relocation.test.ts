@@ -92,7 +92,6 @@ test("moves go by their new episode, and a removal with no row says it is applie
 
 test("after the confirmation each removal and row says what came of it", () => {
   assert.equal(removalLine(removal("r", { state: "done" })).text, "2화 적용본 지움");
-  assert.equal(removalLine(removal("r", { state: "set_aside" })).text, "2화 적용본 지우는 중");
   const kept = removalLine(removal("r", { state: "kept", reason: "적용한 뒤 바뀐 파일이라 그대로 뒀어요" }));
   assert.deepEqual(
     [kept.text, kept.detail, kept.urgent],

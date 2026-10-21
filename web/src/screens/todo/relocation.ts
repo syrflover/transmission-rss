@@ -44,9 +44,6 @@ export function removalLine(r: Relocation): MoveLine {
   switch (r.state) {
     case "planned":
       return line(`${copy} 제거`, r.path);
-    case "intended":
-    case "set_aside":
-      return line(`${copy} 지우는 중`, r.path);
     case "done":
       return line(`${copy} 지움`, r.path);
     case "kept":

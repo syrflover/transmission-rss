@@ -258,27 +258,6 @@ pub fn set_outcome(
 }
 
 // ---------------------------------------------------------------------------
-// Relocations under way
-
-/// The paths in `folder`, lower-cased, a relocation's removal under way
-/// takes off ([`crate::place::relocate`]), but the removal `except`: names
-/// another removal is about to change. A store, an apply or a replacement
-/// records nothing before it changes a file, so none of them keeps a name:
-/// jobs run one at a time, and a run cut short is done again by its job.
-pub fn busy_targets(
-    c: &Connection,
-    folder: &str,
-    except: Option<&str>,
-) -> rusqlite::Result<Vec<String>> {
-    let mut stmt = c.prepare_cached(
-        "SELECT lower(path) FROM subtitle_relocations
-          WHERE folder = ?1 AND state IN ('intended', 'set_aside') AND id IS NOT ?2",
-    )?;
-    let rows = stmt.query_map(params![folder, except], |r| r.get::<_, String>(0))?;
-    rows.collect()
-}
-
-// ---------------------------------------------------------------------------
 // Assets, packages, stored subtitles
 
 /// A kept file of a work.

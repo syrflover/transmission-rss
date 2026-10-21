@@ -64,11 +64,13 @@ impl Setup {
         std::fs::read(self.at(path)).ok()
     }
 
-    /// What is left in the work folder's temporary folders: a
-    /// relocation's, and the staging folder of stores and applies.
+    /// What is left in the work folder's temporary folders: where a
+    /// relocation renames a copy aside before it removes it, the staging
+    /// folder of stores and applies, and the folder of releases before 0153.
     fn temps(&self) -> Vec<String> {
-        let mut left = names(&self.at(".trss/tmp"));
+        let mut left = names(&self.at(".trss/aside"));
         left.extend(names(&self.at(".trss/staging")));
+        left.extend(names(&self.at(".trss/tmp")));
         left
     }
 
@@ -437,7 +439,18 @@ async fn confirming_the_relocation_takes_the_copy_off_and_applies_it_on_the_new_
         1
     );
     assert_eq!(removals(&s, &job).await[0].state, RemovalState::Done);
+    // The copy went through `.trss/aside/`, which it left empty; nothing
+    // uses the `.trss/tmp/` of earlier releases.
+    assert!(s.at(".trss/aside").is_dir());
     assert!(s.temps().is_empty(), "{:?}", s.temps());
+    assert!(!s.at(".trss/tmp").exists());
+    assert!(
+        d.events
+            .iter()
+            .any(|e| e.message == format!("2화 적용본 {}을 지웠어요", copy(2))),
+        "{:?}",
+        d.events
+    );
     let plan = s.store.place.plan(&job).await.unwrap();
     assert_eq!(plan[0].outcome, Some(Outcome::Applied));
 }
@@ -965,6 +978,8 @@ async fn a_copy_a_person_changed_stays_where_it_is() {
     );
     assert_eq!(s.read(&copy(2)), Some(MINE.as_bytes().to_vec()));
     assert_eq!(s.read(&copy(3)), Some(fake::ass("Show-14")));
+    // Looked at where it is: it was not renamed aside.
+    assert!(!s.at(".trss/aside").exists());
 }
 
 #[tokio::test]
@@ -1014,8 +1029,17 @@ async fn a_relocation_that_only_takes_copies_off_says_it_took_them_off() {
     assert_eq!(s.read(&copy(3)), Some(fake::ass("Show-14")));
 }
 
+/// The episodes the relocation's table applies its rows on.
+async fn planned_on(s: &Setup, job: &str) -> Vec<Option<i64>> {
+    let (asked, _) = s.store.place.placeable(job).await.unwrap().unwrap();
+    asked
+        .iter()
+        .map(|r| r.placed.as_ref().map(|p| p.episode))
+        .collect()
+}
+
 #[tokio::test]
-async fn a_copy_being_taken_off_does_not_count_as_applied_when_its_episode_comes_back() {
+async fn a_copy_a_cut_run_moved_aside_is_applied_again_when_its_episode_came_back() {
     let s = setup().await;
     applied(&s, "c1", 14).await;
     remap(&s, -11).await;
@@ -1028,26 +1052,31 @@ async fn a_copy_being_taken_off_does_not_count_as_applied_when_its_episode_comes
     remap(&s, -11).await;
     let second = s.relocations().await[1].clone();
     queued(confirm(&s, &second).await);
-    // The worker has set episode 2's copy aside when the mapping moves back.
-    let removal = removals(&s, &second).await.remove(0);
-    set_removal(&s, &removal, "set_aside").await;
-    std::fs::create_dir_all(s.at(".trss/tmp")).unwrap();
-    std::fs::rename(s.at(&copy(2)), aside(&s, &removal)).unwrap();
+    // A run renamed episode 2's copy aside and was cut short before it
+    // recorded anything; the mapping moves back before it is restarted.
+    s.sql(format!(
+        "UPDATE subtitle_jobs SET state = 'running', wait = NULL WHERE id = '{second}'"
+    ))
+    .await;
+    let aside = s.at(".trss/aside/cut");
+    std::fs::create_dir_all(aside.parent().unwrap()).unwrap();
+    std::fs::rename(s.at(&copy(2)), &aside).unwrap();
+    cut_and_restart(&s.store, &second).await;
     remap(&s, -12).await;
 
-    // The copy going does not keep episode 2: the plan applies the subtitle
-    // there again and takes episode 3's copy off.
+    // Episode 2's copy is on record there: the new plan only takes episode
+    // 3's off.
     let jobs = s.relocations().await;
     assert_eq!(jobs.len(), 3, "{jobs:?}");
     let third = jobs[2].clone();
-    let (asked, _) = s.store.place.placeable(&third).await.unwrap().unwrap();
-    assert_eq!(
-        asked
-            .iter()
-            .map(|r| r.placed.as_ref().map(|p| p.episode))
-            .collect::<Vec<_>>(),
-        [Some(2)]
-    );
+    assert_eq!(planned_on(&s, &third).await, []);
+
+    // Its removal done again finds it gone, and the record that ends it plans
+    // to apply the subtitle on episode 2 again.
+    run(&s).await;
+    let off = removals(&s, &second).await;
+    assert_eq!(off[0].state, RemovalState::Done, "{off:?}");
+    assert_eq!(planned_on(&s, &third).await, [Some(2)]);
     assert_eq!(
         removals(&s, &third)
             .await
@@ -1056,8 +1085,6 @@ async fn a_copy_being_taken_off_does_not_count_as_applied_when_its_episode_comes
             .collect::<Vec<_>>(),
         [3]
     );
-    run(&s).await;
-    assert_eq!(removals(&s, &second).await[0].state, RemovalState::Done);
     queued(confirm(&s, &third).await);
     run(&s).await;
 
@@ -1071,6 +1098,8 @@ async fn a_copy_being_taken_off_does_not_count_as_applied_when_its_episode_comes
     );
     assert_eq!(s.read(&copy(2)), Some(fake::ass("Show-14")));
     assert_eq!(s.read(&copy(3)), None);
+    // What the cut run moved aside stays there.
+    assert_eq!(std::fs::read(&aside).unwrap(), fake::ass("Show-14"));
 }
 
 #[tokio::test]
@@ -1301,7 +1330,7 @@ async fn a_copy_recorded_after_a_mapping_change_moved_its_subtitle_is_planned_to
 }
 
 // ---------------------------------------------------------------------------
-// A worker killed while taking a copy off
+// A run cut short while taking a copy off
 
 /// A relocation confirmed, with its one removal.
 async fn confirmed(s: &Setup) -> (String, Removal) {
@@ -1313,7 +1342,31 @@ async fn confirmed(s: &Setup) -> (String, Removal) {
     (job, removal)
 }
 
-async fn set_removal(s: &Setup, removal: &Removal, state: &str) {
+/// The job's run cut short, as the process that ran it stopping leaves it,
+/// and a person's `다시 시작`.
+async fn cut(s: &Setup, job: &str) {
+    s.sql(format!(
+        "UPDATE subtitle_jobs SET state = 'running', wait = NULL WHERE id = '{job}'"
+    ))
+    .await;
+    cut_and_restart(&s.store, job).await;
+}
+
+/// The removal held, as one whose outcome the run could not confirm is.
+async fn hold_removal(s: &Setup, removal: &Removal) {
+    s.sql(format!(
+        "UPDATE subtitle_relocations
+            SET state = 'held', reason = '{}을 지우지 못했어요'
+          WHERE id = '{}'",
+        removal.path, removal.id
+    ))
+    .await;
+}
+
+/// The removal left as a release before 0153 left one cut short: `state`
+/// (`intended` or `set_aside`) with the folder and the place aside it
+/// recorded.
+async fn leave_as_an_earlier_release(s: &Setup, removal: &Removal, state: &str) {
     let folder = s.work().to_string_lossy().into_owned();
     s.sql(format!(
         "UPDATE subtitle_relocations
@@ -1324,7 +1377,8 @@ async fn set_removal(s: &Setup, removal: &Removal, state: &str) {
     .await;
 }
 
-fn aside(s: &Setup, removal: &Removal) -> PathBuf {
+/// Where a release before 0153 renamed the removal's copy aside.
+fn earlier_aside(s: &Setup, removal: &Removal) -> PathBuf {
     s.at(&format!(".trss/tmp/{}.aside", removal.id))
 }
 
@@ -1363,69 +1417,144 @@ async fn a_copy_whose_stored_file_is_missing_stays_where_it_is() {
 }
 
 #[tokio::test]
-async fn a_copy_renamed_aside_before_its_record_said_so_is_removed() {
+async fn a_removal_cut_before_its_rename_takes_the_copy_off_when_it_is_done_again() {
     let s = setup().await;
-    let (job, removal) = confirmed(&s).await;
-    set_removal(&s, &removal, "intended").await;
-    std::fs::create_dir_all(s.at(".trss/tmp")).unwrap();
-    std::fs::rename(s.at(&copy(2)), aside(&s, &removal)).unwrap();
+    let (job, _) = confirmed(&s).await;
+    cut(&s, &job).await;
 
     run(&s).await;
 
     assert_eq!(detail(&s, &job).await.row.state, JobState::Done);
     assert_eq!(removals(&s, &job).await[0].state, RemovalState::Done);
-    assert!(s.temps().is_empty(), "{:?}", s.temps());
     assert_eq!(s.read(&copy(2)), None);
     assert_eq!(s.read(&copy(3)), Some(fake::ass("Show-14")));
-}
-
-#[tokio::test]
-async fn another_file_found_aside_goes_back_on_its_path() {
-    let s = setup().await;
-    let (job, removal) = confirmed(&s).await;
-    set_removal(&s, &removal, "intended").await;
-    std::fs::create_dir_all(s.at(".trss/tmp")).unwrap();
-    std::fs::remove_file(s.at(&copy(2))).unwrap();
-    std::fs::write(aside(&s, &removal), MINE).unwrap();
-
-    run(&s).await;
-
-    let off = removals(&s, &job).await;
-    assert_eq!(off[0].state, RemovalState::Kept, "{off:?}");
-    assert_eq!(s.read(&copy(2)), Some(MINE.as_bytes().to_vec()));
     assert!(s.temps().is_empty(), "{:?}", s.temps());
 }
 
 #[tokio::test]
-async fn a_copy_intended_but_not_renamed_is_taken_off_anew() {
-    let s = setup().await;
-    let (job, removal) = confirmed(&s).await;
-    set_removal(&s, &removal, "intended").await;
+async fn a_removal_cut_after_its_rename_or_its_removal_ends_done_and_leaves_what_is_aside() {
+    for left in ["renamed", "removed"] {
+        let s = setup().await;
+        let (job, _) = confirmed(&s).await;
+        // The run renamed the copy into `.trss/aside/`, and maybe removed it
+        // there, and was cut short before it recorded anything.
+        let aside = s.at(".trss/aside/cut");
+        std::fs::create_dir_all(aside.parent().unwrap()).unwrap();
+        std::fs::rename(s.at(&copy(2)), &aside).unwrap();
+        if left == "removed" {
+            std::fs::remove_file(&aside).unwrap();
+        }
+        cut(&s, &job).await;
 
-    run(&s).await;
+        run(&s).await;
 
-    assert_eq!(removals(&s, &job).await[0].state, RemovalState::Done);
-    assert_eq!(s.read(&copy(2)), None);
-    assert_eq!(s.read(&copy(3)), Some(fake::ass("Show-14")));
-}
-
-#[tokio::test]
-async fn a_copy_set_aside_and_already_removed_is_done() {
-    let s = setup().await;
-    let (job, removal) = confirmed(&s).await;
-    set_removal(&s, &removal, "set_aside").await;
-    std::fs::remove_file(s.at(&copy(2))).unwrap();
-
-    run(&s).await;
-
-    assert_eq!(detail(&s, &job).await.row.state, JobState::Done);
-    assert_eq!(removals(&s, &job).await[0].state, RemovalState::Done);
-    assert_eq!(
-        s.count("SELECT count(*) FROM subtitle_applied WHERE episode = 2 AND removed_at IS NULL")
+        let d = detail(&s, &job).await;
+        assert_eq!(
+            d.row.state,
+            JobState::Done,
+            "{left}: {:?} {:?}",
+            d.row.note,
+            d.events
+        );
+        assert_eq!(removals(&s, &job).await[0].state, RemovalState::Done);
+        assert!(
+            d.events
+                .iter()
+                .any(|e| e.message == format!("2화 적용본 {}은 이미 없어요", copy(2))),
+            "{left}: {:?}",
+            d.events
+        );
+        assert_eq!(
+            s.count(
+                "SELECT count(*) FROM subtitle_applied WHERE episode = 2 AND removed_at IS NULL"
+            )
             .await,
-        0
-    );
-    assert_eq!(s.read(&copy(3)), Some(fake::ass("Show-14")));
+            0,
+            "{left}"
+        );
+        assert_eq!(s.read(&copy(2)), None, "{left}");
+        assert_eq!(s.read(&copy(3)), Some(fake::ass("Show-14")), "{left}");
+        // The app never removes what a cut run left aside.
+        let kept = match left {
+            "renamed" => Some(fake::ass("Show-14")),
+            _ => None,
+        };
+        assert_eq!(std::fs::read(&aside).ok(), kept, "{left}");
+    }
+}
+
+#[tokio::test]
+async fn a_removal_an_earlier_release_left_under_way_is_kept_and_not_planned_again() {
+    for state in ["intended", "set_aside"] {
+        let s = setup().await;
+        let (job, removal) = confirmed(&s).await;
+        // An earlier release recorded the removal and was cut short, before
+        // the rename (`intended`) or after it (`set_aside`), and the job was
+        // interrupted when it started again.
+        leave_as_an_earlier_release(&s, &removal, state).await;
+        if state == "set_aside" {
+            std::fs::create_dir_all(s.at(".trss/tmp")).unwrap();
+            std::fs::rename(s.at(&copy(2)), earlier_aside(&s, &removal)).unwrap();
+        }
+        cut(&s, &job).await;
+
+        run(&s).await;
+
+        let d = detail(&s, &job).await;
+        assert_eq!(
+            d.row.state,
+            JobState::Done,
+            "{state}: {:?} {:?}",
+            d.row.note,
+            d.events
+        );
+        assert_eq!(
+            d.row.note.as_deref(),
+            Some("옛 회차의 적용본 1개를 그대로 뒀어요"),
+            "{state}"
+        );
+        let off = removals(&s, &job).await;
+        assert_eq!(
+            (off[0].state, off[0].reason.as_deref()),
+            (
+                RemovalState::Kept,
+                Some(relocate::LEFT_BY_AN_EARLIER_RELEASE)
+            ),
+            "{state}"
+        );
+        // Its record and its files are as the earlier release left them.
+        assert_eq!(
+            s.count("SELECT count(*) FROM subtitle_relocations WHERE state IN ('intended', 'set_aside')")
+                .await,
+            1,
+            "{state}"
+        );
+        let (on_path, aside) = match state {
+            "intended" => (Some(fake::ass("Show-14")), None),
+            _ => (None, Some(fake::ass("Show-14"))),
+        };
+        assert_eq!(s.read(&copy(2)), on_path, "{state}");
+        assert_eq!(
+            std::fs::read(earlier_aside(&s, &removal)).ok(),
+            aside,
+            "{state}"
+        );
+        assert_eq!(s.read(&copy(3)), Some(fake::ass("Show-14")), "{state}");
+
+        // A later mapping change does not plan its copy again.
+        remap(&s, -10).await;
+        let later = s.relocations().await.pop().unwrap();
+        assert_ne!(later, job);
+        assert_eq!(
+            removals(&s, &later)
+                .await
+                .iter()
+                .map(|r| r.episode)
+                .collect::<Vec<_>>(),
+            [3],
+            "{state}"
+        );
+    }
 }
 
 #[tokio::test]
@@ -1437,14 +1566,13 @@ async fn a_held_removal_holds_only_the_rows_it_touches() {
     remap(&s, -11).await;
     let job = s.relocation().await;
     queued(confirm(&s, &job).await);
-    // Episode 3's copy was set aside, but what is aside cannot be removed.
+    // Episode 3's removal is held: what became of its copy is not known.
     let three = removals(&s, &job)
         .await
         .into_iter()
         .find(|r| r.episode == 3)
         .unwrap();
-    set_removal(&s, &three, "set_aside").await;
-    std::fs::create_dir_all(aside(&s, &three).join("in-the-way")).unwrap();
+    hold_removal(&s, &three).await;
 
     run(&s).await;
 
@@ -1503,35 +1631,13 @@ async fn a_held_removal_holds_only_the_rows_it_touches() {
 }
 
 #[tokio::test]
-async fn a_path_a_removal_is_taking_off_is_busy_for_other_effects() {
-    let s = setup().await;
-    let (_, removal) = confirmed(&s).await;
-    set_removal(&s, &removal, "intended").await;
-    let (folder, id) = (s.work().to_string_lossy().into_owned(), removal.id.clone());
-
-    let (busy, own) =
-        s.db.run(move |c| {
-            Ok::<_, DbError>((
-                records::busy_targets(c, &folder, None)?,
-                records::busy_targets(c, &folder, Some(&id))?,
-            ))
-        })
-        .await
-        .unwrap();
-    assert_eq!(busy, [copy(2).to_lowercase()]);
-    assert!(own.is_empty(), "{own:?}");
-}
-
-#[tokio::test]
-async fn a_relocation_cut_short_too_often_holds_its_removals_under_way() {
+async fn a_relocation_held_for_its_starts_keeps_the_copies_it_did_not_take_off() {
     let s = setup().await;
     applied(&s, "c1", 14).await;
     applied(&s, "c2", 15).await;
     remap(&s, -11).await;
     let job = s.relocation().await;
     queued(confirm(&s, &job).await);
-    let started = removals(&s, &job).await.remove(0);
-    set_removal(&s, &started, "set_aside").await;
 
     s.store
         .run
@@ -1549,9 +1655,20 @@ async fn a_relocation_cut_short_too_often_holds_its_removals_under_way() {
     assert_eq!(
         off,
         [
-            (2, RemovalState::Held, note.clone()),
+            (2, RemovalState::Kept, note.clone()),
             (3, RemovalState::Kept, note)
         ]
+    );
+    // A later relocation may move them.
+    remap(&s, -10).await;
+    let later = s.relocations().await.pop().unwrap();
+    assert_eq!(
+        removals(&s, &later)
+            .await
+            .iter()
+            .map(|r| r.episode)
+            .collect::<Vec<_>>(),
+        [2, 3]
     );
 }
 
@@ -1570,8 +1687,7 @@ async fn a_held_removal_waits_for_the_approval_another_row_needs() {
         .into_iter()
         .find(|r| r.episode == 4)
         .unwrap();
-    set_removal(&s, &four, "set_aside").await;
-    std::fs::create_dir_all(aside(&s, &four).join("in-the-way")).unwrap();
+    hold_removal(&s, &four).await;
 
     run(&s).await;
 
@@ -1628,8 +1744,7 @@ async fn a_held_removal_waits_for_the_work_folder_an_approved_row_needs() {
         .into_iter()
         .find(|r| r.episode == 4)
         .unwrap();
-    set_removal(&s, &four, "set_aside").await;
-    std::fs::create_dir_all(aside(&s, &four).join("in-the-way")).unwrap();
+    hold_removal(&s, &four).await;
     run(&s).await;
     let plan = s
         .store

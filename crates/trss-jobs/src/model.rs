@@ -217,11 +217,12 @@ codes! {
     /// Where a relocation's removal of an applied copy is (see
     /// `migrations/jobs/relocation.sql` in `trss-core`).
     RemovalState {
-        /// Waiting for the person's confirmation of the relocation.
+        /// Waiting for the person's confirmation of the relocation, and
+        /// until the copy is taken off (nothing is recorded before that).
+        /// Releases before ticket 0153 also wrote `intended` and
+        /// `set_aside`; [`crate::place::relocate::removals`] reads those as
+        /// `kept`.
         Planned = "planned",
-        Intended = "intended",
-        /// The copy is renamed aside, into the work folder's `.trss/tmp/`.
-        SetAside = "set_aside",
         Done = "done",
         /// The copy stays where it is (`reason` says why).
         Kept = "kept",
