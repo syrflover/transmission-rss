@@ -121,6 +121,13 @@ async fn run() -> Result<(), String> {
         Ok(removed) => println!("trss: removed {removed} unfinished receive attempts"),
         Err(e) => eprintln!("trss: cannot empty the receive attempts' folder: {e}"),
     }
+    // The same for the new copies of the stores into the app data folder: a
+    // run writes such a copy again, and never into another's file.
+    match trss_jobs::place::files::empty_app_temp(app_data.root()) {
+        Ok(0) => {}
+        Ok(removed) => println!("trss: removed {removed} unfinished stored-file copies"),
+        Err(e) => eprintln!("trss: cannot empty the stored files' temporary folder: {e}"),
+    }
 
     // From here on SIGTERM and SIGINT stop the process the orderly way, the
     // waits of the start included.

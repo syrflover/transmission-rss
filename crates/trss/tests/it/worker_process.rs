@@ -387,6 +387,39 @@ async fn the_start_empties_the_receive_attempts_folder_before_the_web_serves() {
 }
 
 #[tokio::test]
+async fn the_start_empties_the_stored_files_temporary_folder_before_the_web_serves() {
+    // A store into the app data folder writes its new copy in
+    // `subtitle-files/.tmp/` (trss-jobs' `place::files`): what a process
+    // left there goes before any job runs, the stored files beside it stay.
+    let h = Harness::new().await;
+    let files = h.dir.path().join("subtitle-files");
+    let made = |relative: &str| {
+        let path = files.join(relative);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, b"bytes").unwrap();
+        path
+    };
+    let cut = made(".tmp/0b9e4f61-7c2d-4f0e-9a3b-5d6c7e8f9a01");
+    let stored = made("w1/제작자/readme.txt");
+
+    let mut p = Proc::spawn(&h, "p", &[]);
+    p.wait_output("trss listening").await;
+    assert!(!cut.exists());
+    assert!(std::fs::read_dir(files.join(".tmp"))
+        .unwrap()
+        .next()
+        .is_none());
+    assert!(stored.exists());
+    let output = p.output();
+    let emptied = output
+        .find("trss: removed 1 unfinished stored-file copies")
+        .unwrap_or_else(|| panic!("{output}"));
+    assert!(emptied < output.find("trss listening").unwrap(), "{output}");
+    p.sigterm();
+    assert!(p.wait_exit(Duration::from_secs(10)).await.success());
+}
+
+#[tokio::test]
 async fn logs_and_history_never_contain_secret_query_values() {
     let h = harness_with_channel_a().await;
     // A feed answering 500 and one whose server is not there: errors that

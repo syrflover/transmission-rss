@@ -106,7 +106,10 @@ use super::{
     files::{Copied, Published},
     joined,
     package::extension,
-    records::{self as place_records, Adopted, Effect, JobFacts, NewApplied, Placed, PlanRow},
+    records::{
+        self as place_records, Adopted, Effect, JobFacts, NewApplied, Placed, PlanRow,
+        PublishedCopy,
+    },
     row_label, video_parts, Choice, Placer, SUBTITLE_EXTENSIONS,
 };
 use crate::{
@@ -117,7 +120,9 @@ use crate::{
     },
     store::JobError,
 };
-use records::{Claimed, Compared, Comparison, FileSeen, Imported, Plan, PlanPath, VideoSeen};
+use records::{
+    Claimed, Compared, Comparison, FileSeen, Imported, ImportedAsset, Plan, PlanPath, VideoSeen,
+};
 
 /// The error number of a rename of a file that is not there.
 const ENOENT: i32 = 2;
@@ -1062,9 +1067,8 @@ impl Placer {
         };
         let mut effect: Option<Effect> = None;
         for _ in 0..=super::MAX_RETARGETS {
-            let except = effect.as_ref().map(|e| e.id.clone());
             let choice = self
-                .choose_name(&unknown, &plan.folder, &dir, &probe, except.as_deref())
+                .choose_name(&unknown, &plan.folder, &dir, &probe)
                 .await?;
             let name = match choice {
                 Choice::New(name) => name,
@@ -1075,8 +1079,42 @@ impl Placer {
                         }
                     }
                     let (w, now) = (what.clone(), self.now());
-                    self.write(move |c| records::imported(c, &w, None, Some(&asset), now))
-                        .await?;
+                    self.write(move |c| {
+                        records::imported(c, &w, ImportedAsset::Reused(&asset), now)
+                    })
+                    .await?;
+                    return Ok(Ok(()));
+                }
+                // An import cut short after publishing left the file: it is
+                // recorded as an import records the file it publishes.
+                Choice::Adopt(name) => {
+                    if let Some(effect) = &effect {
+                        if let Some(unsure) = self.drop_temp(effect).await? {
+                            return Ok(Err(unsure));
+                        }
+                    }
+                    let relative = format!("{dir}/{name}");
+                    let (w, at, now) = (what.clone(), relative.clone(), self.now());
+                    let (size, sha256) = (seen.size, seen.sha256.clone());
+                    self.write(move |c| {
+                        let asset = ImportedAsset::Found {
+                            relative_path: &at,
+                            size,
+                            sha256: &sha256,
+                        };
+                        records::imported(c, &w, asset, now)
+                    })
+                    .await?;
+                    self.event(
+                        &plan.job_id,
+                        format!(
+                            "{}화: 관리하지 않던 자막을 '{}' 보관본으로 들였어요",
+                            plan.episode,
+                            super::UNKNOWN_CREATOR
+                        ),
+                        Some(relative),
+                    )
+                    .await?;
                     return Ok(Ok(()));
                 }
                 Choice::Full => {
@@ -1146,8 +1184,10 @@ impl Placer {
             match blocking(move || files::publish(&temp, &to)).await {
                 Published::Done => {
                     let (w, e, now) = (what.clone(), current.clone(), self.now());
-                    self.write(move |c| records::imported(c, &w, Some(&e), None, now))
-                        .await?;
+                    self.write(move |c| {
+                        records::imported(c, &w, ImportedAsset::Published(&e), now)
+                    })
+                    .await?;
                     self.event(
                         &plan.job_id,
                         format!(
@@ -1465,11 +1505,10 @@ impl Placer {
             season: plan.season,
             episode: plan.episode,
         };
-        let (e, now) = (apply.clone(), self.now());
-        let object = apply.object.clone().unwrap_or_default();
+        let (published, id, now) = (PublishedCopy::of(apply), apply.id.clone(), self.now());
         let note = Some("기존 자막을 새 자막으로 교체했어요".to_owned());
         match self
-            .write(move |c| place_records::applied(c, &e, &copy, &object, note, now))
+            .write(move |c| place_records::applied(c, &published, &copy, note, Some(&id), now))
             .await
         {
             Ok(_) => Ok(true),
@@ -1620,8 +1659,10 @@ impl Placer {
                             };
                             debug_assert!(at.is_some());
                             let (e, now) = (effect.clone(), self.now());
-                            self.write(move |c| records::imported(c, &what, Some(&e), None, now))
-                                .await?;
+                            self.write(move |c| {
+                                records::imported(c, &what, ImportedAsset::Published(&e), now)
+                            })
+                            .await?;
                         }
                     }
                 }

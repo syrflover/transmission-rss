@@ -100,23 +100,7 @@ impl ReceiveArea {
     /// runs, so no attempt is writing there. `.tmp/` is not touched. Returns
     /// how many entries it removed.
     pub fn empty_partial(&self) -> io::Result<usize> {
-        let dir = self.root.join(PARTIAL_DIR);
-        let entries = match std::fs::read_dir(&dir) {
-            Ok(entries) => entries,
-            Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(0),
-            Err(err) => return Err(err),
-        };
-        let mut removed = 0;
-        for entry in entries {
-            let entry = entry?;
-            // Not followed: a link is removed as itself.
-            match entry.file_type()?.is_dir() {
-                true => std::fs::remove_dir_all(entry.path())?,
-                false => std::fs::remove_file(entry.path())?,
-            }
-            removed += 1;
-        }
-        Ok(removed)
+        trss_core::files::empty_dir(&self.root.join(PARTIAL_DIR))
     }
 
     /// `relative` within the area.

@@ -7,7 +7,7 @@ use crate::{
     Handles,
 };
 use std::{
-    os::unix::fs::PermissionsExt,
+    os::unix::fs::{MetadataExt, PermissionsExt},
     path::{Path, PathBuf},
 };
 
@@ -61,8 +61,12 @@ impl Setup {
         std::fs::read(self.at(path)).unwrap()
     }
 
+    /// What is left in the work folder's temporary folders: a
+    /// replacement's, and the staging folder of stores and applies.
     fn temps(&self) -> Vec<String> {
-        names(&self.at(".trss/tmp"))
+        let mut left = names(&self.at(".trss/tmp"));
+        left.extend(names(&self.at(".trss/staging")));
+        left
     }
 
     async fn sql(&self, sql: String) {
@@ -429,6 +433,51 @@ async fn an_unmanaged_subtitle_is_imported_as_the_unknown_creators_before_it_is_
     assert!(d.events.iter().any(|e| e
         .message
         .contains("관리하지 않던 자막을 '제작자 알 수 없음' 보관본으로 들였어요")));
+    assert_eq!(s.temps(), Vec::<String>::new());
+}
+
+#[tokio::test]
+async fn an_import_finds_the_file_an_import_cut_short_published_and_records_it() {
+    let s = setup().await;
+    let (job, plan) = unmanaged_waiting(&s).await;
+    decide(&s, &job, &plan, true).await;
+    // The bytes beside the video are under the import's name already, with
+    // no record: what an import cut between publishing and recording leaves.
+    let dir = s.at(".trss/subtitles/제작자 알 수 없음");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("Show S01E02.ass"), MINE.as_bytes()).unwrap();
+    let inode = std::fs::metadata(dir.join("Show S01E02.ass"))
+        .unwrap()
+        .ino();
+    run(&s).await;
+
+    let d = detail(&s, &job).await;
+    assert_eq!(
+        d.row.state,
+        JobState::Done,
+        "{:?} {:?}",
+        d.row.note,
+        d.events
+    );
+    assert_eq!(s.read(TARGET), fake::ass("Show-02"));
+    // That file is the import, as it is: no numbered copy.
+    assert_eq!(names(&dir), ["Show S01E02.ass"]);
+    assert_eq!(
+        std::fs::metadata(dir.join("Show S01E02.ass"))
+            .unwrap()
+            .ino(),
+        inode
+    );
+    assert_eq!(
+        s.count(
+            "SELECT count(*) FROM subtitle_stored st
+               JOIN subtitle_assets a ON a.id = st.subtitle_asset_id
+              WHERE st.creator IS NULL AND st.episode = 2
+                AND a.relative_path = '.trss/subtitles/제작자 알 수 없음/Show S01E02.ass'"
+        )
+        .await,
+        1
+    );
     assert_eq!(s.temps(), Vec::<String>::new());
 }
 

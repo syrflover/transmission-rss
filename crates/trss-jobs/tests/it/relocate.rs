@@ -4,7 +4,7 @@
 //! `trss_jobs::place::relocate`).
 
 use crate::{
-    world::{Base, Shows, TodoStores},
+    world::{cut_and_restart, Base, Shows, TodoStores},
     Handles,
 };
 use std::path::{Path, PathBuf};
@@ -64,8 +64,12 @@ impl Setup {
         std::fs::read(self.at(path)).ok()
     }
 
+    /// What is left in the work folder's temporary folders: a
+    /// relocation's, and the staging folder of stores and applies.
     fn temps(&self) -> Vec<String> {
-        names(&self.at(".trss/tmp"))
+        let mut left = names(&self.at(".trss/tmp"));
+        left.extend(names(&self.at(".trss/staging")));
+        left
     }
 
     async fn sql(&self, sql: String) {
@@ -1240,8 +1244,7 @@ async fn a_copy_recorded_after_a_mapping_change_moved_its_subtitle_is_planned_to
     // for the change to move.
     s.sql(format!(
         "UPDATE subtitle_applied SET removed_at = 1;
-         UPDATE subtitle_job_plan SET outcome = NULL, applied_id = NULL WHERE job_id = '{id}';
-         UPDATE subtitle_file_effects SET state = 'prepared' WHERE job_id = '{id}' AND kind = 'apply'"
+         UPDATE subtitle_job_plan SET outcome = NULL, applied_id = NULL WHERE job_id = '{id}';"
     ))
     .await;
     s.sql(format!(
@@ -1251,18 +1254,28 @@ async fn a_copy_recorded_after_a_mapping_change_moved_its_subtitle_is_planned_to
     remap(&s, -11).await;
     assert!(s.relocations().await.is_empty());
     let stored_id = s.stored_id("Show-14.ass").await;
-    let job = id.clone();
+    let bytes = fake::ass("Show-14");
+    let published = records::PublishedCopy {
+        job_id: id.clone(),
+        position: 0,
+        video: Some(video(2)),
+        path: copy(2),
+        size: bytes.len() as u64,
+        sha256: {
+            use sha2::{Digest, Sha256};
+            trss_jobs::area::hex(&Sha256::digest(&bytes))
+        },
+        object: trss_jobs::area::object_of(&std::fs::metadata(s.at(&copy(2))).unwrap()),
+    };
     let copy_id =
         s.db.run(move |c| -> Result<String, JobError> {
-            let effect = records::unfinished_effects(c, &job)?.remove(0);
             let copy = NewApplied {
                 work_id: WORK.to_owned(),
                 stored_id,
                 season: 1,
                 episode: 2,
             };
-            let object = effect.object.clone().unwrap_or_default();
-            records::applied(c, &effect, &copy, &object, None, 2_100_000)
+            records::applied(c, &published, &copy, None, None, 2_100_000)
         })
         .await
         .unwrap();
@@ -1678,41 +1691,19 @@ async fn a_copy_prepared_for_the_old_episode_is_not_published_there() {
         Some(Outcome::NoVideo)
     );
     std::fs::write(&ep2, b"video").unwrap();
-    // A killed worker left the copy for episode 2 prepared.
+    // A run cut short left the copy for episode 2 staged, and the row to
+    // apply.
     let bytes = fake::ass("Show-14");
-    std::fs::create_dir_all(s.at(".trss/tmp")).unwrap();
-    std::fs::write(s.at(".trss/tmp/t1"), &bytes).unwrap();
-    let object = trss_jobs::area::object_of(&std::fs::metadata(s.at(".trss/tmp/t1")).unwrap());
-    let sha = {
-        use sha2::{Digest, Sha256};
-        trss_jobs::area::hex(&Sha256::digest(&bytes))
-    };
-    let (job, folder, target, video2) = (
-        id.clone(),
-        s.work().to_string_lossy().into_owned(),
-        copy(2),
-        video(2),
-    );
-    let size = bytes.len() as i64;
-    s.db.run(move |c| {
-        c.execute(
-            "UPDATE subtitle_job_plan SET outcome = NULL, note = NULL WHERE job_id = ?1",
-            [&job],
-        )?;
-        c.execute(
-            "INSERT INTO subtitle_file_effects
-                 (id, job_id, position, kind, state, folder, temp, target, video, size, sha256,
-                  object, created_at, updated_at)
-             VALUES ('e1', ?1, 0, 'apply', 'prepared', ?2, '.trss/tmp/t1', ?3, ?4, ?5, ?6, ?7,
-                     1, 1)",
-            rusqlite::params![job, folder, target, video2, size, sha, object],
-        )
-        .map_err(DbError::from)
-    })
-    .await
-    .unwrap();
+    std::fs::create_dir_all(s.at(".trss/staging")).unwrap();
+    std::fs::write(s.at(".trss/staging/t1"), &bytes).unwrap();
+    s.sql(format!(
+        "UPDATE subtitle_job_plan SET outcome = NULL, note = NULL WHERE job_id = '{id}';
+         UPDATE subtitle_jobs SET state = 'running', wait = NULL WHERE id = '{id}'"
+    ))
+    .await;
+    cut_and_restart(&s.store, &id).await;
 
-    // The mapping changes before the worker starts again.
+    // The mapping changes before the run is done again.
     remap(&s, -11).await;
     run(&s).await;
 
@@ -1724,17 +1715,7 @@ async fn a_copy_prepared_for_the_old_episode_is_not_published_there() {
         d.row.note,
         d.events
     );
-    assert!(d.events.iter().any(|e| e
-        .message
-        .ends_with("적용할 회차가 바뀌어 적용하지 않고 다시 살펴봐요")));
     assert_eq!(s.read(&copy(2)), None);
     assert_eq!(s.read(&copy(3)), Some(bytes));
     assert!(s.temps().is_empty(), "{:?}", s.temps());
-    assert_eq!(
-        s.count(
-            "SELECT count(*) FROM subtitle_file_effects WHERE id = 'e1' AND state = 'abandoned'"
-        )
-        .await,
-        1
-    );
 }

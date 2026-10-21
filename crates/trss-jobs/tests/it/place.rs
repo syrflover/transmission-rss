@@ -1,5 +1,6 @@
 //! Storing and applying what a candidate's job received (ticket 0063,
-//! `trss_jobs::place`), with the restarts a killed worker leaves.
+//! `trss_jobs::place`), and doing a store or an apply again after a run was
+//! cut short (ticket 0153).
 
 use crate::{
     world::{cut_and_restart, Base, Shows},
@@ -14,7 +15,7 @@ use rusqlite::params;
 use tokio_util::sync::CancellationToken;
 use trss_core::Db;
 use trss_jobs::{
-    area::{object_of, ReceiveArea},
+    area::ReceiveArea,
     model::{Chosen, Outcome, PlanAction},
     store::JobDetail,
     Created, JobState, NewItem, NewJob, Runner, StepKind, StepState, Wait,
@@ -160,8 +161,10 @@ async fn a_received_subtitle_is_stored_applied_beside_its_video_and_leaves_the_r
         std::fs::metadata(&stored).unwrap().ino(),
         std::fs::metadata(&applied).unwrap().ino()
     );
-    // Nothing temporary is left, and the receipt is gone from the area.
-    assert_eq!(names(&s.work().join(".trss/tmp")), Vec::<String>::new());
+    // Nothing temporary is left (the staged copies were published), and the
+    // receipt is gone from the area.
+    assert_eq!(names(&s.work().join(".trss/staging")), Vec::<String>::new());
+    assert!(!s.work().join(".trss/tmp").exists());
     assert!(!s.area.at(&id).exists());
 
     let plan = s.store.place.plan(&id).await.unwrap();
@@ -654,185 +657,192 @@ async fn requeue(s: &Setup, id: &str) {
     .unwrap();
 }
 
-/// Records an effect as a killed worker left it.
-#[allow(clippy::too_many_arguments)]
-async fn left_effect(
-    s: &Setup,
-    job: &str,
-    kind: &'static str,
-    state: &'static str,
-    temp: &str,
-    target: &str,
-    video: Option<&str>,
-    bytes: &[u8],
-    object: Option<String>,
-) {
-    use sha2::{Digest, Sha256};
-    let sha = trss_jobs::area::hex(&Sha256::digest(bytes));
-    let (job, temp, target) = (job.to_owned(), temp.to_owned(), target.to_owned());
-    let video = video.map(str::to_owned);
-    let folder = s.work().to_string_lossy().into_owned();
-    let size = bytes.len() as i64;
+/// Leaves `id` as a process stopped in the middle of its run leaves it:
+/// interrupted, then restarted by a person.
+async fn cut(s: &Setup, id: &str) {
+    let job = id.to_owned();
     s.db.run(move |c| {
         c.execute(
-            "INSERT INTO subtitle_file_effects
-                 (id, job_id, position, kind, state, folder, temp, target, video, size, sha256,
-                  object, created_at, updated_at)
-             VALUES ('e1', ?1, 0, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 1, 1)",
-            params![job, kind, state, folder, temp, target, video, size, sha, object],
+            "UPDATE subtitle_jobs SET state = 'running', wait = NULL WHERE id = ?1",
+            [job],
         )
         .map_err(trss_core::DbError::from)
     })
     .await
     .unwrap();
+    cut_and_restart(&s.store, id).await;
 }
 
-fn write_temp(s: &Setup, name: &str, bytes: &[u8]) -> (String, String) {
-    let relative = format!(".trss/tmp/{name}");
-    let path = s.work().join(&relative);
-    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-    std::fs::write(&path, bytes).unwrap();
-    let object = object_of(&std::fs::metadata(&path).unwrap());
-    (relative, object)
+/// Runs the new job `id` with its work folder away, so it is received and
+/// planned but nothing is stored, brings the folder back and [`cut`]s it: as
+/// a process stopped in the middle of the job's store leaves it, before
+/// anything the store wrote is on record.
+async fn cut_before_its_records(s: &Setup, id: &str) {
+    let work = s.work();
+    let hidden = s.dir.path().join("shows/.Show-away");
+    std::fs::rename(&work, &hidden).unwrap();
+    run(s).await;
+    let d = detail(s, id).await;
+    assert_eq!(
+        (d.row.state, d.row.wait),
+        (JobState::Waiting, Some(Wait::Video)),
+        "{:?}",
+        d.row.note
+    );
+    assert_eq!(s.count("subtitle_assets").await, 0);
+    std::fs::rename(&hidden, &work).unwrap();
+    cut(s, id).await;
+}
+
+fn told_count(d: &JobDetail, ending: &str) -> usize {
+    d.events
+        .iter()
+        .filter(|e| e.message.ends_with(ending))
+        .count()
 }
 
 #[tokio::test]
-async fn a_store_intended_before_a_kill_is_done_anew_once() {
+async fn a_store_cut_before_publishing_is_done_again_once_after_its_staging_folder_is_emptied() {
     let s = setup().await;
-    let id = received_not_stored(&s, "/ok/Show-02").await;
+    let id = make(&s, "c1", "2", "/ok/Show-02", false).await;
+    cut_before_its_records(&s, &id).await;
     let bytes = fake::ass("Show-02");
-    // Half of the bytes made it to the temporary file.
-    let (temp, _) = write_temp(&s, "t1", &bytes[..bytes.len() / 2]);
-    let target = format!(".trss/subtitles/{CREATOR}/Show-02.ass");
-    left_effect(
-        &s, &id, "store", "intended", &temp, &target, None, &bytes, None,
+    // Half a copy the cut run staged, and what other features keep in the
+    // work folder's app folders: an old release's set-aside original in
+    // `.trss/tmp/` and a file moved aside in `.trss/aside/`.
+    let staging = s.work().join(".trss/staging");
+    std::fs::create_dir_all(&staging).unwrap();
+    std::fs::write(
+        staging.join("5d0b6c2e-0d43-4d4f-9a55-1c3f6b1e2a77"),
+        &bytes[..bytes.len() / 2],
     )
-    .await;
+    .unwrap();
+    let kept = [
+        s.work().join(".trss/tmp/r1.aside"),
+        s.work().join(".trss/aside/a1"),
+    ];
+    for file in &kept {
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(file, b"someone's subtitle").unwrap();
+    }
     run(&s).await;
 
     let d = detail(&s, &id).await;
     assert_eq!(d.row.state, JobState::Done, "{:?}", d.row.note);
     assert_eq!(names(&s.stored_dir()), ["Show-02.ass"]);
-    assert!(!s.work().join(&temp).exists());
+    assert_eq!(
+        std::fs::read(s.stored_dir().join("Show-02.ass")).unwrap(),
+        bytes
+    );
     assert_eq!(s.count("subtitle_assets").await, 1);
-}
-
-#[tokio::test]
-async fn a_prepared_store_is_published_and_one_already_renamed_is_found_by_its_object() {
-    for renamed in [false, true] {
-        let s = setup().await;
-        let id = received_not_stored(&s, "/ok/Show-02").await;
-        let bytes = fake::ass("Show-02");
-        let (temp, object) = write_temp(&s, "t1", &bytes);
-        let target = format!(".trss/subtitles/{CREATOR}/Show-02.ass");
-        if renamed {
-            std::fs::create_dir_all(s.stored_dir()).unwrap();
-            std::fs::rename(s.work().join(&temp), s.work().join(&target)).unwrap();
-        }
-        left_effect(
-            &s,
-            &id,
-            "store",
-            "prepared",
-            &temp,
-            &target,
-            None,
-            &bytes,
-            Some(object),
-        )
-        .await;
-        run(&s).await;
-
-        let d = detail(&s, &id).await;
-        assert_eq!(
-            d.row.state,
-            JobState::Done,
-            "renamed {renamed}: {:?}",
-            d.row.note
-        );
-        assert_eq!(names(&s.stored_dir()), ["Show-02.ass"], "renamed {renamed}");
-        assert_eq!(s.count("subtitle_assets").await, 1);
-        assert!(s.work().join("Season 01/Show S01E02.ass").exists());
-    }
-}
-
-/// `object` as a file system mounted again (after the machine restarted)
-/// shows the same file: another device number, the same inode.
-fn renumbered(object: &str) -> String {
-    format!("999999{}", &object[object.find(':').unwrap()..])
-}
-
-#[tokio::test]
-async fn a_prepared_store_is_found_by_its_object_whatever_device_number_it_was_mounted_with() {
-    for renamed in [false, true] {
-        let s = setup().await;
-        let id = received_not_stored(&s, "/ok/Show-02").await;
-        let bytes = fake::ass("Show-02");
-        let (temp, object) = write_temp(&s, "t1", &bytes);
-        let target = format!(".trss/subtitles/{CREATOR}/Show-02.ass");
-        if renamed {
-            std::fs::create_dir_all(s.stored_dir()).unwrap();
-            std::fs::rename(s.work().join(&temp), s.work().join(&target)).unwrap();
-        }
-        left_effect(
-            &s,
-            &id,
-            "store",
-            "prepared",
-            &temp,
-            &target,
-            None,
-            &bytes,
-            Some(renumbered(&object)),
-        )
-        .await;
-        run(&s).await;
-
-        let d = detail(&s, &id).await;
-        assert_eq!(
-            d.row.state,
-            JobState::Done,
-            "renamed {renamed}: {:?}",
-            d.row.note
-        );
-        assert_eq!(names(&s.stored_dir()), ["Show-02.ass"], "renamed {renamed}");
-        assert_eq!(s.count("subtitle_assets").await, 1);
+    assert_eq!(told_count(&d, ": 보관했어요"), 1);
+    assert!(s.work().join("Season 01/Show S01E02.ass").exists());
+    // The staging folder was emptied before the run's first copy, and the
+    // copies it published left it; the other folders are untouched.
+    assert_eq!(names(&staging), Vec::<String>::new());
+    for file in &kept {
+        assert_eq!(std::fs::read(file).unwrap(), b"someone's subtitle");
     }
 }
 
 #[tokio::test]
-async fn a_prepared_effect_whose_files_are_not_what_it_wrote_is_held() {
+async fn a_store_cut_after_publishing_records_the_file_it_left_without_writing_it_again() {
     let s = setup().await;
-    let id = received_not_stored(&s, "/ok/Show-02").await;
-    let bytes = fake::ass("Show-02");
-    // The temporary file is gone and the target holds a copy with the same
-    // bytes that is not the file this effect wrote.
-    let (temp, object) = write_temp(&s, "t1", &bytes);
-    std::fs::remove_file(s.work().join(&temp)).unwrap();
-    let target = format!(".trss/subtitles/{CREATOR}/Show-02.ass");
-    std::fs::create_dir_all(s.stored_dir()).unwrap();
-    std::fs::write(s.work().join(&target), &bytes).unwrap();
-    left_effect(
-        &s,
-        &id,
-        "store",
-        "prepared",
-        &temp,
-        &target,
-        None,
-        &bytes,
-        Some(object),
-    )
-    .await;
+    let id = make_pack(&s, "c1", "pick", "2", &["Show - 02.ass", "readme.txt"]).await;
+    cut_before_its_records(&s, &id).await;
+    // What the cut run published before recording it: the subtitle in the
+    // work folder and the attachment in the app data folder, each under the
+    // name the store chooses.
+    let subtitle = s.stored_dir().join("Show - 02.ass");
+    let attachment_dir = s.dir.path().join("subtitle-files").join(WORK).join(CREATOR);
+    let attachment = attachment_dir.join("readme.txt");
+    let mut inodes = Vec::new();
+    for (file, name) in [(&subtitle, "Show - 02.ass"), (&attachment, "readme.txt")] {
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(file, fake::bytes_of(name)).unwrap();
+        inodes.push(std::fs::metadata(file).unwrap().ino());
+    }
     run(&s).await;
 
     let d = detail(&s, &id).await;
-    assert_eq!(d.row.state, JobState::Held);
-    assert_eq!(s.count("subtitle_assets").await, 0, "no false record");
-    assert_eq!(names(&s.stored_dir()), ["Show-02.ass"]);
-    // A held job is not taken up again by itself.
+    assert_eq!(d.row.state, JobState::Done, "{:?}", d.row.note);
+    // The files are the assets as they are: no numbered copy, no new write.
+    assert_eq!(names(&s.stored_dir()), ["Show - 02.ass"]);
+    assert_eq!(names(&attachment_dir), ["readme.txt"]);
+    for (file, inode) in [&subtitle, &attachment].into_iter().zip(inodes) {
+        assert_eq!(std::fs::metadata(file).unwrap().ino(), inode, "{file:?}");
+    }
+    let paths: Vec<(String, String)> =
+        s.db.run(|c| {
+            let mut stmt =
+                c.prepare("SELECT base, relative_path FROM subtitle_assets ORDER BY base")?;
+            let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
+            rows.collect::<Result<Vec<_>, _>>()
+                .map_err(trss_core::DbError::from)
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        paths,
+        [
+            (
+                "app_data".to_owned(),
+                format!("subtitle-files/{WORK}/{CREATOR}/readme.txt")
+            ),
+            (
+                "work".to_owned(),
+                format!(".trss/subtitles/{CREATOR}/Show - 02.ass")
+            ),
+        ]
+    );
+    assert_eq!(
+        told_count(
+            &d,
+            "기록되지 않은 같은 내용의 파일이 있어 그것을 보관본으로 기록했어요"
+        ),
+        2
+    );
+    // The stored subtitle is applied as one the store wrote would be.
+    assert_eq!(
+        std::fs::read(s.work().join("Season 01/Show S01E02.ass")).unwrap(),
+        fake::bytes_of("Show - 02.ass")
+    );
+}
+
+#[tokio::test]
+async fn a_file_of_other_bytes_under_the_name_after_a_cut_is_left_and_the_next_number_taken() {
+    let s = setup().await;
+    let id = make(&s, "c1", "2", "/ok/Show-02", false).await;
+    cut_before_its_records(&s, &id).await;
+    let bytes = fake::ass("Show-02");
+    // Someone's file under the name, as long as the received one.
+    let mut other = bytes.clone();
+    *other.last_mut().unwrap() ^= 1;
+    std::fs::create_dir_all(s.stored_dir()).unwrap();
+    std::fs::write(s.stored_dir().join("Show-02.ass"), &other).unwrap();
     run(&s).await;
-    assert_eq!(detail(&s, &id).await.row.state, JobState::Held);
+
+    let d = detail(&s, &id).await;
+    assert_eq!(d.row.state, JobState::Done, "{:?}", d.row.note);
+    assert_eq!(names(&s.stored_dir()), ["Show-02 (2).ass", "Show-02.ass"]);
+    assert_eq!(
+        std::fs::read(s.stored_dir().join("Show-02.ass")).unwrap(),
+        other
+    );
+    assert_eq!(
+        std::fs::read(s.stored_dir().join("Show-02 (2).ass")).unwrap(),
+        bytes
+    );
+    let path: String =
+        s.db.run(|c| {
+            c.query_row("SELECT relative_path FROM subtitle_assets", [], |r| {
+                r.get(0)
+            })
+            .map_err(trss_core::DbError::from)
+        })
+        .await
+        .unwrap();
+    assert_eq!(path, format!(".trss/subtitles/{CREATOR}/Show-02 (2).ass"));
 }
 
 /// A job stored with no video yet, so its row waits for an apply; the video
@@ -865,54 +875,43 @@ async fn stored_not_applied(s: &Setup) -> String {
 async fn an_apply_renamed_before_its_record_is_recorded_once() {
     let s = setup().await;
     let id = stored_not_applied(&s).await;
-    let bytes = fake::ass("Show-02");
-    let (temp, object) = write_temp(&s, "t1", &bytes);
+    // The cut run published the copy beside the video before recording it.
     let target = "Season 01/Show S01E02.ass";
-    std::fs::rename(s.work().join(&temp), s.work().join(target)).unwrap();
-    left_effect(
-        &s,
-        &id,
-        "apply",
-        "prepared",
-        &temp,
-        target,
-        Some(VIDEO),
-        &bytes,
-        Some(object),
-    )
-    .await;
+    std::fs::write(s.work().join(target), fake::ass("Show-02")).unwrap();
+    let inode = std::fs::metadata(s.work().join(target)).unwrap().ino();
+    cut(&s, &id).await;
     run(&s).await;
 
     let d = detail(&s, &id).await;
     assert_eq!(d.row.state, JobState::Done, "{:?}", d.row.note);
     assert_eq!(s.count("subtitle_applied").await, 1);
+    let plan = s.store.place.plan(&id).await.unwrap();
+    assert_eq!(
+        (plan[0].outcome, plan[0].note.as_deref()),
+        (
+            Some(Outcome::Applied),
+            Some(trss_jobs::place::replace::ADOPTED)
+        )
+    );
     assert_eq!(
         names(&s.work().join("Season 01")),
         ["Show S01E02.ass", "Show S01E02.mkv"]
     );
+    assert_eq!(
+        std::fs::metadata(s.work().join(target)).unwrap().ino(),
+        inode
+    );
 }
 
 #[tokio::test]
-async fn a_file_that_takes_the_name_before_publishing_is_kept_for_a_replacement_to_approve() {
+async fn a_file_that_takes_the_name_while_an_apply_is_cut_is_kept_for_a_replacement_to_approve() {
     let s = setup().await;
     let id = stored_not_applied(&s).await;
-    let bytes = fake::ass("Show-02");
-    let (temp, object) = write_temp(&s, "t1", &bytes);
+    // Someone's own subtitle comes under the name before the run is done
+    // again.
     let target = "Season 01/Show S01E02.ass";
-    left_effect(
-        &s,
-        &id,
-        "apply",
-        "prepared",
-        &temp,
-        target,
-        Some(VIDEO),
-        &bytes,
-        Some(object),
-    )
-    .await;
-    // Someone's own subtitle comes under the name in between.
     std::fs::write(s.work().join(target), b"mine").unwrap();
+    cut(&s, &id).await;
     run(&s).await;
 
     // The episode has a subtitle now: its replacement waits for a person.
@@ -924,26 +923,8 @@ async fn a_file_that_takes_the_name_before_publishing_is_kept_for_a_replacement_
         d.row.note
     );
     assert_eq!(std::fs::read(s.work().join(target)).unwrap(), b"mine");
-    assert!(!s.work().join(&temp).exists());
     assert_eq!(s.count("subtitle_applied").await, 0);
     assert_eq!(s.count("subtitle_replacements").await, 1);
-}
-
-/// Puts `job` last in line, as a job a killed worker left `running` behind
-/// newer ones (made before this).
-async fn last_in_line(s: &Setup, job: &str) {
-    let id = job.to_owned();
-    let job = job.to_owned();
-    s.db.run(move |c| {
-        c.execute(
-            "UPDATE subtitle_jobs SET seq = 99999, state = 'running' WHERE id = ?1",
-            [job],
-        )
-        .map_err(trss_core::DbError::from)
-    })
-    .await
-    .unwrap();
-    cut_and_restart(&s.store, &id).await;
 }
 
 #[tokio::test]
@@ -976,134 +957,6 @@ async fn an_applied_copy_a_person_removed_is_applied_again_by_a_later_job() {
         .await
         .unwrap();
     assert_eq!(removed, [(first, true), (again, false)]);
-}
-
-#[tokio::test]
-async fn a_name_another_jobs_store_is_about_to_take_is_taken_whatever_its_case() {
-    let s = setup().await;
-    // A killed worker left job A's store prepared under `show-02.ass`, and
-    // A behind a newer job in line.
-    let a = received_away(&s, "c1", "/ok/Show-02").await;
-    let bytes = fake::ass("Show-02");
-    let (temp, object) = write_temp(&s, "t1", &bytes);
-    let target = format!(".trss/subtitles/{CREATOR}/show-02.ass");
-    left_effect(
-        &s,
-        &a,
-        "store",
-        "prepared",
-        &temp,
-        &target,
-        None,
-        &bytes,
-        Some(object),
-    )
-    .await;
-    let b = make(&s, "c2", "2", "/ok/Show-02", false).await;
-    last_in_line(&s, &a).await;
-    run(&s).await;
-
-    for job in [&a, &b] {
-        let d = detail(&s, job).await;
-        assert_eq!(d.row.state, JobState::Done, "{job}: {:?}", d.row.note);
-    }
-    assert_eq!(names(&s.stored_dir()), ["Show-02 (2).ass", "show-02.ass"]);
-    assert_eq!(s.count("subtitle_assets").await, 2);
-    // B came first and applied its copy; A's found the episode's subtitle.
-    assert_eq!(
-        s.store.place.plan(&b).await.unwrap()[0].outcome,
-        Some(Outcome::Applied)
-    );
-    assert_eq!(
-        s.store.place.plan(&a).await.unwrap()[0].outcome,
-        Some(Outcome::Existing)
-    );
-}
-
-#[tokio::test]
-async fn an_episode_another_jobs_apply_is_about_to_take_keeps_it() {
-    let s = setup().await;
-    let a = stored_not_applied(&s).await;
-    let bytes = fake::ass("Show-02");
-    let (temp, object) = write_temp(&s, "t1", &bytes);
-    let target = "Season 01/Show S01E02.ass";
-    left_effect(
-        &s,
-        &a,
-        "apply",
-        "prepared",
-        &temp,
-        target,
-        Some(VIDEO),
-        &bytes,
-        Some(object),
-    )
-    .await;
-    let b = make(&s, "c2", "2", "/ok/Show-02", false).await;
-    last_in_line(&s, &a).await;
-    run(&s).await;
-
-    let plan = s.store.place.plan(&b).await.unwrap();
-    assert_eq!(plan[0].outcome, Some(Outcome::Existing), "{plan:?}");
-    let d = detail(&s, &a).await;
-    assert_eq!(d.row.state, JobState::Done, "{:?}", d.row.note);
-    assert_eq!(
-        s.store.place.plan(&a).await.unwrap()[0].outcome,
-        Some(Outcome::Applied)
-    );
-    assert_eq!(s.count("subtitle_applied").await, 1);
-}
-
-#[tokio::test]
-async fn a_job_held_after_its_starts_holds_its_effects_and_frees_their_names() {
-    let s = setup().await;
-    let id = received_not_stored(&s, "/ok/Show-02").await;
-    let bytes = fake::ass("Show-02");
-    let (temp, object) = write_temp(&s, "t1", &bytes);
-    let target = format!(".trss/subtitles/{CREATOR}/Show-02.ass");
-    left_effect(
-        &s,
-        &id,
-        "store",
-        "prepared",
-        &temp,
-        &target,
-        None,
-        &bytes,
-        Some(object),
-    )
-    .await;
-    let job = id.clone();
-    s.db.run(move |c| {
-        c.execute(
-            "UPDATE subtitle_jobs SET state = 'running', attempts = ?2 WHERE id = ?1",
-            params![job, trss_jobs::runner::MAX_STARTS],
-        )
-        .map_err(trss_core::DbError::from)
-    })
-    .await
-    .unwrap();
-    cut_and_restart(&s.store, &id).await;
-    run(&s).await;
-
-    let d = detail(&s, &id).await;
-    assert_eq!(d.row.state, JobState::Held);
-    let plan = s.store.place.plan(&id).await.unwrap();
-    assert_eq!(plan[0].outcome, Some(Outcome::Held));
-    let state: String =
-        s.db.run(|c| {
-            c.query_row("SELECT state FROM subtitle_file_effects", [], |r| r.get(0))
-                .map_err(trss_core::DbError::from)
-        })
-        .await
-        .unwrap();
-    assert_eq!(state, "held");
-    // Its temporary file stays, and the name is free for another job.
-    assert!(s.work().join(&temp).exists());
-    let other = make(&s, "c2", "2", "/ok/Show-02", false).await;
-    run(&s).await;
-    assert_eq!(detail(&s, &other).await.row.state, JobState::Done);
-    assert_eq!(names(&s.stored_dir()), ["Show-02.ass"]);
 }
 
 #[tokio::test]

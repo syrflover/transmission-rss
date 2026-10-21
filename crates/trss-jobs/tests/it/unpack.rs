@@ -8,6 +8,7 @@ use crate::{
     Handles,
 };
 use std::{
+    collections::HashMap,
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicI64, Ordering},
@@ -23,6 +24,7 @@ use trss_jobs::{
     area::ReceiveArea,
     model::{AssetKind, Outcome, PlanAction, StepKind},
     place::records::{Confirmed, RowPlacing},
+    place::unchanged::{font_receipt, new_assets},
     place::unpack::{UNPACK_AGAIN, UNPACK_RETRY_AFTER},
     store::{FileRow, JobDetail},
     Created, JobState, NewItem, NewJob, Runner, Unpacker, Wait,
@@ -357,6 +359,49 @@ async fn members_in_folders_are_placed_and_one_that_is_no_file_is_dropped_with_w
         Some("받은 내용이 파일이 아니라 웹 페이지(HTML)예요")
     );
     assert!(!s.area.at(&id).exists());
+}
+
+// Two members with the same bytes: the first one stored is a new file, the
+// second uses it, and the job's detail tells them apart (ticket 0153: from
+// the stored records, not a record of the store).
+#[tokio::test]
+async fn a_member_with_the_bytes_of_one_stored_before_it_is_not_a_new_file() {
+    let s = setup().await;
+    video(&s, "02").await;
+    let post = zip_post("pack.zip", &["Show - 02.ass", "a/Font.ttf", "b/Font.ttf"]);
+    let id = make(&s, "c1", &[("2", &post)]).await;
+    s.run().await;
+
+    let d = s.detail(&id).await;
+    assert_eq!(d.row.state, JobState::Done, "{:?}", d.row.note);
+    assert_eq!(names(&s.stored_dir()), ["Font.ttf", "Show - 02.ass"]);
+    let plan = s.store.place.plan(&id).await.unwrap();
+    let made: HashMap<i64, bool> = s
+        .store
+        .place
+        .plan_paths(&id)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|(position, at)| (position, at.made))
+        .collect();
+    let fonts: Vec<(&str, Option<&str>)> = plan
+        .iter()
+        .filter(|r| r.kind == AssetKind::Font)
+        .map(|r| {
+            let made = made.get(&r.position).copied().unwrap_or(false);
+            (
+                r.name.as_str(),
+                font_receipt(r, None, made).map(|f| f.code()),
+            )
+        })
+        .collect();
+    assert_eq!(
+        fonts,
+        [("a/Font.ttf", Some("new")), ("b/Font.ttf", Some("same"))]
+    );
+    let archive = &d.items[0].files[0];
+    assert_eq!(new_assets(&plan, &made).get(archive.id.as_str()), Some(&2));
 }
 
 // A member whose path leaves the archive: the archive alone fails, it stays

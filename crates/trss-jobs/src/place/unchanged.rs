@@ -201,8 +201,8 @@ fn record(c: &Connection, work_id: &str, key: &str, dir: &str) -> rusqlite::Resu
 }
 
 /// The receipt `receipt` that was not received, and the receipts sharing it,
-/// are `abandoned` with `reason`; its plan rows not kept yet (with no effect)
-/// go; and the items of those receipts that were received go back to
+/// are `abandoned` with `reason`; its plan rows not kept yet go (such a row's
+/// store reuses the font and writes no file of its own); and the items of those receipts that were received go back to
 /// `pending`, to receive the file anew. An item held, failed or waiting keeps
 /// its state and reason: it was never planned, and receives the file when it
 /// is taken up again. One synced transaction.
@@ -231,10 +231,7 @@ pub fn revoke(
         .execute(params![receipt, reason, now])?;
         tx.prepare_cached(
             "DELETE FROM subtitle_job_plan
-              WHERE file_id = ?1 AND stored_id IS NULL AND asset_id IS NULL AND outcome IS NULL
-                AND NOT EXISTS (SELECT 1 FROM subtitle_file_effects e
-                                 WHERE e.job_id = subtitle_job_plan.job_id
-                                   AND e.position = subtitle_job_plan.position)",
+              WHERE file_id = ?1 AND stored_id IS NULL AND asset_id IS NULL AND outcome IS NULL",
         )?
         .execute([receipt])?;
         for item in items {

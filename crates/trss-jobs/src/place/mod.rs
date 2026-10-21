@@ -10,8 +10,9 @@
 //! 1. The received archives not tried yet are unpacked into the receive
 //!    area, the volumes of a split one together ([`unpack`]); one that
 //!    cannot be unpacked stays there with why (풀지 못함).
-//! 2. The effects an earlier start left unfinished are compared with the
-//!    disk (the table below).
+//! 2. A replacement an earlier start left under way is compared with the
+//!    disk ([`replace`]). A store or an apply leaves nothing to compare: the
+//!    run does it again (see Doing it again below).
 //! 3. The analysis makes the job's plan ([`records::PlanRow`]) from each
 //!    post's receipts not planned yet ([`package::plan`]), an unpacked
 //!    archive's members in its place: what each file is (a subtitle, a font,
@@ -31,9 +32,10 @@
 //!    companion file into the app data folder's
 //!    `subtitle-files/<work>/<creator>/<name>` ([`store_name`]); or, when a
 //!    file of that name (or a numbered one) with the same bytes is stored
-//!    already, that one is used. Another file under the name (another case of it
-//!    too), or another job's effect under way to it, numbers the new one
-//!    (`<stem> (2).<ext>`). A work folder that is not there (a share not
+//!    already, that one is used; a file there with the same bytes that no
+//!    asset names is recorded as the asset. Another file under the name
+//!    (another case of it too) numbers the new one (`<stem> (2).<ext>`). A
+//!    work folder that is not there (a share not
 //!    mounted, a work moved) leaves the job waiting (`영상 대기`): nothing
 //!    was written, and the worker tries again when it starts.
 //!    A Google Drive font the job did not receive because it did not change
@@ -45,50 +47,60 @@
 //!    archive with its later volumes and its unpack folder.
 //! 6. A row whose episode has one video and no subtitle is applied: the
 //!    stored file is copied beside the video under its stem. An episode with
-//!    a subtitle, or with another job's apply under way, keeps it and the
-//!    row is stored only; a row whose episode has no video waits for it
+//!    a subtitle keeps it and its replacement waits for a person
+//!    ([`replace`]); a row whose episode has no video waits for it
 //!    (`영상 대기`) and is applied when the job runs again once the library
 //!    records the video ([`crate::JobRun::requeue_awaiting_video`]); a row
 //!    whose episode a person has to say waits for them (`회차 확인 필요`). An
 //!    earlier applied copy recorded at the path is recorded as removed: the
 //!    rename replaced nothing, so a person removed it.
 //!
-//! # One effect
+//! # One write
 //!
-//! Storing and applying are each an effect on one file ([`files`]):
+//! Storing and applying each write one new file ([`files`]), with no record
+//! of their own before it is published:
 //!
-//! 1. `intended`: the effect's ID, its temporary file `.trss/tmp/<ID>` in the
-//!    work folder (`subtitle-files/.tmp/<ID>` in the app data folder for a
-//!    file kept there), its target and the bytes' length and SHA-256, before
-//!    anything is written.
-//! 2. The bytes are copied to the temporary file, synced and read back.
-//! 3. `prepared`: the temporary file's object.
-//! 4. Right before an apply is published, the episode is looked at again: a
-//!    subtitle that came meanwhile stays, nothing is applied and the row is
-//!    held for a person, as it is when its name is taken at the rename.
-//! 5. A rename that replaces nothing publishes the file, and the folders are
+//! 1. The bytes are copied to a new file in the work folder's
+//!    `.trss/staging/` (`subtitle-files/.tmp/` in the app data folder for a
+//!    file kept there), synced and read back. A run empties the work folder's
+//!    staging folder before its first copy there ([`files::Staging`]).
+//! 2. Right before an apply is published, the episode is looked at again: a
+//!    subtitle that came meanwhile stays, nothing is applied and its
+//!    replacement waits for a person, as it does when its name is taken at
+//!    the rename.
+//! 3. A rename that replaces nothing publishes the file, and the folders are
 //!    synced.
-//! 6. `done`, with what it made (the asset and stored subtitle, or the
-//!    applied copy) in the same transaction.
+//! 4. What it made (the asset and stored subtitle, or the applied copy) is
+//!    recorded in one synced transaction.
 //!
-//! # Restart
+//! What goes wrong before the rename leaves the row failed or held with
+//! why, and its copy removed (or left to the next emptying).
 //!
-//! | Record | On disk | Then |
-//! | --- | --- | --- |
-//! | `intended` | anything at the temporary file | it is removed (only this effect writes there), `abandoned`, and the row is done anew |
-//! | `prepared` | the temporary file, recorded object, length and hash | published (from step 4) |
-//! | `prepared` | no temporary file, the target is the recorded object, length and hash | the rename happened: synced, then `done` |
-//! | `prepared` | anything else | `held` |
+//! # Doing it again
+//!
+//! A run cut short (a process stopped, or a run that ended in an error and
+//! that the same process takes up again) leaves a row whose write is not on
+//! record, and the next run writes it again from the start:
+//!
+//! - A copy staged before the cut goes with the staging folder before the
+//!   first write; one in `subtitle-files/.tmp/` went when `trss` started.
+//! - A store published before its record left its file under the name it
+//!   chose: that name holds a file with the row's bytes that no asset names,
+//!   which the store records as the asset instead of copying the bytes again
+//!   under the next number. A file of other bytes there is left as it is, and
+//!   the next free name is taken.
+//! - An apply published before its record left the stored subtitle's bytes
+//!   beside the video: the comparison records that file as the applied copy
+//!   ([`replace`]'s `ADOPTED`).
 //!
 //! A file is the recorded object by its inode ([`trss_core::file_id::same_recorded_file`]),
 //! here and in [`replace`]: a machine restarted meanwhile may have mounted
 //! its file system with another device number.
 //!
-//! A held effect holds its row and the job: the runner does not take it up
-//! again by itself, and its files stay as they are. The effects under way of
-//! a job held for never ending a run are held too, and so is an effect whose
-//! published file the database refuses to record. A held effect no longer
-//! keeps its target from other effects.
+//! A held row holds the job: the runner does not take it up again by
+//! itself. A row is held when the bytes to copy are not the recorded ones,
+//! when what a failed rename did is not known, and when the database refuses
+//! to record a published file.
 //!
 //! # Cleanup
 //!
@@ -129,15 +141,15 @@ use crate::{
     area::{safe_name, ReceiveArea},
     follow::Follow,
     model::{
-        AssetKind, Chosen, EffectKind, EffectState, FileState, ItemState, Outcome, PlanAction,
-        PlanState, StepKind, StepState, SubtitleFormat,
+        AssetKind, Chosen, FileState, ItemState, Outcome, PlanAction, PlanState, StepKind,
+        StepState, SubtitleFormat,
     },
     store::{FileRow, ItemRow, JobError, JobRun, JobViews, AUTO, FIND, RELOCATE, UPLOAD},
 };
 pub use api::PlaceStore;
 use files::{Copied, Published};
 use package::extension;
-use records::{Effect, JobFacts, Kept, NewApplied, NewStored, PlanRow, Role};
+use records::{JobFacts, Kept, NewApplied, NewStored, PlanRow, PublishedCopy, Role};
 
 /// The creator folder of a subtitle whose creator nobody named.
 pub const UNKNOWN_CREATOR: &str = "제작자 알 수 없음";
@@ -225,10 +237,59 @@ enum Choice {
     New(String),
     /// A stored file of this name holds the bytes already: the asset.
     Reuse(String, String),
+    /// A file of this name (as it is on the disk) that no asset names holds
+    /// the bytes: a store cut short between publishing and recording left
+    /// it. It is recorded as the asset (the user's decision of 2026-10-21).
+    Adopt(String),
     /// Every name tried is taken.
     Full,
     /// The creator folder could not be read.
     Unreadable(io::Error),
+}
+
+/// What holds a row's bytes under one of its names ([`Placer::choose_name`]).
+enum Same {
+    /// A kept file: the asset.
+    Kept(String),
+    /// A file that no asset names, by its name on the disk.
+    Unrecorded(String),
+}
+
+/// What a store or an apply writes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WriteKind {
+    Store,
+    Apply,
+}
+
+/// A new copy a store or an apply wrote and publishes (see the module
+/// docs): paths relative to `folder`, the bytes it holds and its object.
+/// Nothing records it before it is published.
+#[derive(Debug, Clone)]
+struct Write {
+    kind: WriteKind,
+    folder: String,
+    /// Where it was written ([`files::STAGING_DIR`], or the app data folder's
+    /// [`files::APP_TEMP_DIR`]).
+    temp: String,
+    target: String,
+    /// The video an apply's copy goes beside.
+    video: Option<String>,
+    size: u64,
+    sha256: String,
+    object: String,
+}
+
+/// Whether `path` is a regular file of `size` bytes with SHA-256 `sha256`;
+/// the bytes are read only when the length is the same.
+fn same_file_bytes(path: &Path, size: u64, sha256: &str) -> bool {
+    let regular =
+        std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_file() && m.len() == size);
+    regular
+        && files::facts(path)
+            .ok()
+            .flatten()
+            .is_some_and(|(n, s, _)| n == size && s == sha256)
 }
 
 /// `creator` as the name of a folder every share shows the same: a safe name
@@ -266,6 +327,14 @@ pub fn creator_folder(creator: Option<&str>) -> String {
     }
 }
 
+/// The names a file of `name` may be stored under, in the order they are
+/// tried: `name` made safe, then `<stem> (2).<ext>`, ….
+fn name_candidates(name: &str) -> Vec<String> {
+    crate::area::name_candidates(&safe_name(name))
+        .take(MAX_NAMES)
+        .collect()
+}
+
 /// The name a file is stored under in its creator folder: the one of
 /// `name`, `<stem> (2).<ext>`, … that `same` says holds these bytes already,
 /// else the first that no other file takes, whatever the case of its
@@ -275,10 +344,7 @@ pub fn store_name(
     taken: &[String],
     same: impl Fn(&str) -> bool,
 ) -> Option<(String, bool)> {
-    let safe = safe_name(name);
-    let names: Vec<String> = crate::area::name_candidates(&safe)
-        .take(MAX_NAMES)
-        .collect();
+    let names = name_candidates(name);
     let same_one = names.iter().find(|n| same(&n.to_lowercase()));
     match same_one {
         Some(name) => Some((name.clone(), true)),
@@ -525,22 +591,17 @@ impl Placer {
         };
         let items = self.views.items(job).await?;
 
+        // A replacement's effects an earlier start left under way are
+        // compared together; a store or an apply is done again.
         let id = job.to_owned();
-        let mut plans: Vec<String> = Vec::new();
-        for effect in self
-            .read(move |c| records::unfinished_effects(c, &id))
+        for plan in self
+            .read(move |c| replace::records::unfinished_plans(c, &id))
             .await?
         {
-            // A replacement's effects are compared together.
-            match effect.plan_id.clone() {
-                Some(plan) if plans.contains(&plan) => {}
-                Some(plan) => {
-                    self.recover_plan(&plan).await?;
-                    plans.push(plan);
-                }
-                None => self.recover(&facts, &items, effect).await?,
-            }
+            self.recover_plan(&plan).await?;
         }
+        // What this run stages in the work folder ([`files::Staging`]).
+        let staging = files::Staging::default();
 
         let mut placement = self.analyse(job, &facts, &work_id, season, &items).await?;
 
@@ -611,7 +672,8 @@ impl Placer {
             if cancel.is_cancelled() {
                 return Ok(None);
             }
-            self.store_row(&facts, &items, &folder, row).await?;
+            self.store_row(&facts, &items, &folder, &staging, row)
+                .await?;
         }
         self.end_store_step(job).await?;
         self.link(job, &items).await?;
@@ -642,7 +704,7 @@ impl Placer {
             if cancel.is_cancelled() {
                 return Ok(None);
             }
-            self.apply_row(&facts, &folder, row).await?;
+            self.apply_row(&facts, &folder, &staging, row).await?;
         }
         self.end_apply_step(job).await?;
         Ok(Some(placement))
@@ -957,6 +1019,7 @@ impl Placer {
         facts: &JobFacts,
         items: &[ItemRow],
         work_folder: &str,
+        staging: &files::Staging,
         row: &PlanRow,
     ) -> Result<(), JobError> {
         let job = row.job_id.as_str();
@@ -1002,10 +1065,10 @@ impl Placer {
                     .join(position.to_string())
             }
         };
-        let (folder, temp_dir) = match records::base_of(row.kind) {
-            "work" => (work_folder.to_owned(), files::TEMP_DIR),
+        let (folder, in_work) = match records::base_of(row.kind) {
+            "work" => (work_folder.to_owned(), true),
             _ => match self.area.app_data() {
-                Some(app_data) => (app_data.to_string_lossy().into_owned(), files::APP_TEMP_DIR),
+                Some(app_data) => (app_data.to_string_lossy().into_owned(), false),
                 None => {
                     return self
                         .fail_row(
@@ -1019,11 +1082,16 @@ impl Placer {
         let folder = folder.as_str();
         let dir = self.dir_of(facts, row).await?;
 
-        let name = match self.choose_name(facts, folder, &dir, row, None).await? {
+        let name = match self.choose_name(facts, folder, &dir, row).await? {
             Choice::New(name) => name,
             Choice::Reuse(name, asset) => {
                 return self
                     .reuse(facts, items, row, folder, &dir, (name, asset))
+                    .await
+            }
+            Choice::Adopt(name) => {
+                return self
+                    .adopt_stored(facts, items, row, folder, &dir, name)
                     .await
             }
             Choice::Full => {
@@ -1038,56 +1106,70 @@ impl Placer {
             }
         };
 
-        let effect = Effect {
-            id: uuid::Uuid::new_v4().to_string(),
-            job_id: job.to_owned(),
-            position: row.position,
-            kind: EffectKind::Store,
-            state: EffectState::Intended,
-            folder: folder.to_owned(),
-            temp: format!("{temp_dir}/{}", uuid::Uuid::new_v4()),
-            target: format!("{dir}/{name}"),
-            video: None,
-            size: row.size,
-            sha256: row.sha256.clone(),
-            object: None,
-            reason: None,
-            source: None,
-            plan_id: None,
+        let temp = match self.staged(staging, folder, in_work).await {
+            Ok(temp) => temp,
+            Err(err) => {
+                return self
+                    .fail_row(row, format!("보관본을 쓰지 못했어요: {err}"))
+                    .await
+            }
         };
-        let e = effect.clone();
-        let now = self.now();
-        self.write(move |c| records::intend(c, &e, now)).await?;
-        let temp = files::within(Path::new(folder), &effect.temp);
-        let (size, sha) = (effect.size, effect.sha256.clone());
-        match blocking(move || files::copy_to_temp(&source, &temp, size, &sha)).await {
+        let at = files::within(Path::new(folder), &temp);
+        let (size, sha) = (row.size, row.sha256.clone());
+        match blocking(move || files::copy_to_temp(&source, &at, size, &sha)).await {
             Copied::Ready(object) => {
-                let (id, o, now) = (effect.id.clone(), object.clone(), self.now());
-                self.write(move |c| records::prepared(c, &id, &o, now))
-                    .await?;
-                let effect = Effect {
-                    state: EffectState::Prepared,
-                    object: Some(object),
-                    ..effect
+                let write = Write {
+                    kind: WriteKind::Store,
+                    folder: folder.to_owned(),
+                    temp,
+                    target: format!("{dir}/{name}"),
+                    video: None,
+                    size: row.size,
+                    sha256: row.sha256.clone(),
+                    object,
                 };
-                self.finish_store(facts, items, effect).await
+                self.finish_store(facts, items, row, write).await
             }
             Copied::SourceChanged(reason) => {
-                self.hold_effect(
-                    &effect,
+                self.hold_write(
+                    row,
                     &format!("받은 파일이 기록과 달라 보관하지 못했어요 ({reason})"),
                 )
                 .await
             }
             Copied::Failed(err) if err.kind() == io::ErrorKind::NotFound => {
-                self.hold_effect(&effect, "수신 영역에 받은 파일이 없어 보관하지 못했어요")
+                self.hold_write(row, "수신 영역에 받은 파일이 없어 보관하지 못했어요")
                     .await
             }
             Copied::Failed(err) => {
-                let reason = format!("보관본을 쓰지 못했어요: {err}");
-                self.fail_effect(&effect, reason).await
+                self.fail_row(row, format!("보관본을 쓰지 못했어요: {err}"))
+                    .await
             }
         }
+    }
+
+    /// A new file's path for a copy written into `folder`, relative to it:
+    /// in the work folder's staging folder, emptied first in this run
+    /// ([`files::Staging`]), or in the app data folder's
+    /// `subtitle-files/.tmp/` (`in_work` false), emptied when `trss` starts.
+    async fn staged(
+        &self,
+        staging: &files::Staging,
+        folder: &str,
+        in_work: bool,
+    ) -> io::Result<String> {
+        if !in_work {
+            return Ok(format!("{}/{}", files::APP_TEMP_DIR, uuid::Uuid::new_v4()));
+        }
+        let (staging, folder) = (staging.clone(), PathBuf::from(folder));
+        blocking(move || staging.new_file(&folder)).await
+    }
+
+    /// Removes a copy that will not be published. One that cannot go is left
+    /// to the next emptying of its folder ([`files::Staging`]).
+    async fn discard(&self, temp: &Path) {
+        let temp = temp.to_owned();
+        let _ = blocking(move || files::remove_known(&temp)).await;
     }
 
     /// The job's creator folder in `parent` (relative to `base`): a folder of
@@ -1161,17 +1243,49 @@ impl Placer {
         .await
     }
 
-    /// The name the row's file is kept under in `dir`, or the kept file under
-    /// one of its names that holds the same bytes already. The names of files
-    /// there, registered or not, and the targets of other effects under way
-    /// (but `except`) are taken.
+    /// Records the file `name` in `dir` that no asset names and that holds
+    /// the row's bytes as the row's new asset, the file left as it is: a
+    /// store cut short after publishing it, so it is not written again.
+    async fn adopt_stored(
+        &self,
+        facts: &JobFacts,
+        items: &[ItemRow],
+        row: &PlanRow,
+        folder: &str,
+        dir: &str,
+        name: String,
+    ) -> Result<(), JobError> {
+        let relative = format!("{dir}/{name}");
+        let at = files::within(Path::new(folder), &relative);
+        let kept = Kept::New {
+            relative_path: relative.clone(),
+        };
+        match self.record_stored(facts, items, row, kept, &at).await {
+            Ok(_) => {}
+            Err(err) if is_constraint(&err) => return self.unrecorded(row, err).await,
+            Err(err) => return Err(err),
+        }
+        self.event(
+            &row.job_id,
+            format!(
+                "{}: 기록되지 않은 같은 내용의 파일이 있어 그것을 보관본으로 기록했어요",
+                row_label(row)
+            ),
+            Some(relative),
+        )
+        .await
+    }
+
+    /// The name the row's file is kept under in `dir`, or the file under one
+    /// of its names that holds the same bytes already: a kept one, else one
+    /// that no asset names ([`Choice::Adopt`]). The names of the other files
+    /// there, registered or not, are taken.
     async fn choose_name(
         &self,
         facts: &JobFacts,
         folder: &str,
         dir: &str,
         row: &PlanRow,
-        except: Option<&str>,
     ) -> Result<Choice, JobError> {
         let work = facts.work_id.clone().unwrap_or_default();
         let prefix = format!("{dir}/");
@@ -1189,17 +1303,8 @@ impl Placer {
         };
         // Names held by a file, registered or not, lower-cased.
         let mut taken: Vec<String> = on_disk.iter().map(|n| n.to_lowercase()).collect();
-        let (f, e) = (folder.to_owned(), except.map(str::to_owned));
-        let busy = self
-            .read(move |c| records::busy_targets(c, &f, e.as_deref()))
-            .await?;
-        let lower_dir = format!("{}/", dir.to_lowercase());
-        taken.extend(busy.iter().filter_map(|t| {
-            t.strip_prefix(&lower_dir)
-                .filter(|n| !n.contains('/'))
-                .map(str::to_owned)
-        }));
-        let mut same_bytes: HashMap<String, String> = HashMap::new();
+        let mut same_bytes: HashMap<String, Same> = HashMap::new();
+        let mut recorded: Vec<String> = Vec::new();
         for asset in &assets {
             let Some(rest) = asset
                 .relative_path
@@ -1218,148 +1323,142 @@ impl Placer {
                     .flatten()
                     .is_some_and(|(n, s, _)| n == row.size && s == row.sha256);
                 if ok {
-                    same_bytes.insert(lower.clone(), asset.id.clone());
+                    same_bytes.insert(lower.clone(), Same::Kept(asset.id.clone()));
                 }
             }
+            recorded.push(lower.clone());
             taken.push(lower);
         }
         let base = row.name.rsplit('/').next().unwrap_or(&row.name);
+        // A file under one of the names that no asset names, with the row's
+        // bytes: a store published it and was cut short before its record.
+        let candidates: Vec<String> = name_candidates(base)
+            .into_iter()
+            .map(|n| n.to_lowercase())
+            .collect();
+        let unrecorded: Vec<String> = on_disk
+            .into_iter()
+            .filter(|n| {
+                let lower = n.to_lowercase();
+                !recorded.contains(&lower) && candidates.contains(&lower)
+            })
+            .collect();
+        if !unrecorded.is_empty() {
+            let at = files::within(Path::new(folder), dir);
+            let (size, sha256) = (row.size, row.sha256.clone());
+            let found = blocking(move || {
+                unrecorded
+                    .into_iter()
+                    .filter(|name| same_file_bytes(&at.join(name), size, &sha256))
+                    .collect::<Vec<String>>()
+            })
+            .await;
+            for name in found {
+                same_bytes
+                    .entry(name.to_lowercase())
+                    .or_insert(Same::Unrecorded(name));
+            }
+        }
         Ok(
             match store_name(base, &taken, |lower| same_bytes.contains_key(lower)) {
-                Some((name, true)) => {
-                    let asset = same_bytes[&name.to_lowercase()].clone();
-                    Choice::Reuse(name, asset)
-                }
+                Some((name, true)) => match same_bytes.remove(&name.to_lowercase()) {
+                    Some(Same::Kept(asset)) => Choice::Reuse(name, asset),
+                    Some(Same::Unrecorded(on_disk)) => Choice::Adopt(on_disk),
+                    None => Choice::Full,
+                },
                 Some((name, false)) => Choice::New(name),
                 None => Choice::Full,
             },
         )
     }
 
-    /// Publishes a prepared store, taking the next free name when another
+    /// Publishes a store's new copy, taking the next free name when another
     /// file took its target meanwhile.
     async fn finish_store(
         &self,
         facts: &JobFacts,
         items: &[ItemRow],
-        mut effect: Effect,
+        row: &PlanRow,
+        mut write: Write,
     ) -> Result<(), JobError> {
-        let Some(row) = self.row_of(&effect).await? else {
-            return Ok(());
-        };
-        let folder = PathBuf::from(&effect.folder);
-        let temp = files::within(&folder, &effect.temp);
-        let dir = match effect.target.rsplit_once('/') {
+        let folder = PathBuf::from(&write.folder);
+        let temp = files::within(&folder, &write.temp);
+        let dir = match write.target.rsplit_once('/') {
             Some((dir, _)) => dir.to_owned(),
-            None => self.dir_of(facts, &row).await?,
+            None => self.dir_of(facts, row).await?,
         };
         for _ in 0..=MAX_RETARGETS {
-            let target = files::within(&folder, &effect.target);
+            let target = files::within(&folder, &write.target);
             let from = temp.clone();
             match blocking(move || files::publish(&from, &target)).await {
-                Published::Done => return self.stored_by(facts, items, &row, &effect).await,
+                Published::Done => return self.stored_by(facts, items, row, &write).await,
                 Published::Occupied => {
-                    let name = match self
-                        .choose_name(facts, &effect.folder, &dir, &row, Some(&effect.id))
-                        .await?
-                    {
+                    let choice = self.choose_name(facts, &write.folder, &dir, row).await?;
+                    let name = match choice {
                         Choice::New(name) => name,
                         Choice::Reuse(name, asset) => {
+                            self.discard(&temp).await;
                             return self
-                                .reuse_instead(
-                                    facts,
-                                    items,
-                                    &row,
-                                    &effect,
-                                    &temp,
-                                    &dir,
-                                    (name, asset),
-                                )
-                                .await
+                                .reuse(facts, items, row, &write.folder, &dir, (name, asset))
+                                .await;
+                        }
+                        Choice::Adopt(name) => {
+                            self.discard(&temp).await;
+                            return self
+                                .adopt_stored(facts, items, row, &write.folder, &dir, name)
+                                .await;
                         }
                         Choice::Full => {
+                            self.discard(&temp).await;
                             return self
-                                .hold_effect(&effect, "보관할 이름을 정하지 못해 보류했어요")
-                                .await
+                                .hold_write(row, "보관할 이름을 정하지 못해 보류했어요")
+                                .await;
                         }
                         Choice::Unreadable(err) => {
+                            self.discard(&temp).await;
                             let reason = format!("보관 폴더를 읽지 못해 보류했어요: {err}");
-                            return self.hold_effect(&effect, &reason).await;
+                            return self.hold_write(row, &reason).await;
                         }
                     };
-                    effect.target = format!("{dir}/{name}");
-                    let (id, target, now) = (effect.id.clone(), effect.target.clone(), self.now());
-                    self.write(move |c| records::retarget(c, &id, &target, now))
-                        .await?;
+                    write.target = format!("{dir}/{name}");
                 }
                 Published::Failed(err) => {
-                    return self.unsure(&effect, &temp, err).await;
+                    return self.unsure(row, &write, &temp, err).await;
                 }
             }
         }
-        self.hold_effect(
-            &effect,
-            "보관할 이름이 계속 다른 파일에 먼저 쓰여 보류했어요",
-        )
-        .await
-    }
-
-    /// A prepared store whose target was taken by a kept file of the same
-    /// bytes: its temporary file goes and that file is used.
-    #[allow(clippy::too_many_arguments)]
-    async fn reuse_instead(
-        &self,
-        facts: &JobFacts,
-        items: &[ItemRow],
-        row: &PlanRow,
-        effect: &Effect,
-        temp: &Path,
-        dir: &str,
-        found: (String, String),
-    ) -> Result<(), JobError> {
-        let temp = temp.to_owned();
-        if let Err(err) = blocking(move || files::remove_known(&temp)).await {
-            let reason = format!("임시 파일을 지우지 못했어요: {err}");
-            return self.hold_effect(effect, &reason).await;
-        }
-        let (id, now) = (effect.id.clone(), self.now());
-        self.write(move |c| records::end_effect(c, &id, EffectState::Abandoned, None, now))
-            .await?;
-        self.reuse(facts, items, row, &effect.folder, dir, found)
+        self.discard(&temp).await;
+        self.hold_write(row, "보관할 이름이 계속 다른 파일에 먼저 쓰여 보류했어요")
             .await
     }
 
-    /// A publish that failed: nothing moved when the temporary file is still
-    /// there, so the effect failed and its file goes; otherwise what happened
-    /// is not known and the effect is held.
-    async fn unsure(&self, effect: &Effect, temp: &Path, err: io::Error) -> Result<(), JobError> {
-        let temp = temp.to_owned();
+    /// A publish that failed: nothing moved when the new copy is still where
+    /// it was written, so the row failed and the copy goes; otherwise what
+    /// happened is not known and the row is held.
+    async fn unsure(
+        &self,
+        row: &PlanRow,
+        write: &Write,
+        temp: &Path,
+        err: io::Error,
+    ) -> Result<(), JobError> {
         let still = blocking({
-            let temp = temp.clone();
+            let temp = temp.to_owned();
             move || files::facts(&temp)
         })
         .await;
         match still {
-            Ok(Some((_, _, object)))
-                if effect
-                    .object
-                    .as_ref()
-                    .is_some_and(|r| same_recorded_file(r, &object)) =>
-            {
-                let _ = blocking(move || files::remove_known(&temp)).await;
-                let reason = match effect.kind {
-                    EffectKind::Store | EffectKind::Import => {
-                        format!("보관본을 쓰지 못했어요: {err}")
-                    }
-                    EffectKind::Apply | EffectKind::Remove => {
-                        format!("적용본을 쓰지 못했어요: {err}")
-                    }
+            Ok(Some((_, _, object))) if same_recorded_file(&write.object, &object) => {
+                self.discard(temp).await;
+                let reason = match write.kind {
+                    WriteKind::Store => format!("보관본을 쓰지 못했어요: {err}"),
+                    WriteKind::Apply => format!("적용본을 쓰지 못했어요: {err}"),
                 };
-                self.fail_effect(effect, reason).await
+                self.fail_row(row, reason).await
             }
             _ => {
-                self.hold_effect(
-                    effect,
+                self.hold_write(
+                    row,
                     &format!("파일을 공개한 결과를 확인하지 못했어요: {err}"),
                 )
                 .await
@@ -1373,22 +1472,21 @@ impl Placer {
         facts: &JobFacts,
         items: &[ItemRow],
         row: &PlanRow,
-        effect: &Effect,
+        write: &Write,
     ) -> Result<(), JobError> {
-        let target = files::within(Path::new(&effect.folder), &effect.target);
+        let target = files::within(Path::new(&write.folder), &write.target);
         let kept = Kept::New {
-            effect_id: effect.id.clone(),
-            relative_path: effect.target.clone(),
+            relative_path: write.target.clone(),
         };
         match self.record_stored(facts, items, row, kept, &target).await {
             Ok(_) => {}
-            Err(err) if is_constraint(&err) => return self.unrecorded(effect, err).await,
+            Err(err) if is_constraint(&err) => return self.unrecorded(row, err).await,
             Err(err) => return Err(err),
         }
         self.event(
             &row.job_id,
             format!("{}: 보관했어요", row_label(row)),
-            Some(effect.target.clone()),
+            Some(write.target.clone()),
         )
         .await
     }
@@ -1681,6 +1779,7 @@ impl Placer {
         &self,
         facts: &JobFacts,
         folder: &str,
+        staging: &files::Staging,
         row: &PlanRow,
     ) -> Result<(), JobError> {
         let job = row.job_id.as_str();
@@ -1787,22 +1886,6 @@ impl Placer {
         }
         let (dir, stem) = video_parts(&video);
         let target = joined(dir, &format!("{stem}.{ext}"));
-        // Another job's apply under way here (stopped before it ended) is
-        // the episode's subtitle once it ends.
-        let (f, lower) = (folder.to_owned(), target.to_lowercase());
-        if self
-            .read(move |c| records::busy_targets(c, &f, None))
-            .await?
-            .contains(&lower)
-        {
-            let note =
-                "다른 작업이 이 회차에 자막을 적용하는 중이라 그대로 두고 보관만 했어요".to_owned();
-            self.settle_row(row, Outcome::Existing, note.clone())
-                .await?;
-            return self
-                .event(job, format!("{label}: {note}"), Some(target))
-                .await;
-        }
         let Some(asset) = self
             .read(move |c| records::stored_asset(c, &stored_id))
             .await?
@@ -1812,76 +1895,78 @@ impl Placer {
                 .await;
         };
         self.begin(job, StepKind::Apply).await?;
-        let effect = Effect {
-            id: uuid::Uuid::new_v4().to_string(),
-            job_id: job.to_owned(),
-            position: row.position,
-            kind: EffectKind::Apply,
-            state: EffectState::Intended,
-            folder: folder.to_owned(),
-            temp: format!("{}/{}", files::TEMP_DIR, uuid::Uuid::new_v4()),
-            target,
-            video: Some(video.clone()),
-            size: asset.size,
-            sha256: asset.sha256.clone(),
-            object: None,
-            reason: None,
-            source: None,
-            plan_id: None,
+        let temp = match self.staged(staging, folder, true).await {
+            Ok(temp) => temp,
+            Err(err) => {
+                return self
+                    .fail_row(row, format!("적용본을 쓰지 못했어요: {err}"))
+                    .await
+            }
         };
-        let e = effect.clone();
-        let now = self.now();
-        self.write(move |c| records::intend(c, &e, now)).await?;
         let source = files::within(Path::new(folder), &asset.relative_path);
-        let temp = files::within(Path::new(folder), &effect.temp);
-        let (size, sha) = (effect.size, effect.sha256.clone());
-        match blocking(move || files::copy_to_temp(&source, &temp, size, &sha)).await {
+        let at = files::within(Path::new(folder), &temp);
+        let (size, sha) = (asset.size, asset.sha256.clone());
+        match blocking(move || files::copy_to_temp(&source, &at, size, &sha)).await {
             Copied::Ready(object) => {
-                let (id, o, now) = (effect.id.clone(), object.clone(), self.now());
-                self.write(move |c| records::prepared(c, &id, &o, now))
-                    .await?;
-                let effect = Effect {
-                    state: EffectState::Prepared,
-                    object: Some(object),
-                    ..effect
+                let write = Write {
+                    kind: WriteKind::Apply,
+                    folder: folder.to_owned(),
+                    temp,
+                    target,
+                    video: Some(video.clone()),
+                    size: asset.size,
+                    sha256: asset.sha256.clone(),
+                    object,
                 };
-                self.finish_apply(facts, effect).await
+                self.finish_apply(facts, row, write).await
             }
             Copied::SourceChanged(reason) => {
-                self.hold_effect(
-                    &effect,
+                self.hold_write(
+                    row,
                     &format!("보관본이 기록과 달라 적용하지 않았어요 ({reason})"),
                 )
                 .await
             }
             Copied::Failed(err) if err.kind() == io::ErrorKind::NotFound => {
-                self.hold_effect(&effect, "보관본 파일이 없어 적용하지 않았어요")
+                self.hold_write(row, "보관본 파일이 없어 적용하지 않았어요")
                     .await
             }
             Copied::Failed(err) => {
-                self.fail_effect(&effect, format!("적용본을 쓰지 못했어요: {err}"))
+                self.fail_row(row, format!("적용본을 쓰지 못했어요: {err}"))
                     .await
             }
         }
     }
 
-    /// Publishes a prepared apply, unless the episode has a subtitle now or
-    /// its name is taken.
-    async fn finish_apply(&self, facts: &JobFacts, effect: Effect) -> Result<(), JobError> {
-        let Some(row) = self.row_of(&effect).await? else {
+    /// Publishes an apply's new copy, unless the row's episode changed, the
+    /// episode has a subtitle now or its name is taken. The row is read
+    /// again: a mapping change may have moved it since `row` was read.
+    async fn finish_apply(
+        &self,
+        facts: &JobFacts,
+        row: &PlanRow,
+        write: Write,
+    ) -> Result<(), JobError> {
+        let folder = PathBuf::from(&write.folder);
+        let temp = files::within(&folder, &write.temp);
+        let (job, position) = (row.job_id.clone(), row.position);
+        let Some(row) = self
+            .read(move |c| records::plan_row_at(c, &job, position))
+            .await?
+        else {
+            self.discard(&temp).await;
             return Ok(());
         };
         let (Some(placed), Some(video), Some(stored_id)) = (
             row.placed.clone(),
-            effect.video.clone(),
+            write.video.clone(),
             row.stored_id.clone(),
         ) else {
+            self.discard(&temp).await;
             return self
-                .hold_effect(&effect, "적용할 회차의 기록이 바뀌었어요")
+                .hold_write(&row, "적용할 회차의 기록이 바뀌었어요")
                 .await;
         };
-        let folder = PathBuf::from(&effect.folder);
-        let temp = files::within(&folder, &effect.temp);
         // A mapping change gave the row another episode since its copy was
         // made (or the library no longer has the video): nothing is
         // published, and the job looks at the row again once this run ends.
@@ -1894,20 +1979,13 @@ impl Placer {
             .read(move |c| records::episode_files(c, &work, season, episode))
             .await?;
         if !videos.contains(&video) {
-            let t = temp.clone();
-            if let Err(err) = blocking(move || files::remove_known(&t)).await {
-                let reason = format!("적용할 회차가 바뀌었지만 임시 파일을 지우지 못했어요: {err}");
-                return self.hold_effect(&effect, &reason).await;
-            }
-            let (id, job, now) = (effect.id.clone(), effect.job_id.clone(), self.now());
-            self.write(move |c| {
-                records::end_effect(c, &id, EffectState::Abandoned, None, now)?;
-                relocate::look_again(c, &job, now)
-            })
-            .await?;
+            self.discard(&temp).await;
+            let (job, now) = (row.job_id.clone(), self.now());
+            self.write(move |c| relocate::look_again(c, &job, now))
+                .await?;
             return self
                 .event(
-                    &effect.job_id,
+                    &row.job_id,
                     format!(
                         "{}: 적용할 회차가 바뀌어 적용하지 않고 다시 살펴봐요",
                         row_label(&row)
@@ -1918,79 +1996,65 @@ impl Placer {
         }
         // An added format is published beside the subtitles the episode has:
         // only its own name is taken.
-        let only = (row.chosen == Some(Chosen::Add)).then_some(effect.target.as_str());
+        let only = (row.chosen == Some(Chosen::Add)).then_some(write.target.as_str());
         if let Some(existing) = self
-            .existing_subtitle(facts, &effect.folder, placed.episode, &video, only)
+            .existing_subtitle(facts, &write.folder, placed.episode, &video, only)
             .await?
         {
             let reason = "적용하려던 회차에 다른 자막이 생겨 덮어쓰지 않았어요";
             return self
-                .withdraw(facts, &row, &effect, &temp, reason, existing)
+                .withdraw(facts, &row, &write, &temp, reason, existing)
                 .await;
         }
-        let target = files::within(&folder, &effect.target);
+        let target = files::within(&folder, &write.target);
         let from = temp.clone();
         match blocking(move || files::publish(&from, &target)).await {
             Published::Done => {
-                self.applied_by(facts, &row, &effect, placed.episode, stored_id)
+                self.applied_by(facts, &row, &write, placed.episode, stored_id)
                     .await
             }
             Published::Occupied => {
                 let reason = "적용하려던 이름에 다른 파일이 먼저 생겨 덮어쓰지 않았어요";
-                let at = effect.target.clone();
-                self.withdraw(facts, &row, &effect, &temp, reason, at).await
+                let at = write.target.clone();
+                self.withdraw(facts, &row, &write, &temp, reason, at).await
             }
-            Published::Failed(err) => self.unsure(&effect, &temp, err).await,
+            Published::Failed(err) => self.unsure(&row, &write, &temp, err).await,
         }
     }
 
     /// An apply that something on disk overtook before it was published:
-    /// its temporary file goes and nothing beside the video changes. The
-    /// episode has a subtitle now, so its replacement is planned for a
-    /// person to approve ([`replace`]); the row is held when it cannot be
-    /// (the effect too when its file cannot go).
+    /// its new copy goes and nothing beside the video changes. The episode
+    /// has a subtitle now, so its replacement is planned for a person to
+    /// approve ([`replace`]); the row is held when it cannot be.
     async fn withdraw(
         &self,
         facts: &JobFacts,
         row: &PlanRow,
-        effect: &Effect,
+        write: &Write,
         temp: &Path,
         reason: &str,
         found: String,
     ) -> Result<(), JobError> {
-        let temp = temp.to_owned();
-        if let Err(err) = blocking(move || files::remove_known(&temp)).await {
-            return self
-                .hold_effect(
-                    effect,
-                    &format!("{reason} (임시 파일을 지우지 못했어요: {err})"),
-                )
-                .await;
-        }
-        let (id, now) = (effect.id.clone(), self.now());
-        self.write(move |c| records::end_effect(c, &id, EffectState::Abandoned, None, now))
-            .await?;
+        self.discard(temp).await;
         self.event(
             &row.job_id,
             format!("{}: {reason}", row_label(row)),
             Some(found),
         )
         .await?;
-        let video = effect.video.clone().unwrap_or_default();
-        if self.compare(facts, &effect.folder, row, &video).await? {
+        let video = write.video.clone().unwrap_or_default();
+        if self.compare(facts, &write.folder, row, &video).await? {
             return Ok(());
         }
         // The subtitle went again: a person looks at the row.
-        let (e, r, now) = (effect.clone(), reason.to_owned(), self.now());
-        self.write(move |c| records::withdrawn(c, &e, &r, now))
-            .await
+        self.settle_row(row, Outcome::Held, reason.to_owned()).await
     }
 
     async fn applied_by(
         &self,
         facts: &JobFacts,
         row: &PlanRow,
-        effect: &Effect,
+        write: &Write,
         episode: i64,
         stored_id: String,
     ) -> Result<(), JobError> {
@@ -2000,20 +2064,28 @@ impl Placer {
             season: facts.season.unwrap_or(0),
             episode,
         };
-        let (e, now) = (effect.clone(), self.now());
-        let object = effect.object.clone().unwrap_or_default();
+        let published = PublishedCopy {
+            job_id: row.job_id.clone(),
+            position: row.position,
+            video: write.video.clone(),
+            path: write.target.clone(),
+            size: write.size,
+            sha256: write.sha256.clone(),
+            object: write.object.clone(),
+        };
+        let now = self.now();
         match self
-            .write(move |c| records::applied(c, &e, &copy, &object, None, now))
+            .write(move |c| records::applied(c, &published, &copy, None, None, now))
             .await
         {
             Ok(_) => {}
-            Err(err) if is_constraint(&err) => return self.unrecorded(effect, err).await,
+            Err(err) if is_constraint(&err) => return self.unrecorded(row, err).await,
             Err(err) => return Err(err),
         }
         self.event(
             &row.job_id,
             format!("{}: 영상 옆에 적용했어요", row_label(row)),
-            Some(effect.target.clone()),
+            Some(write.target.clone()),
         )
         .await
     }
@@ -2100,114 +2172,7 @@ impl Placer {
     }
 
     // -----------------------------------------------------------------------
-    // Restart
-
-    /// Compares an effect an earlier start left unfinished with the disk
-    /// (see the module docs).
-    async fn recover(
-        &self,
-        facts: &JobFacts,
-        items: &[ItemRow],
-        effect: Effect,
-    ) -> Result<(), JobError> {
-        let folder = PathBuf::from(&effect.folder);
-        let temp = files::within(&folder, &effect.temp);
-        let target = files::within(&folder, &effect.target);
-        match effect.state {
-            EffectState::Intended => match blocking(move || files::remove_known(&temp)).await {
-                Ok(()) => {
-                    let (id, now) = (effect.id.clone(), self.now());
-                    self.write(move |c| {
-                        records::end_effect(c, &id, EffectState::Abandoned, None, now)
-                    })
-                    .await
-                }
-                Err(err) => {
-                    self.hold_effect(&effect, &format!("임시 파일을 지우지 못했어요: {err}"))
-                        .await
-                }
-            },
-            EffectState::Prepared => {
-                let (t, g) = blocking(move || (files::facts(&temp), files::facts(&target))).await;
-                let ours = |found: &Option<(u64, String, String)>| {
-                    found.as_ref().is_some_and(|(n, s, o)| {
-                        *n == effect.size
-                            && *s == effect.sha256
-                            && effect
-                                .object
-                                .as_ref()
-                                .is_some_and(|r| same_recorded_file(r, o))
-                    })
-                };
-                match (t, g) {
-                    (Ok(t), _) if ours(&t) => match effect.kind {
-                        EffectKind::Store => self.finish_store(facts, items, effect).await,
-                        EffectKind::Apply => self.finish_apply(facts, effect).await,
-                        // A replacement's effects are its plan's.
-                        EffectKind::Remove | EffectKind::Import => {
-                            self.hold_effect(&effect, "교체 계획이 없는 효과예요").await
-                        }
-                    },
-                    (Ok(None), Ok(g)) if ours(&g) => {
-                        let target = files::within(&folder, &effect.target);
-                        let synced = blocking(move || match target.parent() {
-                            Some(dir) => trss_core::files::sync_dir(dir),
-                            None => Ok(()),
-                        })
-                        .await;
-                        if let Err(err) = synced {
-                            return self
-                                .hold_effect(
-                                    &effect,
-                                    &format!("공개한 파일을 동기화하지 못했어요: {err}"),
-                                )
-                                .await;
-                        }
-                        let Some(row) = self.row_of(&effect).await? else {
-                            return Ok(());
-                        };
-                        match (effect.kind, row.placed.clone(), row.stored_id.clone()) {
-                            (EffectKind::Store, _, _) => {
-                                self.stored_by(facts, items, &row, &effect).await
-                            }
-                            (EffectKind::Apply, Some(placed), Some(stored_id)) => {
-                                self.applied_by(facts, &row, &effect, placed.episode, stored_id)
-                                    .await
-                            }
-                            _ => {
-                                self.hold_effect(&effect, "적용한 회차의 기록이 바뀌었어요")
-                                    .await
-                            }
-                        }
-                    }
-                    (Err(err), _) | (_, Err(err)) => {
-                        self.hold_effect(
-                            &effect,
-                            &format!("이전 작업의 파일을 확인하지 못했어요: {err}"),
-                        )
-                        .await
-                    }
-                    _ => {
-                        self.hold_effect(
-                            &effect,
-                            "이전 작업이 쓰던 파일이 기록과 달라 결과를 확인할 수 없어요",
-                        )
-                        .await
-                    }
-                }
-            }
-            _ => Ok(()),
-        }
-    }
-
-    // -----------------------------------------------------------------------
     // Rows
-
-    async fn row_of(&self, effect: &Effect) -> Result<Option<PlanRow>, JobError> {
-        let (job, position) = (effect.job_id.clone(), effect.position);
-        self.read(move |c| records::plan_row_at(c, &job, position))
-            .await
-    }
 
     async fn settle_row(
         &self,
@@ -2231,33 +2196,20 @@ impl Placer {
         .await
     }
 
-    async fn fail_effect(&self, effect: &Effect, reason: String) -> Result<(), JobError> {
-        let (id, r, now) = (effect.id.clone(), reason.clone(), self.now());
-        self.write(move |c| records::end_effect(c, &id, EffectState::Failed, Some(r), now))
-            .await?;
-        if let Some(row) = self.row_of(effect).await? {
-            self.fail_row(&row, reason).await?;
-        }
-        Ok(())
-    }
-
     /// A published file whose records the database refuses: no later run
-    /// changes that, so the effect is held with its file left as it is.
-    async fn unrecorded(&self, effect: &Effect, err: JobError) -> Result<(), JobError> {
+    /// changes that, so the row is held with the file left as it is.
+    async fn unrecorded(&self, row: &PlanRow, err: JobError) -> Result<(), JobError> {
         let reason = format!("공개한 파일을 기록하지 못했어요: {err}");
-        self.hold_effect(effect, &reason).await
+        self.hold_write(row, &reason).await
     }
 
-    async fn hold_effect(&self, effect: &Effect, reason: &str) -> Result<(), JobError> {
-        let (e, r, now) = (effect.clone(), reason.to_owned(), self.now());
-        self.write(move |c| records::hold(c, &e, &r, now)).await?;
-        let label = match self.row_of(effect).await? {
-            Some(row) => row_label(&row),
-            None => effect.target.clone(),
-        };
+    /// Holds the row of a store or an apply with why.
+    async fn hold_write(&self, row: &PlanRow, reason: &str) -> Result<(), JobError> {
+        self.settle_row(row, Outcome::Held, reason.to_owned())
+            .await?;
         self.event(
-            &effect.job_id,
-            format!("{label}: 보류했어요"),
+            &row.job_id,
+            format!("{}: 보류했어요", row_label(row)),
             Some(reason.to_owned()),
         )
         .await

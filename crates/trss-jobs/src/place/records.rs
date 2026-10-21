@@ -1,7 +1,8 @@
 //! The records of storing and applying (`migrations/jobs/store_apply.sql` in
-//! `trss-core`). The writes that follow a file effect are synced
-//! ([`durable`]), so the record of an effect's intent is on disk before the
-//! effect.
+//! `trss-core`). The writes around a file's publishing are synced
+//! ([`durable`]): what a store or an apply published is on record once its
+//! transaction ends, and a replacement's intent is on disk before its effect
+//! ([`crate::place::replace`]).
 
 use std::collections::{btree_map::Entry, BTreeMap};
 
@@ -309,18 +310,6 @@ pub(crate) fn effect(r: &Row<'_>) -> rusqlite::Result<Effect> {
     })
 }
 
-/// The job's effects that did not end: `intended`, `prepared` or
-/// `set_aside`.
-pub fn unfinished_effects(c: &Connection, job_id: &str) -> rusqlite::Result<Vec<Effect>> {
-    let mut stmt = c.prepare_cached(&format!(
-        "SELECT {EFFECT_COLUMNS} FROM subtitle_file_effects
-          WHERE job_id = ?1 AND state IN ('intended', 'prepared', 'set_aside')
-          ORDER BY created_at, id"
-    ))?;
-    let rows = stmt.query_map([job_id], effect)?;
-    rows.collect()
-}
-
 /// Inserts an effect as `intended`, in the caller's transaction.
 pub(crate) fn insert_intended(c: &Connection, e: &Effect, now: Millis) -> rusqlite::Result<()> {
     c.prepare_cached(&format!(
@@ -393,60 +382,13 @@ pub fn end_effect(
     })
 }
 
-/// Ends the effect and its row `held` together.
-pub fn hold(
-    c: &mut Connection,
-    effect: &Effect,
-    reason: &str,
-    now: Millis,
-) -> Result<(), JobError> {
-    durable(c, |c| {
-        let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        tx.prepare_cached(
-            "UPDATE subtitle_file_effects SET state = 'held', reason = ?2, updated_at = ?3
-             WHERE id = ?1",
-        )?
-        .execute(params![effect.id, reason, now])?;
-        tx.prepare_cached(
-            "UPDATE subtitle_job_plan SET outcome = 'held', note = ?3, updated_at = ?4
-             WHERE job_id = ?1 AND position = ?2",
-        )?
-        .execute(params![effect.job_id, effect.position, reason, now])?;
-        tx.commit()?;
-        Ok(())
-    })
-}
-
-/// An apply that something on disk overtook before it was published: the
-/// effect is abandoned (its temporary file is gone) and its row held for a
-/// person, in one synced transaction.
-pub fn withdrawn(
-    c: &mut Connection,
-    effect: &Effect,
-    reason: &str,
-    now: Millis,
-) -> Result<(), JobError> {
-    durable(c, |c| {
-        let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        tx.prepare_cached(
-            "UPDATE subtitle_file_effects SET state = 'abandoned', reason = ?2, updated_at = ?3
-             WHERE id = ?1",
-        )?
-        .execute(params![effect.id, reason, now])?;
-        tx.prepare_cached(
-            "UPDATE subtitle_job_plan SET outcome = 'held', note = ?3, updated_at = ?4
-             WHERE job_id = ?1 AND position = ?2",
-        )?
-        .execute(params![effect.job_id, effect.position, reason, now])?;
-        tx.commit()?;
-        Ok(())
-    })
-}
-
-/// The targets in `folder`, lower-cased, of the effects under way (of any
-/// job) but `except`, and the paths a replacement or a relocation under way
-/// takes off ([`crate::place::relocate`]; `except` may be a removal's ID):
-/// names another effect is about to take or change.
+/// The targets in `folder`, lower-cased, of the replacements' effects under
+/// way (of any job) but `except`, and the paths a replacement or a relocation
+/// under way takes off ([`crate::place::relocate`]; `except` may be a
+/// removal's ID): names another effect is about to take or change. A store or
+/// an apply records nothing before it publishes, and an effect of one an
+/// earlier release left unfinished keeps no name: jobs run one at a time, and
+/// that job's next run redoes the write.
 pub fn busy_targets(
     c: &Connection,
     folder: &str,
@@ -454,11 +396,12 @@ pub fn busy_targets(
 ) -> rusqlite::Result<Vec<String>> {
     let mut stmt = c.prepare_cached(
         "SELECT lower(target) FROM subtitle_file_effects
-          WHERE folder = ?1 AND state IN ('intended', 'prepared', 'set_aside') AND id IS NOT ?2
+          WHERE folder = ?1 AND plan_id IS NOT NULL
+            AND state IN ('intended', 'prepared', 'set_aside') AND id IS NOT ?2
          UNION
          SELECT lower(source) FROM subtitle_file_effects
-          WHERE folder = ?1 AND kind = 'remove' AND state IN ('intended', 'prepared', 'set_aside')
-            AND id IS NOT ?2
+          WHERE folder = ?1 AND kind = 'remove' AND plan_id IS NOT NULL
+            AND state IN ('intended', 'prepared', 'set_aside') AND id IS NOT ?2
          UNION
          SELECT lower(path) FROM subtitle_relocations
           WHERE folder = ?1 AND state IN ('intended', 'set_aside') AND id IS NOT ?2",
@@ -571,11 +514,10 @@ pub struct NewStored {
 /// The asset a store makes or takes.
 #[derive(Debug, Clone)]
 pub enum Kept {
-    /// A file this effect published at `relative_path`.
-    New {
-        effect_id: String,
-        relative_path: String,
-    },
+    /// A file at `relative_path` with the row's bytes that no asset names:
+    /// one the store published, or one a store cut short before its record
+    /// published there.
+    New { relative_path: String },
     /// A file stored before with the same name and bytes.
     Reused(String),
 }
@@ -584,8 +526,8 @@ pub enum Kept {
 /// post), the asset (new, or the one reused), the package's entry for it,
 /// and for a subtitle the stored subtitle (or the one already stored for the
 /// same bytes, source and link, [`same_stored`]) and the row's link to it; a font,
-/// attachment or companion row links to its asset and is `stored`. The
-/// effect, if one made the file, is `done`. One synced transaction. Returns
+/// attachment or companion row links to its asset and is `stored`. One synced
+/// transaction. Returns
 /// the stored subtitle's ID, or the asset's for a row that is no subtitle.
 /// The stored subtitle's links to the package's other files are made once
 /// the package is stored ([`link`]).
@@ -628,10 +570,7 @@ pub fn stored(
         };
         let asset_id = match &kept {
             Kept::Reused(id) => id.clone(),
-            Kept::New {
-                effect_id,
-                relative_path,
-            } => {
+            Kept::New { relative_path } => {
                 let id = uuid::Uuid::new_v4().to_string();
                 tx.prepare_cached(
                     "INSERT INTO subtitle_assets
@@ -648,11 +587,6 @@ pub fn stored(
                     now,
                     base_of(row.kind),
                 ])?;
-                tx.prepare_cached(
-                    "UPDATE subtitle_file_effects SET state = 'done', target = ?2, updated_at = ?3
-                     WHERE id = ?1",
-                )?
-                .execute(params![effect_id, relative_path, now])?;
                 id
             }
         };
@@ -1057,16 +991,46 @@ pub struct NewApplied {
     pub episode: i64,
 }
 
-/// Records the effect's published copy as applied, and the row as
-/// `applied` on the copy's episode; the effect is `done`. One synced
-/// transaction, which also plans the copy's relocation when the stored
-/// subtitle is on another episode by then. Returns the applied copy's ID.
+/// A copy published beside a video, for [`applied`]: the plan row it
+/// settles, the video, its path (relative to the work folder), its bytes and
+/// its object.
+#[derive(Debug, Clone)]
+pub struct PublishedCopy {
+    pub job_id: String,
+    pub position: i64,
+    pub video: Option<String>,
+    pub path: String,
+    pub size: u64,
+    pub sha256: String,
+    pub object: String,
+}
+
+impl PublishedCopy {
+    /// The copy a replacement's apply effect published.
+    pub fn of(effect: &Effect) -> PublishedCopy {
+        PublishedCopy {
+            job_id: effect.job_id.clone(),
+            position: effect.position,
+            video: effect.video.clone(),
+            path: effect.target.clone(),
+            size: effect.size,
+            sha256: effect.sha256.clone(),
+            object: effect.object.clone().unwrap_or_default(),
+        }
+    }
+}
+
+/// Records the published copy as applied, and the row as `applied` on the
+/// copy's episode; the replacement's effect that published it (`effect`),
+/// if one did, is `done`. One synced transaction, which also plans the copy's
+/// relocation when the stored subtitle is on another episode by then.
+/// Returns the applied copy's ID.
 pub fn applied(
     c: &mut Connection,
-    effect: &Effect,
+    published: &PublishedCopy,
     copy: &NewApplied,
-    object: &str,
     note: Option<String>,
+    effect: Option<&str>,
     now: Millis,
 ) -> Result<String, JobError> {
     durable(c, |c| {
@@ -1077,7 +1041,7 @@ pub fn applied(
             "UPDATE subtitle_applied SET removed_at = ?3
               WHERE work_id = ?1 AND path = ?2 AND removed_at IS NULL",
         )?
-        .execute(params![copy.work_id, effect.target, now])?;
+        .execute(params![copy.work_id, published.path, now])?;
         let id = uuid::Uuid::new_v4().to_string();
         tx.prepare_cached(
             "INSERT INTO subtitle_applied
@@ -1091,26 +1055,28 @@ pub fn applied(
             copy.stored_id,
             copy.season,
             copy.episode,
-            effect.video,
-            effect.target,
-            effect.size as i64,
-            effect.sha256,
-            object,
-            effect.job_id,
+            published.video,
+            published.path,
+            published.size as i64,
+            published.sha256,
+            published.object,
+            published.job_id,
             now
         ])?;
-        tx.prepare_cached(
-            "UPDATE subtitle_file_effects SET state = 'done', updated_at = ?2 WHERE id = ?1",
-        )?
-        .execute(params![effect.id, now])?;
+        if let Some(effect) = effect {
+            tx.prepare_cached(
+                "UPDATE subtitle_file_effects SET state = 'done', updated_at = ?2 WHERE id = ?1",
+            )?
+            .execute(params![effect, now])?;
+        }
         tx.prepare_cached(
             "UPDATE subtitle_job_plan
                 SET outcome = 'applied', applied_id = ?3, note = ?4, episode = ?6, updated_at = ?5
               WHERE job_id = ?1 AND position = ?2",
         )?
         .execute(params![
-            effect.job_id,
-            effect.position,
+            published.job_id,
+            published.position,
             id,
             note,
             now,
@@ -1243,20 +1209,35 @@ pub struct RowPaths {
     pub applied: Option<String>,
     pub video: Option<String>,
     pub in_app_data: bool,
-    /// The row's own store published its file: a new asset, not one kept
-    /// before with the same bytes (nor a font it did not receive).
+    /// The row's own store made its asset: a new file, not one kept before
+    /// with the same bytes (nor a font it did not receive).
     pub made: bool,
 }
 
 /// [`RowPaths`] of each row of the job's plan, by position. A file a cleanup
 /// removed ([`crate::place::cleanup`]) is in none.
+///
+/// A row made its asset ([`RowPaths::made`]) when the asset is no older than
+/// the row's package (the job's package of the row's post, [`stored`]) and
+/// the first entry of the asset in that package is the row's, by its name:
+/// the store that makes an asset enters it in the same transaction, and a
+/// later row with the same bytes reuses it with a later entry, or in a
+/// package made after it. One case reads wrong: a job cut between two stores
+/// of one post whose later row reuses an asset another job made meanwhile
+/// shows that row as new.
 pub fn row_paths(c: &Connection, job_id: &str) -> rusqlite::Result<Vec<(i64, RowPaths)>> {
     let mut stmt = c.prepare_cached(
         "SELECT p.position, coalesce(s.work_id, k.work_id), coalesce(a.relative_path, k.relative_path),
                 ap.path, ap.video_path, coalesce(k.base = 'app_data', 0),
-                EXISTS (SELECT 1 FROM subtitle_file_effects e
-                         WHERE e.job_id = p.job_id AND e.position = p.position
-                           AND e.kind = 'store' AND e.state = 'done')
+                EXISTS (SELECT 1 FROM subtitle_assets m
+                          JOIN subtitle_job_items i ON i.id = p.item_id
+                          JOIN subtitle_packages pk
+                               ON pk.job_id = p.job_id AND pk.source_page IS i.post_url
+                         WHERE m.id = coalesce(s.subtitle_asset_id, p.asset_id)
+                           AND m.created_at >= pk.created_at
+                           AND (SELECT e.original_name FROM subtitle_package_entries e
+                                 WHERE e.package_id = pk.id AND e.asset_id = m.id
+                                 ORDER BY e.position LIMIT 1) = p.name)
            FROM subtitle_job_plan p
            LEFT JOIN subtitle_stored s ON s.id = p.stored_id
            LEFT JOIN subtitle_assets a

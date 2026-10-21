@@ -19,9 +19,11 @@
 //! a plan row of it of a job that is pending or running ([`RUNNING_JOB`]),
 //! held ([`HELD_JOB`]), interrupted ([`INTERRUPTED_JOB`]), or waiting with
 //! the row not settled ([`WAITING_JOB`]); a replacement plan that puts it
-//! beside a video, open or approved ([`AWAITING_APPROVAL`]); or a file
-//! effect of a row of it that did not end ([`UNFINISHED_EFFECT`]). A row
-//! that waits for its video
+//! beside a video, open or approved ([`AWAITING_APPROVAL`]); or a
+//! replacement's file effect on a row of it that did not end
+//! ([`UNFINISHED_EFFECT`]). A store or an apply records nothing of its own
+//! before it publishes: what a job not ended still needs is its plan rows'.
+//! A row that waits for its video
 //! (`no_video`) does not keep it: a person may clean what waits for a video.
 //!
 //! The files that go with it ([`Cleanable::with`]) are its subtitle's file
@@ -40,8 +42,8 @@
 //! after the link step, [`records::relink`], which the next run links)
 //! ([`JOB_FILE`]); a receipt of a job not ended that
 //! uses it instead of receiving an unchanged Drive font, until its row is
-//! stored ([`super::unchanged`], the same reason); an effect not ended that
-//! aims at its path (the same reason). A job past its links (waiting for a video
+//! stored ([`super::unchanged`], the same reason); a replacement's effect
+//! not ended that aims at its path (the same reason). A job past its links (waiting for a video
 //! with every item received and its stored subtitles linked, or put back in
 //! line by a cleanup) keeps no file this way, and no link is ever made to a
 //! removed file
@@ -128,7 +130,7 @@ pub const INTERRUPTED_JOB: &str = "중단된 작업이 이 보관본을 써요";
 pub const WAITING_JOB: &str = "회차 확인을 기다리는 작업이 이 보관본을 써요";
 /// A replacement plan open or approved puts it beside a video.
 pub const AWAITING_APPROVAL: &str = "교체 승인을 기다리는 작업이 이 보관본을 써요";
-/// A file effect of a row of it did not end.
+/// A replacement's file effect on a row of it did not end.
 pub const UNFINISHED_EFFECT: &str = "보관·적용이 끝나지 않은 작업이 이 보관본을 써요";
 /// It has an applied copy beside a video.
 pub const APPLIED: &str = "영상 옆에 적용한 보관본은 정리할 수 없어요";
@@ -140,7 +142,7 @@ pub const OTHER_SUBTITLE: &str = "다른 자막도 이 파일을 써요";
 /// A file of a package none of whose entries is a subtitle (fonts and
 /// attachments kept on purpose).
 pub const FONTS_ONLY: &str = "폰트만 올린 묶음에 들어 있어요";
-/// A file a job not ended kept, or an effect not ended aims at.
+/// A file a job not ended kept, or a replacement's effect not ended aims at.
 pub const JOB_FILE: &str = "진행 중인 작업이 이 파일을 써요";
 
 /// The work folder of a subtitle's or a font's file is not there.
@@ -293,7 +295,8 @@ fn blocked(c: &Connection, stored: &str) -> rusqlite::Result<Option<&'static str
         c,
         "SELECT 1 FROM subtitle_file_effects e
            JOIN subtitle_job_plan p ON p.job_id = e.job_id AND p.position = e.position
-          WHERE p.stored_id = ?1 AND e.state IN ('intended', 'prepared', 'set_aside', 'held')",
+          WHERE p.stored_id = ?1 AND e.plan_id IS NOT NULL
+            AND e.state IN ('intended', 'prepared', 'set_aside', 'held')",
         [stored],
     )? {
         return Ok(Some(UNFINISHED_EFFECT));
@@ -375,12 +378,13 @@ fn in_use(
     )? {
         return Ok(Some(JOB_FILE));
     }
-    // An effect not ended that aims at its path, or takes a file off it.
+    // A replacement's effect not ended that aims at its path, or takes a
+    // file off it.
     if exists(
         c,
         "SELECT 1 FROM subtitle_assets a, subtitle_file_effects e
            JOIN subtitle_jobs j ON j.id = e.job_id
-          WHERE a.id = ?1 AND j.work_id = ?2
+          WHERE a.id = ?1 AND j.work_id = ?2 AND e.plan_id IS NOT NULL
             AND e.state IN ('intended', 'prepared', 'set_aside', 'held')
             AND (lower(e.target) = lower(a.relative_path)
                  OR lower(e.source) = lower(a.relative_path))",

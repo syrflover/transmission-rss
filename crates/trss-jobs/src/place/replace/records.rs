@@ -614,9 +614,10 @@ pub enum Claimed {
 }
 
 /// Records the approved plan's effects as `intended` in one synced
-/// transaction, unless another effect under way (of another plan, or no
-/// plan) aims at or takes off one of their paths: the paths beside the
-/// video change one replacement at a time.
+/// transaction, unless another plan's effect under way, or a relocation's
+/// removal, aims at or takes off one of their paths
+/// ([`place_records::busy_targets`]): the paths beside the video change one
+/// replacement at a time.
 pub fn claim(
     c: &mut Connection,
     plan: &Plan,
@@ -661,6 +662,21 @@ pub fn claim(
         tx.commit()?;
         Ok(Claimed::Yes)
     })
+}
+
+/// The plans of the job with effects that did not end (`intended`,
+/// `prepared` or `set_aside`), in the order their first effect was recorded:
+/// what an earlier start left under way.
+pub fn unfinished_plans(c: &Connection, job_id: &str) -> rusqlite::Result<Vec<String>> {
+    let mut stmt = c.prepare_cached(
+        "SELECT plan_id FROM subtitle_file_effects
+          WHERE job_id = ?1 AND plan_id IS NOT NULL
+            AND state IN ('intended', 'prepared', 'set_aside')
+          GROUP BY plan_id
+          ORDER BY min(created_at), min(id)",
+    )?;
+    let rows = stmt.query_map([job_id], |r| r.get(0))?;
+    rows.collect()
 }
 
 /// The plan's effects that did not end.
@@ -862,38 +878,55 @@ pub struct Imported {
     pub encoding: Option<String>,
 }
 
-/// Records an import: its package (`existing`), the asset (the effect's
-/// published file, or `reused`), the package's entry, and the stored
-/// subtitle of the creator nobody named on the episode (or the one stored
-/// already for the same bytes there, while a person did not clean it); the
-/// effect, if it made the file, is
-/// `done`. One synced transaction; returns the stored subtitle's ID.
+/// The asset an import records ([`imported`]).
+#[derive(Debug, Clone, Copy)]
+pub enum ImportedAsset<'a> {
+    /// The file the import's effect published, which is `done` with it.
+    Published(&'a Effect),
+    /// A file at `relative_path` with the import's bytes that no asset
+    /// names: an import cut short between publishing and recording left it,
+    /// and it is recorded instead of copied again.
+    Found {
+        relative_path: &'a str,
+        size: u64,
+        sha256: &'a str,
+    },
+    /// A kept file with the same name and bytes.
+    Reused(&'a str),
+}
+
+/// Records an import: its package (`existing`), the asset (`asset`), the
+/// package's entry, and the stored subtitle of the creator nobody named on
+/// the episode (or the one stored already for the same bytes there, while a
+/// person did not clean it). One synced transaction; returns the stored
+/// subtitle's ID.
 pub fn imported(
     c: &mut Connection,
     what: &Imported,
-    effect: Option<&Effect>,
-    reused: Option<&str>,
+    asset: ImportedAsset<'_>,
     now: Millis,
 ) -> Result<String, JobError> {
     durable(c, |c| {
         let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let asset_id = match (effect, reused) {
-            (_, Some(id)) => id.to_owned(),
-            (Some(effect), None) => {
-                let id = uuid::Uuid::new_v4().to_string();
-                tx.prepare_cached(
-                    "INSERT INTO subtitle_assets
-                         (id, work_id, kind, base, relative_path, byte_size, sha256, created_at)
-                     VALUES (?1, ?2, 'subtitle', 'work', ?3, ?4, ?5, ?6)",
-                )?
-                .execute(params![
-                    id,
-                    what.work_id,
-                    effect.target,
-                    effect.size as i64,
-                    effect.sha256,
-                    now
-                ])?;
+        let new_asset = |path: &str, size: u64, sha256: &str| -> rusqlite::Result<String> {
+            let id = uuid::Uuid::new_v4().to_string();
+            tx.prepare_cached(
+                "INSERT INTO subtitle_assets
+                     (id, work_id, kind, base, relative_path, byte_size, sha256, created_at)
+                 VALUES (?1, ?2, 'subtitle', 'work', ?3, ?4, ?5, ?6)",
+            )?
+            .execute(params![id, what.work_id, path, size as i64, sha256, now])?;
+            Ok(id)
+        };
+        let asset_id = match asset {
+            ImportedAsset::Reused(id) => id.to_owned(),
+            ImportedAsset::Found {
+                relative_path,
+                size,
+                sha256,
+            } => new_asset(relative_path, size, sha256)?,
+            ImportedAsset::Published(effect) => {
+                let id = new_asset(&effect.target, effect.size, &effect.sha256)?;
                 tx.prepare_cached(
                     "UPDATE subtitle_file_effects SET state = 'done', updated_at = ?2
                       WHERE id = ?1",
@@ -901,7 +934,6 @@ pub fn imported(
                 .execute(params![effect.id, now])?;
                 id
             }
-            (None, None) => return Err(JobError::Missing("the asset of an import")),
         };
         let same: Option<String> = tx
             .prepare_cached(

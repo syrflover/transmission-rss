@@ -1,14 +1,16 @@
-//! The file effects of storing and applying, on a work folder's file system
+//! The file writes of storing and applying, on a work folder's file system
 //! (or the app data folder's, for the files of a package that are neither
 //! subtitles nor fonts). Blocking: the caller runs them off the runtime.
 //!
-//! Every effect writes its own temporary file in the work folder's
-//! `.trss/tmp/` (the app data folder's `subtitle-files/.tmp/`), on the file
-//! system of where it is published, and publishes
-//! it by a rename that replaces nothing
-//! ([`trss_core::files::rename_noreplace_synced`]). A rename keeps
-//! the file's object, so the published file is known for this effect's by
-//! the object recorded before the rename.
+//! Every store or apply writes its new copy whole in the work folder's
+//! `.trss/staging/` (the app data folder's `subtitle-files/.tmp/`), on the
+//! file system of where it is published, syncs it, and publishes it by a
+//! rename that replaces nothing ([`trss_core::files::rename_noreplace_synced`]).
+//! Nothing records the copy before it is published: a run cut short leaves at
+//! most a staged copy, which goes when the folder is emptied ([`Staging`] for
+//! a work folder once per run, [`empty_app_temp`] for the app data folder
+//! when `trss` starts), or a published file, which the next run finds by its
+//! bytes ([`super::Placer`]).
 
 use std::{
     fs::{self, File},
@@ -28,14 +30,54 @@ use crate::area::{hex, read_facts};
 pub const TRSS_DIR: &str = ".trss";
 /// Where stored subtitles and fonts go, relative to the work folder.
 pub const SUBTITLES_DIR: &str = ".trss/subtitles";
-/// Where the temporary files of effects go, relative to the work folder.
+/// Where a replacement's and a relocation's files are kept for the while
+/// they are taken off or copied ([`super::replace`], [`super::relocate`]),
+/// relative to the work folder. Releases before 0153 also staged stores and
+/// applies there; nothing empties it.
 pub const TEMP_DIR: &str = ".trss/tmp";
+/// Where a store or an apply writes its new copy before publishing it,
+/// relative to the work folder. Only those writes are there, and a run
+/// empties it before its first write into the work folder ([`Staging`]).
+pub const STAGING_DIR: &str = ".trss/staging";
 // Where a package's attachments and companion files go, relative to the
-// app data folder (`<work id>/<creator>/<name>` under it), and where the
-// temporary files of effects in the app data folder go, relative to it.
+// app data folder (`<work id>/<creator>/<name>` under it), and where their
+// new copies are written before they are published, relative to it.
 pub use trss_core::app_data::{
     SUBTITLE_FILES_DIR as APP_FILES_DIR, SUBTITLE_FILES_TEMP_DIR as APP_TEMP_DIR,
 };
+
+/// The work folders one run of a job has emptied the staging folder of
+/// ([`STAGING_DIR`]). A run makes one and asks it for each new copy it
+/// writes into a work folder: the folder's staging folder is emptied before
+/// the first, so what a run cut short left there goes before anything is
+/// written, and a copy staged in this run is never removed by it. Jobs run
+/// one at a time, so no other run is writing there. Cheap to clone: the
+/// clones share what was emptied.
+#[derive(Debug, Clone, Default)]
+pub struct Staging {
+    emptied: std::sync::Arc<std::sync::Mutex<Vec<PathBuf>>>,
+}
+
+impl Staging {
+    /// A new file's path in `folder`'s staging folder, relative to `folder`;
+    /// the staging folder is emptied first unless this run did that already.
+    /// Blocking.
+    pub fn new_file(&self, folder: &Path) -> io::Result<String> {
+        let mut emptied = self.emptied.lock().unwrap_or_else(|e| e.into_inner());
+        if !emptied.iter().any(|f| f == folder) {
+            trss_core::files::empty_dir(&within(folder, STAGING_DIR))?;
+            emptied.push(folder.to_owned());
+        }
+        Ok(format!("{STAGING_DIR}/{}", uuid::Uuid::new_v4()))
+    }
+}
+
+/// Removes everything in the app data folder's `subtitle-files/.tmp/`: the
+/// new copies of stores a process left when it stopped. `trss` calls it when
+/// it starts, before any job runs. Returns how many entries it removed.
+pub fn empty_app_temp(app_data: &Path) -> io::Result<usize> {
+    trss_core::files::empty_dir(&within(app_data, APP_TEMP_DIR))
+}
 
 /// What came of writing a temporary file.
 #[derive(Debug)]

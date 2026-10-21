@@ -167,6 +167,28 @@ pub fn occupied(path: &Path) -> io::Result<bool> {
     }
 }
 
+/// Removes everything in the folder `dir`, which stays: a folder with what is
+/// in it, anything else (a link too) as itself, never followed. A folder that
+/// is not there holds nothing. Returns how many entries it removed. Only for
+/// a folder the app alone writes into, while nothing writes there.
+pub fn empty_dir(dir: &Path) -> io::Result<usize> {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(0),
+        Err(err) => return Err(err),
+    };
+    let mut removed = 0;
+    for entry in entries {
+        let entry = entry?;
+        match entry.file_type()?.is_dir() {
+            true => std::fs::remove_dir_all(entry.path())?,
+            false => std::fs::remove_file(entry.path())?,
+        }
+        removed += 1;
+    }
+    Ok(removed)
+}
+
 /// `bytes` as lowercase hex, two digits each.
 pub fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
