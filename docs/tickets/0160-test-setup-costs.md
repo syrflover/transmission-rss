@@ -2,7 +2,7 @@
 
 - 상태: 대기
 - 출처: [구조 가볍게 하기 명세의 테스트 정리](lighter-structure.md#테스트-정리)
-- 막는 티켓: [0150](0150-trss-crate-tests-by-adr-0015.md)(`trss` 크레이트의 테스트), [0153](0153-no-effect-records.md)(효과별 기록), [0159](0159-generated-types-rest-and-events.md)(타입 생성의 마지막)
+- 막는 티켓: [0150](0150-trss-crate-tests-by-adr-0015.md)(`trss` 크레이트의 테스트), [0153](0153-no-effect-records.md)(효과별 기록), [0159](0159-generated-types-rest-and-events.md)(타입 생성의 마지막), [0163](0163-batch-archive-on-server.md)(서버의 일괄 보관)
 
 ## 작업
 
