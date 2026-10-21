@@ -977,7 +977,7 @@ async fn subscribe(
         Some(work) => Some(recorded_work(&items, work)?),
         None if items.is_empty() => {
             return Err(ApiError::invalid(
-                "이 채널에는 수집 기록이 아직 없어요. worker가 채널을 한 번 읽은 뒤에 첫 화 전 작품을 구독해 주세요. 그 기록보다 나중에 올라온 제목만 제목 후보가 돼요.",
+                "이 채널에는 수집 기록이 아직 없어요. trss가 채널을 한 번 읽은 뒤에 첫 화 전 작품을 구독해 주세요. 그 기록보다 나중에 올라온 제목만 제목 후보가 돼요.",
             ))
         }
         None => None,

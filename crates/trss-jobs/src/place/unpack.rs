@@ -608,7 +608,7 @@ impl Placer {
             false => (
                 format!("{}: 압축 파일을 풀지 못해 다시 풀어요", first.name),
                 format!(
-                    "{reason} ({}). 1시간 뒤나 worker가 다시 시작할 때 다시 풀어요",
+                    "{reason} ({}). 1시간 뒤나 trss가 다시 시작할 때 다시 풀어요",
                     attempt(tries)
                 ),
             ),

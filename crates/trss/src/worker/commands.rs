@@ -613,7 +613,7 @@ impl Worker {
                             state: CommandState::Failed,
                             outcome: Outcome {
                                 result: anissia_captions::FAILED.to_owned(),
-                                reason: Some("이 worker는 Anissia를 읽지 않아요.".to_owned()),
+                                reason: Some("trss가 Anissia를 읽지 않게 시작됐어요.".to_owned()),
                             },
                             add_unconfirmed: false,
                         };

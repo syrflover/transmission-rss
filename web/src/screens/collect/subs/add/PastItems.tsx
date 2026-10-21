@@ -211,7 +211,7 @@ export function ProgressRows<K extends string | number>({
           </li>
         ))}
       </ul>
-      {!settled && <p className={hintClass}>worker가 하나씩 추가해요. 이 화면을 떠나도 계속돼요.</p>}
+      {!settled && <p className={hintClass}>trss가 하나씩 추가해요. 이 화면을 떠나도 계속돼요.</p>}
     </>
   );
 }

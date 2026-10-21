@@ -60,7 +60,7 @@ export function unpackText(
     case "retry": {
       const next =
         unpack.retry_at !== null && unpack.retry_at > now
-          ? `${when(unpack.retry_at, now)} 또는 worker가 다시 시작할 때`
+          ? `${when(unpack.retry_at, now)} 또는 trss가 다시 시작할 때`
           : "다음 실행 때";
       return {
         text: `다시 풀기를 기다려요 (${unpack.max_tries}번 중 ${unpack.tries}번째 시도 실패)`,

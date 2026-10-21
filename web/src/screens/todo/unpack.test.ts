@@ -24,7 +24,7 @@ const unpack = (fields: Partial<UnpackResult>): UnpackResult => ({
 test("a try this machine failed says which, why, and when the next goes", () => {
   assert.deepEqual(unpackText(unpack({ state: "retry", reason: FULL, tries: 1, retry_at: NOW + HOUR }), NOW), {
     text: "다시 풀기를 기다려요 (3번 중 1번째 시도 실패)",
-    reason: `${FULL} · 다음 시도: ${when(NOW + HOUR, NOW)} 또는 worker가 다시 시작할 때`,
+    reason: `${FULL} · 다음 시도: ${when(NOW + HOUR, NOW)} 또는 trss가 다시 시작할 때`,
     urgent: false,
   });
   assert.equal(when(NOW + HOUR, NOW), "오늘 13:00");

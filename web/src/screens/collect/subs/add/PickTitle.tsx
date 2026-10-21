@@ -143,7 +143,7 @@ export function PickTitle({
       {empty && (
         <p role="status" className="text-[13px] leading-normal font-semibold text-text-secondary">
           이 채널에는 수집 기록이 아직 없어서 릴리스 제목을 고를 수도, 제목 대기로 구독할 수도 없어요. 기록이 있어야 새 작품이 나타난 것을 알 수
-          있어요. worker가 채널을 한 번 읽은 뒤에 다시 와요.
+          있어요. trss가 채널을 한 번 읽은 뒤에 다시 와요.
         </p>
       )}
 

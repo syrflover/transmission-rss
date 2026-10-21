@@ -546,7 +546,7 @@ async fn an_archive_this_machine_failed_to_unpack_is_tried_again_from_its_receip
     assert!(events(&d).contains(&(
         "pack.zip: 압축 파일을 풀지 못해 다시 풀어요".to_owned(),
         Some(format!(
-            "{DISK_FULL} (3번 중 1번째 시도). 1시간 뒤나 worker가 다시 시작할 때 다시 풀어요"
+            "{DISK_FULL} (3번 중 1번째 시도). 1시간 뒤나 trss가 다시 시작할 때 다시 풀어요"
         ))
     )));
     assert_eq!(s.count("subtitle_job_members").await, 0);

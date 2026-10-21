@@ -191,7 +191,7 @@
 | [0146](0146-one-trss-process-and-container.md) | web과 worker를 `trss` 프로세스 하나와 컨테이너 하나로 돌려요 | 완료 | 0145 |
 | [0147](0147-commands-start-at-once.md) | 명령과 자막 작업을 적은 곳에서 바로 실행을 시작해요 | 완료 | 0146 |
 | [0148](0148-one-instance-lock-and-cycle-stall.md) | 잠금을 단일 실행 잠금 하나로 바꾸고 수집 멈춤을 수집 주기만으로 판정해요 | 완료 | 0147 |
-| [0149](0149-no-worker-in-texts.md) | 화면과 서버가 보내는 문구에서 worker를 빼요 | 대기 | 0146 |
+| [0149](0149-no-worker-in-texts.md) | 화면과 서버가 보내는 문구에서 worker를 빼요 | 완료 | 0146 |
 | [0150](0150-trss-crate-tests-by-adr-0015.md) | `trss` 크레이트의 테스트를 테스트 나눔 ADR에 맞춰요 | 대기 | 0148 |
 | [0151](0151-probe-rename-exchange.md) | 서버의 미디어 파일시스템이 `RENAME_EXCHANGE`를 지원하는지 `trss-probe`로 확인해요 | 대기 | 0144 |
 | [0152](0152-interrupted-jobs-stop.md) | 실행 도중 끊긴 자막 작업을 `중단됨`으로 멈추고 사람이 다시 시작하게 해요 | 대기 | 0145 |

@@ -46,7 +46,7 @@ function describe(job: JobRow): string {
   if (job.note !== null && job.note !== "") return job.note;
   switch (job.state) {
     case "pending":
-      return "worker가 곧 받기 시작해요.";
+      return "곧 받기 시작해요.";
     case "running":
       return job.stage === "open"
         ? "게시물을 열어 받을 파일을 찾고 있어요."

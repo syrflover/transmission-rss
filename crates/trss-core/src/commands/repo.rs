@@ -14,7 +14,7 @@ const COLUMNS: &str = "id, kind, payload, subject, state, attempts, created_at, 
      finished_at, outcome, add_unconfirmed, original_name";
 
 /// Reason recorded for a command given up after [`MAX_ATTEMPTS`] starts.
-const GIVEN_UP: &str = "worker가 이 명령을 처리하다 여러 번 멈춰서 더는 시도하지 않아요.";
+const GIVEN_UP: &str = "trss가 이 명령을 처리하다 여러 번 멈춰서 더는 시도하지 않아요.";
 
 fn command_from_row(row: &Row<'_>) -> Result<Command> {
     let id: String = row.get(0)?;

@@ -128,7 +128,7 @@ function Summary({ preview }: { preview: Preview }) {
   if (counts.total === 0) {
     return (
       <p className="text-[13px] leading-normal text-text-secondary">
-        이 채널의 수집 기록이 아직 없어서 비교할 항목이 없어요. worker가 채널을 한 번 읽으면 여기서 볼 수 있어요.
+        이 채널의 수집 기록이 아직 없어서 비교할 항목이 없어요. trss가 채널을 한 번 읽으면 여기서 볼 수 있어요.
       </p>
     );
   }
@@ -196,7 +196,7 @@ export function RulePreview({ state, receive }: { state: PreviewState; receive?:
           )}
           {preview.masked_total > 0 && (
             <p className="text-xs leading-normal text-text-muted">
-              기록의 제목 {preview.masked_total}개는 채널 주소의 비밀 값이 가려져 있어요. 원래 제목과 다를 수 있어서 worker의 판정과 다르게 보일 수 있어요.
+              기록의 제목 {preview.masked_total}개는 채널 주소의 비밀 값이 가려져 있어요. 원래 제목과 다를 수 있어서 수집할 때의 판정과 다르게 보일 수 있어요.
             </p>
           )}
         </div>

@@ -78,7 +78,7 @@ function Feeds({ board }: { board: Board }) {
           ? `읽지 못함: ${failing.map(channelName).join(", ")}`
           : latest !== null
             ? `마지막 확인 ${when(latest, board.now)}`
-            : "worker가 확인하면 여기에 보여요."}
+            : "trss가 확인하면 여기에 보여요."}
       </p>
       {board.cycle?.stalled && (
         <p role="status" className="text-xs leading-normal font-semibold text-urgent">
@@ -126,7 +126,7 @@ function Transmission({ board }: { board: Board }) {
     return (
       <>
         <p className="text-[15px] font-bold">아직 없음</p>
-        <p className="text-xs text-text-muted">worker가 확인하면 여기에 보여요.</p>
+        <p className="text-xs text-text-muted">trss가 확인하면 여기에 보여요.</p>
       </>
     );
   }
