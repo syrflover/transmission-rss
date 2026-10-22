@@ -14,7 +14,11 @@
 //!
 //! A video the library has not recorded yet (the scan comes later), a torrent
 //! Transmission no longer has, and a rule that received nothing leave the rule
-//! as it is. A rule whose videos are in more than one season is left alone too:
+//! as it is. The cycle's own cleanup of torrents whose item left the feeds
+//! keeps a finished one until its second look ([`crate::cycle::remove_departed`]),
+//! so a past episode received after its item left the feed is still in
+//! Transmission when this pass first sees its video in the library.
+//! A rule whose videos are in more than one season is left alone too:
 //! which one the rule belongs to is not told by them. Videos a person put into a
 //! folder, and videos other rules received, are no evidence for this rule, even
 //! in a folder of the same name.

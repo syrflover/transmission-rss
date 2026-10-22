@@ -1,8 +1,9 @@
 //! What the worker does around the connecting of a subscription to its season
-//! (tickets 2-work-discovery-and-subscriptions/0019, 3-subtitle-candidates-and-receiving/0035, 3-subtitle-candidates-and-receiving/0045): the cycle that connects a season makes the
-//! `anissia_captions` command and the creator's jobs in the same cycle, and a
+//! (tickets 2-work-discovery-and-subscriptions/0019, 3-subtitle-candidates-and-receiving/0035, 3-subtitle-candidates-and-receiving/0045, feedback-0.8.0/0001): the cycle that connects a season makes the
+//! `anissia_captions` command and the creator's jobs in the same cycle, a
 //! `start` or `resume` that turns a followed subscription on looks at the
-//! creator. The real worker, a real library scan of temporary folders, the
+//! creator, and the cycle's cleanup of torrents whose item left the feeds
+//! leaves a past episode's torrent long enough for the season link to see it. The real worker, a real library scan of temporary folders, the
 //! history of what a rule received, and a fake Transmission that says where
 //! each torrent's files are.
 //!
@@ -89,18 +90,34 @@ impl Scene {
     /// The rule received a torrent whose file is `file` (a path below the
     /// watch folder); Transmission has it saved next to the file.
     async fn received(&mut self, rule: &Rule, file: &str) {
+        self.receive(rule, file, false).await;
+    }
+
+    /// The rule received, from its past episodes, a torrent whose item no
+    /// feed lists any more; Transmission has it finished, labelled as trss
+    /// adds one (the trss label and the item's).
+    async fn received_past(&mut self, rule: &Rule, file: &str) {
+        self.receive(rule, file, true).await;
+    }
+
+    async fn receive(&mut self, rule: &Rule, file: &str, labelled: bool) {
         self.next_hash += 1;
         let hash = format!("{:040x}", self.next_hash);
         let path = Path::new(file);
         let dir = self.shows.join(path.parent().unwrap());
         touch(&self.shows.join(file));
-        self.h.tr.preload(
-            FakeTorrent::new(&hash, "name").in_dir(&dir).files(&[path
-                .file_name()
-                .unwrap()
-                .to_str()
-                .unwrap()]),
-        );
+        let mut torrent = FakeTorrent::new(&hash, "name").in_dir(&dir).files(&[path
+            .file_name()
+            .unwrap()
+            .to_str()
+            .unwrap()]);
+        if labelled {
+            torrent.labels = vec![
+                BOT_LABEL.to_owned(),
+                trss_transmission::item_label(&self.channel, &format!("key-{hash}")),
+            ];
+        }
+        self.h.tr.preload(torrent);
         self.h
             .history
             .record(
@@ -161,6 +178,30 @@ impl Scene {
 
 fn season_of(rule: &Rule) -> Option<&str> {
     rule.subscription.as_ref().unwrap().season_id.as_deref()
+}
+
+// --- a past episode received after its item left the feed (ticket feedback-0.8.0/0001) ---
+
+#[tokio::test]
+async fn a_past_episode_received_after_its_item_left_the_feed_connects_the_subscription() {
+    let mut scene = Scene::new().await;
+    let rule = scene.subscription(7, "Work").await;
+    // Subscribed after the season ended: the one episode the rule received was
+    // picked from its past episodes, and no feed lists that item any more.
+    scene
+        .received_past(&rule, "Work/Season 01/Work - S01E12.mkv")
+        .await;
+    scene.register().await;
+
+    scene.tick().await;
+
+    let work = scene.work_id("Work").await;
+    assert_eq!(
+        season_of(&scene.rule(&rule).await),
+        Some(format!("{work}:1").as_str()),
+        "removals: {:?}",
+        scene.h.tr.calls_of("torrent-remove")
+    );
 }
 
 // --- the subscription's anime is read when its season is connected (ticket 3-subtitle-candidates-and-receiving/0035) ---

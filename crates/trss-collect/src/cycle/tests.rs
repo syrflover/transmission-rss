@@ -621,8 +621,10 @@ async fn a_torrent_a_retry_added_is_kept_and_left_alone_by_the_next_cycles() {
     assert_eq!(kept.result, HistoryResult::Received);
     assert_eq!(kept.rule_id, item.rule_id);
 
-    // Once the item leaves the feed, the ordinary cleanup applies to it again.
+    // Once the item leaves the feed, the ordinary cleanup applies to it again
+    // (at the second cycle that finds it gone).
     s.feed(&[(&hash(3), other)]);
+    s.cycle_later().await;
     s.cycle_later().await;
     assert!(s.removed(&hash(26)));
     assert!(s.tr.torrents().is_empty());
@@ -733,6 +735,8 @@ async fn a_torrent_labelled_for_an_item_stays_while_the_item_is_in_a_feed_and_go
         ..FakeTorrent::new("gone0000000000000000000000000000000000aa", "Gone.mkv")
     });
 
+    // The second cycle that finds a torrent gone removes it.
+    s.cycle_later().await;
     s.cycle_later().await;
 
     assert!(!s.removed("feed0000000000000000000000000000000000aa"));
@@ -788,6 +792,8 @@ async fn torrents_of_a_channel_whose_feed_failed_stay_while_the_stale_ones_of_a_
             Feed::TooLarge => s.feeds.set_large("show", MAX_FEED_BYTES + 1),
         }
         s.feed_numbered_at("feed-y", &[(3, "[G] Show Y1 - 01")]);
+        // The second cycle that finds a torrent gone removes it.
+        s.cycle_later().await;
         s.cycle_later().await;
 
         // X's torrents stay whatever its feed would say; Y's departed one goes,
@@ -803,6 +809,7 @@ async fn torrents_of_a_channel_whose_feed_failed_stay_while_the_stale_ones_of_a_
         // Once X's feed is back and no longer lists its second show, that one goes too.
         s.feeds.set_xml("show", &feed_xml_of(&[]));
         s.feed_numbered(&[(1, "[G] Show X1 - 01")]);
+        s.cycle_later().await;
         s.cycle_later().await;
         let mut left: Vec<String> = s.tr.torrents().into_iter().map(|t| t.name).collect();
         left.sort();

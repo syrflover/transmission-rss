@@ -68,6 +68,9 @@ pub struct CollectContext {
     /// What the season link remembers between cycles (see
     /// [`crate::season_link`]).
     pub season_link: super::season_link::Memory,
+    /// The torrents the cycle's last removal left for the next one (see
+    /// [`crate::cycle::remove_departed`]).
+    pub departed: crate::cycle::Departed,
     /// The works the library knows (the season link finds the videos a rule
     /// received there; the episode offset reads the seasons they belong to).
     pub library: LibraryStore,

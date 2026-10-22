@@ -324,6 +324,7 @@ impl Worker {
                 commands: CommandStore::new(db.clone()),
                 seasons: SeasonStore::new(db),
                 season_link: season_link::Memory::default(),
+                departed: Default::default(),
                 library,
                 live,
                 transmission: TransmissionLink {

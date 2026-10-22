@@ -1316,9 +1316,11 @@ async fn the_cycles_removal_leaves_the_torrents_alone_while_a_command_adds() {
     assert_eq!(held.torrent_hash.as_deref(), Some(hash(26).as_str()));
     assert_eq!(s.h.tr.torrent(&hash(26)).name, "LIAR GAME S01E26.mkv");
 
-    // With no command at work, the next cycle cleans up as usual.
+    // With no command at work, the cycles clean up as usual: the second one
+    // that finds the torrent gone removes it.
     let report = s.cycle_with(&worker).await;
     assert!(!report.commands_at_work);
+    let report = s.cycle_with(&worker).await;
     assert_eq!(report.removed.len(), 1);
 }
 

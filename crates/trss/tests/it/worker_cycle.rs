@@ -202,11 +202,13 @@ async fn a_panic_after_torrent_add_does_not_remove_the_new_torrent_or_any_other(
     assert!(h.tr.calls_of("torrent-remove").is_empty());
 
     // A healthy cycle carries on: the torrents are renamed and kept, the
-    // departed one goes.
+    // departed one goes (at the second cycle that finds it gone).
     drop(panicking);
     h.advance(300_000);
     let report = run(&worker).await;
     assert_eq!(report.job_panics, 0);
+    h.advance(300_000);
+    let report = run(&worker).await;
     assert_eq!(
         report
             .removed
@@ -331,6 +333,9 @@ async fn torrents_of_a_channel_whose_feed_failed_stay_while_the_stale_ones_of_a_
     h.feeds.set_status("feed-x", 503);
     h.feeds
         .set_xml("feed-y", &feed_of(&[("[G] Show Y1 - 01", '3')]));
+    // The second cycle that finds a torrent gone removes it.
+    h.advance(300_000);
+    run(&worker).await;
     h.advance(300_000);
     let report = run(&worker).await;
 
@@ -352,6 +357,8 @@ async fn torrents_of_a_channel_whose_feed_failed_stay_while_the_stale_ones_of_a_
     // Once X's feed is back and no longer lists its second show, that one goes too.
     h.feeds
         .set_xml("feed-x", &feed_of(&[("[G] Show X1 - 01", '1')]));
+    h.advance(300_000);
+    run(&worker).await;
     h.advance(300_000);
     let report = run(&worker).await;
     assert_eq!(report.channels_failed, 0);
@@ -536,11 +543,16 @@ async fn a_refused_add_still_lets_departed_torrents_go() {
     channel_a(&h).await;
     h.tr.preload(FakeTorrent::new("stale0000", "Gone - 01.mkv").bot());
     h.tr.reject_adds(Some("invalid or corrupt torrent file"));
+    let worker = h.worker();
 
-    let report = run(&h.worker()).await;
+    let report = run(&worker).await;
 
     assert_eq!(report.add_failed, 3);
     assert_eq!(report.adds_unconfirmed, 0);
+    // The second cycle that finds the torrent gone removes it, which it does
+    // only when the first one's removal ran.
+    h.advance(300_000);
+    let report = run(&worker).await;
     assert_eq!(report.removed.len(), 1);
 }
 

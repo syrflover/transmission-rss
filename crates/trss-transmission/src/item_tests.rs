@@ -3,7 +3,7 @@
 //! rules are the crate's (ADR 0015); the cycle that calls them is tested in
 //! trss-collect.
 
-use std::path::Path;
+use std::{collections::HashSet, path::Path};
 
 use serde_json::json;
 
@@ -143,16 +143,19 @@ async fn a_cleanup_removes_only_finished_bot_torrents_whose_item_is_gone_and_kee
     fake.preload(FakeTorrent::new(&hash(4), "Stalled.mkv").bot().unfinished());
     let mut transmission = connect(&fake).await;
     let kept = hash(2);
+    let mut departed = HashSet::new();
+    let ask = |hash: &str, labels: &[String]| {
+        assert!(labels.contains(&BOT_LABEL.to_owned()), "asked about {hash}");
+        hash == kept
+    };
 
-    let removed = remove_stale(
-        &mut transmission,
-        |hash, labels| {
-            assert!(labels.contains(&BOT_LABEL.to_owned()), "asked about {hash}");
-            hash == kept
-        },
-        &Redactor::none(),
-    )
-    .await;
+    // The first look finds the gone one and leaves it for the next.
+    let removed = remove_stale(&mut transmission, ask, &mut departed, &Redactor::none()).await;
+    assert!(removed.is_empty());
+    assert!(fake.calls_of("torrent-remove").is_empty());
+    assert_eq!(departed, HashSet::from([hash(1)]));
+
+    let removed = remove_stale(&mut transmission, ask, &mut departed, &Redactor::none()).await;
 
     // A person's torrent and one still downloading are not even asked about;
     // the one whose item is in the feeds stays.
@@ -168,11 +171,58 @@ async fn a_cleanup_removes_only_finished_bot_torrents_whose_item_is_gone_and_kee
     left.sort();
     assert_eq!(left, [hash(2), hash(3), hash(4)]);
 
-    // The stalled one goes once it has finished.
+    // The stalled one goes at the second look after it has finished.
     fake.finish(&hash(4));
-    let removed = remove_stale(&mut transmission, |hash, _| hash == kept, &Redactor::none()).await;
+    let removed = remove_stale(&mut transmission, ask, &mut departed, &Redactor::none()).await;
+    assert!(removed.is_empty());
+    let removed = remove_stale(&mut transmission, ask, &mut departed, &Redactor::none()).await;
     assert_eq!(
         removed.iter().map(|t| t.hash.as_str()).collect::<Vec<_>>(),
         [hash(4)]
     );
+}
+
+#[tokio::test]
+async fn a_torrent_accounted_for_between_two_looks_stays_and_starts_over() {
+    let fake = FakeTransmission::start().await;
+    fake.preload(FakeTorrent::new(&hash(1), "Back.mkv").bot());
+    let mut transmission = connect(&fake).await;
+    let mut departed = HashSet::new();
+
+    remove_stale(
+        &mut transmission,
+        |_, _| false,
+        &mut departed,
+        &Redactor::none(),
+    )
+    .await;
+    // Its item is in a feed again at the second look.
+    let removed = remove_stale(
+        &mut transmission,
+        |_, _| true,
+        &mut departed,
+        &Redactor::none(),
+    )
+    .await;
+    assert!(removed.is_empty());
+    assert!(departed.is_empty());
+
+    // Gone again, it waits one look more.
+    let removed = remove_stale(
+        &mut transmission,
+        |_, _| false,
+        &mut departed,
+        &Redactor::none(),
+    )
+    .await;
+    assert!(removed.is_empty());
+    let removed = remove_stale(
+        &mut transmission,
+        |_, _| false,
+        &mut departed,
+        &Redactor::none(),
+    )
+    .await;
+    assert_eq!(removed.len(), 1);
+    assert!(fake.torrents().is_empty());
 }

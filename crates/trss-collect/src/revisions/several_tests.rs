@@ -155,8 +155,10 @@ async fn a_lower_revision_skipped_for_a_higher_one_whose_check_fails_replaces_th
 async fn a_lower_revision_whose_item_is_gone_when_the_higher_one_fails_stays_a_failure() {
     let s = World::new().await;
     s.v2_skipped_for_v3().await;
-    // `14v2` leaves the feed; the cycle takes its finished torrent out.
+    // `14v2` leaves the feed; the second cycle that finds it gone takes its
+    // finished torrent out.
     s.feed(&[(V3_HASH, &v3()), (OLD_HASH, &v1())]);
+    s.cycle().await;
     s.cycle().await;
     assert!(!s.tr.torrents().iter().any(|t| t.hash == NEW_HASH));
     assert_eq!(s.state_of(&v2()).await, RevisionState::Skipped);

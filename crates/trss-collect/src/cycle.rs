@@ -7,7 +7,7 @@
 use std::{
     collections::{HashMap, HashSet},
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{Arc, Mutex, MutexGuard},
 };
 
 use tokio_util::sync::CancellationToken;
@@ -30,6 +30,15 @@ use crate::{
 use trss_core::{folder_locks::Section, Millis};
 use trss_transmission as transmission;
 use trss_transmission::{remove_stale, AddKind, AddLabels, Redactor, RemovedTorrent};
+
+/// The torrents the last removal ([`remove_departed`]) found nothing
+/// accounting for, which the next one removes if that is still so. Kept in
+/// the worker's process: a restart only makes them wait one removal more.
+pub type Departed = Arc<Mutex<HashSet<String>>>;
+
+fn lock(departed: &Departed) -> MutexGuard<'_, HashSet<String>> {
+    departed.lock().unwrap_or_else(|e| e.into_inner())
+}
 
 /// The plan of each channel. A channel with a subscription gets one more
 /// look at history, for its first read: when history has no first read of it
@@ -932,6 +941,14 @@ async fn rename_mode(ctx: &CollectContext, kind: AddKind, hash: &str) -> Option<
 ///   an item that is still in a feed read this cycle stays, though no rule
 ///   selects it now (the rule was edited or archived since a retry added it,
 ///   or an older receive by hand, which no rule ever selected).
+///
+/// A torrent nothing accounts for goes at the second removal that finds it so
+/// ([`Departed`]), not the first. The removal runs before the worker reads the
+/// watch folders and connects subscriptions to seasons, and the season link
+/// finds a rule's videos through where Transmission says its torrents are:
+/// a past episode received after its item left the feed is accounted for by
+/// nothing from the moment it has finished, and without the wait it would be
+/// gone before any season link saw it with its video in the library.
 pub async fn remove_departed(
     ctx: &CollectContext,
     mut kept: HashSet<String>,
@@ -973,12 +990,18 @@ pub async fn remove_departed(
         Ok(hashes) => {
             kept.extend(hashes);
             let mut transmission = ctx.transmission.client();
-            remove_stale(
+            // One removal at a time holds the torrent gate, so the set is
+            // taken out for the call and put back after it.
+            let mut departed = std::mem::take(&mut *lock(&ctx.departed));
+            let removed = remove_stale(
                 &mut transmission,
                 |hash, labels| kept.contains(hash) || labelled_for_a_waiting_item(labels),
+                &mut departed,
                 redactor,
             )
-            .await
+            .await;
+            *lock(&ctx.departed) = departed;
+            removed
         }
         Err(err) => {
             eprintln!(

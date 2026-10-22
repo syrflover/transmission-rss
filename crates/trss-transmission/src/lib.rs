@@ -12,7 +12,7 @@
 pub mod fake;
 mod redact;
 
-use std::{fmt, path::Path, time::Duration};
+use std::{collections::HashSet, fmt, path::Path, time::Duration};
 
 pub use redact::{Redactor, MIN_QUERY_SECRET_LEN, REDACTED};
 use transmission_rpc::{
@@ -562,19 +562,27 @@ pub struct RemovedTorrent {
 
 /// Removes (keeping the downloaded data) every finished bot-labelled torrent
 /// for which `is_kept(hash, labels)` is false, i.e. torrents whose item is no
-/// longer in the feeds. One still downloading stays until it has finished, so a
-/// Transmission that was down while its item left the feed does not leave the
-/// episode half downloaded. Prints one `Removed` line per torrent. A failure to
-/// list or remove is printed and leaves things as they are.
+/// longer in the feeds, provided the previous call found it so too.
+///
+/// `departed` holds the hashes the previous call found finished and not kept;
+/// this call replaces them with the ones it finds, so a torrent goes at the
+/// second call that finds it so. Between the two, whatever looks at the
+/// torrent's files through Transmission after they are complete (the season
+/// link of a subscription whose only episode left the feed before it was
+/// received) still finds the torrent. One still downloading stays until it
+/// has finished, so a Transmission that was down while its item left the feed
+/// does not leave the episode half downloaded. Prints one `Removed` line per
+/// torrent. A failure to list or remove is printed and leaves things as they
+/// are; a failed listing leaves `departed` as it was.
 pub async fn remove_stale(
     transmission: &mut TransClient,
     is_kept: impl Fn(&str, &[String]) -> bool,
+    departed: &mut HashSet<String>,
     redactor: &Redactor,
 ) -> Vec<RemovedTorrent> {
     match get_torrents(transmission).await {
         Ok(torrents) => {
-            // remove oldest torrents
-            let oldest_torrents = torrents
+            let unaccounted = torrents
                 .into_iter()
                 .filter(|torrent| has_label(torrent.labels.as_deref(), BOT_LABEL))
                 .filter(is_finished)
@@ -584,6 +592,17 @@ pub async fn remove_stale(
                         torrent.labels.as_deref().unwrap_or_default(),
                     )
                 })
+                .collect::<Vec<_>>();
+            let found_before = std::mem::replace(
+                departed,
+                unaccounted
+                    .iter()
+                    .filter_map(|torrent| torrent.hash_string.clone())
+                    .collect(),
+            );
+            let oldest_torrents = unaccounted
+                .into_iter()
+                .filter(|torrent| found_before.contains(torrent.hash_string.as_deref().unwrap()))
                 .collect::<Vec<_>>();
 
             let mut removed = Vec::new();
