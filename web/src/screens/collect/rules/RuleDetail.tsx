@@ -30,7 +30,7 @@ import { SaveFolderFields } from "../folder/SaveFolderFields";
 import { ArchivedWorkNotice } from "./ArchivedWorkNotice";
 import { EpisodeGrounds } from "./EpisodeGrounds";
 import { BLANK_DRAFT, draftOf, fieldsOf, parseEpisode, sameDraft, type Draft } from "./draft";
-import { LinkToSchedule } from "./LinkToSchedule";
+import { LinkToAnissia } from "./LinkToAnissia";
 import { PastSearch } from "./past-search/PastSearch";
 import { ChannelTag, StateBadge } from "./RuleList";
 import { ConflictNotice, OrderRow, RuleSummary } from "./parts";
@@ -296,7 +296,7 @@ export function RuleDetail({
   // The work folder is coming into the collect folder before the rule collects.
   const bringingIn = bringingInStored || moving;
 
-  /** A switch, the creator or `편성표와 연결` changed the rule: take it, the list and the other screens. */
+  /** A switch, the creator or `Anissia 연결` changed the rule: take it, the list and the other screens. */
   const taken = (fresh: Rule) => {
     setKnown(fresh);
     setConflict(null);
@@ -401,7 +401,7 @@ export function RuleDetail({
         />
       )}
       {known && linkOpen && known.subscription === null && (
-        <LinkToSchedule
+        <LinkToAnissia
           rule={known}
           onCancel={() => setLinkOpen(false)}
           onStale={taken}

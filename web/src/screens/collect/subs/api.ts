@@ -29,13 +29,17 @@ export function fetchSchedule(week: number, signal?: AbortSignal): Promise<Sched
   return api<Schedule>(`/anissia/schedule/${week}`, { signal });
 }
 
-/** A page (from 1) of `작품 찾기`: Anissia's full list for `q`, every week's anime that have not ended. */
-export function searchSchedule(q: string, page: number, signal?: AbortSignal): Promise<ScheduleSearch> {
+/**
+ * A page (from 1) of Anissia's full list for `q`, every week's anime: `작품 찾기` leaves out the ones that have ended,
+ * and a rule's `Anissia 연결` keeps them with `ended`.
+ */
+export function searchSchedule(q: string, page: number, ended: boolean, signal?: AbortSignal): Promise<ScheduleSearch> {
   const params = new URLSearchParams({ q, page: String(page) });
+  if (ended) params.set("ended", "true");
   return api<ScheduleSearch>(`/anissia/search?${params}`, { signal });
 }
 
-/** Where an anime was picked: a week of the schedule, or a page of `작품 찾기`. The server finds it there again. */
+/** Where an anime was picked: a week of the schedule, or a page of a search. The server finds it there again. */
 export type PickedFrom = { week: number } | { q: string; page: number };
 
 export function fetchCreators(animeNo: number, signal?: AbortSignal): Promise<Creators> {
@@ -62,11 +66,11 @@ export function changeCreator(rule: Pick<Rule, "id" | "version">, creator: strin
   return api<Rule>(`/rules/${encodeURIComponent(rule.id)}/creator`, { method: "PUT", body });
 }
 
-/** What `편성표와 연결` sends besides the rule's version. */
-export type ScheduleLink = Omit<LinkRuleBody, "version">;
+/** What `Anissia 연결` sends besides the rule's version. */
+export type RuleLink = Omit<LinkRuleBody, "version">;
 
-/** `편성표와 연결`: turns an existing rule into a subscription, keeping its phrase, folder and order. */
-export function linkToSchedule(rule: Pick<Rule, "id" | "version">, link: ScheduleLink): Promise<Rule> {
+/** `Anissia 연결`: turns an existing rule into a subscription, keeping its phrase, folder and order. */
+export function linkToAnissia(rule: Pick<Rule, "id" | "version">, link: RuleLink): Promise<Rule> {
   const body: LinkRuleBody = { version: rule.version, ...link };
   return api<Rule>(`/rules/${encodeURIComponent(rule.id)}/subscription`, { method: "POST", body });
 }

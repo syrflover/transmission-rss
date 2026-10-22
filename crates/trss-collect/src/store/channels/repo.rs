@@ -740,7 +740,7 @@ pub fn set_creator(
     Ok(updated)
 }
 
-/// `편성표와 연결`: makes an existing rule a subscription to
+/// `Anissia 연결`: makes an existing rule a subscription to
 /// `subscription.anime` if it is still at `expected`, keeping everything else
 /// about it (match phrase, save folder, order, state), and stores the anime's
 /// snapshot. The rule must not be a subscription already, and the channel

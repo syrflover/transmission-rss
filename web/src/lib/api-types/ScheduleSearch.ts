@@ -2,8 +2,9 @@
 import type { ScheduleEntry } from "./ScheduleEntry";
 
 /**
- * A page of the schedule's `작품 찾기`: the anime of every week that have not
- * ended, in the order Anissia lists them.
+ * A page of Anissia's full list for a text, every week's anime, in the order
+ * Anissia lists them: the schedule's `작품 찾기` leaves out the ones that have
+ * ended, a rule's `Anissia 연결` keeps them.
  */
 export type ScheduleSearch = { 
 /**
@@ -15,7 +16,7 @@ q: string, entries: Array<ScheduleEntry>,
  */
 page: number, 
 /**
- * Whether Anissia has a next page; it may hold none that have not ended.
+ * Whether Anissia has a next page; without the ended ones it may hold none.
  */
 has_next: boolean, 
 /**

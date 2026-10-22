@@ -52,7 +52,7 @@ const linkButton =
  * The four lines at the top of every rule, filled the same way for each so the
  * poster keeps one size: broadcast day and quarter, subtitle creator with its
  * `변경`, progress, and the last collection. What is not known is `미정` or
- * `아직 없음`. A rule that follows no anime has `편성표와 연결` beside the
+ * `아직 없음`. A rule that follows no anime has `Anissia 연결` beside the
  * broadcast line. The poster is the connected work's cover, or an empty box.
  */
 export function RuleSummary({
@@ -109,7 +109,7 @@ export function RuleSummary({
           {broadcast}
           {rule && subscription === null && (
             <button type="button" className={linkButton} aria-expanded={linkOpen} onClick={onLink}>
-              편성표와 연결
+              Anissia 연결
             </button>
           )}
         </dd>

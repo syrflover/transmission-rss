@@ -2,8 +2,8 @@
 //! schedule, and a page of the full list's search (Anissia matches its Korean
 //! titles). A pick names the list it was made from, and [`listed_anime`] reads
 //! that list again: the anime must be in it, and the snapshot kept is the one
-//! Anissia gave there. The subscribe flow, a rule's `편성표와 연결` and a
-//! season's Anissia link take their anime this way.
+//! Anissia gave there. The subscribe flow, a rule's `Anissia 연결` and a
+//! season's or a movie's Anissia link take their anime this way.
 
 use super::{
     subscriptions_api::{unavailable, USER_MAX_WAIT},

@@ -4,7 +4,7 @@
 //! | call                                         | success                                        |
 //! | -------------------------------------------- | ---------------------------------------------- |
 //! | `GET /anissia/schedule/{week}`               | `200 Schedule` (0 Sunday to 6 Saturday, 7 `기타`, 8 `신작`) |
-//! | `GET /anissia/search?q=&page=`               | `200 ScheduleSearch` (every week's anime that have not ended) |
+//! | `GET /anissia/search?q=&page=&ended=`        | `200 ScheduleSearch` (every week's anime, the ended ones only with `ended=true`) |
 //! | `GET /anissia/anime/{no}/creators`           | `200 Creators`                                 |
 //! | `GET /subscriptions`                         | `200 { quarter, subscriptions: [SubscriptionItem] }` |
 //! | `GET /subscriptions/titles?channel_id=&q=`   | `200 Titles`                                   |
@@ -12,7 +12,7 @@
 //! | `GET /subscriptions/candidates`              | `200 { candidates: [CandidateView] }`          |
 //! | `POST /subscriptions/candidates/reject`      | `200 { rejected: true }`                       |
 //! | `PUT /rules/{id}/creator`                    | `200 RuleView` (`제작자 변경`)                 |
-//! | `POST /rules/{id}/subscription`              | `200 RuleView` (`편성표와 연결`)               |
+//! | `POST /rules/{id}/subscription`              | `200 RuleView` (`Anissia 연결`)                |
 //! | `POST /rules/{id}/title`                     | `200 RuleView` (`제목 정하기`)                 |
 //!
 //! Anissia is a third party: a call that needs it and cannot get an answer
@@ -34,7 +34,9 @@
 //! `GET /anissia/search` is the schedule's `작품 찾기`: a page of Anissia's
 //! full list for the text written (Anissia matches its Korean titles), without
 //! the anime that have ended ([`run_state`]), each with its week. A page can
-//! hold none of them and still have a next one.
+//! hold none of them and still have a next one. With `ended=true` the page
+//! keeps them: a rule's `Anissia 연결` picks from the whole list, finished
+//! anime included.
 //!
 //! A subscription made without a `work` waits for its title (`제목 대기`): the
 //! rule has no match phrase and receives nothing. It needs a channel whose
@@ -246,8 +248,9 @@ pub(super) struct Schedule {
     cached: bool,
 }
 
-/// A page of the schedule's `작품 찾기`: the anime of every week that have not
-/// ended, in the order Anissia lists them.
+/// A page of Anissia's full list for a text, every week's anime, in the order
+/// Anissia lists them: the schedule's `작품 찾기` leaves out the ones that have
+/// ended, a rule's `Anissia 연결` keeps them.
 #[derive(Debug, Serialize)]
 #[cfg_attr(test, derive(ts_rs::TS))]
 pub(super) struct ScheduleSearch {
@@ -256,7 +259,7 @@ pub(super) struct ScheduleSearch {
     entries: Vec<ScheduleEntryView>,
     /// Counted from 1.
     page: u32,
-    /// Whether Anissia has a next page; it may hold none that have not ended.
+    /// Whether Anissia has a next page; without the ended ones it may hold none.
     has_next: bool,
     /// The last page a search answers; a page past it is refused.
     max_page: u32,
@@ -269,6 +272,9 @@ pub(super) struct ScheduleSearch {
 struct SearchQuery {
     q: Option<String>,
     page: Option<u32>,
+    /// Keep the anime that have ended.
+    #[serde(default)]
+    ended: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -419,7 +425,7 @@ async fn search(
         .entries
         .iter()
         .map(|entry| entry_view(entry, found.fetched_at, today, &mut followed))
-        .filter(|entry| entry.run != Some(RunState::End))
+        .filter(|entry| asked.ended || entry.run != Some(RunState::End))
         .collect();
     Ok(Json(ScheduleSearch {
         q,
@@ -1206,7 +1212,7 @@ async fn change_creator(
     let rule = rule_at(&state, &id, b.version).await?;
     let Some(subscription) = &rule.subscription else {
         return Err(ApiError::invalid(
-            "편성표와 연결된 규칙만 자막 제작자를 정해요.",
+            "Anissia 작품에 연결된 규칙만 자막 제작자를 정해요.",
         ));
     };
     if subscription.subtitles == SubtitleMode::None {
@@ -1265,7 +1271,7 @@ async fn link_rule(
     let rule = rule_at(&state, &id, b.version).await?;
     if rule.subscription.is_some() {
         return Err(ApiError::invalid(
-            "이미 편성표와 연결된 규칙이에요. 화면을 새로고침해 주세요.",
+            "이미 Anissia 작품에 연결된 규칙이에요. 화면을 새로고침해 주세요.",
         ));
     }
     // A subscription saves into a work folder below the collect folder, as

@@ -7,6 +7,7 @@ import { ApiError } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import type { ScheduleEntry } from "@/lib/api-types";
 
+import { AnissiaListTabs, type AnissiaList } from "../../collect/subs/add/AnissiaSearch";
 import { PickAnime } from "../../collect/subs/add/PickAnime";
 import { todayWeek } from "../../collect/subs/format";
 import { btnNeutral, btnPrimary, hintClass, inputClass } from "../../collect/channels/styles";
@@ -21,8 +22,6 @@ import {
 } from "../api";
 import { anissiaStatusText as statusText } from "./model";
 import { targetOf, unitOf, type AnissiaTarget } from "./movie.ts";
-
-type Tab = "list" | "schedule";
 
 /** The anime picked, and where it was picked from (the server checks it against that list). */
 interface Picked {
@@ -105,7 +104,7 @@ function Body({
   onClose: () => void;
   onChanged: (link: AnissiaLink) => void;
 }) {
-  const [tab, setTab] = useState<Tab>("list");
+  const [tab, setTab] = useState<AnissiaList>("list");
   const [picked, setPicked] = useState<Picked | null>(null);
   const [week, setWeek] = useState(() => todayWeek());
   const [busy, setBusy] = useState(false);
@@ -133,11 +132,6 @@ function Body({
     }
   };
 
-  const tabs: { id: Tab; label: string }[] = [
-    { id: "list", label: "전체 목록" },
-    { id: "schedule", label: "편성표" },
-  ];
-
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-x-hidden overflow-y-auto overscroll-contain p-4 pb-[calc(16px+env(safe-area-inset-bottom,0px))]">
       <p className="text-[13px] leading-relaxed text-text-secondary" data-testid="anissia-current">
@@ -150,22 +144,7 @@ function Body({
         )}
       </p>
 
-      <div role="group" aria-label="찾는 곳" className="flex gap-1.5">
-        {tabs.map((t) => (
-          <button
-            key={t.id}
-            type="button"
-            aria-pressed={tab === t.id}
-            onClick={() => setTab(t.id)}
-            className={cn(
-              "min-h-9 rounded-full border px-4 text-[13px] font-semibold outline-offset-2 focus-visible:outline-2 focus-visible:outline-focus max-[720px]:min-h-10",
-              tab === t.id ? "border-focus bg-focus text-primary-foreground" : "border-hairline bg-surface-1 text-text-primary hover:border-text-secondary",
-            )}
-          >
-            {t.label}
-          </button>
-        ))}
-      </div>
+      <AnissiaListTabs tab={tab} onTab={setTab} />
 
       {/* Both tabs stay mounted, so a search and its place survive switching. */}
       <div hidden={tab !== "list"}>

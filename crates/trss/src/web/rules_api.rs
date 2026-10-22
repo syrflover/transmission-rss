@@ -1344,7 +1344,7 @@ async fn switch_rule(
         (None, Some(on)) => {
             if stored.subscription.is_none() {
                 return Err(ApiError::invalid(
-                    "편성표와 연결된 규칙만 자막을 받아요. 먼저 편성표와 연결해 주세요.",
+                    "Anissia 작품에 연결된 규칙만 자막을 받아요. 먼저 Anissia 연결을 해 주세요.",
                 ));
             }
             if stored.state != RuleState::Active {

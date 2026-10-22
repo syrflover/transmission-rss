@@ -399,7 +399,7 @@ impl ChannelStore {
             .await
     }
 
-    /// Makes an existing rule a subscription (`편성표와 연결`), keeping its
+    /// Makes an existing rule a subscription (`Anissia 연결`), keeping its
     /// match phrase, save folder, order and state.
     pub async fn subscribe_rule(
         &self,

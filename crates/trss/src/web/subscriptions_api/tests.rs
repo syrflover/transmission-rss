@@ -329,6 +329,33 @@ async fn a_search_lists_the_anime_of_every_week_that_have_not_ended_with_their_w
 }
 
 #[tokio::test]
+async fn a_search_with_the_ended_ones_keeps_the_anime_that_have_ended() {
+    let app = App::new().await;
+    app.catalogue();
+
+    let (status, first) = app
+        .get("/api/anissia/search?q=%EC%95%88%EB%85%95&ended=true")
+        .await;
+    assert_eq!(status, StatusCode::OK, "{first}");
+    assert_eq!(numbers(&first["entries"]), [3320, 2969, 3002, 3005]);
+    let runs: Vec<&str> = first["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["run"].as_str().unwrap())
+        .collect();
+    assert_eq!(runs, ["on", "end", "end", "off"]);
+    assert_eq!(first["entries"][1]["week"], 1);
+    assert_eq!(first["entries"][1]["end_date"], "2021-06-27");
+    assert_eq!(first["has_next"], true);
+
+    let (_, ended) = app
+        .get("/api/anissia/search?q=%EB%9D%BC%EB%9D%BC&ended=true")
+        .await;
+    assert_eq!(numbers(&ended["entries"]), [2969]);
+}
+
+#[tokio::test]
 async fn a_search_needs_its_text_and_a_page_in_range_and_its_failure_leaves_the_weeks() {
     let app = App::new().await;
     app.catalogue();
@@ -830,7 +857,7 @@ async fn editing_a_subscription_rule_keeps_its_subscription_and_a_stale_version_
     );
 }
 
-/// The rule detail (ticket 2-work-discovery-and-subscriptions/0019): the switches, the creator, `편성표와 연결` and
+/// The rule detail (ticket 2-work-discovery-and-subscriptions/0019): the switches, the creator, `Anissia 연결` and
 /// what the rule's view says of its season.
 mod rule_detail {
     use std::collections::BTreeSet;
@@ -1191,6 +1218,103 @@ mod rule_detail {
         assert_eq!(linked["subscription"]["anime"]["week"], 4);
         assert_eq!(linked["match"], "Off Show");
         assert_eq!(linked["directory"], "Off Show/Season 02");
+    }
+
+    /// `Anissia 연결` picks from the whole list, so a rule can follow an anime
+    /// no week of the schedule lists. It reads as ended, has no card this week
+    /// and is suggested for the archive: at once when its end date has passed,
+    /// and after the daily refresh found no week listing it when it has none.
+    #[tokio::test]
+    async fn a_rule_linked_to_an_anime_the_schedule_does_not_list_reads_as_ended() {
+        let app = App::new().await;
+        app.catalogue();
+        let channel = app.channel("feed.test").await;
+        let past = app.plain(&channel, "Past Show").await;
+        let dateless = app.plain(&channel, "Off Show").await;
+        for (rule, no) in [(&past, 3002), (&dateless, 3005)] {
+            let (status, linked) = app
+                .call(
+                    Method::POST,
+                    format!("/api/rules/{}/subscription", rule.id).leak(),
+                    Some(json!({
+                        "version": rule.version, "anissia_anime_no": no, "q": "안녕", "page": 1,
+                        "subtitles": "none",
+                    })),
+                )
+                .await;
+            assert_eq!(status, StatusCode::OK, "{linked}");
+        }
+        let runs = || async {
+            let (_, list) = app.get("/api/subscriptions").await;
+            list["subscriptions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|s| (s["title"].as_str().unwrap().to_owned(), s["run"].clone()))
+                .collect::<Vec<_>>()
+        };
+        let cards = || async {
+            // The home screen's week, which it shows once the first run's checklist is done.
+            let week = crate::web::schedule_api::week_at(&app.state, NOW)
+                .await
+                .unwrap();
+            serde_json::to_value(week).unwrap()["days"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .flat_map(|d| d["cards"].as_array().unwrap().clone())
+                .map(|c| c["anime_no"].as_i64().unwrap())
+                .collect::<Vec<_>>()
+        };
+        let suggested = || async {
+            let (_, list) = app.get("/api/archive-suggestions").await;
+            list["suggestions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|s| {
+                    let ground = &s["grounds"][0];
+                    (
+                        s["rule_id"].as_str().unwrap().to_owned(),
+                        ground["kind"].as_str().unwrap().to_owned(),
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+
+        // 3002 (Tuesday) ended on 2026-09-20; 3005 (Thursday, `결방`) has no end date.
+        assert_eq!(
+            runs().await,
+            [
+                ("Past Show".to_owned(), json!("end")),
+                ("Off Show".to_owned(), json!("off")),
+            ]
+        );
+        assert_eq!(cards().await, [3005]);
+        assert_eq!(suggested().await, [(past.id.clone(), "ended".to_owned())]);
+
+        // The daily refresh asked every week and none listed 3005.
+        app.state
+            .anissia_store
+            .mark_unlisted(vec![3005], NOW, NOW + 24 * 60 * 60 * 1000, NOW + 1)
+            .await
+            .unwrap();
+        assert_eq!(
+            runs().await,
+            [
+                ("Past Show".to_owned(), json!("end")),
+                ("Off Show".to_owned(), json!("end")),
+            ]
+        );
+        assert_eq!(cards().await, Vec::<i64>::new());
+        let mut both = suggested().await;
+        both.sort();
+        let mut expected = vec![
+            (past.id.clone(), "ended".to_owned()),
+            (dateless.id.clone(), "unlisted".to_owned()),
+        ];
+        expected.sort();
+        assert_eq!(both, expected);
     }
 
     #[tokio::test]
