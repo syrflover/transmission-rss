@@ -34,7 +34,7 @@
   - 첫 수집 주기에 오류가 없어요.
   - 올리기 전과 뒤의 토렌트 목록이 같아요.
   - 컨테이너가 `trss`와 `trss-browser` 둘이고, 예전 `trss-web`·`trss-worker` 컨테이너는 없어요.
-  - `trss` 컨테이너의 메모리 사용량을 측정해 [0058](../../../specs/2026-10-04-server-resource-limits/0058-server-oom-and-resource-limits.md)에 적어요.
+  - `trss` 컨테이너의 메모리 사용량을 측정해 [0058](../../specs/2026-10-04-server-resource-limits/0058-server-oom-and-resource-limits.md)에 적어요.
   - 명령 하나를 실행해, 결과가 이벤트로 화면에 닿아요.
 - [x] 0143의 서버 확인 가운데 0140에 기대지 않는 것을 이 배포에서 하고, 그 결과를 0143에 적어요.
 
@@ -96,7 +96,7 @@
 - 첫 수집 주기: 14:36:29에 시작해 14:36:32에 끝났어요. 상태판의 문제는 0개였고, 두 채널 모두 정상으로 읽었어요. 규칙 32개, 채널 2개, 작품 92개가 화면 API에 그대로 나왔어요.
 - 토렌트 목록: 올리기 전과 첫 주기 뒤 모두 4개이고, `diff`가 같았어요.
 - 컨테이너: `docker ps -a --filter name=trss`에 `trss`와 `trss-browser`만 있었고 둘 다 `0.8.0`이었어요. 멈춘 `trss-web`·`trss-worker`도 남지 않았어요.
-- 메모리: 시작하고 1분쯤 뒤 `trss` 14.26MiB(한도 384MiB), `trss-browser` 13.86MiB(한도 768MiB)였어요. [0058](../../../specs/2026-10-04-server-resource-limits/0058-server-oom-and-resource-limits.md)에 적었어요.
+- 메모리: 시작하고 1분쯤 뒤 `trss` 14.26MiB(한도 384MiB), `trss-browser` 13.86MiB(한도 768MiB)였어요. [0058](../../specs/2026-10-04-server-resource-limits/0058-server-oom-and-resource-limits.md)에 적었어요.
 - 명령과 이벤트: 사용자 승인을 받아 `설정 > 감시 폴더`의 `/downloads/Shows (current)`에서 `다시 확인`을 한 번 눌렀어요. `watch_rescan` 명령이 14:43:33.006에 접수돼 23ms 뒤 `scanned`로 끝났어요. 같은 때 이 PC에서 연 이벤트 스트림에 명령 이벤트 셋과 라이브러리 이벤트 셋이 왔어요. 화면은 명령을 두 번, 감시 폴더를 한 번 다시 읽었고, 누른 뒤 0.25초 안에 `다시 확인했어요.`가 나왔어요.
 
 0143의 확인 가운데 0140에 기대지 않는 것은 [0143의 결과](../../../specs/2026-10-11-feedback-0.7.0/0143-deploy-feedback-fixes.md#결과)에 적었어요.

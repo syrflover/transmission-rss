@@ -48,7 +48,7 @@
 - [x] `trss-web`과 `trss-worker` 크레이트는 `trss` 크레이트 하나가 되고, 바이너리도 `trss` 하나예요. 기능 크레이트는 그대로예요.
 - [x] 앱 이미지에는 `trss`, `trss-extract`, `trss-probe` 바이너리와 정적 화면이 들어가고, 이미지는 `trss`로 시작해요.
 - [x] Compose의 `trss-web`·`trss-worker` 서비스는 `trss` 서비스 하나가 돼요. 이 서비스는 1000:1000으로 돌고, 미디어를 쓰기로 마운트하고, `trss_net`(`gw_priority`)과 `browser_net`에 붙어요. 지금 web이 하는 서브넷 확인을 그대로 하고, `stop_grace_period`는 15초예요. 환경 변수는 두 서비스가 받던 것을 합친 것이에요.
-- [x] 메모리 한도는 지금 두 컨테이너 한도의 합인 384M(worker 256M, web 128M)로 시작하고, 서버에서 측정한 값을 [0058](../../../specs/2026-10-04-server-resource-limits/0058-server-oom-and-resource-limits.md)에 적어요.
+- [x] 메모리 한도는 지금 두 컨테이너 한도의 합인 384M(worker 256M, web 128M)로 시작하고, 서버에서 측정한 값을 [0058](../../specs/2026-10-04-server-resource-limits/0058-server-oom-and-resource-limits.md)에 적어요.
 - [x] `trss` 프로세스 하나가 화면과 API, 5분 수집 주기, 감시 폴더 읽기(알림과 자동 감시), 명령, 자막 작업, 서버 브라우저의 수명, 보관 파일 정리를 돌려요.
 - [x] 같은 앱 데이터 폴더로 두 번째 `trss`를 시작하면, 그 프로세스는 이미 도는 프로세스가 있다고 로그에 남기고 멈춰요. 이 잠금 하나가 worker 잠금, 대기열마다의 잠금 파일, 브라우저 잠금, 수집 주기의 두 번째 실행 막기를 대신해요.
 - [x] 시작할 때 쓸 수 있는지 확인하는 목록에서 깨우기 소켓이 빠지고, 나머지 확인은 그대로예요.
@@ -163,7 +163,7 @@
   - [개요](../../../overview.md)의 구성 요소와 지금 상태를 보는 곳
   - [readme](../../../../readme.md)의 Docker Compose, 실행·중지·업데이트, 1000:1000 실행, 자원 한도, 개발 환경
   - `dev/compose.sh`, `dev/measure/run.sh`, `deploy/probe.sh`
-  - 열린 티켓 [0058](../../../specs/2026-10-04-server-resource-limits/0058-server-oom-and-resource-limits.md)과 [0135](../../../specs/2026-09-30-web-redesign/0135-deploy-settings-item.md)
+  - 열린 티켓 [0058](../../specs/2026-10-04-server-resource-limits/0058-server-oom-and-resource-limits.md)과 [0135](../../../specs/2026-09-30-web-redesign/0135-deploy-settings-item.md)
 - [x] [ADR 0006](../../../adr/0006-separate-web-worker-binaries.md)에서 바뀐 부분은 이미 [한 프로세스 ADR](../../../adr/0019-one-process-for-web-and-worker.md)과 [끊긴 작업 ADR](../../../adr/0020-interrupted-jobs-wait-for-a-restart.md)을 가리켜요. 구현이 이 두 ADR과 다르게 되면, 구현을 마치기 전에 사용자 결정을 받아 ADR을 고쳐요.
 
 ## 순서
@@ -309,7 +309,7 @@
 
 - 0153이 남긴 한계, 곧 끊긴 교체가 남기는 적용본 기록과 `.trss/aside/`의 파일은 범위 밖이라 [0165](../../../specs/2026-10-22-cut-replacement-leftovers/0165-cut-replacement-leftovers.md)가 다뤄요. 그 제안은 사용자 결정을 기다려요.
 - 0137–0142의 서버 확인 가운데 0140에 기대는 `Season 00` 극장판의 확인은 0140을 올릴 때 [0143](../../../specs/2026-10-11-feedback-0.7.0/0143-deploy-feedback-fixes.md)에서 봐요.
-- 큰 폴더 스캔과 표지 올리기 때 `trss`의 최대 메모리는 [0058](../../../specs/2026-10-04-server-resource-limits/0058-server-oom-and-resource-limits.md)이 계속 봐요.
+- 큰 폴더 스캔과 표지 올리기 때 `trss`의 최대 메모리는 [0058](../../specs/2026-10-04-server-resource-limits/0058-server-oom-and-resource-limits.md)이 계속 봐요.
 - 실제 서버를 쓰며 지켜볼 것과 나중에 생길 환경에서만 확인할 수 있는 것은 [열린 관찰 목록](../../../observations.md)에 옮겼어요. 다시 시작할 때 끊긴 명령과 자막 작업, 수집 주기 하나가 보내는 바뀜의 수, 시계만으로 바뀌는 상태의 이벤트, 서버의 Transmission을 거친 일괄 보관, reverse proxy를 거친 이벤트, 다른 파일시스템의 미디어예요.
 
 ### 기준값

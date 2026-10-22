@@ -30,7 +30,7 @@
   - [웹 앱 공통 명세의 구현 경계와 실행 순서](../../../requirements/web-app.md#구현-경계와-실행-순서)에서 프로세스와 컨테이너를 적은 부분
   - [자막 명세의 압축 해제의 격리와 한도](../../../requirements/subtitles.md#압축-해제의-격리와-한도)에서 worker 컨테이너의 한도를 적은 부분
   - [RSS 수집 명세](../../../requirements/collection.md), [설정과 이전 명세](../../../requirements/settings.md), [작업과 인증 명세](../../../requirements/jobs.md)에서 worker를 실행 주체로 적은 문장
-  - 열린 티켓 [0058](../../../specs/2026-10-04-server-resource-limits/0058-server-oom-and-resource-limits.md)의 한도 문장과 [0135](../../../specs/2026-09-30-web-redesign/0135-deploy-settings-item.md)의 환경 변수 문장
+  - 열린 티켓 [0058](../../specs/2026-10-04-server-resource-limits/0058-server-oom-and-resource-limits.md)의 한도 문장과 [0135](../../../specs/2026-09-30-web-redesign/0135-deploy-settings-item.md)의 환경 변수 문장
 - [x] [명세의 동작 보존 조건](lighter-structure.md#동작-보존)을 지켜요.
 - [x] 구현이 [한 프로세스 ADR](../../../adr/0019-one-process-for-web-and-worker.md)과 맞아요. 다르게 해야 하면 마치기 전에 사용자 결정을 받아 ADR을 고쳐요.
 

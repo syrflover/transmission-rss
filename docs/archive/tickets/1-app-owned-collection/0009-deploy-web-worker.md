@@ -1,6 +1,6 @@
 # 0009 웹과 worker를 배포하고 cron을 걷어내요
 
-- 상태: 완료 (OOM 관찰과 자원 한도는 [0058](../../../specs/2026-10-04-server-resource-limits/0058-server-oom-and-resource-limits.md)로 옮김. 원격 인증 화면의 실제 배포 경로 보호는 결과 목표 5로 넘김)
+- 상태: 완료 (OOM 관찰과 자원 한도는 [0058](../../specs/2026-10-04-server-resource-limits/0058-server-oom-and-resource-limits.md)로 옮김. 원격 인증 화면의 실제 배포 경로 보호는 결과 목표 5로 넘김)
 - 출처: [구현 경계와 실행 순서](../../../requirements/web-app.md#구현-경계와-실행-순서), [접근 경계와 기기](../../../requirements/web-app.md#접근-경계와-기기)
 - 막는 티켓: [0004](0004-worker-collection-history.md), [0005](0005-legacy-yaml-import.md)
 
@@ -150,6 +150,6 @@
 
 ### 남은 일
 
-- OOM 관찰, 커널 갱신, 자원 한도 재검토는 [0058](../../../specs/2026-10-04-server-resource-limits/0058-server-oom-and-resource-limits.md)로 옮겼어요(사용자 결정, 2026-10-04). 결과 목표 1의 완료 조건에 들지 않고, 실제 서버를 며칠 운영해야 볼 수 있어서예요.
+- OOM 관찰, 커널 갱신, 자원 한도 재검토는 [0058](../../specs/2026-10-04-server-resource-limits/0058-server-oom-and-resource-limits.md)로 옮겼어요(사용자 결정, 2026-10-04). 결과 목표 1의 완료 조건에 들지 않고, 실제 서버를 며칠 운영해야 볼 수 있어서예요.
 - 휴대폰·LTE 확인은 2026-10-04에 사용자 확인으로 마쳤어요(위).
 - 원격 인증 화면(결과 목표 3)의 보호를 실제 배포 경로에서 확인하는 일은 결과 목표 5의 [실제 배포의 접근 보호](../../../requirements/web-app.md#접근-경계와-기기)로 넘겼어요. 서버는 0.5.0이라 아직 원격 화면이 없어요. 목표 3이 든 릴리스를 올릴 때 확인해요.

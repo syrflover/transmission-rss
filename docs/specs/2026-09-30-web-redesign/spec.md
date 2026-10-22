@@ -65,7 +65,7 @@
 - 시험으로 확인한 것: 웹에서 고친 규칙이 다음 처리에 쓰이는 것과, 미리보기의 예측이 다음 주기의 처리와 같은 것이에요. 0006의 통합 시험 `what_the_preview_predicts_for_an_edit_is_what_the_next_cycle_does_after_it_is_saved`와 `after_a_reorder_through_the_api_the_next_cycle_picks_the_first_match_in_the_new_order`였고, [0113](../../archive/tickets/refactoring-between-5-and-6/0113-remaining-area-tests.md)에서 trss-collect의 `the_preview_agrees_with_the_plan_for_every_recorded_title`(`plan/preview/tests.rs`)과 `after_the_rules_are_reordered_a_cycle_gives_an_item_to_the_first_rule_in_the_new_order`(`cycle/tests.rs`)로 옮겼어요. 실제 서버에서 규칙을 고친 뒤 다음 주기를 따로 관찰한 기록은 없어요.
 - 남은 것이에요. 티켓마다의 다른 한계는 보관한 각 티켓의 `남은 일`에 있어요.
   - 원격 인증 화면(목표 3)의 보호를 실제 배포 경로에서 확인하는 일은 결과 목표 5로 넘겼어요. 서버는 0.5.0이라 원격 화면이 아직 없어요.
-  - Transmission OOM 관찰과 자원 한도는 [0058](../2026-10-04-server-resource-limits/0058-server-oom-and-resource-limits.md)에서 이어가요.
+  - Transmission OOM 관찰과 자원 한도는 [0058](../../archive/specs/2026-10-04-server-resource-limits/0058-server-oom-and-resource-limits.md)에서 이어가요.
   - 0004가 적은 음수 회차 변환의 이름 반복 변경(가짜 서버에서 본 `S04E38` → `S04E14`)은 실제 Transmission에서 따로 관찰하지 않았어요.
 
 ### 2. 작품 발견과 방영작 구독

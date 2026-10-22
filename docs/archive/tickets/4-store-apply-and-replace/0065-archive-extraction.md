@@ -185,4 +185,4 @@
    chmod +x probe.sh trss-probe trss-extract
    ./probe.sh --samples ./samples -- --size-mib 0 --unpack /samples/big.zip --unpack /samples/big.7z --unpack /samples/big.tar.xz --unpack /samples/big.rar --unpack /samples/many100k.zip --unpack /samples/nested30.zip --unpack /samples/dict1536m.xz --unpack /samples/dict4095m.7z --unpack /samples/dict_rar50_1g.rar --unpack /samples/zeros1g.rar --unpack /samples/enc_aes.zip --unpack /samples/esc.zip 2>&1 | tee unpack-$(date +%F).txt
    ```
-4. `unpack-<날짜>.txt`의 내용을 저에게 붙여 주세요. 제가 날짜·커널과 표본마다의 최대 `memory.current`·`oom_kill`을 이 티켓에 적어요. `oom_kill`이 생기면 [0058](../../../specs/2026-10-04-server-resource-limits/0058-server-oom-and-resource-limits.md)에서 한도를 다시 정해요.
+4. `unpack-<날짜>.txt`의 내용을 저에게 붙여 주세요. 제가 날짜·커널과 표본마다의 최대 `memory.current`·`oom_kill`을 이 티켓에 적어요. `oom_kill`이 생기면 [0058](../../specs/2026-10-04-server-resource-limits/0058-server-oom-and-resource-limits.md)에서 한도를 다시 정해요.

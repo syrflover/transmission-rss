@@ -46,6 +46,6 @@
 | 0129, 0131–0136 | [web-redesign](2026-09-30-web-redesign/spec.md) |
 | 0137–0143 | [feedback-0.7.0](2026-10-11-feedback-0.7.0/spec.md) |
 | 0165 | [cut-replacement-leftovers](2026-10-22-cut-replacement-leftovers/0165-cut-replacement-leftovers.md) |
-| 0058 | [server-resource-limits](2026-10-04-server-resource-limits/0058-server-oom-and-resource-limits.md) |
+| 0058 | [server-resource-limits](../archive/specs/2026-10-04-server-resource-limits/0058-server-oom-and-resource-limits.md), 보관 |
 | `docs/tickets/README.md`의 결과 목표와 그 사이 변경의 기록 | [web-redesign의 결과 목표](2026-09-30-web-redesign/spec.md#결과-목표) |
 | `docs/tickets/README.md`의 릴리스 규칙 | [readme의 Releasing](../../readme.md#releasing) |

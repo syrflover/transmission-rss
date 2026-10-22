@@ -4,8 +4,6 @@
 
 항목마다 지켜볼 것, 드러나는 모습, 결과가 바꿀 것, 출처를 적으세요. 관찰한 것이 생기면 날짜를 붙여 그 항목에 더하고, 지켜보던 것을 뒷받침하든 거스르든 적으세요. 항목은 사용자가 결론을 내리거나 그만 보기로 할 때만 지우고, 그 결론은 지우는 커밋의 메시지에 적으세요.
 
-실제 서버의 메모리와 자원 한도는 [0058](specs/2026-10-04-server-resource-limits/0058-server-oom-and-resource-limits.md)이 지켜봐요.
-
 ## 다시 시작할 때 끊긴 명령과 자막 작업
 
 - 지켜볼 것: 서버의 `trss`가 다시 시작하거나 업그레이드될 때, 끝나지 않은 명령을 다시 실행하고 시도를 한 번으로 세는지, 단계를 실행하던 자막 작업이 `중단됨`이 되고 `다시 시작`하면 끊긴 단계부터 이어 가는지예요. `중단됨`이 얼마나 자주 생기는지도 봐요.
@@ -49,3 +47,21 @@
 - 드러나는 모습: 옮기기 전에 새 마운트에서 `deploy/probe.sh`를 돌리면 검사가 실패해요. 옮긴 뒤에는 자막 교체가 모두 실패해요.
 - 결과가 바꿀 것: 교체를 다른 방법으로 할지 사용자 결정을 받아요.
 - 출처: [0151](archive/tickets/lighter-structure/0151-probe-rename-exchange.md)과 [0153의 바뀐 동작](archive/tickets/lighter-structure/0153-no-effect-records.md#바뀐-동작)
+
+## 서버 Transmission의 OOM 강제 종료
+
+- 지켜볼 것: 봇 토렌트 여럿을 며칠 받는 동안 서버(j4105)의 Transmission이 `oom_kill`로 죽지 않는지, 토렌트의 이름과 라벨이 되돌아가지 않는지예요. RHEL 9 커널 `5.14.0-687.36.1`부터 `687.53.1`까지는 쓰는 중인 `transmission-daemon`을 한도에서 죽였어요(RHEL-211058). 서버는 2026-10-19에 수정(RHEL-269060)이 든 `5.14.0-687.58.1.el9_8`로 올렸고, `transmission.slice`의 `MemoryHigh=384M`도 남아 있어요.
+- 드러나는 모습: `transmission.slice`와 그 아래 컨테이너의 `memory.events`에서 `oom_kill`이나 `max`가 0보다 커지거나, 토렌트의 이름과 라벨이 되돌아가요.
+- 결과가 바꿀 것: 0이 아니면 커널 수정이 듣지 않는 것이라 원인을 다시 찾아요. Transmission의 512M 한도는 그대로 두기로 했어요(사용자 결정).
+- 출처: [server-resource-limits/0058](archive/specs/2026-10-04-server-resource-limits/0058-server-oom-and-resource-limits.md)과 [1-app-owned-collection/0009의 OOM 강제 종료 기록](archive/tickets/1-app-owned-collection/0009-deploy-web-worker.md#이름과-라벨이-되돌아간-일-호스트-커널의-oom-강제-종료)
+- 2026-10-02 점검에서 컨테이너의 `oom_kill`은 0이었어요. 그 사이 받은 것은 1.4GB 한 회차뿐이었어요.
+- 2026-10-19 커널을 올리기 전 slice의 `memory.events`는 `high` 30455, `max` 0, `oom_kill` 0이었어요. 캐시가 384M를 넘는 동안 512M 한도에는 닿지 않았어요. slice가 활성화된 시각과 그 사이 받은 양은 확인하지 않았어요. 재부팅 직후에는 모두 0이었어요.
+
+## `trss` 컨테이너의 메모리 한도
+
+- 지켜볼 것: 큰 폴더를 스캔하거나 표지를 올릴 때 `trss`가 쓰는 최대 메모리예요. 한도 384M는 web(128M)과 worker(256M)가 두 컨테이너였을 때의 한도를 더해 시작한 값이고, 사용량을 보고 정한 값이 아니에요. 서버 브라우저 `trss-browser`(한도 768M)도 함께 봐요.
+- 드러나는 모습: 서버에서 `docker stats`로 본 `trss`와 `trss-browser`의 메모리 사용량이에요.
+- 결과가 바꿀 것: 측정한 최대치로 두 한도를 다시 정해 compose에 반영해요.
+- 출처: [server-resource-limits/0058](archive/specs/2026-10-04-server-resource-limits/0058-server-oom-and-resource-limits.md)과 [lighter-structure/0146](archive/tickets/lighter-structure/0146-one-trss-process-and-container.md)
+- 2026-10-02 서버에서 worker는 7.4MiB, web은 3.9MiB를 썼어요.
+- 2026-10-22 0.8.0을 올리고 1분쯤 뒤 `trss`는 14.26MiB, `trss-browser`는 13.86MiB였어요([lighter-structure/0162](archive/tickets/lighter-structure/0162-deploy-lighter-structure.md)).
