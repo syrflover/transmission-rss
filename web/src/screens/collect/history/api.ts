@@ -1,4 +1,4 @@
-import { api } from "@/lib/api";
+import { api, timedRead } from "@/lib/api";
 import { sendCommand, type Command } from "@/lib/commands";
 import type { HistoryItem, HistoryPage, HistoryResult, ReceiveOnce } from "@/lib/api-types";
 
@@ -40,7 +40,7 @@ export function listHistory(
 }
 
 export function getHistoryItem(id: number): Promise<HistoryItem> {
-  return api<HistoryItem>(`/history/${id}`);
+  return api<HistoryItem>(`/history/${id}`, timedRead());
 }
 
 /** Sends the command; `202` when stored now, `200` when the same command was stored before: both give its current state. */

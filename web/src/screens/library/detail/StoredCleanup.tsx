@@ -64,8 +64,8 @@ export function StoredCleanup({
   seasons: number;
   /** The work is a movie and nothing else: its one episode is `본편`. */
   movieOnly: boolean;
-  /** Reads the work again and shows it. */
-  onRefresh: () => Promise<void>;
+  /** Reads the work again and shows it, unless `signal` aborted meanwhile. */
+  onRefresh: (signal?: AbortSignal) => Promise<void>;
 }) {
   const [confirming, setConfirming] = useState<Confirming | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -93,7 +93,7 @@ export function StoredCleanup({
   useEffect(() => {
     if (!asked) return;
     const rereader = createRereader({
-      read: () => refresh.current(),
+      read: (signal) => refresh.current(signal),
       retryMs: () => RETRY_MS,
       hidden: () => document.hidden,
     });

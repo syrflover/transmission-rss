@@ -11,14 +11,35 @@
  * comes while it reads only sets a flag, and exactly one more read follows when
  * the read ends, however many requests came. That read starts after the last
  * request, so it sees everything the burst changed.
+ *
+ * A read the server never answers (a request on a connection that died
+ * without closing) would keep every later read from starting. So a read that
+ * takes longer than {@link READ_TIMEOUT_MS} is aborted and counts as failed,
+ * whether it ends later or not: the retry applies, and a request that came
+ * meanwhile reads again at once.
  */
+
+/** How long a read may take before it counts as failed, in milliseconds. */
+export const READ_TIMEOUT_MS = 15_000;
+
+/** The reason a read that took too long was aborted with (its signal's `reason`). */
+export class ReadTimedOut extends Error {
+  constructor() {
+    super("the read took too long");
+    this.name = "ReadTimedOut";
+  }
+}
 
 export interface RereaderOptions {
   /**
    * Reads what the screen shows and puts it on the screen. It rejects when the
-   * read failed; `signal` aborts when the rereader is stopped.
+   * read failed; `signal` aborts when the rereader is stopped, or with
+   * {@link ReadTimedOut} when the read took too long, and an aborted read must
+   * not put its answer on the screen.
    */
   read: (signal: AbortSignal) => Promise<void>;
+  /** How long a read may take, in milliseconds; {@link READ_TIMEOUT_MS} when not set. */
+  timeoutMs?: number;
   /**
    * How long to wait before reading again after `error`, in milliseconds, for a
    * read that failed (the server could not be reached): `null` for not at all.
@@ -72,10 +93,21 @@ export function createRereader(options: RereaderOptions): Rereader {
     again = false;
     const mine = new AbortController();
     controller = mine;
+    let timeOut!: (reason: ReadTimedOut) => void;
+    const late = new Promise<never>((_, reject) => (timeOut = reject));
+    const cancelTimeout = setTimer(() => {
+      const reason = new ReadTimedOut();
+      mine.abort(reason);
+      timeOut(reason);
+    }, options.timeoutMs ?? READ_TIMEOUT_MS);
     try {
-      await options.read(mine.signal);
+      const pending = options.read(mine.signal);
+      // What the read comes to after its time ran out is not heard.
+      pending.catch(() => {});
+      await Promise.race([pending, late]);
     } catch (error) {
-      if (!stopped && !mine.signal.aborted) {
+      const timedOut = mine.signal.reason instanceof ReadTimedOut;
+      if (!stopped && (timedOut || !mine.signal.aborted)) {
         if (options.gone?.(error)) {
           gone = true;
         } else {
@@ -89,6 +121,7 @@ export function createRereader(options: RereaderOptions): Rereader {
         }
       }
     } finally {
+      cancelTimeout();
       reading = false;
     }
     if (again && !stopped && !gone) await run();

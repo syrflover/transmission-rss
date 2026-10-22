@@ -10,6 +10,8 @@
 
 import type { ErrorBody, ErrorCode } from "@/lib/api-types";
 
+import { READ_TIMEOUT_MS } from "./rereads";
+
 /** The server's error codes (generated from `ErrorCode`) and `network`, which only the browser can raise. */
 export type ApiErrorCode = ErrorCode | "network";
 
@@ -30,9 +32,6 @@ export class ApiError extends Error {
 
 const NETWORK_MESSAGE = "서버에 연결하지 못했어요. 연결을 확인하고 다시 시도해 주세요.";
 const UNKNOWN_MESSAGE = "서버가 알 수 없는 응답을 보냈어요. 잠시 뒤 다시 시도해 주세요.";
-
-/** How long a read may take before it counts as failed, in milliseconds (see {@link timedRead}). */
-export const READ_TIMEOUT_MS = 15_000;
 
 /**
  * `init` for a read that a screen waits on before it reads again, as the
@@ -80,6 +79,8 @@ export async function api<T>(
   try {
     json = await response.json();
   } catch {
+    // A read that ran out of time or was stopped while its body came is a lost connection, not a strange answer.
+    if (rest.signal?.aborted) throw new ApiError("network", NETWORK_MESSAGE, 0);
     throw new ApiError("internal", UNKNOWN_MESSAGE, response.status);
   }
 

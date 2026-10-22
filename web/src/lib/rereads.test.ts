@@ -13,7 +13,7 @@ import {
 import { scheduleChanged } from "../screens/schedule/listens.ts";
 import type { Change } from "./api-types";
 import { createEvents, type EventSourceLike } from "./events.ts";
-import { createRereader, type RereaderOptions } from "./rereads.ts";
+import { createRereader, READ_TIMEOUT_MS, ReadTimedOut, type RereaderOptions } from "./rereads.ts";
 
 class FakeSource implements EventSourceLike {
   readyState = 1;
@@ -296,6 +296,70 @@ test("a stopped rereader aborts the read on its way, forgets its retry and reads
   rereader.start();
   await settle();
   assert.equal(reads, 1);
+});
+
+test("a read that takes longer than its time counts as failed: it is aborted, and the retry reads again", async () => {
+  const t = timers();
+  const signals: AbortSignal[] = [];
+  const answers: (() => void)[] = [];
+  const rereader = createRereader({
+    // Each read is answered when the test says; the first never in time (a connection that died without closing).
+    read: (signal) => {
+      signals.push(signal);
+      return new Promise<void>((resolve) => answers.push(resolve));
+    },
+    retryMs: () => 2000,
+    setTimer: t.setTimer,
+  });
+  rereader.start();
+  await settle();
+  assert.equal(t.waiting(), 1);
+
+  assert.deepEqual(t.fire(), [READ_TIMEOUT_MS]);
+  await settle();
+  assert.equal(signals[0].aborted, true);
+  assert.ok(signals[0].reason instanceof ReadTimedOut);
+  // Failed like a lost connection: the retry waits, and reads.
+  assert.deepEqual(t.fire(), [2000]);
+  await settle();
+  assert.equal(signals.length, 2);
+
+  // The first read's answer that comes at last does not end the read on its way: a request still waits for it.
+  answers[0]();
+  await settle();
+  rereader.request();
+  await settle();
+  assert.equal(signals.length, 2);
+  answers[1]();
+  await settle();
+  assert.equal(signals.length, 3);
+  assert.equal(signals[1].aborted, false);
+});
+
+test("a change that comes during a read that runs out of time reads again at once", async () => {
+  const t = timers();
+  let reads = 0;
+  const rereader = createRereader({
+    read: (signal) => {
+      reads += 1;
+      if (reads > 1) return Promise.resolve();
+      // A read that ends when aborted, as `fetch` does.
+      return new Promise<void>((_, reject) => signal.addEventListener("abort", () => reject(signal.reason)));
+    },
+    retryMs: () => 2000,
+    setTimer: t.setTimer,
+    timeoutMs: 500,
+  });
+  rereader.start();
+  await settle();
+  rereader.request();
+  rereader.request();
+  assert.equal(reads, 1);
+
+  assert.deepEqual(t.fire(), [500]);
+  await settle();
+  assert.equal(reads, 2);
+  assert.equal(t.waiting(), 0);
 });
 
 test("a screen that stops listening hears no more, and the connection closes with the last one", async () => {

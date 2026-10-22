@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type MouseEvent } from "react";
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 
 import { Button } from "@/components/ui/button";
+import { timedRead } from "@/lib/api";
 import { forget, forgetPrefix, store, useCached } from "@/lib/cached";
 import { useMediaQuery, PHONE_QUERY } from "@/lib/media";
 import { createRereader } from "@/lib/rereads";
@@ -163,10 +164,11 @@ function WorkPage({ workId }: { workId: string }) {
     work.reload();
   };
 
-  // A `다시 받기` of a failed replacement ended: the episode rows show what the worker did.
-  const retried = async () => {
-    const fresh = await loadWork(workId);
-    if (fresh) work.update(fresh);
+  // A `다시 받기` of a failed replacement ended: the episode rows show what the worker did. The read is timed, as
+  // reads on events are (`rereads.ts`), unless the caller's own `signal` is.
+  const retried = async (signal: AbortSignal = timedRead().signal) => {
+    const fresh = await loadWork(workId, signal);
+    if (fresh && !signal.aborted) work.update(fresh);
   };
 
   // The work's own format order was saved or taken away: the card shows it at once.
@@ -242,7 +244,7 @@ function Loaded({
   onAnissiaChanged: (link: AnissiaLink) => void;
   onSubscriptionChanged: () => void;
   onCreatorsChanged: () => void;
-  onRetried: () => Promise<void>;
+  onRetried: (signal?: AbortSignal) => Promise<void>;
   onOrderChanged: (order: FormatOrder) => void;
 }) {
   const cover = coverOf(work.title);

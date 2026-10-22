@@ -181,7 +181,7 @@ export function FilesCard({
   work: WorkDetail;
   collapsible: boolean;
   arrival: string | null;
-  onRefresh: () => Promise<void>;
+  onRefresh: (signal?: AbortSignal) => Promise<void>;
 }) {
   const [mapOpen, setMapOpen] = useState(false);
   const mapId = useId();

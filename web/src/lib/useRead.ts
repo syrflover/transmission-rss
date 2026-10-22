@@ -4,7 +4,7 @@ import { ApiError, type ApiErrorCode } from "@/lib/api";
 import type { Change } from "@/lib/api-types";
 import { peek, store, useAfterDelay, useStored, versionOf } from "@/lib/cached";
 
-import { createRereader, type Rereader } from "./rereads";
+import { createRereader, ReadTimedOut, type Rereader } from "./rereads";
 import { sharedEvents } from "./sharedEvents";
 
 export interface Read<T> {
@@ -88,7 +88,8 @@ export function useRead<T>(
           if (versionOf(key) === started || peek<T>(key) === undefined) store(key, value);
           setStatus({ key, error: null, code: null });
         } catch (e) {
-          if (signal.aborted) return;
+          // A read that took too long fails like a lost connection; one the screen stopped says nothing.
+          if (signal.aborted && !(signal.reason instanceof ReadTimedOut)) return;
           setStatus({
             key,
             error: e instanceof ApiError ? e.message : failureRef.current,

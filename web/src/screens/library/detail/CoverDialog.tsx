@@ -4,7 +4,7 @@ import { Dialog } from "radix-ui";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ApiError } from "@/lib/api";
-import { createRereader } from "@/lib/rereads";
+import { createRereader, ReadTimedOut } from "@/lib/rereads";
 import { sharedEvents } from "@/lib/sharedEvents";
 import { sizeText } from "@/lib/size";
 import { cn } from "@/lib/utils";
@@ -109,7 +109,10 @@ export function CoverDialog({
         try {
           next = await loadArtwork(workId, signal);
         } catch (e) {
-          if (!signal.aborted) setLoadError(e instanceof ApiError ? e.message : FAILED);
+          // A read that took too long fails like a lost connection; one the dialog stopped says nothing.
+          if (!signal.aborted || signal.reason instanceof ReadTimedOut) {
+            setLoadError(e instanceof ApiError ? e.message : FAILED);
+          }
           throw e;
         }
         if (signal.aborted) return;

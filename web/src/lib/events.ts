@@ -32,6 +32,14 @@ import type { Change, StreamEvent } from "./api-types";
  * every event, `alive` included, sets a watchdog, and a stream that says
  * nothing for {@link SILENCE_MS} is closed and opened again at once, which ends in
  * `ready`.
+ *
+ * A page can also be away without being hidden: a phone freezes a page in the
+ * background without saying so, and wakes it with its timers late, so the
+ * watchdog has not run yet. So when the page comes back ({@link Returns}: shown
+ * again from the browser's cache, given the focus back, back on the network), a
+ * stream that has not opened or said anything for {@link ALIVE_MS} is replaced at
+ * once, which ends in `ready`. A stream that spoke lately is kept, so a return
+ * never makes a second connection and focusing a window does not read again.
  */
 
 /** A listener to the changes. */
@@ -60,12 +68,25 @@ export interface Visibility {
   onChange(listener: () => void): () => void;
 }
 
+/** When the page may have been away without being hidden. */
+export interface Returns {
+  /**
+   * Calls `listener` whenever the page is shown again (`pageshow`), the window
+   * gets the focus back, or the network comes back; returns how to stop.
+   */
+  onReturn(listener: () => void): () => void;
+}
+
 export interface EventsDeps {
   /** Opens a stream. */
   open: () => EventSourceLike;
   visibility: Visibility;
+  /** When the page comes back; without it only showing a hidden page counts. */
+  returns?: Returns;
   /** Runs `run` after `ms` milliseconds; returns how to cancel it. */
   setTimer?: (run: () => void, ms: number) => () => void;
+  /** The time now, in milliseconds. */
+  now?: () => number;
 }
 
 export interface Events {
@@ -82,6 +103,13 @@ export const REOPEN_MS = 5000;
  */
 export const SILENCE_MS = 45_000;
 
+/**
+ * How lately a stream must have opened or said something for a return of the
+ * page to keep it, in milliseconds: a little more than the server's `alive`
+ * interval (15 s).
+ */
+export const ALIVE_MS = 20_000;
+
 /** `EventSource.CLOSED`. */
 const CLOSED = 2;
 
@@ -92,9 +120,13 @@ const defaultTimer = (run: () => void, ms: number) => {
 
 export function createEvents(deps: EventsDeps): Events {
   const setTimer = deps.setTimer ?? defaultTimer;
+  const now = deps.now ?? Date.now;
   const subscribers = new Set<Subscriber>();
   let source: EventSourceLike | null = null;
+  /** When the current stream opened or last said something. */
+  let lastHeard = 0;
   let stopVisibility: (() => void) | null = null;
+  let stopReturns: (() => void) | null = null;
   let cancelReopen: (() => void) | null = null;
   let cancelWatchdog: (() => void) | null = null;
 
@@ -134,6 +166,7 @@ export function createEvents(deps: EventsDeps): Events {
     // Whatever the stream says, even `alive`, shows it is not dead; one that
     // says nothing for too long is replaced.
     const watch = () => {
+      lastHeard = now();
       cancelWatchdog?.();
       cancelWatchdog = setTimer(() => {
         cancelWatchdog = null;
@@ -191,16 +224,30 @@ export function createEvents(deps: EventsDeps): Events {
     }
   };
 
+  /** The page came back: a stream that has been quiet may be dead though open, so it is replaced. */
+  const returned = () => {
+    if (subscribers.size === 0 || deps.visibility.hidden()) return;
+    if (source !== null && now() - lastHeard < ALIVE_MS) return;
+    // Also a stream the browser gave up on: the network that is back is tried now, not after the wait.
+    close();
+    connect();
+  };
+
   return {
     subscribe(subscriber) {
       subscribers.add(subscriber);
-      if (stopVisibility === null) stopVisibility = deps.visibility.onChange(sync);
+      if (stopVisibility === null) {
+        stopVisibility = deps.visibility.onChange(sync);
+        stopReturns = deps.returns?.onReturn(returned) ?? null;
+      }
       sync();
       return () => {
         if (!subscribers.delete(subscriber)) return;
         if (subscribers.size === 0) {
           stopVisibility?.();
           stopVisibility = null;
+          stopReturns?.();
+          stopReturns = null;
         }
         sync();
       };

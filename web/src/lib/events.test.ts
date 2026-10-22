@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { createEvents, REOPEN_MS, SILENCE_MS, type EventSourceLike, type Subscriber } from "./events.ts";
+import { ALIVE_MS, createEvents, REOPEN_MS, SILENCE_MS, type EventSourceLike, type Subscriber } from "./events.ts";
 
 /** A stream the test drives: it says what the server would. */
 class FakeSource implements EventSourceLike {
@@ -67,10 +67,26 @@ class FakeTimers {
   }
 }
 
+/** The page's returns (`pageshow`, `focus`, `online`), which the test makes. */
+class FakeReturns {
+  listeners = new Set<() => void>();
+  onReturn = (listener: () => void) => {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  };
+
+  come() {
+    for (const listener of [...this.listeners]) listener();
+  }
+}
+
 function setup(options: { hidden?: boolean } = {}) {
   const visibility = new FakeVisibility();
   visibility.isHidden = options.hidden ?? false;
   const timers = new FakeTimers();
+  const returns = new FakeReturns();
+  /** The time now; the test moves it on by hand, without running the timers (a frozen page). */
+  const clock = { now: 1_000_000 };
   const sources: FakeSource[] = [];
   const events = createEvents({
     open: () => {
@@ -79,10 +95,15 @@ function setup(options: { hidden?: boolean } = {}) {
       return source;
     },
     visibility,
+    returns,
     setTimer: timers.setTimer,
+    now: () => clock.now,
   });
-  return { events, sources, visibility, timers };
+  return { events, sources, visibility, timers, returns, clock };
 }
+
+/** How many of the streams are not closed. */
+const open = (sources: FakeSource[]) => sources.filter((s) => !s.closed).length;
 
 /** A subscriber that notes what it was told to read again. */
 function listener(accepts: (kind: string, id: string | null) => boolean = () => true) {
@@ -353,4 +374,80 @@ test("a listener that throws does not keep the others from being told", () => {
 
   assert.equal(before.rereads.length, 2);
   assert.equal(after.rereads.length, 2);
+});
+
+test("a page that comes back after a quiet while replaces its stream, and the new stream's ready reads everything again", () => {
+  const { events, sources, returns, clock } = setup();
+  const a = listener();
+  events.subscribe(a.subscriber);
+  sources[0].say("ready");
+  assert.equal(a.rereads.length, 1);
+
+  // The phone froze the page: nothing was heard and the watchdog did not run.
+  clock.now += ALIVE_MS;
+  returns.come();
+
+  assert.equal(sources[0].closed, true);
+  assert.equal(sources.length, 2);
+  assert.equal(open(sources), 1);
+  sources[0].say("ready");
+  assert.equal(a.rereads.length, 1);
+  sources[1].say("ready");
+  assert.equal(a.rereads.length, 2);
+});
+
+test("a return keeps a stream that spoke lately or just opened, so it never makes a second connection", () => {
+  const { events, sources, returns, clock, visibility } = setup();
+  const a = listener();
+  events.subscribe(a.subscriber);
+  clock.now += ALIVE_MS - 1;
+  returns.come();
+  assert.equal(sources.length, 1);
+
+  // `alive` counts as speaking: the window that got the focus back keeps its stream and reads nothing.
+  sources[0].say("alive");
+  clock.now += ALIVE_MS - 1;
+  returns.come();
+  returns.come();
+  assert.equal(sources.length, 1);
+  assert.equal(a.rereads.length, 0);
+
+  // A page shown from the browser's cache opens its stream on being shown, then hears `pageshow`: one stream.
+  visibility.set(true);
+  clock.now += 10 * ALIVE_MS;
+  visibility.set(false);
+  returns.come();
+  assert.equal(sources.length, 2);
+  assert.equal(open(sources), 1);
+});
+
+test("the network coming back opens at once the stream the browser gave up on", () => {
+  const { events, sources, returns, timers } = setup();
+  events.subscribe(listener().subscriber);
+  sources[0].readyState = 2;
+  sources[0].say("error");
+  assert.deepEqual(timers.waiting(), [REOPEN_MS]);
+
+  returns.come();
+
+  assert.equal(sources.length, 2);
+  assert.equal(open(sources), 1);
+  // The wait is over: only the new stream's watchdog is left.
+  assert.deepEqual(timers.waiting(), [SILENCE_MS]);
+});
+
+test("a return opens nothing while the page is hidden or nobody listens, and is not heard after the last listener left", () => {
+  const { events, sources, returns, clock, visibility } = setup({ hidden: true });
+  const stop = events.subscribe(listener().subscriber);
+  clock.now += 10 * ALIVE_MS;
+  returns.come();
+  assert.equal(sources.length, 0);
+
+  visibility.set(false);
+  stop();
+  assert.equal(returns.listeners.size, 0);
+  clock.now += 10 * ALIVE_MS;
+  returns.come();
+  assert.equal(sources.length, 1);
+  assert.equal(open(sources), 0);
 });
