@@ -12,7 +12,7 @@
 - **상대 시각**: 명세는 `2시간 전` 같은 상대 표기를 쓰지 않는다고 해요.
   `web/src/lib/time.ts`의 `ago()`가 `방금`, `n분 전` 꼴을 만들고, 구독 추가(`PickTitle.tsx`, `PickAnime.tsx`), 규칙 상세(`parts.tsx`, `ArchiveMoveNotice.tsx`), 작품 상세의 자막 후보(`CandidateSection.tsx`), 설정의 폴더(`FoldersPanel.tsx`)가 써요.
 - **` · `로 잇기**: 명세는 여러 정보를 ` · `로 한 줄에 잇지 않고 정보 종류마다 모양을 달리해 간격으로 나눈다고 해요.
-  2026-10-10에 `web/src`의 37개 파일에 ` · `가 든 줄이 있었어요(주석 포함). 0113의 조사는 수집 상태(`StatusBoard.tsx`)와 구독 추가(`PickTitle.tsx`)만 짚었지만, 할 일·작품 상세·수집 이력·설정 목록에도 있어요.
+  2026-10-10에 `web/src`의 37개 파일에 ` · `가 든 줄이 있었어요(주석 포함). [refactoring-between-5-and-6/0113](../../archive/tickets/refactoring-between-5-and-6/0113-remaining-area-tests.md)의 조사는 수집 상태(`StatusBoard.tsx`)와 구독 추가(`PickTitle.tsx`)만 짚었지만, 할 일·작품 상세·수집 이력·설정 목록에도 있어요.
   먼저 화면에 보이는 곳을 모두 꼽고, 그 수가 이 결정을 내릴 때 본 것보다 훨씬 많으니 고치기 전에 범위를 사용자에게 다시 보여줘요.
 - **`더 보기` 버튼**: 명세는 모든 목록이 `더 보기` 대신 무한 스크롤을 쓴다고 해요.
   작품 상세의 Anissia 연결(`SeasonAnissiaDialog.tsx`), 시즌 정보 연결(`SeasonLinksDialog.tsx`), 표지 고르기(`CoverDialog.tsx`)에 `결과 더 보기`가, 할 일의 변경 목록(`todo/Changes.tsx`)에 `n줄 더 보기`가 있어요.
