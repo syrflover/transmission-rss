@@ -19,4 +19,9 @@ anime: Anime | null,
  * The quarter the anime started in (or, without a start date, the
  * subscription began in).
  */
-quarter: Quarter, };
+quarter: Quarter, 
+/**
+ * The subscription's own cover (`GET /api/rules/{id}/cover`) while it
+ * has no season; `null` once it has one, or while none was found.
+ */
+cover_url: string | null, };

@@ -16,8 +16,15 @@
 //! How many local seasons the work has does not matter: the cover is the
 //! work's, so a work of several seasons takes the one entry named exactly like
 //! its folder (usually the first season).
+//!
+//! A subscription's cover is decided by the Anissia anime it follows
+//! ([`decide_original`]): its original title against the native titles only,
+//! and its start date against the candidate's, under the same rules.
 
+use trss_core::calendar::days_from_civil;
 use unicode_normalization::UnicodeNormalization;
+
+use crate::FuzzyDate;
 
 /// One AniList entry as a search answered it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -30,6 +37,8 @@ pub struct Candidate {
     /// AniList's format (`TV`, `MOVIE`, ...), shown to tell entries apart.
     pub format: Option<String>,
     pub season_year: Option<i32>,
+    /// When the entry started airing, as far as AniList knows.
+    pub start: FuzzyDate,
     /// The large cover, from an allowed image origin; `None` when the entry
     /// has none or its URL is not allowed.
     pub cover_url: Option<String>,
@@ -99,6 +108,65 @@ pub fn decide<'a>(observed: &str, candidates: &'a [Candidate], complete: bool) -
     found.map_or(Decision::NoMatch, Decision::Select)
 }
 
+/// How many days apart two start days may be and still be one airing.
+/// Anissia gives the Korean start, which can come a few days after Japan's,
+/// and a late-night slot is dated a day apart in the two listings.
+pub const START_SLACK_DAYS: i64 = 7;
+
+/// Whether two start dates are one airing's: their years, and their months
+/// where both know them, are the same, and where both know the day, the days
+/// are at most [`START_SLACK_DAYS`] apart. A date without a year agrees with
+/// nothing.
+pub fn starts_together(a: FuzzyDate, b: FuzzyDate) -> bool {
+    let (Some(year_a), Some(year_b)) = (a.year, b.year) else {
+        return false;
+    };
+    match (a.month.zip(a.day), b.month.zip(b.day)) {
+        (Some((month_a, day_a)), Some((month_b, day_b))) => {
+            let apart =
+                days_from_civil(year_a, month_a, day_a) - days_from_civil(year_b, month_b, day_b);
+            apart.abs() <= START_SLACK_DAYS
+        }
+        _ => year_a == year_b && (a.month.is_none() || b.month.is_none() || a.month == b.month),
+    }
+}
+
+/// Decides for an Anissia anime among `candidates`, which are the whole
+/// answer only when `complete`: a candidate matches when its native title is
+/// `original` after [`normalize`] and it starts together with `start`
+/// ([`starts_together`]). As [`decide`], it selects only the one match of a
+/// search read to its end; an empty `original` matches nothing.
+pub fn decide_original<'a>(
+    original: &str,
+    start: FuzzyDate,
+    candidates: &'a [Candidate],
+    complete: bool,
+) -> Decision<'a> {
+    if !complete {
+        return Decision::Incomplete;
+    }
+    let wanted = normalize(original);
+    if wanted.is_empty() {
+        return Decision::NoMatch;
+    }
+    let mut found: Option<&Candidate> = None;
+    for candidate in candidates {
+        let named = candidate
+            .native
+            .as_deref()
+            .is_some_and(|native| normalize(native) == wanted);
+        if !named || !starts_together(candidate.start, start) {
+            continue;
+        }
+        match found {
+            Some(first) if first.id == candidate.id => {}
+            Some(_) => return Decision::Ambiguous,
+            None => found = Some(candidate),
+        }
+    }
+    found.map_or(Decision::NoMatch, Decision::Select)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -112,8 +180,18 @@ mod tests {
             synonyms: synonyms.iter().map(|s| (*s).to_owned()).collect(),
             format: Some("TV".to_owned()),
             season_year: None,
+            start: FuzzyDate::default(),
             cover_url: None,
             thumb_url: None,
+        }
+    }
+
+    /// An entry with only a native title and a start date (`YYYY-MM-DD`, or less).
+    fn native(id: i64, title: &str, start: &str) -> Candidate {
+        Candidate {
+            native: Some(title.to_owned()),
+            start: FuzzyDate::from_text(start),
+            ..entry(id, "", None, &[])
         }
     }
 
@@ -173,5 +251,138 @@ mod tests {
             decide("Lycoris Recoil", &twice, true),
             Decision::Select(&twice[0])
         );
+    }
+
+    #[test]
+    fn an_anissia_anime_takes_the_one_entry_of_its_native_title_that_starts_with_it() {
+        let start = FuzzyDate::from_text("2023-07-03");
+        let candidates = [
+            native(1, "無職転生", "2021-01-11"),
+            native(2, "無職転生Ⅱ 〜異世界行ったら本気だす〜", "2023-07-03"),
+            // Only the romaji title is the original title: not a match.
+            Candidate {
+                romaji: Some("無職転生Ⅱ 〜異世界行ったら本気だす〜".to_owned()),
+                start,
+                ..entry(3, "", None, &[])
+            },
+        ];
+        assert_eq!(
+            decide_original(
+                "  無職転生Ⅱ   〜異世界行ったら本気だす〜",
+                start,
+                &candidates,
+                true
+            ),
+            Decision::Select(&candidates[1])
+        );
+        // A Korean start a few days after Japan's is the same airing; a week more is not.
+        let korean = FuzzyDate::from_text("2023-07-10");
+        assert_eq!(
+            decide_original(
+                "無職転生Ⅱ 〜異世界行ったら本気だす〜",
+                korean,
+                &candidates,
+                true
+            ),
+            Decision::Select(&candidates[1])
+        );
+        let later = FuzzyDate::from_text("2023-07-11");
+        assert_eq!(
+            decide_original(
+                "無職転生Ⅱ 〜異世界行ったら本気だす〜",
+                later,
+                &candidates,
+                true
+            ),
+            Decision::NoMatch
+        );
+        // Another wave dash is another title.
+        assert_eq!(
+            decide_original(
+                "無職転生Ⅱ ～異世界行ったら本気だす～",
+                start,
+                &candidates,
+                true
+            ),
+            Decision::NoMatch
+        );
+    }
+
+    #[test]
+    fn a_remake_of_the_same_title_is_told_by_its_start_and_a_doubt_leaves_no_cover() {
+        let candidates = [
+            native(10, "うる星やつら", "1981-10-14"),
+            native(11, "うる星やつら", "2022-10-14"),
+            native(12, "うる星やつら", "2022"),
+        ];
+        // The 2022 TV entry and an entry known only by its year both start in 2022.
+        assert_eq!(
+            decide_original(
+                "うる星やつら",
+                FuzzyDate::from_text("2022-10-14"),
+                &candidates,
+                true
+            ),
+            Decision::Ambiguous
+        );
+        assert_eq!(
+            decide_original(
+                "うる星やつら",
+                FuzzyDate::from_text("1981-10"),
+                &candidates,
+                true
+            ),
+            Decision::Select(&candidates[0])
+        );
+        // A month both know must be the same.
+        assert_eq!(
+            decide_original(
+                "うる星やつら",
+                FuzzyDate::from_text("1981-11"),
+                &candidates,
+                true
+            ),
+            Decision::NoMatch
+        );
+        // No start date, no title, or a search not read to its end: no cover.
+        assert_eq!(
+            decide_original("うる星やつら", FuzzyDate::default(), &candidates, true),
+            Decision::NoMatch
+        );
+        assert_eq!(
+            decide_original(" ", FuzzyDate::from_text("1981-10"), &candidates, true),
+            Decision::NoMatch
+        );
+        assert_eq!(
+            decide_original(
+                "うる星やつら",
+                FuzzyDate::from_text("1981-10"),
+                &candidates,
+                false
+            ),
+            Decision::Incomplete
+        );
+    }
+
+    #[test]
+    fn a_text_date_keeps_the_parts_it_can_read() {
+        let date = |y, m, d| FuzzyDate {
+            year: y,
+            month: m,
+            day: d,
+        };
+        assert_eq!(
+            FuzzyDate::from_text("2027-04"),
+            date(Some(2027), Some(4), None)
+        );
+        assert_eq!(
+            FuzzyDate::from_text("2026-10-07"),
+            date(Some(2026), Some(10), Some(7))
+        );
+        assert_eq!(
+            FuzzyDate::from_text("2026-13-07"),
+            date(Some(2026), None, None)
+        );
+        assert_eq!(FuzzyDate::from_text(""), FuzzyDate::default());
     }
 }

@@ -20,7 +20,9 @@ use crate::store::{
     },
 };
 use trss_core::Millis;
-use trss_library::store::seasons::anissia as season_anissia;
+use trss_library::store::{
+    artwork::subscription as subscription_cover, seasons::anissia as season_anissia,
+};
 
 type Result<T> = std::result::Result<T, ChannelError>;
 
@@ -414,6 +416,7 @@ pub fn create_subscription_rule(
             subscription.subscribed_at,
         ],
     )?;
+    subscription_cover::request_in(&tx, &id, subscription.subscribed_at)?;
     let created = fetch_rule(&tx, &id)?.expect("the rule was just inserted");
     tx.commit()?;
     Ok(created)
@@ -769,6 +772,7 @@ pub fn subscribe_rule(
             subscription.subscribed_at,
         ],
     )?;
+    subscription_cover::request_in(&tx, id, subscription.subscribed_at)?;
     bump_version(&tx, id)?;
     let updated = fetch_rule(&tx, id)?.expect("the rule still exists");
     tx.commit()?;
@@ -822,7 +826,9 @@ fn other_holder(tx: &Connection, season_id: &str, anime_no: i64) -> Result<Optio
 ///
 /// The season's Anissia link takes the subscription's anime in the same
 /// transaction (a season the library does not have has none to take), which is
-/// what keeps a subscribed season's link the subscription's.
+/// what keeps a subscribed season's link the subscription's. The subscription's
+/// own cover ends there too, handed to the season's work when that work's cover
+/// has nothing yet (`trss_library::store::artwork::subscription::adopt_in`).
 pub fn link_season(conn: &mut Connection, id: &str, season_id: &str) -> Result<SeasonLinked> {
     let tx = begin(conn)?;
     let Some(subscription) = fetch_rule(&tx, id)?.and_then(|rule| rule.subscription) else {
@@ -847,6 +853,7 @@ pub fn link_season(conn: &mut Connection, id: &str, season_id: &str) -> Result<S
     )?
     .execute(params![id, season_id])?;
     bump_version(&tx, id)?;
+    let mut work = None;
     if let Some(season) = SeasonRef::parse(season_id) {
         let work_exists: bool = tx
             .prepare_cached("SELECT EXISTS (SELECT 1 FROM works WHERE id = ?1)")?
@@ -858,8 +865,10 @@ pub fn link_season(conn: &mut Connection, id: &str, season_id: &str) -> Result<S
                 season.number,
                 Some(subscription.anissia_anime_no),
             )?;
+            work = Some(season.work_id);
         }
     }
+    subscription_cover::adopt_in(&tx, id, work.as_deref())?;
     tx.commit()?;
     Ok(SeasonLinked::Linked)
 }

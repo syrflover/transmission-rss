@@ -10,6 +10,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use rusqlite::OptionalExtension;
 use serde_json::json;
 use tempfile::TempDir;
 
@@ -22,7 +23,7 @@ use crate::{
     },
     discovery::{Scan, ScannedWork, WorkRead},
     store::{
-        artwork::{Format, JobKind, Mode, Note, Selection, Source, UserChange},
+        artwork::{subscription, Format, JobKind, Mode, Note, Selection, Source, UserChange},
         library::{LibraryStore, ListQuery},
     },
 };
@@ -1941,4 +1942,405 @@ async fn an_unregistered_works_cover_file_is_kept_and_served_again_when_it_comes
         samples::png()
     );
     assert_eq!(env.art.run_next().await, None);
+}
+
+// --- subscription covers -------------------------------------------------------------------
+
+const MUSHOKU: &str = "無職転生Ⅱ 〜異世界行ったら本気だす〜";
+
+/// Anissia anime `anime_no` with `original` and `start`, and rule `rule`
+/// subscribed to it with no season, whose cover is asked for in the same
+/// transaction, as the subscribe screen does.
+async fn subscribe(env: &Env, rule: &str, anime_no: i64, original: Option<&str>, start: &str) {
+    let (rule, original, start) = (
+        rule.to_owned(),
+        original.map(str::to_owned),
+        start.to_owned(),
+    );
+    env.db
+        .run::<_, DbError, _>(move |c| {
+            let tx = c.transaction()?;
+            tx.execute(
+                "INSERT OR IGNORE INTO channels (id, position, url, excludes, secret_query, version)
+                 VALUES ('c', 0, 'http://x/feed', '[]', '[]', 1)",
+                [],
+            )?;
+            tx.execute(
+                "INSERT INTO anissia_anime (anime_no, subject, original_subject, week, start_date,
+                                            status, fetched_at)
+                 VALUES (?1, '작품', ?2, 1, ?3, 'ON', 10)",
+                rusqlite::params![anime_no, original, start],
+            )?;
+            tx.execute(
+                "INSERT INTO rules (id, channel_id, position, match_text, regex, case_insensitive,
+                                    directory, episode, episode_auto, state, version)
+                 VALUES (?1, 'c', (SELECT count(*) FROM rules), 'A', 0, 1, 'A', 1, 0, 'active', 1)",
+                [&rule],
+            )?;
+            tx.execute(
+                "INSERT INTO rule_subscriptions (rule_id, anissia_anime_no, subtitles, creator,
+                                                 season_id, subscribed_at)
+                 VALUES (?1, ?2, 'none', NULL, NULL, 1)",
+                rusqlite::params![rule, anime_no],
+            )?;
+            subscription::request_in(&tx, &rule, 50)?;
+            tx.commit()?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+}
+
+/// An AniList entry whose native title is `title`, starting on `start`.
+fn native(env: &Env, id: i64, title: &str, start: (i32, u32, u32)) -> serde_json::Value {
+    let mut entry = env.fake.entry(id, &format!("Romaji {id}"), &[]);
+    entry["title"]["native"] = json!(title);
+    entry["startDate"] = json!({ "year": start.0, "month": start.1, "day": start.2 });
+    entry
+}
+
+async fn cover(env: &Env, rule: &str) -> Option<crate::store::artwork::ImageRef> {
+    env.art.store.subscription_image(rule).await.unwrap()
+}
+
+/// Rule `rule`'s subscription cover row, if any: its job, note and entry.
+async fn cover_row(env: &Env, rule: &str) -> Option<(Option<String>, Option<String>, Option<i64>)> {
+    let rule = rule.to_owned();
+    env.db
+        .run::<_, DbError, _>(move |c| {
+            Ok(c.query_row(
+                "SELECT job, note, anilist_media_id FROM subscription_artwork WHERE rule_id = ?1",
+                [rule],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .optional()?)
+        })
+        .await
+        .unwrap()
+}
+
+/// Connects rule `rule`'s subscription to a season of `work`: what that
+/// transaction does with the cover. Whether the work took it.
+async fn adopt(env: &Env, rule: &str, work: &str) -> bool {
+    let (rule, work) = (rule.to_owned(), work.to_owned());
+    env.db
+        .run::<_, DbError, _>(move |c| {
+            let tx = c.transaction()?;
+            let adopted = subscription::adopt_in(&tx, &rule, Some(&work))?;
+            tx.commit()?;
+            Ok(adopted)
+        })
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn a_subscription_takes_the_one_entry_of_its_original_title_that_starts_with_it() {
+    let env = Env::new(&[]).await;
+    let jpeg = samples::jpeg();
+    // Anissia gives the Korean start, a few days after Japan's.
+    subscribe(&env, "r", 7, Some(MUSHOKU), "2023-07-09").await;
+    env.fake.add_search(
+        MUSHOKU,
+        vec![
+            native(
+                &env,
+                1,
+                "無職転生 〜異世界行ったら本気だす〜",
+                (2021, 1, 11),
+            ),
+            native(&env, 2, MUSHOKU, (2023, 7, 3)),
+            native(&env, 3, &format!("{MUSHOKU} 第2クール"), (2024, 4, 8)),
+        ],
+        &jpeg,
+    );
+
+    // The search selects the entry; no image before its bytes are verified.
+    assert_eq!(env.art.run_next().await, Some(Ran::Recorded));
+    assert_eq!(
+        cover_row(&env, "r").await,
+        Some((Some("fetch".into()), None, Some(2)))
+    );
+    assert_eq!(cover(&env, "r").await, None);
+    let asked = env.fake.api_requests();
+    assert_eq!(asked[0].1["search"], MUSHOKU);
+
+    assert_eq!(env.art.run_next().await, Some(Ran::Recorded));
+    let image = cover(&env, "r").await.expect("a cover");
+    assert_eq!(image.origin, Source::Anilist);
+    assert_eq!(env.art.image(image).await.unwrap(), jpeg);
+    assert_eq!(cover_row(&env, "r").await, Some((None, None, Some(2))));
+    // The cleanup keeps the file while the subscription refers to it.
+    env.art.maintain().await;
+    assert_eq!(env.files().len(), 1);
+    assert_eq!(env.art.run_next().await, None);
+}
+
+#[tokio::test]
+async fn a_subscription_without_one_clear_match_of_its_whole_search_gets_no_cover() {
+    let env = Env::new(&[]).await;
+    let png = samples::png();
+    subscribe(&env, "no-title", 1, None, "2023-07-09").await;
+    subscribe(&env, "remake", 2, Some("うる星やつら"), "2022-10-14").await;
+    subscribe(&env, "twins", 3, Some("双子"), "2024-01-05").await;
+    subscribe(&env, "more", 4, Some("長い"), "2024-01-05").await;
+    subscribe(&env, "no-date", 5, Some("日付"), "").await;
+    // Only the 1981 series has the title: a remake of another year is no match.
+    env.fake.add_search(
+        "うる星やつら",
+        vec![native(&env, 20, "うる星やつら", (1981, 10, 14))],
+        &png,
+    );
+    env.fake.add_search(
+        "双子",
+        vec![
+            native(&env, 30, "双子", (2024, 1, 5)),
+            native(&env, 31, "双子", (2024, 1, 6)),
+        ],
+        &png,
+    );
+    {
+        // One match on the first page, but more pages than the app reads.
+        let mut pages = vec![vec![native(&env, 40, "長い", (2024, 1, 5))]];
+        for p in 0..trss_anilist::MAX_SEARCH_PAGES as i64 {
+            pages.push(vec![native(&env, 400 + p, "他", (2024, 1, 5))]);
+        }
+        env.fake
+            .state
+            .lock()
+            .unwrap()
+            .searches
+            .insert("長い".into(), pages);
+    }
+    env.fake
+        .add_search("日付", vec![native(&env, 50, "日付", (2024, 1, 5))], &png);
+
+    env.drain().await;
+    let left = |note: Note| Some((None, Some(note.code().to_owned()), None));
+    assert_eq!(cover_row(&env, "no-title").await, left(Note::NoMatch));
+    assert_eq!(cover_row(&env, "remake").await, left(Note::NoMatch));
+    assert_eq!(cover_row(&env, "twins").await, left(Note::Ambiguous));
+    assert_eq!(cover_row(&env, "more").await, left(Note::Incomplete));
+    assert_eq!(cover_row(&env, "no-date").await, left(Note::NoMatch));
+    for rule in ["no-title", "remake", "twins", "more", "no-date"] {
+        assert_eq!(cover(&env, rule).await, None, "{rule}");
+    }
+    assert!(env.files().is_empty());
+    // Without an original title AniList is not asked.
+    let searched: BTreeSet<String> = env
+        .fake
+        .api_requests()
+        .iter()
+        .filter_map(|(_, v)| v["search"].as_str().map(str::to_owned))
+        .collect();
+    assert_eq!(
+        searched,
+        BTreeSet::from(["うる星やつら", "双子", "長い", "日付"].map(String::from))
+    );
+}
+
+#[tokio::test]
+async fn a_subscription_cover_that_anilist_keeps_failing_is_tried_three_times_and_left() {
+    let env = Env::new(&[]).await;
+    subscribe(&env, "r", 7, Some(MUSHOKU), "2023-07-09").await;
+    env.fake.add_search(
+        MUSHOKU,
+        vec![native(&env, 2, MUSHOKU, (2023, 7, 3))],
+        &samples::jpeg(),
+    );
+    env.fake.state.lock().unwrap().failing = 10;
+
+    let before = env.art.now();
+    assert_eq!(env.art.run_next().await, Some(Ran::Later));
+    let job = env
+        .art
+        .store
+        .next_subscription_job(i64::MAX)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(job.attempts, 1);
+    // Not due yet: the queue goes on with nothing.
+    assert_eq!(env.art.run_next().await, None);
+    let wait = env
+        .db
+        .run::<_, DbError, _>(|c| {
+            Ok(
+                c.query_row("SELECT job_not_before FROM subscription_artwork", [], |r| {
+                    r.get::<_, i64>(0)
+                })?,
+            )
+        })
+        .await
+        .unwrap()
+        - before;
+    assert!((60_000..65_000).contains(&wait), "{wait}");
+
+    for _ in 0..2 {
+        let job = env
+            .art
+            .store
+            .next_subscription_job(i64::MAX)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(env.art.run_subscription_job(&job).await, Ran::Later);
+    }
+    let job = env
+        .art
+        .store
+        .next_subscription_job(i64::MAX)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(job.attempts, 3);
+    assert_eq!(
+        env.art.run_subscription_job(&job).await,
+        Ran::GaveUp(Note::Failed)
+    );
+    assert_eq!(
+        cover_row(&env, "r").await,
+        Some((None, Some(Note::Failed.code().to_owned()), None))
+    );
+    assert_eq!(cover(&env, "r").await, None);
+}
+
+#[tokio::test]
+async fn a_subscription_hands_its_cover_only_to_a_work_whose_auto_cover_has_nothing_yet() {
+    let env = Env::new(&["Chosen", "Cleared"]).await;
+    let (jpeg, png) = (samples::jpeg(), samples::png());
+    for (rule, anime, title) in [
+        ("r-open", 1, "開"),
+        ("r-chosen", 2, "選"),
+        ("r-cleared", 3, "消"),
+    ] {
+        subscribe(&env, rule, anime, Some(title), "2024-01-05").await;
+        env.fake.add_search(
+            title,
+            vec![native(&env, 10 + anime, title, (2024, 1, 5))],
+            &jpeg,
+        );
+    }
+    // "Chosen" found its own cover by its folder name; "Cleared" was cleared.
+    env.fake
+        .add_search("Chosen", vec![env.fake.entry(50, "Chosen", &[])], &png);
+    env.drain().await;
+    let cleared = env.id("Cleared").await;
+    let v = env.selection("Cleared").await.version;
+    env.art
+        .store
+        .change(&cleared, v, UserChange::Clear, 300)
+        .await
+        .unwrap();
+    // "Open" is recorded now: its own search is still waiting, and runs while
+    // the subscription is connected.
+    env.library
+        .record_scan(&env.folder, Ok(scan(&["Chosen", "Cleared", "Open"])), 400)
+        .await
+        .unwrap();
+    let running = env.art.store.next_job(i64::MAX).await.unwrap().unwrap();
+    assert_eq!(running.work_id, env.id("Open").await);
+    let (open_before, chosen_before, cleared_before) = (
+        env.selection("Open").await,
+        env.selection("Chosen").await,
+        env.selection("Cleared").await,
+    );
+    let sub_image = cover(&env, "r-open").await.unwrap();
+    assert_eq!(env.files().len(), 4);
+
+    assert!(adopt(&env, "r-open", &env.id("Open").await).await);
+    assert!(!adopt(&env, "r-chosen", &env.id("Chosen").await).await);
+    assert!(!adopt(&env, "r-cleared", &cleared).await);
+
+    let open = env.selection("Open").await;
+    assert_eq!(
+        (open.mode, open.source, open.anilist_media_id),
+        (Mode::Auto, Some(Source::Anilist), Some(11))
+    );
+    assert_eq!(open.image.as_ref(), Some(&sub_image));
+    assert_eq!((open.job, open.note), (None, None));
+    assert_eq!(open.version, open_before.version + 1);
+    assert_eq!(env.selection("Chosen").await, chosen_before);
+    assert_eq!(env.selection("Cleared").await, cleared_before);
+    for rule in ["r-open", "r-chosen", "r-cleared"] {
+        assert_eq!(cover_row(&env, rule).await, None, "{rule}");
+    }
+    // The work's own search, running meanwhile, finds the cover chosen.
+    assert_eq!(env.art.run_job(&running).await, Ran::Dropped);
+    assert_eq!(env.selection("Open").await.image, Some(sub_image.clone()));
+
+    // The covers not handed over go with the cleanup; the work keeps its own.
+    env.art.maintain().await;
+    assert_eq!(env.files().len(), 2);
+    assert_eq!(env.art.image(sub_image).await.unwrap(), jpeg);
+    let chosen = image_of(&chosen_before).clone();
+    assert_eq!(env.art.image(chosen).await.unwrap(), png);
+    assert_eq!(env.art.run_next().await, None);
+}
+
+#[tokio::test]
+async fn a_work_of_an_unregistered_folder_takes_no_subscription_cover() {
+    let env = Env::new(&["Away"]).await;
+    subscribe(&env, "r", 1, Some("離"), "2024-01-05").await;
+    env.fake.add_search(
+        "離",
+        vec![native(&env, 11, "離", (2024, 1, 5))],
+        &samples::jpeg(),
+    );
+    env.drain().await;
+    let away = env.id("Away").await;
+    env.library.remove_folder(&env.folder, 200).await.unwrap();
+
+    assert!(!adopt(&env, "r", &away).await);
+    assert_eq!(cover_row(&env, "r").await, None);
+    // The work's cover is as its own search left it, and its file is the cleanup's.
+    env.library
+        .add_folder("/w".into(), scan(&["Away"]), 300, &[])
+        .await
+        .unwrap();
+    let s = env.selection("Away").await;
+    assert_eq!((s.source, s.image), (None, None));
+    env.art.maintain().await;
+    assert!(env.files().is_empty());
+}
+
+#[tokio::test]
+async fn a_subscription_deleted_before_its_season_takes_its_cover_file_along() {
+    let env = Env::new(&[]).await;
+    let jpeg = samples::jpeg();
+    for (rule, anime, title) in [("kept", 1, "残"), ("gone", 2, "去"), ("late", 3, "遅")] {
+        env.fake.add_search(
+            title,
+            vec![native(&env, 10 + anime, title, (2024, 1, 5))],
+            &jpeg,
+        );
+        if rule != "late" {
+            subscribe(&env, rule, anime, Some(title), "2024-01-05").await;
+        }
+    }
+    env.drain().await;
+    assert_eq!(env.files().len(), 2);
+    // "late" is deleted while its image is being received.
+    subscribe(&env, "late", 3, Some("遅"), "2024-01-05").await;
+    assert_eq!(env.art.run_next().await, Some(Ran::Recorded));
+    let late = env
+        .art
+        .store
+        .next_subscription_job(i64::MAX)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!((late.rule_id.as_str(), late.kind), ("late", JobKind::Fetch));
+
+    env.sql("DELETE FROM rules WHERE id = ?1", "gone".to_owned())
+        .await;
+    env.sql("DELETE FROM rules WHERE id = ?1", "late".to_owned())
+        .await;
+    assert_eq!(cover_row(&env, "gone").await, None);
+    // The late image finds the subscription gone and is not kept.
+    assert_eq!(env.art.run_subscription_job(&late).await, Ran::Dropped);
+    env.art.maintain().await;
+    assert_eq!(env.files().len(), 1);
+    let kept = cover(&env, "kept").await.unwrap();
+    assert_eq!(env.art.image(kept).await.unwrap(), jpeg);
 }

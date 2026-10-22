@@ -171,7 +171,7 @@ pub struct Search {
 }
 
 const MEDIA_FIELDS: &str = "id title { romaji english native } synonyms format seasonYear \
-     coverImage { extraLarge large medium }";
+     startDate { year month day } coverImage { extraLarge large medium }";
 
 fn search_query() -> String {
     format!(
@@ -210,6 +210,7 @@ struct Media {
     synonyms: Option<Vec<Option<String>>>,
     format: Option<String>,
     season_year: Option<i32>,
+    start_date: Option<season::Date>,
     cover_image: Option<CoverImage>,
 }
 
@@ -384,6 +385,7 @@ impl Anilist {
                 .collect(),
             format: media.format,
             season_year: media.season_year,
+            start: season::date(media.start_date),
             thumb_url: self.allowed(medium).or_else(|| cover_url.clone()),
             cover_url,
         }

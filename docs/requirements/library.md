@@ -213,6 +213,22 @@ Anissia의 `subject`, 선택적인 `originalSubject`와 `startDate`는 해당 �
 | YAML에 이미지 참조만 있는 상태에서 가져오기, 파일 복구, 내용 불일치 또는 앱 데이터 폴더 밖·링크 경로 | 가져오는 행위로 다운로드·파일 변경을 하지 않고 현재 앱 데이터 폴더의 검증된 파일만 제공하며, 누락·불일치·미검증은 참조를 남긴 채 상태를 구분해 보여주되 표지로 제공하지 않고 파일 복구 뒤 재검사해요. `auto` 상태를 가져온 뒤 주기 검사·화면 열기·재시작을 해도 수신 요청이 발생하지 않고, 별도 복구 요청 후에만 선택된 ID의 수신이 시작되는지 확인해요. |
 | 복제로 서로 다른 이미지 ID가 같은 물리 파일을 참조한 뒤 원래 선택 해제, 또는 소유 불명확 | 원래 선택은 비우되 다른 작품·계획·진행 작업이 참조하는 물리 파일과 외부·불명확한 파일은 삭제하지 않아요. |
 
+#### 구독의 표지
+
+구독이 아직 라이브러리 시즌에 붙지 않은 동안에는 표지를 보여 줄 작품이 없으므로, 구독할 때 trss가 AniList에서 그 작품의 표지를 찾아 구독의 표지로 둬요(사용자 결정, 2026-10-23, [feedback-0.8.0/0008](../specs/2026-10-23-feedback-0.8.0/0008-subscription-cover.md)).
+[이번 주 편성](web-app.md#이번-주-편성)의 카드와 [규칙 상세](collection.md#수집-화면)의 포스터는 구독이 시즌에 붙기 전에는 이 표지를 보여주고, 구독의 표지도 없으면 빈 칸이에요.
+
+찾기는 구독 화면과 규칙의 `Anissia 연결`이 구독을 만들 때만 요청하고, 가져오기로 만든 구독과 이 기능 전에 만든 구독은 찾지 않아요.
+구독은 사용자가 고른 Anissia 작품이라 그 원제(`originalSubject`)와 시작일(`startDate`)을 힌트로 써요.
+원제로 AniList를 찾아, [자동 판정](#자동-판정)처럼 정규화한 원제가 AniList 항목의 원제(`native`)와 정확히 같고 방영 시작일도 맞는 후보가 하나뿐임을 검색을 끝까지 읽어 확인했을 때만 그 항목의 표지를 받아요.
+시작일은 두 쪽이 모두 날짜까지 알면 7일 안이고, 그렇지 않으면 같은 해이고 둘 다 아는 달이 같을 때 맞다고 봐요. Anissia의 시작일은 한국 방영일이라 일본 방영일보다 며칠 늦을 수 있어서예요.
+원제나 시작 연도가 없거나, 후보가 없거나 여럿이거나, 검색 페이지가 남았으면 표지를 두지 않아요.
+찾기와 받기는 구독 만들기를 막지 않아요. 작품 표지의 수신 큐에서 작품의 일보다 먼저 돌고, 요청 간격·재시도와 이미지 검사, [앱 데이터 폴더](../adr/0008-trss-folder-and-app-data-files.md)에 두는 것은 작품 표지와 같아요.
+
+구독이 시즌에 붙을 때 그 작품의 표지가 `auto`이고 아무것도 고르지 않은 상태이면(자기 검색을 기다리거나 검색이 고르지 못한 상태), 구독의 표지가 작품의 표지가 되고 그 AniList 항목이 작품의 선택이 돼요.
+이미 고른 표지와 `manual`·`disabled`인 표지는 바꾸지 않아요. 시즌에 붙은 뒤의 카드와 포스터는 작품의 표지를 보여줘요.
+작품에 넘기지 않은 구독의 표지와, 시즌에 붙기 전에 지워진 구독(보관 포함)의 표지는 [이미지 파일의 수명](#이미지-파일의-수명)의 정리가 지워요. 정리는 구독의 표지가 가리키는 파일도 참조로 세요.
+
 ### 시즌 정보
 
 시즌 정보(방영·분량·제작사·장르·원제·영문명·줄거리)는 로컬 시즌마다 연결한 AniList 항목에서 가져와요(사용자 결정, 2026-10-01).
@@ -540,6 +556,18 @@ Anissia의 `subject`, 선택적인 `originalSubject`와 `startDate`는 해당 �
 | 표: 같은 작품을 복제·교체해 ID가 달라지거나 작품 폴더가 이동 | 2026-10-08 서버: 보관 폴더에서 옮겨 온 작품이 AniList 연결을 그대로 가졌어요. 표지 이미지가 보였는지는 기록에 없어요 ([5-deployed-verification/0123]) | `trss-library` `store/artwork/tests.rs` `a_selection_follows_its_work_through_an_archive_move` | 작품을 복제·교체해 ID가 달라지는 경우와 물리 파일의 이름이 바뀌거나 옮겨지지 않는 것은 겨눈 테스트를 찾지 못했어요. |
 | 표: YAML에 이미지 참조만 있는 상태에서 가져오기, 파일 복구, 내용 불일치, 앱 데이터 폴더 밖·링크 경로 | 없음 | `trss-library` `artwork/tests.rs` `an_image_is_served_only_while_its_file_is_the_recorded_one`(링크, 폴더 밖 경로, 내용 불일치), `a_missing_image_is_not_replaced_and_a_repair_fetches_the_same_entry` | YAML을 가져오는 부분과, 가져온 `auto` 상태가 주기 검사·화면 열기·재시작 뒤에도 수신 요청을 만들지 않고 별도 복구 요청 뒤에만 수신하는지는 목표 6에서 만들어요. |
 | 표: 복제로 서로 다른 이미지 ID가 같은 물리 파일을 참조한 뒤 원래 선택 해제, 또는 소유 불명확 | 없음 | `trss-library` `artwork/tests.rs` `the_cleanup_keeps_files_other_references_lead_to`, `a_file_is_the_apps_own_whatever_device_number_it_was_mounted_with` | 소유가 불명확한 외부 파일을 강제로 지우지 않는 것은 위 두 테스트가 간접으로만 봐요. |
+
+#### 구독의 표지
+
+요구 절: [구독의 표지](#구독의-표지)
+
+| 요구 | 실제 사용에서 본 것 | 테스트로 확인한 것 | 확인하지 않은 것 |
+| --- | --- | --- | --- |
+| 구독할 때 원제와 시작일로 찾고 후보가 하나뿐일 때만 받음, 가져오기는 찾지 않음 | 2026-10-23 개발(서버 DB 사본, 실제 Anissia·AniList): `반딧불이의 혼례`(원제 `ホタルの嫁入り`, Anissia 시작일 2026-10-09)를 구독하자 2초 안에 AniList 205909(원제 `ホタルの嫁入り`, 시작일 2026-10-09)의 표지(JPEG 460×645)를 받았어요 ([feedback-0.8.0/0008](../specs/2026-10-23-feedback-0.8.0/0008-subscription-cover.md)) | `trss-anilist` `title.rs`: (1) `an_anissia_anime_takes_the_one_entry_of_its_native_title_that_starts_with_it`, `a_remake_of_the_same_title_is_told_by_its_start_and_a_doubt_leaves_no_cover`, `a_text_date_keeps_the_parts_it_can_read`<br>`trss-library` `artwork/tests.rs`: (2) `a_subscription_takes_the_one_entry_of_its_original_title_that_starts_with_it`, `a_subscription_without_one_clear_match_of_its_whole_search_gets_no_cover`<br>`trss-collect` (3) `store/channels/season_anime_tests.rs` `a_subscription_asks_for_its_cover_and_hands_it_to_the_season_it_is_connected_to`(구독 화면과 `Anissia 연결`의 저장), `store/channels/import_subscriptions_tests.rs` `checked_rules_become_subscriptions_with_the_import_time_and_the_others_do_not`(가져오기) | (1) 원제와 시작일의 판정 (2) 가짜 AniList로 본 찾기와 받기 (3) 찾기를 요청하는 곳. 원제의 물결표(`〜`와 `～`)처럼 Anissia와 AniList가 다르게 쓰는 문자는 정규화하지 않으므로, 그런 작품은 표지를 두지 않는 쪽으로 빗나가요. |
+| 구독 만들기를 막지 않음, 큐의 순서와 재시도 | 같은 확인에서 구독 API가 8.5 ms에 답했고, 표지는 그 뒤에 queue가 받았어요 ([feedback-0.8.0/0008](../specs/2026-10-23-feedback-0.8.0/0008-subscription-cover.md)) | `trss` `web/subscriptions_api/tests.rs` `a_subscription_shows_its_own_cover_until_its_season_has_the_work_s`(AniList가 실패하는 동안 구독)<br>`trss-library` `artwork/tests.rs` `a_subscription_cover_that_anilist_keeps_failing_is_tried_three_times_and_left` | 작품의 일보다 먼저 도는 것은 겨눈 테스트가 없어요. |
+| 시즌에 붙기 전의 카드와 포스터 | 같은 확인에서 내장 브라우저의 이번 주 편성 금요일 카드와 규칙 상세의 포스터가 그 표지를 보였어요 ([feedback-0.8.0/0008](../specs/2026-10-23-feedback-0.8.0/0008-subscription-cover.md)) | `trss` `web/subscriptions_api/tests.rs` `a_subscription_shows_its_own_cover_until_its_season_has_the_work_s`(규칙 상세, 구독 목록, 이번 주 편성의 API 값과 이미지 응답) | 포스터와 카드의 화면 코드는 웹 테스트가 없어요. |
+| 시즌에 붙을 때 작품에 넘김 | 없음 | `trss-library` `artwork/tests.rs` `a_subscription_hands_its_cover_only_to_a_work_whose_auto_cover_has_nothing_yet`<br>`trss-collect` `store/channels/season_anime_tests.rs` `a_subscription_asks_for_its_cover_and_hands_it_to_the_season_it_is_connected_to`<br>`trss` `web/subscriptions_api/tests.rs` `a_subscription_shows_its_own_cover_until_its_season_has_the_work_s` | 실제 구독이 첫 화를 받아 시즌에 붙으며 표지를 넘기는 것은 보지 않았어요. |
+| 시즌에 붙기 전에 지운 구독의 표지 파일 | 없음 | `trss-library` `artwork/tests.rs` `a_subscription_deleted_before_its_season_takes_its_cover_file_along` | 보관은 규칙을 지우는 같은 연쇄 삭제라 따로 보지 않았어요. |
 
 ### 시즌 정보
 

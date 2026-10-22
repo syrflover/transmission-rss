@@ -31,6 +31,12 @@ struct App {
 
 impl App {
     async fn new() -> App {
+        App::over(None).await
+    }
+
+    /// [`App::new`] whose artwork keeps its images in `covers`' folder and
+    /// asks its AniList (subscription covers).
+    async fn over(covers: Option<(&std::path::Path, trss_anilist::AnilistConfig)>) -> App {
         let db = Db::open_blocking(":memory:").unwrap();
         let fake = Fake::start().await;
         let now = Arc::new(AtomicI64::new(NOW));
@@ -39,7 +45,17 @@ impl App {
             Arc::new(move || now.load(Ordering::SeqCst))
         };
         let anissia = Anissia::new(db.clone(), fake.config(), clock).with_spacing(Duration::ZERO);
-        let state = AppState::new(db).with_anissia(anissia);
+        let mut state = AppState::new(db.clone()).with_anissia(anissia);
+        if let Some((dir, anilist)) = covers {
+            state = state.with_artwork(
+                trss_library::artwork::Artwork::new(
+                    db,
+                    Some(trss_library::artwork::AppData::new(dir)),
+                    anilist,
+                )
+                .with_spacing(Duration::ZERO),
+            );
+        }
         state
             .settings
             .put_collection(0, "/media".to_owned(), None)
@@ -865,7 +881,10 @@ mod rule_detail {
     use super::*;
     use trss_anilist::{Entry, FuzzyDate};
     use trss_collect::store::channels::Rule;
-    use trss_library::discovery::{EpisodeFile, FileKind, Scan, ScannedWork, WorkRead};
+    use trss_library::{
+        artwork::{image::samples, queue::Ran},
+        discovery::{EpisodeFile, FileKind, Scan, ScannedWork, WorkRead},
+    };
 
     impl App {
         /// A subscription to 3320 on a fresh channel, with the schedule up.
@@ -1406,6 +1425,94 @@ mod rule_detail {
             .unwrap();
         let (_, view) = app.get(&format!("/api/rules/{}", rule.id)).await;
         assert_eq!(view["season"]["episodes"], 12);
+    }
+
+    // feedback-0.8.0/0008: 구독은 AniList를 기다리지 않고 바로 만들어지고, 시즌에 붙기 전의 편성 카드와
+    // 규칙의 포스터는 구독이 찾은 표지를, 붙은 뒤에는 작품의 표지를 보여줘요.
+    #[tokio::test]
+    async fn a_subscription_shows_its_own_cover_until_its_season_has_the_work_s() {
+        let dir = tempfile::tempdir().unwrap();
+        let anilist = trss_anilist::fake::Fake::start().await;
+        let app = App::over(Some((dir.path(), anilist.config()))).await;
+        // AniList fails: subscribing neither asks it nor waits for it.
+        anilist.state.lock().unwrap().failing = 100;
+        let (_, rule) = app.subscribed().await;
+        assert!(anilist.api_requests().is_empty());
+        let detail = || async {
+            let (status, view) = app.get(&format!("/api/rules/{}", rule.id)).await;
+            assert_eq!(status, StatusCode::OK, "{view}");
+            view
+        };
+        // A week in which the anime (from Wednesday 2026-10-07) airs.
+        let card = || async {
+            let week = crate::web::schedule_api::week_at(&app.state, NOW + 7 * 86_400_000)
+                .await
+                .unwrap();
+            serde_json::to_value(week).unwrap()["days"][2]["cards"][0].clone()
+        };
+        assert_eq!(detail().await["subscription"]["cover_url"], Value::Null);
+        assert_eq!(card().await["rule_id"], rule.id.as_str());
+        assert_eq!(card().await["cover_url"], Value::Null);
+
+        // The queue finds the anime's one entry once AniList answers.
+        let mut entry = anilist.entry(77, "Work", &[]);
+        entry["title"]["native"] = json!("Work Original");
+        entry["startDate"] = json!({ "year": 2026, "month": 10, "day": 7 });
+        anilist.add_search("Work Original", vec![entry], &samples::jpeg());
+        anilist.state.lock().unwrap().failing = 0;
+        assert_eq!(app.state.artwork.run_next().await, Some(Ran::Recorded));
+        assert_eq!(app.state.artwork.run_next().await, Some(Ran::Recorded));
+        let image = app
+            .state
+            .artwork
+            .store
+            .subscription_image(&rule.id)
+            .await
+            .unwrap()
+            .unwrap();
+        let own = format!("/api/rules/{}/cover?v={}", rule.id, image.id);
+        assert_eq!(detail().await["subscription"]["cover_url"], own.as_str());
+        assert_eq!(card().await["cover_url"], own.as_str());
+        let (_, list) = app.get("/api/subscriptions").await;
+        assert_eq!(
+            list["subscriptions"][0]["subscription"]["cover_url"],
+            own.as_str()
+        );
+        let (status, bytes) =
+            testing::read(&app.router, testing::request(Method::GET, &own, None)).await;
+        assert_eq!((status, bytes.to_vec()), (StatusCode::OK, samples::jpeg()));
+
+        // Connected to a season of a work whose cover has nothing yet: the work
+        // takes the image, and both show the work's cover.
+        let (folder, _) = app
+            .state
+            .library
+            .add_folder(
+                "/c".into(),
+                Scan {
+                    works: vec![WorkRead::Read(work_with_videos(1))],
+                },
+                100,
+                &[],
+            )
+            .await
+            .unwrap();
+        let work = app.state.library.works(&folder.id).await.unwrap()[0]
+            .id
+            .clone();
+        app.state
+            .channels
+            .link_season(&rule.id, &format!("{work}:1"))
+            .await
+            .unwrap();
+        let theirs = format!("/api/library/works/{work}/artwork/image?v={}", image.id);
+        let view = detail().await;
+        assert_eq!(view["subscription"]["cover_url"], Value::Null);
+        assert_eq!(view["season"]["cover_url"], theirs.as_str());
+        assert_eq!(card().await["cover_url"], theirs.as_str());
+        let (status, _) =
+            testing::read(&app.router, testing::request(Method::GET, &own, None)).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
     }
 
     /// Two subscriptions of different anime whose videos are in one season:

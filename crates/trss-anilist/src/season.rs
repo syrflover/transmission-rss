@@ -53,7 +53,7 @@ struct Title {
 }
 
 #[derive(Deserialize)]
-struct Date {
+pub(crate) struct Date {
     year: Option<i64>,
     month: Option<i64>,
     day: Option<i64>,
@@ -145,7 +145,7 @@ fn text(value: Option<String>) -> Option<String> {
 
 /// AniList's fuzzy date, keeping only what makes sense: a month needs a year and
 /// a day needs a month.
-fn date(value: Option<Date>) -> FuzzyDate {
+pub(crate) fn date(value: Option<Date>) -> FuzzyDate {
     let Some(value) = value else {
         return FuzzyDate::default();
     };

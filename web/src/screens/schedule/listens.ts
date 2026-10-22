@@ -17,8 +17,10 @@ import { ofKinds } from "../../lib/changeMatch.ts";
  * - `library`: the episodes' videos and subtitles beside them (`영상 받음`,
  *   `자막 받음`).
  * - `rules`, `anissia`, `season_info`: the subscriptions, the anime they follow
- *   and the AniList entries that tell when an episode airs.
- * - `artwork`: the covers on the cards.
+ *   and the AniList entries that tell when an episode airs. A subscription's
+ *   own cover, which a card shows until the subscription has a season, is
+ *   announced as `rules` too.
+ * - `artwork`: the works' covers on the cards.
  * - `history`: the torrents a rule received (`영상 받는 중` names the episodes).
  * - `settings`: the first run's checklist, which takes the schedule's place.
  */

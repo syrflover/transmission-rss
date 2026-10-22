@@ -79,6 +79,7 @@ use url::Url;
 
 use super::{
     anissia_lists::{self, listed_anime, page_of, query_of, Listed, MAX_PAGE},
+    artwork_api::subscription_image_url,
     jobs_api,
     rules_api::{self, RuleView},
     ApiError, AppState,
@@ -89,7 +90,7 @@ use trss_anissia::{
 use trss_collect::{
     schedule::state::{run_state, RunState},
     store::channels::{
-        ChannelError, ChannelWithRules, NewSubscription, RuleInput, RuleState, Subscription,
+        ChannelError, ChannelWithRules, NewSubscription, Rule, RuleInput, RuleState, Subscription,
         SubtitleMode,
     },
     subscriptions::{
@@ -174,11 +175,18 @@ pub struct SubscriptionBrief {
     /// The quarter the anime started in (or, without a start date, the
     /// subscription began in).
     pub quarter: QuarterView,
+    /// The subscription's own cover (`GET /api/rules/{id}/cover`) while it
+    /// has no season; `null` once it has one, or while none was found.
+    pub cover_url: Option<String>,
 }
 
+/// Rule `rule_id`'s subscription as the screens show it. `covers` holds the
+/// image ID of subscription covers by rule ID ([`subscription_covers`]).
 pub fn subscription_brief(
+    rule_id: &str,
     subscription: &Subscription,
     animes: &HashMap<i64, Anime>,
+    covers: &HashMap<String, String>,
 ) -> SubscriptionBrief {
     let anime = animes.get(&subscription.anissia_anime_no);
     SubscriptionBrief {
@@ -189,7 +197,39 @@ pub fn subscription_brief(
         subscribed_at: subscription.subscribed_at,
         anime: anime.map(AnimeView::from),
         quarter: Quarter::of_anime(anime, subscription.subscribed_at).into(),
+        cover_url: subscription
+            .season_id
+            .is_none()
+            .then(|| covers.get(rule_id))
+            .flatten()
+            .map(|image_id| subscription_image_url(rule_id, image_id)),
     }
+}
+
+/// The image ID of the own cover of each of `rules`' subscriptions that has
+/// no season yet, by rule ID.
+pub async fn subscription_covers<'a>(
+    state: &AppState,
+    rules: impl IntoIterator<Item = &'a Rule>,
+) -> Result<HashMap<String, String>, ApiError> {
+    let unconnected: Vec<String> = rules
+        .into_iter()
+        .filter(|r| {
+            r.subscription
+                .as_ref()
+                .is_some_and(|s| s.season_id.is_none())
+        })
+        .map(|r| r.id.clone())
+        .collect();
+    if unconnected.is_empty() {
+        return Ok(HashMap::new());
+    }
+    state
+        .artwork
+        .store
+        .subscription_image_ids_of(unconnected)
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -524,6 +564,7 @@ async fn list(State(state): State<AppState>) -> Result<Json<SubscriptionList>, A
         .animes(nos.clone())
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
+    let covers = subscription_covers(&state, all.iter().flat_map(|c| &c.rules)).await?;
     let unlisted = state
         .anissia_store
         .unlisted(nos)
@@ -552,7 +593,7 @@ async fn list(State(state): State<AppState>) -> Result<Json<SubscriptionList>, A
                 channel_host: host.clone(),
                 title: rule.r#match.clone(),
                 directory: rule.directory.clone(),
-                subscription: subscription_brief(subscription, &animes),
+                subscription: subscription_brief(&rule.id, subscription, &animes, &covers),
                 quarter: quarter.into(),
                 upcoming: quarter > current,
                 run: anime.and_then(|a| run_state(a, unlisted.contains(&a.anime_no), today)),

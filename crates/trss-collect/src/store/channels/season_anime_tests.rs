@@ -576,3 +576,93 @@ async fn a_movie_is_linked_changed_and_cut_by_its_own_version_and_keeps_the_anim
         Err(MovieAnimeError::NoWork)
     ));
 }
+
+/// The subscription covers asked for or kept: rule, job and when it was asked.
+async fn covers(env: &Env) -> Vec<(String, Option<String>, Option<i64>)> {
+    env.db
+        .run::<_, trss_core::DbError, _>(|c| {
+            let mut stmt = c.prepare(
+                "SELECT rule_id, job, job_requested_at FROM subscription_artwork ORDER BY rule_id",
+            )?;
+            let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+            Ok(rows.collect::<rusqlite::Result<_>>()?)
+        })
+        .await
+        .unwrap()
+}
+
+// feedback-0.8.0/0008: 구독을 만드는 두 길이 표지를 찾게 하고, 시즌에 붙는 연결이 그 표지를 작품에 넘겨요.
+#[tokio::test]
+async fn a_subscription_asks_for_its_cover_and_hands_it_to_the_season_it_is_connected_to() {
+    let env = Env::new().await;
+    let first = env.subscribe("First", 7).await;
+    let plain = env
+        .channels
+        .create_rule(&env.channel, RuleInput::default())
+        .await
+        .unwrap();
+    let second = env
+        .channels
+        .subscribe_rule(
+            &plain.id,
+            plain.version,
+            NewSubscription {
+                anime: anime(8, "ON"),
+                subtitles: SubtitleMode::Undecided,
+                creator: None,
+                subscribed_at: 2_000,
+            },
+        )
+        .await
+        .unwrap();
+    let mut asked = vec![
+        (first.id.clone(), Some("search".to_owned()), Some(1_000)),
+        (second.id.clone(), Some("search".to_owned()), Some(2_000)),
+    ];
+    asked.sort();
+    assert_eq!(covers(&env).await, asked);
+
+    // First's cover was found and received.
+    let id = first.id.clone();
+    env.db
+        .run::<_, trss_core::DbError, _>(move |c| {
+            c.execute(
+                "UPDATE subscription_artwork SET anilist_media_id = 5, image_id = 'img',
+                     image_path = 'artwork/img.jpg', image_size = 3, image_sha256 = ?2,
+                     image_format = 'jpeg', job = NULL, job_requested_at = NULL
+                 WHERE rule_id = ?1",
+                rusqlite::params![id, "0".repeat(64)],
+            )?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        env.channels
+            .link_season(&first.id, &env.season(1))
+            .await
+            .unwrap(),
+        SeasonLinked::Linked
+    );
+    let art = trss_library::store::artwork::ArtworkStore::new(env.db.clone());
+    let cover = art.selection(&env.work).await.unwrap();
+    assert_eq!(
+        (
+            cover.anilist_media_id,
+            cover.image.map(|i| (i.id, i.relative_path))
+        ),
+        (Some(5), Some(("img".into(), "artwork/img.jpg".into())))
+    );
+    // A season another anime holds connects nothing, and the cover stays.
+    assert_eq!(
+        env.channels
+            .link_season(&second.id, &env.season(1))
+            .await
+            .unwrap(),
+        SeasonLinked::Taken
+    );
+    assert_eq!(
+        covers(&env).await,
+        [(second.id.clone(), Some("search".to_owned()), Some(2_000))]
+    );
+}

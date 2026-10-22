@@ -17,6 +17,30 @@ impl FuzzyDate {
     pub fn is_known(&self) -> bool {
         self.year.is_some()
     }
+
+    /// A date written `YYYY-MM-DD`, `YYYY-MM` or `YYYY` (as Anissia writes its
+    /// start dates); a part that cannot be read is unknown, and so is all that
+    /// follows it.
+    pub fn from_text(text: &str) -> FuzzyDate {
+        let mut parts = text.trim().splitn(3, '-');
+        let year = parts
+            .next()
+            .and_then(|y| y.parse::<i32>().ok())
+            .filter(|y| (1800..=2300).contains(y));
+        let month = year.and(
+            parts
+                .next()
+                .and_then(|m| m.parse::<u32>().ok())
+                .filter(|m| (1..=12).contains(m)),
+        );
+        let day = month.and(
+            parts
+                .next()
+                .and_then(|d| d.parse::<u32>().ok())
+                .filter(|d| (1..=31).contains(d)),
+        );
+        FuzzyDate { year, month, day }
+    }
 }
 
 /// An entry AniList relates to another as its sequel.

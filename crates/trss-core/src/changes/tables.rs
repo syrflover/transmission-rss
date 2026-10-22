@@ -86,7 +86,7 @@ pub(crate) const TABLES: &[(&str, Announced)] = &[
     ("archive_suggestion_kept", row(Rules, "rule_id")),
     (
         "artwork_files",
-        Not("the image files the app made, for the sweep of unused ones; the covers screens read are work_artwork"),
+        Not("the image files the app made, for the sweep of unused ones; the covers screens read are work_artwork and subscription_artwork"),
     ),
     ("caption_observations", any(Anissia)),
     ("channel_read_days", any(CollectStatus)),
@@ -124,6 +124,7 @@ pub(crate) const TABLES: &[(&str, Announced)] = &[
     ("season_entries", row(SeasonInfo, "work_id")),
     ("season_info", row(SeasonInfo, "work_id")),
     ("seasons", row(Library, "work_id")),
+    ("subscription_artwork", row(Rules, "rule_id")),
     ("subtitle_applied", row(SubtitleStore, "work_id")),
     ("subtitle_asset_removals", any(SubtitleStore)),
     ("subtitle_assets", row(SubtitleStore, "work_id")),

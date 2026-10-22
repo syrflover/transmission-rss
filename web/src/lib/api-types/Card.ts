@@ -22,7 +22,11 @@ creator: string | null,
 /**
  * The work of the connected season: the card links to its detail.
  */
-work_id: string | null, cover_url: string | null, 
+work_id: string | null, 
+/**
+ * The work's cover, or the subscription's own while it has no season.
+ */
+cover_url: string | null, 
 /**
  * Anissia's end date is in this week: the card says `이번 주 종영`
  * ([`ends_in_week`]).

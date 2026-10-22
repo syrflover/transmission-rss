@@ -209,6 +209,10 @@ const MIGRATIONS: &[Migration] = &[
     Migration::Sql(include_str!("../migrations/channels/archived_deleted.sql")),
     // 68: a rule is `active` or `paused`
     Migration::Remake(include_str!("../migrations/channels/no_archived.sql")),
+    // 69: a subscription keeps a cover from AniList until it is connected to a season
+    Migration::Sql(include_str!(
+        "../migrations/artwork/subscription_covers.sql"
+    )),
 ];
 
 #[derive(Debug, thiserror::Error)]
@@ -3239,6 +3243,18 @@ mod tests {
         rows.collect::<Result<_, _>>().unwrap()
     }
 
+    /// The indexes and triggers that the migrations after number `remade`
+    /// (a remake under test) add, made in databases of their own in `dir`, so
+    /// that the remake's test does not change with every later migration.
+    fn added_after(dir: &Path, remade: usize) -> Vec<(String, String)> {
+        let at = |n: usize| schema_objects(&database_at(&dir.join(format!("{n}.db")), n));
+        let remade = at(remade);
+        at(MIGRATIONS.len())
+            .into_iter()
+            .filter(|o| !remade.contains(o))
+            .collect()
+    }
+
     // A remake makes its tables anew: their indexes and triggers too.
     #[tokio::test]
     async fn the_same_number_migration_keeps_every_index_and_trigger() {
@@ -3738,6 +3754,7 @@ mod tests {
             schema_objects(&conn)
         };
 
+        let later = added_after(dir.path(), BEFORE_NO_EFFECT_RECORDS + 1);
         let db = Db::open(&path).await.unwrap();
 
         assert_eq!(version_of(&db).await, MIGRATIONS.len());
@@ -3752,10 +3769,12 @@ mod tests {
                 strings("SELECT name FROM sqlite_master WHERE name LIKE 'subtitle_file_effects%'")?,
                 Vec::<String>::new()
             );
-            let expected: Vec<(String, String)> = before
+            let mut expected: Vec<(String, String)> = before
                 .into_iter()
                 .filter(|(_, name)| !name.starts_with("subtitle_file_effects"))
+                .chain(later)
                 .collect();
+            expected.sort();
             assert_eq!(schema_objects(c), expected);
             for (table, gone) in [
                 (
@@ -4070,8 +4089,11 @@ mod tests {
             .run::<_, DbError, _>(|c| Ok(schema_objects(c)))
             .await
             .unwrap();
+        let mut expected = objects;
+        expected.extend(added_after(dir.path(), BEFORE_ARCHIVED_DELETED + 1));
+        expected.sort();
         assert_eq!(
-            after, objects,
+            after, expected,
             "the remake makes the index and triggers again"
         );
 

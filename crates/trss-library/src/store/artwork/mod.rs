@@ -32,12 +32,16 @@
 //! restart or opening a screen does not. Jobs persist, so a restart resumes the
 //! queue.
 //!
+//! A subscription not connected to a season yet has a cover of its own, with
+//! the same two jobs, in a table of its own ([`subscription`]).
+//!
 //! # Files
 //!
 //! The image files are recorded in `artwork_files` before they exist, so the
 //! app removes only files it can show it made (see [`crate::artwork::files`]).
 
 mod repo;
+pub mod subscription;
 #[cfg(test)]
 mod tests;
 
@@ -46,6 +50,7 @@ use std::collections::HashMap;
 use rusqlite::Connection;
 
 pub use repo::FileRow;
+pub use subscription::SubscriptionJob;
 
 use trss_core::{
     db::{Db, DbError},

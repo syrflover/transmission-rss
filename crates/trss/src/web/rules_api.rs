@@ -166,7 +166,7 @@ use url::Url;
 use super::{
     artwork_api::image_url,
     commands_api::CommandView,
-    subscriptions_api::{subscription_brief, SubscriptionBrief},
+    subscriptions_api::{subscription_brief, subscription_covers, SubscriptionBrief},
     ApiError, AppState,
 };
 use trss_anissia::Anime;
@@ -698,6 +698,8 @@ struct Analysis {
     seasons: HashMap<String, RuleSeasonView>,
     /// The season that kept a subscription rule from connecting.
     blocked: HashMap<String, SeasonBlockedView>,
+    /// The image ID of the own cover of each subscription with no season.
+    covers: HashMap<String, String>,
     /// The grounds and suggestions for the rules' episode offsets.
     episodes: episode::Episodes,
 }
@@ -809,6 +811,7 @@ async fn analyze(state: &AppState, cwr: &ChannelWithRules) -> Result<Analysis, A
             .await
             .map_err(|e| ApiError::Internal(e.to_string()))?;
     }
+    analysis.covers = subscription_covers(state, &cwr.rules).await?;
     analysis.episodes = episode::analyze(state, cwr).await;
     // Only the judgement is used here, never a save path.
     let plan = ChannelPlan::new(cwr.clone(), FsPath::new(""));
@@ -893,7 +896,7 @@ fn views(
             subscription: rule
                 .subscription
                 .as_ref()
-                .map(|s| subscription_brief(s, &analysis.animes)),
+                .map(|s| subscription_brief(&rule.id, s, &analysis.animes, &analysis.covers)),
             season: analysis.seasons.get(&rule.id).cloned(),
             season_blocked: analysis.blocked.get(&rule.id).cloned(),
         })

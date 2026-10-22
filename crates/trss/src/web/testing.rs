@@ -44,7 +44,7 @@ pub(crate) fn request(method: Method, uri: &str, body: Option<String>) -> Reques
 }
 
 /// Sends `request` to `router`; the status and the whole body.
-async fn read(router: &Router, request: Request<Body>) -> (StatusCode, Bytes) {
+pub(crate) async fn read(router: &Router, request: Request<Body>) -> (StatusCode, Bytes) {
     let response = router.clone().oneshot(request).await.unwrap();
     let status = response.status();
     (

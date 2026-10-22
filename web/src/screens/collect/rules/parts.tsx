@@ -53,7 +53,9 @@ const linkButton =
  * poster keeps one size: broadcast day and quarter, subtitle creator with its
  * `변경`, progress, and the last collection. What is not known is `미정` or
  * `아직 없음`. A rule that follows no anime has `Anissia 연결` beside the
- * broadcast line. The poster is the connected work's cover, or an empty box.
+ * broadcast line. The poster is the connected work's cover; before the
+ * subscription has a season, the cover trss found for the subscription; else an
+ * empty box.
  */
 export function RuleSummary({
   rule,
@@ -93,6 +95,15 @@ export function RuleSummary({
             letterClass="text-3xl"
           />
         </Link>
+      ) : subscription?.cover_url ? (
+        <div aria-hidden="true" className={posterBox} data-testid="rule-poster">
+          <Cover
+            work={coverOf(anime?.subject ?? "")}
+            imageUrl={subscription.cover_url}
+            className="size-full rounded-xl"
+            letterClass="text-3xl"
+          />
+        </div>
       ) : (
         <div
           aria-hidden="true"

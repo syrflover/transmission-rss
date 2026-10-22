@@ -146,6 +146,14 @@ async fn checked_rules_become_subscriptions_with_the_import_time_and_the_others_
     let stored = f.store.list_channels_with_rules().await.unwrap();
     assert_eq!(subscribed(&stored[0]), subscribed(first));
     assert_eq!(f.snapshot(10), Some(("에이".into(), 3, 1_000)));
+    // An import asks AniList for no subscription cover (feedback-0.8.0/0008).
+    let covers: i64 = f
+        .raw()
+        .query_row("SELECT count(*) FROM subscription_artwork", [], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    assert_eq!(covers, 0);
 }
 
 #[tokio::test]

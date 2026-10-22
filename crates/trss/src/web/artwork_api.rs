@@ -1,5 +1,6 @@
 //! A work's cover (`docs/requirements/library.md`, 작품 표지): its state, its image,
-//! and the user's choices from the cover view of the work detail screen.
+//! and the user's choices from the cover view of the work detail screen; and
+//! the image of a subscription's own cover, until it is connected to a season.
 //!
 //! | method and path                                   | body                                    |
 //! | ------------------------------------------------- | --------------------------------------- |
@@ -11,6 +12,7 @@
 //! | `POST /api/library/works/{id}/artwork/clear`      | `{ "version": 3 }`                      |
 //! | `POST /api/library/works/{id}/artwork/auto`       | `{ "version": 3 }`                      |
 //! | `POST /api/library/works/{id}/artwork/repair`     | `{ "version": 3 }`                      |
+//! | `GET  /api/rules/{id}/cover`                      | (the image bytes)                       |
 //!
 //! The state (also the answer of every change):
 //!
@@ -54,6 +56,9 @@
 //!   `auto` goes back to automatic with a new search, `repair` asks for the
 //!   selected AniList entry's image again.
 //! - A refused change answers `400` with the reason; the cover stays as it was.
+//! - `cover` answers rule `{id}`'s subscription cover as `image` answers a
+//!   work's, `404` when there is none. The schedule's cards and the rule's
+//!   poster use it (`cover_url`) while the subscription has no season.
 
 use axum::{
     body::Body,
@@ -74,7 +79,9 @@ use super::{
 use trss_anilist::{title::Candidate, ImageFetchError, MAX_IMAGE_BYTES};
 use trss_library::{
     artwork::{ActionError, Artwork, Unavailable, USER_MAX_WAIT},
-    store::artwork::{ArtworkError, Format, JobKind, Mode, Note, Selection, Source, UserChange},
+    store::artwork::{
+        ArtworkError, Format, ImageRef, JobKind, Mode, Note, Selection, Source, UserChange,
+    },
 };
 
 #[cfg(test)]
@@ -93,6 +100,7 @@ pub fn routes() -> Router<AppState> {
         .route("/library/works/{id}/artwork/clear", post(clear))
         .route("/library/works/{id}/artwork/auto", post(auto))
         .route("/library/works/{id}/artwork/repair", post(repair))
+        .route("/rules/{id}/cover", get(subscription_image))
 }
 
 /// Where a work's image is served; `v` changes with the image so a new one is
@@ -101,6 +109,15 @@ pub fn image_url(work_id: &str, image_id: &str) -> String {
     format!(
         "/api/library/works/{}/artwork/image?v={}",
         url::form_urlencoded::byte_serialize(work_id.as_bytes()).collect::<String>(),
+        url::form_urlencoded::byte_serialize(image_id.as_bytes()).collect::<String>()
+    )
+}
+
+/// Where rule `rule_id`'s subscription cover is served, as [`image_url`].
+pub fn subscription_image_url(rule_id: &str, image_id: &str) -> String {
+    format!(
+        "/api/rules/{}/cover?v={}",
+        url::form_urlencoded::byte_serialize(rule_id.as_bytes()).collect::<String>(),
         url::form_urlencoded::byte_serialize(image_id.as_bytes()).collect::<String>()
     )
 }
@@ -250,13 +267,31 @@ async fn image(
     Path(id): Path<String>,
     headers: HeaderMap,
 ) -> Response {
-    let not_found = || ApiError::not_found("표지 이미지가 없어요.").into_response();
-    let selection = match state.artwork.store.selection(&id).await {
-        Ok(selection) => selection,
-        Err(ArtworkError::NotFound) => return not_found(),
+    let image = match state.artwork.store.selection(&id).await {
+        Ok(selection) => selection.image,
+        Err(ArtworkError::NotFound) => None,
         Err(e) => return ApiError::Internal(e.to_string()).into_response(),
     };
-    let Some(image) = selection.image else {
+    serve_image(&state.artwork, image, &headers).await
+}
+
+async fn subscription_image(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    match state.artwork.store.subscription_image(&id).await {
+        Ok(image) => serve_image(&state.artwork, image, &headers).await,
+        Err(e) => ApiError::Internal(e.to_string()).into_response(),
+    }
+}
+
+/// Answers `image`'s bytes, checked again, or only that it is still there to
+/// a browser holding it (`If-None-Match`); `404` when there is none or its file
+/// is not the recorded one.
+async fn serve_image(artwork: &Artwork, image: Option<ImageRef>, headers: &HeaderMap) -> Response {
+    let not_found = || ApiError::not_found("표지 이미지가 없어요.").into_response();
+    let Some(image) = image else {
         return not_found();
     };
     let format = image.format;
@@ -267,12 +302,12 @@ async fn image(
         .is_some_and(|v| v.split(',').any(|t| t.trim() == etag));
     // A browser holding the image needs only to know it is still there.
     let mut response = if cached {
-        match state.artwork.image_state(image).await {
+        match artwork.image_state(image).await {
             Ok(()) => StatusCode::NOT_MODIFIED.into_response(),
             Err(_) => return not_found(),
         }
     } else {
-        match state.artwork.image(image).await {
+        match artwork.image(image).await {
             Ok(bytes) => (StatusCode::OK, Body::from(bytes)).into_response(),
             Err(_) => return not_found(),
         }

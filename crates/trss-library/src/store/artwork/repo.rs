@@ -12,7 +12,7 @@ use crate::store::artwork::{
 };
 use trss_core::{file_id::FileId, Millis};
 
-fn begin(conn: &mut Connection) -> rusqlite::Result<Transaction<'_>> {
+pub(super) fn begin(conn: &mut Connection) -> rusqlite::Result<Transaction<'_>> {
     conn.transaction_with_behavior(TransactionBehavior::Immediate)
 }
 
@@ -20,7 +20,7 @@ const COLUMNS: &str = "a.mode, a.source, a.anilist_media_id, a.image_id, a.image
      a.image_path, a.image_size, a.image_sha256, a.image_format, a.version, a.job,
      a.job_requested_at, a.job_attempts, a.job_not_before, a.note";
 
-fn bad(column: usize, what: &str) -> rusqlite::Error {
+pub(super) fn bad(column: usize, what: &str) -> rusqlite::Error {
     rusqlite::Error::FromSqlConversionFailure(
         column,
         rusqlite::types::Type::Text,
@@ -96,7 +96,7 @@ fn read(conn: &Connection, work_id: &str) -> rusqlite::Result<Option<Selection>>
 /// Whether `work_id` is a work in the library: recorded, and its watch folder
 /// registered. A work of an unregistered folder keeps its selection, but it
 /// is neither shown nor changed until the folder is registered again.
-fn in_library(conn: &Connection, work_id: &str) -> rusqlite::Result<bool> {
+pub(super) fn in_library(conn: &Connection, work_id: &str) -> rusqlite::Result<bool> {
     Ok(conn
         .prepare_cached(
             "SELECT 1 FROM works w JOIN watch_folders f ON f.id = w.watch_folder_id
@@ -215,7 +215,7 @@ pub(super) fn change(
 }
 
 /// Whether `relative_path` is a reserved file that no selection took yet.
-fn staged(tx: &Transaction<'_>, relative_path: &str) -> rusqlite::Result<bool> {
+pub(super) fn staged(tx: &Transaction<'_>, relative_path: &str) -> rusqlite::Result<bool> {
     let state: Option<String> = tx
         .prepare_cached("SELECT state FROM artwork_files WHERE relative_path = ?1")?
         .query_row([relative_path], |r| r.get(0))
@@ -600,10 +600,13 @@ pub(crate) fn files_of_state(conn: &Connection, state: &str) -> rusqlite::Result
     rows.collect()
 }
 
-/// Every image path a selection refers to, as written.
+/// Every image path a selection or a subscription's cover refers to, as
+/// written.
 pub(crate) fn referenced_paths(conn: &Connection) -> rusqlite::Result<Vec<String>> {
     let mut stmt = conn.prepare_cached(
-        "SELECT DISTINCT image_path FROM work_artwork WHERE image_path IS NOT NULL",
+        "SELECT image_path FROM work_artwork WHERE image_path IS NOT NULL
+         UNION
+         SELECT image_path FROM subscription_artwork WHERE image_path IS NOT NULL",
     )?;
     let rows = stmt.query_map([], |r| r.get(0))?;
     rows.collect()

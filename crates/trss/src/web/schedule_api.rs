@@ -59,9 +59,11 @@
 //!   the cards' rules, only when something is downloading, and only for the
 //!   torrents downloading.
 //!
-//! `work_id` (the card's link to the work's detail) and `cover_url` exist only
-//! for a connected season; without them the card links to the rule and the
-//! cover is an empty slot.
+//! `work_id` (the card's link to the work's detail) exists only for a
+//! connected season; without it the card links to the rule. `cover_url` is the
+//! work's cover for a connected season and, before that, the subscription's
+//! own (`GET /api/rules/{id}/cover`); without either the cover is an empty
+//! slot.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
@@ -69,9 +71,9 @@ use axum::{extract::State, routing::get, Json, Router};
 use serde::Serialize;
 
 use super::{
-    artwork_api::image_url,
+    artwork_api::{image_url, subscription_image_url},
     setup_api::{self, FirstRunView},
-    subscriptions_api::QuarterView,
+    subscriptions_api::{subscription_covers, QuarterView},
     ApiError, AppState,
 };
 use trss_anissia::{
@@ -115,6 +117,7 @@ pub struct Card {
     pub creator: Option<String>,
     /// The work of the connected season: the card links to its detail.
     pub work_id: Option<String>,
+    /// The work's cover, or the subscription's own while it has no season.
     pub cover_url: Option<String>,
     /// Anissia's end date is in this week: the card says `이번 주 종영`
     /// ([`ends_in_week`]).
@@ -400,6 +403,7 @@ async fn build_week(state: &AppState, now: Millis) -> Result<(WeekView, Option<M
             .await
             .map_err(internal)?
     };
+    let own_covers = subscription_covers(state, airings.iter().map(|a| a.rule)).await?;
     let downloading = downloading_by_rule(state, now, &airings).await?;
 
     let mut by_day: HashMap<i64, Vec<Card>> = HashMap::new();
@@ -466,11 +470,14 @@ async fn build_week(state: &AppState, now: Millis) -> Result<(WeekView, Option<M
                 .then(|| subscription.creator.clone())
                 .flatten(),
             work_id: season.map(|s| s.work_id.clone()),
-            cover_url: season.and_then(|s| {
-                covers
+            cover_url: match season {
+                Some(s) => covers
                     .get(&s.work_id)
-                    .map(|image_id| image_url(&s.work_id, image_id))
-            }),
+                    .map(|image_id| image_url(&s.work_id, image_id)),
+                None => own_covers
+                    .get(&rule.id)
+                    .map(|image_id| subscription_image_url(&rule.id, image_id)),
+            },
             ends_this_week: ends_in_week(anime, start),
         });
     }
