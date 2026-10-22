@@ -43,6 +43,7 @@
   작업 이력·큐·과거 승인과 파일 바이트는 내보내기에 포함하지 않아요.
 - [공통 Rust 라이브러리와 별도 웹·worker 바이너리](../adr/0006-separate-web-worker-binaries.md)를 선택해 코드와 배포 버전은 공유하면서 실행 역할과 재시작 단위를 나눠요.
   Chromium은 별도 비공개 컨테이너로 분리하되, 이 선택을 속도 향상의 실측 근거로 취급하지 않아요.
+  별도 웹·worker 바이너리는 [한 프로세스 ADR](../adr/0019-one-process-for-web-and-worker.md)이 대체했어요. 웹과 worker 역할은 `trss` 프로세스 하나가 맡고, Chromium은 그대로 별도 컨테이너에 둬요.
 
 ## 채택한 시안과 검토 근거
 
