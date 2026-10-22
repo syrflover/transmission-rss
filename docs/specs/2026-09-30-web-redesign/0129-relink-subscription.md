@@ -1,8 +1,8 @@
 # 0129 잘못 이은 구독을 규칙 상세에서 다른 Anissia 작품으로 다시 이어요
 
 - 상태: 대기
-- 출처: [방영작 구독](../../requirements/collection.md#방영작-구독)의 스위치 항목, [0101](../../archive/tickets/refactoring-between-5-and-6/0101-receive-line-tests.md)에서 만든 [검증 표](../../requirements/collection.md#검증-표)(2026-10-09)
-- 막는 티켓: [0114](../../archive/tickets/refactoring-between-5-and-6/0114-refactor-final-check.md)(리팩터링 마지막 확인)
+- 출처: [방영작 구독](../../requirements/collection.md#방영작-구독)의 스위치 항목, [refactoring-between-5-and-6/0101](../../archive/tickets/refactoring-between-5-and-6/0101-receive-line-tests.md)에서 만든 [검증 표](../../requirements/collection.md#검증-표)(2026-10-09)
+- 막는 티켓: [refactoring-between-5-and-6/0114](../../archive/tickets/refactoring-between-5-and-6/0114-refactor-final-check.md)(리팩터링 마지막 확인)
 
 ## 작업
 

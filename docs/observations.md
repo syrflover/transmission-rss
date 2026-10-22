@@ -46,7 +46,7 @@
 - 지켜볼 것: 미디어를 다른 파일시스템(NFS, SMB, 대소문자를 가리지 않는 파일시스템)으로 옮길 때, 교체에 꼭 필요한 `RENAME_EXCHANGE`와 대소문자만 다른 이름 바꾸기가 되는지예요. 지금은 서버(j4105)의 xfs 작품 폴더에서만 확인했어요.
 - 드러나는 모습: 옮기기 전에 새 마운트에서 `deploy/probe.sh`를 돌리면 검사가 실패해요. 옮긴 뒤에는 자막 교체가 모두 실패해요.
 - 결과가 바꿀 것: 교체를 다른 방법으로 할지 사용자 결정을 받아요.
-- 출처: [0151](archive/tickets/lighter-structure/0151-probe-rename-exchange.md)과 [0153의 바뀐 동작](archive/tickets/lighter-structure/0153-no-effect-records.md#바뀐-동작)
+- 출처: [lighter-structure/0151](archive/tickets/lighter-structure/0151-probe-rename-exchange.md)과 [0153의 바뀐 동작](archive/tickets/lighter-structure/0153-no-effect-records.md#바뀐-동작)
 
 ## 서버 Transmission의 OOM 강제 종료
 

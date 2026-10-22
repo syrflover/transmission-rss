@@ -1,15 +1,15 @@
 # 0134 작품별 자막 형식 순서에 버전 계약을 두고 처음 실행 중의 할 일 배지를 살펴요
 
 - 상태: 대기
-- 출처: [앱이 소유하는 설정](../../requirements/settings.md#앱이-소유하는-설정), [처음 실행](../../requirements/settings.md#처음-실행), [0113](../../archive/tickets/refactoring-between-5-and-6/0113-remaining-area-tests.md)에서 만든 [검증 표](../../requirements/settings.md#검증-표)(2026-10-10)
-- 막는 티켓: [0114](../../archive/tickets/refactoring-between-5-and-6/0114-refactor-final-check.md)(리팩터링 마지막 확인)
+- 출처: [앱이 소유하는 설정](../../requirements/settings.md#앱이-소유하는-설정), [처음 실행](../../requirements/settings.md#처음-실행), [refactoring-between-5-and-6/0113](../../archive/tickets/refactoring-between-5-and-6/0113-remaining-area-tests.md)에서 만든 [검증 표](../../requirements/settings.md#검증-표)(2026-10-10)
+- 막는 티켓: [refactoring-between-5-and-6/0114](../../archive/tickets/refactoring-between-5-and-6/0114-refactor-final-check.md)(리팩터링 마지막 확인)
 
 ## 작업
 
 2026-10-10 `51c7ad0`에서 설정 명세와 다른 곳 두 가지를 찾았어요. 결함으로 보고 리팩터링을 마친 뒤 고쳐요(사용자 결정, 2026-10-10).
 
 - **작품별 자막 형식 순서의 버전**: 명세는 설정 변경이 [웹 명령과 상태 갱신](../../requirements/web-app.md#웹-명령과-상태-갱신)의 버전 계약을 따른다고 해요.
-  `PUT`·`DELETE /api/library/works/{id}/subtitle-order`(trss `web/library_work_api.rs`)는 버전을 받지 않아서, 두 화면이 같은 작품의 순서를 바꾸면 늦은 쪽이 먼저 저장한 것을 묻지 않고 덮어요. [0072](../../archive/tickets/4-store-apply-and-replace/0072-choose-stored-subtitle.md)의 결과도 이 점을 적었어요.
+  `PUT`·`DELETE /api/library/works/{id}/subtitle-order`(trss `web/library_work_api.rs`)는 버전을 받지 않아서, 두 화면이 같은 작품의 순서를 바꾸면 늦은 쪽이 먼저 저장한 것을 묻지 않고 덮어요. [4-store-apply-and-replace/0072](../../archive/tickets/4-store-apply-and-replace/0072-choose-stored-subtitle.md)의 결과도 이 점을 적었어요.
 - **처음 실행 중의 할 일 개수 배지**: 명세는 처음 실행 중에는 할 일 개수 배지를 두지 않는다고 해요.
   메뉴의 배지(`web/src/app/MainNav.tsx`, 개수는 `todo-count.ts`)에는 처음 실행인지 보는 조건이 없어요. 다만 배지는 개수가 0이면 그리지 않으므로, 처음 실행 중에 할 일 개수가 0보다 클 수 있는지를 먼저 확인해요. 감시 폴더를 등록한 단계에서 알아보지 못한 영상이 할 일로 세어지는지가 한 예예요. 클 수 있을 때만 배지를 숨겨요.
 

@@ -1,12 +1,12 @@
 # 0165 끊긴 교체가 남긴 적용본 기록과 `.trss/aside/`의 파일을 사람이 알고 다루게 해요
 
 - 상태: 대기
-- 출처: [0153 결과의 남은 한계](../../archive/tickets/lighter-structure/0153-no-effect-records.md#남은-한계)
-- 막는 티켓: 없음. [구조 가볍게 하기 명세](../../archive/tickets/lighter-structure/lighter-structure.md)의 범위 밖이라 [0162](../../archive/tickets/lighter-structure/0162-deploy-lighter-structure.md) 뒤에 해요(사용자 결정, 2026-10-22).
+- 출처: [lighter-structure/0153 결과의 남은 한계](../../archive/tickets/lighter-structure/0153-no-effect-records.md#남은-한계)
+- 막는 티켓: 없음. [구조 가볍게 하기 명세](../../archive/tickets/lighter-structure/lighter-structure.md)의 범위 밖이라 [lighter-structure/0162](../../archive/tickets/lighter-structure/0162-deploy-lighter-structure.md) 뒤에 해요(사용자 결정, 2026-10-22).
 
 ## 작업
 
-[0153](../../archive/tickets/lighter-structure/0153-no-effect-records.md) 뒤로 교체와 재배치가 끊기면, 옮긴 파일이 작품 폴더의 `.trss/aside/<ID>`에 남아요. trss는 그 파일을 자동으로 지우지 않아요. 사용자 자막의 하나뿐인 사본일 수 있어서예요([자막 명세의 교체 계획과 반영](../../requirements/subtitles.md#교체-계획과-반영)). 그런데 사람에게 보이지 않는 것이 두 가지 남아요.
+[lighter-structure/0153](../../archive/tickets/lighter-structure/0153-no-effect-records.md) 뒤로 교체와 재배치가 끊기면, 옮긴 파일이 작품 폴더의 `.trss/aside/<ID>`에 남아요. trss는 그 파일을 자동으로 지우지 않아요. 사용자 자막의 하나뿐인 사본일 수 있어서예요([자막 명세의 교체 계획과 반영](../../requirements/subtitles.md#교체-계획과-반영)). 그런데 사람에게 보이지 않는 것이 두 가지 남아요.
 
 - 교체가 앞선 적용본을 `.trss/aside/`로 옮긴 뒤 기록하기 전에 끊기면, 그 적용본의 기록은 없는 파일을 가리킨 채 살아 있어요. 보관 파일 정리의 `APPLIED` 규칙이 그 보관본을 계속 지켜서, 사람이 정리하려 해도 할 수 없어요. 대소문자를 가리는 파일시스템에서 대소문자만 다른 이름으로 바꾸는 교체가 이름을 바꾼 뒤 끊긴 경우도 같아요.
 - `.trss/aside/`에 남은 파일은 화면 어디에도 보이지 않아서, 사람이 작품 폴더를 직접 열어 봐야 알아요.

@@ -89,6 +89,9 @@ RSS 피드 ──다운로드 규칙──▶ Transmission ──▶ 수집 폴�
 
 ## 진행 순서
 
-결과 목표 1–4로 기능을 만들었고, 그 뒤는 실제 배포 검증(목표 5), [리팩터링](archive/tickets/refactoring-between-5-and-6/refactoring.md)(2026-10-10에 마쳤어요), [0.7.0을 써 보고 고칠 것](specs/2026-10-11-feedback-0.7.0/spec.md), 앱 YAML 내보내기·가져오기(목표 6) 순서예요.
-2026-10-21에 [구조 가볍게 하기](specs/2026-09-30-web-redesign/spec.md#구조-가볍게-하기)를 0.7.0 피드백의 남은 티켓(0140·0143)보다 먼저 하기로 했고, 2026-10-22에 마쳤어요.
+[결과 목표](specs/2026-09-30-web-redesign/spec.md#결과-목표) 1–4로 기능을 만들었고, 그 뒤는 실제 배포 검증(목표 5), [리팩터링](archive/tickets/refactoring-between-5-and-6/refactoring.md)(2026-10-10에 마쳤어요), [0.7.0을 써 보고 고칠 것](specs/2026-10-11-feedback-0.7.0/spec.md), 앱 YAML 내보내기·가져오기(목표 6) 순서예요.
+2026-10-21에 [구조 가볍게 하기](specs/2026-09-30-web-redesign/spec.md#구조-가볍게-하기)를 0.7.0 피드백의 남은 티켓([feedback-0.7.0/0140]·[feedback-0.7.0/0143])보다 먼저 하기로 했고, 2026-10-22에 마쳤어요.
 지금 어디까지 왔는지는 [웹 재설계 명세](specs/2026-09-30-web-redesign/spec.md)와 [`docs/specs/`의 변경 폴더](specs/README.md)에 있어요.
+
+[feedback-0.7.0/0140]: specs/2026-10-11-feedback-0.7.0/0140-movies-in-season-00.md
+[feedback-0.7.0/0143]: specs/2026-10-11-feedback-0.7.0/0143-deploy-feedback-fixes.md
