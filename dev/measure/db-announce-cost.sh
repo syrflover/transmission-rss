@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # What a database connection's noting of changes costs per written row (ticket
-# 0164): 10,000 inserts and 10,000 updates of a `WITHOUT ROWID` table with and
+# lighter-structure/0164): 10,000 inserts and 10,000 updates of a `WITHOUT ROWID` table with and
 # without the TEMP triggers, in one transaction and one row per `Db::run`, and
 # 10,000 read-only calls, in the dev and the release profile. The measurement
 # is the ignored test `changes::tests::from_the_connection::

@@ -1,4 +1,4 @@
-//! Cleaning stored files (ticket 0073, `trss_jobs::place::cleanup`): what a
+//! Cleaning stored files (ticket 4-store-apply-and-replace/0073, `trss_jobs::place::cleanup`): what a
 //! person may clean and what goes with it, the worker's removal, the race
 //! with a job that takes a file up meanwhile, and the restarts a killed
 //! worker leaves.
@@ -486,7 +486,7 @@ async fn cleaning_a_revision_alone_with_its_font_and_attachment_removes_all_thre
     assert_eq!(storage[0].cleanable, 0);
 }
 
-// 화면 알림(0155): 작품 상세의 보관 파일 정리는 그 작품의 `subtitle_store` 이벤트에 작품을
+// 화면 알림(lighter-structure/0155): 작품 상세의 보관 파일 정리는 그 작품의 `subtitle_store` 이벤트에 작품을
 // 다시 읽어요. 사람이 정리를 맡길 때(`asked`)와 trss가 파일을 지우고 끝낼 때가 모두 그
 // 작품의 ID로 가요.
 #[tokio::test]

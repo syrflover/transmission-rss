@@ -32,13 +32,13 @@ directory: string,
  * The past items the person ticked, in the order to receive them (history
  * item IDs of this channel). The server uses them only when the
  * subscription waits for its work folder (the answer's rule is `paused`):
- * its `start` receives them once the rule is on (ticket 0125). Otherwise the
+ * its `start` receives them once the rule is on (ticket 5-deployed-verification/0125). Otherwise the
  * screen receives them itself, as it shows their progress.
  */
 receive: Array<number>, 
 /**
  * The episode offset to make the rule with: the one the person applied
- * from the suggestion the preview offered before receiving (ticket 0126).
+ * from the suggestion the preview offered before receiving (ticket 5-deployed-verification/0126).
  * It is the person's own value. Absent leaves the default (`1`, numbers
  * as they are).
  */

@@ -1,5 +1,5 @@
 //! `다시 받기` of an item a rule picked and Transmission refused
-//! (`receive_once::run` on a command the web accepted; tickets 0008, 0101):
+//! (`receive_once::run` on a command the web accepted; tickets 1-app-owned-collection/0008, refactoring-between-5-and-6/0101):
 //! where the torrent goes, how the file is named, and how a failed add ends.
 //! The cases run through [`World::retry`] against the fake Transmission.
 

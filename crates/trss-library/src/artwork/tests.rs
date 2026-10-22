@@ -1,6 +1,6 @@
 //! The artwork flow end to end against a fake AniList ([`super::fake`]) and a
 //! temporary app data folder: the rows of `docs/specs/library.md` 작품 표지 and
-//! of ticket 0015, except the YAML import (goal 5).
+//! of ticket 2-work-discovery-and-subscriptions/0015, except the YAML import (goal 5).
 
 use std::{
     collections::BTreeSet,
@@ -80,7 +80,7 @@ impl Env {
     }
 
     /// [`Env::new`] over a database whose writes are announced, and what it
-    /// announces from now on. The screens listen to those (`docs/tickets/0156`).
+    /// announces from now on. The screens listen to those (lighter-structure/0156).
     async fn announcing(names: &[&str]) -> (Env, Heard) {
         let dir = tempfile::tempdir().unwrap();
         let changes = Changes::default();
@@ -219,7 +219,7 @@ async fn one_exact_title_is_selected_and_shown_only_after_its_bytes_are_verified
     assert_eq!(env.art.run_next().await, None);
 }
 
-// 화면 알림(0156): 작품 상세의 표지와 표지 고르기 대화 상자는 그 작품의 `artwork` 이벤트에
+// 화면 알림(lighter-structure/0156): 작품 상세의 표지와 표지 고르기 대화 상자는 그 작품의 `artwork` 이벤트에
 // 다시 읽어요. 검색이 항목을 고를 때와 이미지가 확인돼 표지가 될 때가 모두 그 작품의 ID로 가요.
 #[tokio::test]
 async fn a_cover_that_is_chosen_and_the_image_that_then_arrives_are_announced_for_the_work() {

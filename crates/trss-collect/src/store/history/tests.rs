@@ -852,7 +852,7 @@ async fn history_survives_channel_and_rule_deletion() {
         .await
         .unwrap();
 
-    // Ticket 0007 adds channel deletion; a raw delete stands in for it here.
+    // Ticket 1-app-owned-collection/0007 adds channel deletion; a raw delete stands in for it here.
     db.run::<_, HistoryError, _>(move |c| {
         c.execute("DELETE FROM rules", [])?;
         c.execute("DELETE FROM channels", [])?;
@@ -2068,7 +2068,7 @@ async fn the_titles_of_what_rules_received_come_back_with_their_torrents() {
     assert!(none.is_empty());
 }
 
-// --- the items a rule picked first (ticket 0024) -----------------------------
+// --- the items a rule picked first (ticket 2-work-discovery-and-subscriptions/0024) -----------------------------
 
 #[tokio::test]
 async fn the_rules_that_picked_something_are_found_whatever_the_result() {
@@ -2189,7 +2189,7 @@ fn drain(
     told
 }
 
-// 화면 알림(0156): 이번 주 편성과 수집 상태판은 `collect_status`(ID 없음)에 다시 읽어요.
+// 화면 알림(lighter-structure/0156): 이번 주 편성과 수집 상태판은 `collect_status`(ID 없음)에 다시 읽어요.
 // 수집 주기가 시작하고 끝나는 기록이 그 이벤트로 가요.
 #[tokio::test]
 async fn a_cycle_that_begins_and_ends_is_announced_as_a_collect_status_change_without_an_id() {

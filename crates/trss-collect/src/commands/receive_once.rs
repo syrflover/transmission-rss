@@ -607,7 +607,7 @@ pub async fn section(ctx: &ReceiveContext, command: &Command) -> Result<Section,
 /// the item may decide the rule's episode offset ([`may_settle`]): such
 /// receives of one rule go one at a time in the order they were accepted, so
 /// that of the items asked for together, earliest number first, the earliest
-/// decides (ticket 0130). The rule is not held otherwise: its later receives,
+/// decides (ticket refactoring-between-5-and-6/0130). The rule is not held otherwise: its later receives,
 /// whose add and rename can wait on a torrent that does not start, go on side
 /// by side.
 pub(crate) async fn rule_section(

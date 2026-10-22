@@ -1,5 +1,5 @@
 //! The past episode search (`docs/specs/collection.md`, 지난 회차 검색; ticket
-//! 0026): reading a tracker's search RSS for the episodes a feed no longer
+//! 2-work-discovery-and-subscriptions/0026): reading a tracker's search RSS for the episodes a feed no longer
 //! holds, and judging what comes back before the person chooses.
 //!
 //! - [`query`]: the search words (a channel's format with the rule's match

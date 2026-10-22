@@ -1,5 +1,5 @@
 //! The worker's own unpacking of a received archive, measured under the
-//! container's memory limit (ticket 0065): `trss-extract` is started through
+//! container's memory limit (ticket 4-store-apply-and-replace/0065): `trss-extract` is started through
 //! `trss_archive::run::Unpacker` as the worker does, and the container's
 //! memory cgroup, which covers the child, is sampled meanwhile.
 

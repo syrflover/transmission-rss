@@ -1,5 +1,5 @@
 //! Setting the episode offset of a new season's rule before the rule's first
-//! item is named (ticket 0024; the grounds and the table of results are in
+//! item is named (ticket 2-work-discovery-and-subscriptions/0024; the grounds and the table of results are in
 //! [`crate::episode_offset`]).
 //!
 //! A cycle calls [`settle`] after it has judged the feeds and before it adds

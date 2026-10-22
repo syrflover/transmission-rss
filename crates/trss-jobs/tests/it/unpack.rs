@@ -1,4 +1,4 @@
-//! Unpacking a received archive (ticket 0065, `trss_jobs::place::unpack`)
+//! Unpacking a received archive (ticket 4-store-apply-and-replace/0065, `trss_jobs::place::unpack`)
 //! through the `trss-extract` program: its members are placed as a package's
 //! files are, a refused archive fails alone and stays in the receive area, and
 //! a worker killed while it unpacked unpacks again from what it received.
@@ -284,7 +284,7 @@ fn receive_note(d: &JobDetail) -> Option<String> {
         .and_then(|s| s.note.clone())
 }
 
-// Drive's `1-12` ZIP of a season (ticket 0065): the candidate's episode is
+// Drive's `1-12` ZIP of a season (ticket 4-store-apply-and-replace/0065): the candidate's episode is
 // applied, the other eleven stored only, and nothing is left to receive.
 #[tokio::test]
 async fn the_candidates_episode_of_a_season_zip_is_applied_and_the_rest_stored() {
@@ -362,7 +362,7 @@ async fn members_in_folders_are_placed_and_one_that_is_no_file_is_dropped_with_w
 }
 
 // Two members with the same bytes: the first one stored is a new file, the
-// second uses it, and the job's detail tells them apart (ticket 0153: from
+// second uses it, and the job's detail tells them apart (ticket lighter-structure/0153: from
 // the stored records, not a record of the store).
 #[tokio::test]
 async fn a_member_with_the_bytes_of_one_stored_before_it_is_not_a_new_file() {
@@ -550,7 +550,7 @@ fn extract() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_trss-extract"))
 }
 
-// This machine fails to unpack (a full disk, ticket 0065): the job waits
+// This machine fails to unpack (a full disk, ticket 4-store-apply-and-replace/0065): the job waits
 // (`자막 대기`), and the archive is unpacked again from what was received an
 // hour later, or at a worker's start if that comes first; the log says which
 // try each was.
@@ -1099,9 +1099,9 @@ async fn a_split_set_without_its_first_volume_says_why() {
     assert_eq!(tree(&s.area.at("")), [volume.path.clone().unwrap()]);
 }
 
-// Uploads of RAR 5, 7z, `tar.xz` and a RAR in volumes (ticket 0065): the job
+// Uploads of RAR 5, 7z, `tar.xz` and a RAR in volumes (ticket 4-store-apply-and-replace/0065): the job
 // waits for the worker, which unpacks each, and the job detail has what came
-// of them. Their members wait for a person's 배치 확인 (0066).
+// of them. Their members wait for a person's 배치 확인 (4-store-apply-and-replace/0066).
 #[tokio::test]
 async fn uploaded_archives_of_each_format_are_unpacked_by_the_worker() {
     let s = setup().await;
@@ -1275,7 +1275,7 @@ async fn upload(s: &Setup, command: &str, files: &[(&str, Vec<u8>)]) -> (String,
     }
 }
 
-// Bombs and a password (ticket 0065): each archive alone is not unpacked,
+// Bombs and a password (ticket 4-store-apply-and-replace/0065): each archive alone is not unpacked,
 // with why, and stays received; the rest of the job, and the next job, go on
 // to their 배치 확인, and the job partly failed once it is placed.
 #[tokio::test]

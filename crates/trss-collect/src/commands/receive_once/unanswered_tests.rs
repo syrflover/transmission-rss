@@ -1,6 +1,6 @@
 //! An add of `다시 받기` that got no answer from Transmission, though
 //! Transmission may have taken the torrent (`Retry::AddUnanswered`, ticket
-//! 0013), and the torrent a later start meets in the rule's folder: it is the
+//! 2-work-discovery-and-subscriptions/0013), and the torrent a later start meets in the rule's folder: it is the
 //! command's own only when it carries the command's label. A command's start
 //! after the first is [`World::look_again`]; the process parts (the cycle
 //! that removes nothing meanwhile, a worker that dies) are the

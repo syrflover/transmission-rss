@@ -110,7 +110,7 @@
 //!
 //! Nothing removes what a run cut short left in `.trss/aside/`: nothing
 //! records whose file it is. A plan stale after a cut leaves the paths it did
-//! not reach to the next comparison of that episode. Releases before 0153
+//! not reach to the next comparison of that episode. Releases before lighter-structure/0153
 //! kept a replacement's files in `.trss/tmp/`, which nothing empties either.
 
 pub mod diff;

@@ -1,7 +1,7 @@
 //! A replacement carried through its states by [`advance`]: the new video
 //! received and checked, the old one removed, the new one named as the
 //! episode, and what each step that cannot go on leaves (`docs/specs/
-//! collection.md`, 영상 수정본의 대체; tickets 0025, 0033). The cases run
+//! collection.md`, 영상 수정본의 대체; tickets 2-work-discovery-and-subscriptions/0025, 3-subtitle-candidates-and-receiving/0033). The cases run
 //! through [`World::cycle`] against the fake Transmission, which acts on the
 //! media folder the way Transmission does.
 
@@ -14,7 +14,7 @@ use crate::{
 use trss_core::files::testing;
 use trss_transmission::fake::FakeTorrent;
 
-/// Before ticket 0025 the cycle renamed `14v2` onto the episode name right
+/// Before ticket 2-work-discovery-and-subscriptions/0025 the cycle renamed `14v2` onto the episode name right
 /// after adding it. With libtransmission's rename (the target exists, so the
 /// file stays and the answer is `success`) that left both files, the old
 /// video under the episode name and the new one under its release name, and

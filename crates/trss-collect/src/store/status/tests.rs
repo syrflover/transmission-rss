@@ -651,7 +651,7 @@ fn drain(
     told
 }
 
-// 화면 알림(0156): 수집 상태판은 Transmission의 상태가 바뀔 때 `collect_status`(ID 없음)에
+// 화면 알림(lighter-structure/0156): 수집 상태판은 Transmission의 상태가 바뀔 때 `collect_status`(ID 없음)에
 // 다시 읽어요. 워커가 Transmission을 본 결과를 적는 것이 그 이벤트로 가요.
 #[tokio::test]
 async fn transmissions_counts_that_are_recorded_are_announced_as_a_collect_status_change_without_an_id(

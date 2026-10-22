@@ -1,7 +1,7 @@
 //! Erai-raws' magnet feed through the revision decision ([`plan`]): its item
 //! titles have no extension and no CRC32, write a revision as `- 01 (V2)` and
 //! end in a list of subtitle languages that differs between an episode and its
-//! revision (ticket 0115; `docs/specs/collection.md`, 영상 수정본의 대체). The
+//! revision (ticket refactoring-between-5-and-6/0115; `docs/specs/collection.md`, 영상 수정본의 대체). The
 //! names are the pair of the release-name corpus.
 
 use std::{

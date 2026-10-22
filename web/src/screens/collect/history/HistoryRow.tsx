@@ -12,7 +12,7 @@ import { ChevronIcon, PlusIcon } from "./icons";
 import { RetryActions } from "./RetryActions";
 import { retryStatus, useRetry, type RetryPhase } from "./useRetry";
 
-/** The new-rule screen (ticket 0006), opened with the channel and the item's title filled in. */
+/** The new-rule screen (ticket 1-app-owned-collection/0006), opened with the channel and the item's title filled in. */
 export function newRuleLink(item: Pick<HistoryItem, "channel_id" | "title">): string {
   return `/collect/rules/new?channel=${encodeURIComponent(item.channel_id)}&match=${encodeURIComponent(item.title)}`;
 }

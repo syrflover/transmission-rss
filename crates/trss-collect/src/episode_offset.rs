@@ -26,7 +26,7 @@
 //!   connection will later find it in. The work is the library's work of that
 //!   folder under the collect folder.
 //! - **The earlier seasons' episodes**: the sum of the AniList episode counts
-//!   linked to seasons `1..N` of that work (season info, ticket 0017). Season 1
+//!   linked to seasons `1..N` of that work (season info, ticket 2-work-discovery-and-subscriptions/0017). Season 1
 //!   has no earlier season, so its sum is 0 whether or not the library has the
 //!   work. For a later season every earlier season must be in the library with
 //!   AniList entries whose counts are all known; otherwise the sum is unknown.
@@ -371,7 +371,7 @@ pub fn first_release(titles: &[String]) -> Option<u32> {
 }
 
 /// What a subscription that has picked nothing is offered before its first
-/// receive (ticket 0126): the value the grounds give for `first`, the earliest
+/// receive (ticket 5-deployed-verification/0126): the value the grounds give for `first`, the earliest
 /// release among the past items it may receive, and why. A season that ended
 /// before it was subscribed brings no new release, so the person's first pick
 /// decides, and a pick from the middle of the season would only be suggested

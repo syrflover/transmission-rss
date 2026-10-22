@@ -141,7 +141,7 @@ async fn a_job_goes_from_found_to_receive_and_leaves_its_files_in_the_receive_ar
     assert_eq!(file.size, Some(bytes.len() as u64));
 }
 
-// 화면 알림(0155): 할 일 화면의 자막 작업 목록과 작업 상세는 그 작업이 만들어질 때와
+// 화면 알림(lighter-structure/0155): 할 일 화면의 자막 작업 목록과 작업 상세는 그 작업이 만들어질 때와
 // 단계·상태가 바뀔 때의 `subtitle_job` 이벤트에 다시 읽어요. 단계, 항목, 파일의 쓰기가
 // 모두 같은 종류와 작업 ID로 알려져요.
 #[tokio::test]

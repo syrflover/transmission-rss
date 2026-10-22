@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Lines of the code that hands commands from the web to the worker, the
-# yardstick of the lighter-structure change (tickets 0144 and 0161).
+# yardstick of the lighter-structure change (tickets lighter-structure/0144 and lighter-structure/0161).
 #
 #   dev/measure/handoff-lines.sh [<rev>]
 #

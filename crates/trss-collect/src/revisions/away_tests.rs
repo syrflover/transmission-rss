@@ -1,7 +1,7 @@
 //! A rule's folder that is away decides nothing: a mount that is not there,
 //! a rule archived on purpose, and the week after which an away folder ends
 //! a failure ([`advance`]; `docs/specs/collection.md`, 영상 수정본의 대체;
-//! ticket 0033). The cases run through [`World::cycle`] against the fake
+//! ticket 3-subtitle-candidates-and-receiving/0033). The cases run through [`World::cycle`] against the fake
 //! Transmission, which acts on the media folder the way Transmission does.
 
 use super::fixtures::*;

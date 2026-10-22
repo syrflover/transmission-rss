@@ -15,7 +15,7 @@
 //!   when a person passed a site's check on the job's screen, until the item
 //!   received it ([`crate::screen`]).
 //! - `.tmp/<id>/`: the files of an upload while its body is read
-//!   ([`crate::upload`]). Releases before 0153 also put a receive attempt's
+//!   ([`crate::upload`]). Releases before lighter-structure/0153 also put a receive attempt's
 //!   temporary file here; those folders are left to the upload sweep, which
 //!   removes one only once no receipt names it.
 //! - `.partial/<attempt id>/<name>`: the bytes of one attempt to receive a

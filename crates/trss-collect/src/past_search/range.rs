@@ -6,7 +6,7 @@
 //! range or writes it when the app knows nothing:
 //!
 //! - the **episode count** of the season by AniList, and the rule's **episode
-//!   conversion** (ticket 0024), which says how release numbers move into the
+//!   conversion** (ticket 2-work-discovery-and-subscriptions/0024), which says how release numbers move into the
 //!   season: a season of 12 episodes whose rule converts by −12 is the releases
 //!   13 to 24;
 //! - the **first release** the feed showed the rule after it started

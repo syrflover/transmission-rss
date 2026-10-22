@@ -1,5 +1,5 @@
 //! The season flow end to end against a fake AniList ([`trss_anilist::fake`])
-//! and a clock the test moves: the rows of ticket 0017 that are not about the
+//! and a clock the test moves: the rows of ticket 2-work-discovery-and-subscriptions/0017 that are not about the
 //! screen or the API.
 
 use std::{
@@ -97,7 +97,7 @@ impl Env {
     }
 
     /// [`Env::new`] over a database whose writes are announced, and what it
-    /// announces from now on. The screens listen to those (`docs/tickets/0156`).
+    /// announces from now on. The screens listen to those (lighter-structure/0156).
     async fn announcing(works: &[(&str, &[u32])]) -> (Env, Heard) {
         let dir = tempfile::tempdir().unwrap();
         let changes = Changes::default();
@@ -233,7 +233,7 @@ async fn one_exact_title_links_the_first_season_as_auto_with_its_values() {
     assert!(env.drain().await.is_empty());
 }
 
-// 화면 알림(0156): 작품 상세의 시즌 정보는 그 작품의 `season_info` 이벤트에 다시 읽어요. 앱이
+// 화면 알림(lighter-structure/0156): 작품 상세의 시즌 정보는 그 작품의 `season_info` 이벤트에 다시 읽어요. 앱이
 // 시즌의 항목을 찾아 잇고 값을 받으면 그 작품의 ID로 가요.
 #[tokio::test]
 async fn a_season_whose_entry_is_found_and_stored_is_announced_for_the_work() {

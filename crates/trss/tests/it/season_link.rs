@@ -1,5 +1,5 @@
 //! What the worker does around the connecting of a subscription to its season
-//! (tickets 0019, 0035, 0045): the cycle that connects a season makes the
+//! (tickets 2-work-discovery-and-subscriptions/0019, 3-subtitle-candidates-and-receiving/0035, 3-subtitle-candidates-and-receiving/0045): the cycle that connects a season makes the
 //! `anissia_captions` command and the creator's jobs in the same cycle, and a
 //! `start` or `resume` that turns a followed subscription on looks at the
 //! creator. The real worker, a real library scan of temporary folders, the
@@ -163,7 +163,7 @@ fn season_of(rule: &Rule) -> Option<&str> {
     rule.subscription.as_ref().unwrap().season_id.as_deref()
 }
 
-// --- the subscription's anime is read when its season is connected (ticket 0035) ---
+// --- the subscription's anime is read when its season is connected (ticket 3-subtitle-candidates-and-receiving/0035) ---
 
 #[tokio::test]
 async fn connecting_a_subscription_to_a_season_has_the_animes_subtitle_lines_read_once() {
@@ -312,7 +312,7 @@ async fn followed_subscription(scene: &mut Scene) -> Rule {
     rule
 }
 
-// --- a subscribed creator's season, once connected, is looked at (ticket 0045) ---
+// --- a subscribed creator's season, once connected, is looked at (ticket 3-subtitle-candidates-and-receiving/0045) ---
 
 #[tokio::test]
 async fn connecting_a_followed_subscription_to_its_season_makes_the_creators_jobs_in_that_cycle() {

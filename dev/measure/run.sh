@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # A load measurement of an app image in the development environment
 # (dev/compose.sh), under the compose file's limits as in production: trss
-# 0.5 CPU and 384M (tickets 0116, 0117 and 0146; until 0146 the web and the
+# 0.5 CPU and 384M (tickets 5-deployed-verification/0116, refactoring-between-5-and-6/0117 and lighter-structure/0146; until lighter-structure/0146 the web and the
 # worker were two containers, measured each under its own limits).
 #
 #   dev/measure/run.sh snapshot           keep dev/local/data as dev/local/measure-snapshot

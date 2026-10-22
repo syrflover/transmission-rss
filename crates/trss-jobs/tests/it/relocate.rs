@@ -1,6 +1,6 @@
 //! A source's episode mapping changes: what follows it is re-evaluated, and
 //! the copies the app applied move once a person confirms the relocation
-//! (`docs/specs/library.md`, 자막의 회차 대응; ticket 0071,
+//! (`docs/specs/library.md`, 자막의 회차 대응; ticket 4-store-apply-and-replace/0071,
 //! `trss_jobs::place::relocate`).
 
 use crate::{
@@ -66,7 +66,7 @@ impl Setup {
 
     /// What is left in the work folder's temporary folders: where a
     /// relocation renames a copy aside before it removes it, the staging
-    /// folder of stores and applies, and the folder of releases before 0153.
+    /// folder of stores and applies, and the folder of releases before lighter-structure/0153.
     fn temps(&self) -> Vec<String> {
         let mut left = names(&self.at(".trss/aside"));
         left.extend(names(&self.at(".trss/staging")));

@@ -423,7 +423,7 @@ async fn a_check_post_waits_with_its_run_bound_and_a_passed_check_brings_its_fil
     assert_eq!(*s.browser.released.lock().unwrap(), vec![id.clone()]);
 }
 
-// 화면 알림(0155): 작업 상세의 원격 화면은 `subtitle_screen`에 다시 읽어요. 화면의 쓰기는
+// 화면 알림(lighter-structure/0155): 작업 상세의 원격 화면은 `subtitle_screen`에 다시 읽어요. 화면의 쓰기는
 // 자주 있어서 작업 목록이 듣는 `subtitle_job`과 따로 알려요.
 #[tokio::test]
 async fn the_remote_screen_of_a_job_is_announced_when_it_is_bound_ended_and_asked_again() {

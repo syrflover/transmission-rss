@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # How far one change reaches: per non-merge feat, fix, refactor or perf commit,
-# the files and crates it touched (the refactor's yardstick, tickets 0092 and
-# 0114).
+# the files and crates it touched (the refactor's yardstick, tickets refactoring-between-5-and-6/0092 and
+# refactoring-between-5-and-6/0114).
 #
 #   dev/measure/change-spread.sh <first day> <last day> [<rev>]
 #

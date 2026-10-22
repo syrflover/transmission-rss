@@ -303,7 +303,7 @@ test("the wait is over after five minutes and not before", () => {
   assert.equal(waitOver(1000, 1000 + APPLY_WAIT_MS), true);
 });
 
-// --- waiting for the work to show a finished apply (0127) -----------------------------------------------------------
+// --- waiting for the work to show a finished apply (5-deployed-verification/0127) -----------------------------------------------------------
 
 /** A work whose season 1 has episodes with these subtitle files, and these stored copies. */
 const workWith = (files: string[][], ...creators: WorkSubtitles["creators"]) => ({

@@ -1,5 +1,5 @@
 //! The pace of search requests to a feed host, shared through the database
-//! (ticket 0026).
+//! (ticket 2-work-discovery-and-subscriptions/0026).
 //!
 //! Processes cannot share an in-memory timer, so the next allowed time of each
 //! host is a row of `search_pace`, read and moved forward by

@@ -217,7 +217,7 @@ impl Uploads {
     /// `.tmp/<id>/` and `<id>/` whose name is a UUID (what an upload makes)
     /// that no job or file record names and that nothing wrote for `older_than`
     /// (an upload going on is younger; a receive attempt's folder of a release
-    /// before 0153 is named by its receipt's ID while the receipt is kept),
+    /// before lighter-structure/0153 is named by its receipt's ID while the receipt is kept),
     /// and the folders `.tmp/winpng-<job id>/`
     /// (the files a reading of a post's WinPNG images put down, which the
     /// runner removes after each item and a killed process does not) that

@@ -21,17 +21,17 @@
 //! The second test is a find job's screen with the browser controls: back
 //! and forward with the blank page the server passed through as the floor,
 //! the host as the only address that is sent, a popup that becomes a tab, and
-//! switching to and closing tabs (ticket 0055).
+//! switching to and closing tabs (ticket 3-subtitle-candidates-and-receiving/0055).
 //!
 //! The third is a find job's page that its own script holds: the screen
 //! says the page does not answer and stays, comes back when the page moves
 //! again, ends `stuck` when opened on a page held for good, and a person's
-//! ask for a new run opens the post again in a new run (ticket 0056).
+//! ask for a new run opens the post again in a new run (ticket 3-subtitle-candidates-and-receiving/0056).
 //!
 //! The fourth is the page's dialogs on a find job's screen: a confirm and a
 //! prompt a tap opens are answered from the screen, a `beforeunload` of the
 //! page itself is asked and one after the person's reload is left at once,
-//! and an alert left open when the screen closes is dismissed (ticket 0057).
+//! and an alert left open when the screen closes is dismissed (ticket 3-subtitle-candidates-and-receiving/0057).
 
 use std::{
     path::Path,
@@ -427,7 +427,7 @@ async fn a_tap_relayed_through_the_remote_screen_passes_the_check_and_the_file_i
 }
 
 // ---------------------------------------------------------------------------
-// The browser controls of a find job's screen (ticket 0055)
+// The browser controls of a find job's screen (ticket 3-subtitle-candidates-and-receiving/0055)
 
 /// A socket of the screen, with every message it carried but frames.
 struct Watched {
@@ -1090,7 +1090,7 @@ async fn a_find_screen_steps_back_and_forward_never_before_its_first_page_and_sw
 }
 
 // ---------------------------------------------------------------------------
-// A page that does not answer (ticket 0056)
+// A page that does not answer (ticket 3-subtitle-candidates-and-receiving/0056)
 
 #[tokio::test]
 #[ignore = "needs docker and the trss-browser image"]
@@ -1236,7 +1236,7 @@ async fn a_page_held_by_its_script_stalls_the_screen_and_a_new_run_opens_the_pos
 }
 
 // ---------------------------------------------------------------------------
-// The page's dialogs (ticket 0057)
+// The page's dialogs (ticket 3-subtitle-candidates-and-receiving/0057)
 
 #[tokio::test]
 #[ignore = "needs docker and the trss-browser image"]

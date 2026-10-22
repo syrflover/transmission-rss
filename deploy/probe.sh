@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Runs the file probe (crates/trss-probe, ticket 0060) in a one-off container
+# Runs the file probe (crates/trss-probe, ticket 4-store-apply-and-replace/0060) in a one-off container
 # that looks like trss's: the same image, the user 1000:1000, the same memory
 # limit (384M, no swap) and CPU limit, and its mounts, with the probe binary
 # mounted read-only from the host. It works with a release whose
@@ -30,7 +30,7 @@
 #   --data-dir DIR   the host folder mounted at /data. By default a new folder
 #                    next to TRSS_DATA_DIR (same disk), made for this run and
 #                    removed after: the real data folder belongs to root until
-#                    it is switched to 1000:1000 (ticket 0062), and the probe
+#                    it is switched to 1000:1000 (ticket 4-store-apply-and-replace/0062), and the probe
 #                    makes files in it as 1000:1000. Pass the real one only
 #                    after that.
 #   --memory SIZE    the memory limit (default: 384m, as trss's)
@@ -46,7 +46,7 @@
 # `.trss-probe-*` under the folders it is given and removes them again. In a
 # work folder given with --work it also swaps two files of its own with
 # renameat2(RENAME_EXCHANGE), which replacing a subtitle relies on (ticket
-# 0151), and says so when the filesystem does not support it.
+# lighter-structure/0151), and says so when the filesystem does not support it.
 set -euo pipefail
 
 here="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"

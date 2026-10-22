@@ -179,7 +179,7 @@ async fn a_failure_while_deleting_keeps_both_channel_and_rules() {
 async fn history_rows_that_mention_the_channel_survive_the_delete() {
     let f = fixture().await;
     let created = channel_with_rules(&f, "https://example.com/a", 1).await;
-    // Ticket 0004 adds the real history table; it deliberately has no foreign
+    // Ticket 1-app-owned-collection/0004 adds the real history table; it deliberately has no foreign
     // key to `channels`. A stand-in of the same shape shows the delete leaves
     // such rows alone.
     let raw = rusqlite::Connection::open(&f.path).unwrap();

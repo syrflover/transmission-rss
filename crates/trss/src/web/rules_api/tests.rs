@@ -1257,7 +1257,7 @@ async fn an_edit_cannot_pause_a_rule_but_a_paused_rule_still_saves_its_fields() 
     assert_eq!(saved["episode"], 5);
 }
 
-// --- a rule that starts collecting while its work is in the archive folder (0123) ---------------
+// --- a rule that starts collecting while its work is in the archive folder (5-deployed-verification/0123) ---------------
 
 /// An app whose collect and archive folders are real temporary folders and
 /// whose library records `works` in the archive folder.
@@ -1716,7 +1716,7 @@ async fn the_edit_form_asks_whether_the_changed_folder_moves_a_work_over() {
     drop(tmp);
 }
 
-// --- the episode offset in the rule detail (ticket 0024) ------------------------
+// --- the episode offset in the rule detail (ticket 2-work-discovery-and-subscriptions/0024) ------------------------
 //
 // What the cycle decides is tested in `trss-collect`'s `offsets`; here are the
 // rule detail's grounds and suggestions read from the stores, and `적용`.

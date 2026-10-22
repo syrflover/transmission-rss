@@ -1,6 +1,6 @@
 //! `다시 받기` of a video revision (`receive_once::run` on a command the web
-//! accepted; `docs/specs/collection.md`, 영상 수정본의 대체; tickets 0025,
-//! 0033): a revision with no CRC32 in its name confirmed, a download that
+//! accepted; `docs/specs/collection.md`, 영상 수정본의 대체; tickets 2-work-discovery-and-subscriptions/0025,
+//! 3-subtitle-candidates-and-receiving/0033): a revision with no CRC32 in its name confirmed, a download that
 //! stopped received again, an ended replacement checked and started again,
 //! and the requests that are refused with a reason. The cases run through
 //! [`World::retry`] and [`World::cycle`] against the fake Transmission,
@@ -114,7 +114,7 @@ async fn a_retry_whose_result_is_not_written_runs_again_and_replaces() {
 }
 
 /// A confirmed revision whose torrent names the episode file itself (the old
-/// video, as a rename before ticket 0025 left such torrents) is not a new
+/// video, as a rename before ticket 2-work-discovery-and-subscriptions/0025 left such torrents) is not a new
 /// video: nothing is removed.
 #[tokio::test]
 async fn a_revision_whose_torrent_names_the_episode_file_removes_nothing() {

@@ -1,4 +1,4 @@
-//! What history says of the first items a rule picked (ticket 0024: the
+//! What history says of the first items a rule picked (ticket 2-work-discovery-and-subscriptions/0024: the
 //! release a rule's episode offset is decided from).
 
 use std::collections::HashSet;

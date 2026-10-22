@@ -1,5 +1,5 @@
 //! Subscribing before the first episode is in the channel, and the title
-//! candidates that complete such a subscription (ticket 0020).
+//! candidates that complete such a subscription (ticket 2-work-discovery-and-subscriptions/0020).
 
 use super::*;
 use trss_collect::store::history::HistoryQuery;

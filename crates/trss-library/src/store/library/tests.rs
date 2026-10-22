@@ -1658,7 +1658,7 @@ async fn the_generation_changes_with_what_a_video_lookup_can_answer_and_only_the
     );
 }
 
-// 화면 알림(0156): 이번 주 편성은 `library`에 작품이 가진 영상과 자막을 다시 읽어요. 스캔이 새
+// 화면 알림(lighter-structure/0156): 이번 주 편성은 `library`에 작품이 가진 영상과 자막을 다시 읽어요. 스캔이 새
 // 영상이나 자막을 기록하면 그 작품의 ID로 가요.
 #[tokio::test]
 async fn a_scan_that_finds_a_video_or_a_subtitle_is_announced_for_the_work() {

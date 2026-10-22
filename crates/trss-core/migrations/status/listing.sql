@@ -1,5 +1,5 @@
 -- Every torrent Transmission held when the worker last looked, for the web's
--- past episode search (ticket 0026): it cannot ask Transmission, yet must tell
+-- past episode search (ticket 2-work-discovery-and-subscriptions/0026): it cannot ask Transmission, yet must tell
 -- an item whose torrent is still there from one whose torrent was removed.
 -- `transmission_downloading` holds only the torrents being downloaded.
 --

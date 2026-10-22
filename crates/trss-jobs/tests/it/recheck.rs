@@ -1256,7 +1256,7 @@ async fn an_episode_the_user_does_not_receive_is_not_read_again() {
     assert_eq!(w.record(&first).await, None);
 }
 
-// erulabo (ticket 0050): the files come only through the site's check, so the
+// erulabo (ticket 3-subtitle-candidates-and-receiving/0050): the files come only through the site's check, so the
 // post's `dateModified` is what the recheck compares, and the Drive file of
 // the receipt is only observed.
 

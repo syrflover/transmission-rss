@@ -484,7 +484,7 @@ async fn the_worker_needs_transmission_and_a_database_but_not_the_yaml_url() {
     assert!(String::from_utf8_lossy(&out.stderr).contains("TRSS_DB_PATH"));
 }
 
-// --- the screens' event stream (ticket 0154) ----------------------------------------------
+// --- the screens' event stream (ticket lighter-structure/0154) ----------------------------------------------
 
 /// What Transmission says while a test makes it refuse an add.
 const REFUSAL: &str = "Transmission is having a bad day";

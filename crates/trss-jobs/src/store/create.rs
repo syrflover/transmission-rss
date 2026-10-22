@@ -204,7 +204,7 @@ impl JobRequests {
     }
 
     /// Which of `ids` name a job or a file record (a receive attempt's folder
-    /// in `.tmp/`, which releases before 0153 made, is named by its file's
+    /// in `.tmp/`, which releases before lighter-structure/0153 made, is named by its file's
     /// ID).
     pub async fn known_receive_ids(&self, ids: Vec<String>) -> Result<HashSet<String>, JobError> {
         self.db

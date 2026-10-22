@@ -137,7 +137,7 @@ services:
     # 128M, worker 0.25 CPU and 256M), until it is measured as one. trss
     # unpacks a received archive in a child process (trss-extract) that shares
     # this limit; its address space is held to 256 MiB and it used up to 80 MB
-    # on a normal 200 MiB package (ticket 0059).
+    # on a normal 200 MiB package (ticket 4-store-apply-and-replace/0059).
     deploy:
       resources:
         limits:
@@ -184,7 +184,7 @@ services:
       resources:
         limits:
           # 768 MiB: the starting value measured with one Chromium on the
-          # erulabo check (ticket 0032, process memory about 450 MiB). The
+          # erulabo check (ticket 3-subtitle-candidates-and-receiving/0032, process memory about 450 MiB). The
           # concurrent browser jobs of the policy (up to 3) are not sized for
           # it: raise this limit with them. No CPU limit is set; none has been
           # measured with this check yet.

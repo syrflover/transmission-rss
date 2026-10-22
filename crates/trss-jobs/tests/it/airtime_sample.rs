@@ -1,5 +1,5 @@
 //! The air-time mapping rules ([`trss_jobs::mapping`]) run on what Anissia and
-//! AniList really say, once, by hand (ticket 0051's sample):
+//! AniList really say, once, by hand (ticket 3-subtitle-candidates-and-receiving/0051's sample):
 //!
 //! `cargo test -p trss-jobs --test it airtime_sample:: -- --ignored --nocapture`
 //!

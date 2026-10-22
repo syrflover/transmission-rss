@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # How long the workspace's test build takes after an edit to trss-core, the
-# yardstick of the lighter-structure change (tickets 0144 and 0161).
+# yardstick of the lighter-structure change (tickets lighter-structure/0144 and lighter-structure/0161).
 #
 #   dev/measure/core-edit-build.sh <out dir>
 #

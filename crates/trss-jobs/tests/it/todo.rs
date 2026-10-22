@@ -891,7 +891,7 @@ async fn a_video_whose_name_gives_no_episode_is_a_card_newest_first_until_it_is_
     assert_eq!(list.count, 1);
 }
 
-// 화면 알림(0155): 할 일 목록과 메뉴의 배지(`GET /api/todo`, `/api/todo/count`)는 할 일이
+// 화면 알림(lighter-structure/0155): 할 일 목록과 메뉴의 배지(`GET /api/todo`, `/api/todo/count`)는 할 일이
 // 생기거나 끝나게 하는 쓰기의 이벤트에 다시 읽어요. 할 일의 출처마다 한 곳씩 보여요. 작업이
 // 사람을 기다리는 할 일(인증, 교체 승인, 배치 확인)은 같은 `subtitle_job` 쓰기이므로 인증과 교체
 // 승인으로 대표하고, 회차 확인 필요는 매핑과 영상으로 나눠 보여요.

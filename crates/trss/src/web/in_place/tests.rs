@@ -3,7 +3,7 @@
 //!
 //! The rule (what [`Evidence::held`] tells, from which rows, listing and
 //! files) is tested directly on `Evidence`; the router tests that stay check
-//! that the screens and the command take its verdict (ADR 0015, ticket 0101).
+//! that the screens and the command take its verdict (ADR 0015, ticket refactoring-between-5-and-6/0101).
 
 use std::path::PathBuf;
 

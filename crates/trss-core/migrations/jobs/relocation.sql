@@ -1,7 +1,7 @@
 -- Moving the app's applied copies when a source's episode mapping changes
 -- (재배치; `trss_jobs::place::relocate`; docs/specs/library.md, 자막의 회차
 -- 대응; docs/specs/subtitles.md, 배치 확인; docs/specs/jobs.md, 체크포인트와
--- 중단 복구; ticket 0071).
+-- 중단 복구; ticket 4-store-apply-and-replace/0071).
 --
 -- A mapping change gives a mapped stored subtitle its new episode at once
 -- (`subtitle_stored.episode`); an applied copy of it stays beside the video

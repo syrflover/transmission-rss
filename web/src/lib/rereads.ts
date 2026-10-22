@@ -6,7 +6,7 @@
  *
  * Events come in bursts: a collection cycle announces 250 `history` changes
  * within 5 ms, and one subtitle job announces 12 changes of the same job
- * within 74 ms (`docs/tickets/0164-db-change-events.md`), and the server does not
+ * within 74 ms (lighter-structure/0164), and the server does not
  * gather them. So a {@link Rereader} keeps one read in flight: a request that
  * comes while it reads only sets a flag, and exactly one more read follows when
  * the read ends, however many requests came. That read starts after the last

@@ -1,5 +1,5 @@
 -- Whether the worker is alive and busy, for the board's `RSS 확인이 멈췄어요`
--- (ticket 0021). The web cannot ask the worker, and must not touch its cycle
+-- (ticket 2-work-discovery-and-subscriptions/0021). The web cannot ask the worker, and must not touch its cycle
 -- lock (taking even a try-lock could make the worker skip a cycle), so the
 -- worker leaves a pulse in the database while it holds the lock.
 --

@@ -12,7 +12,7 @@ RUN bun run build
 
 # Rust build: `trss` (the web server and the collection worker in one
 # process), `trss-extract` (the child process trss unpacks a received archive
-# in, beside it) and `trss-probe` (the file probe, ticket 0060).
+# in, beside it) and `trss-probe` (the file probe, ticket 4-store-apply-and-replace/0060).
 #
 # The crates.io registry, the git checkouts and target/ are BuildKit cache
 # mounts that the builder keeps between builds, shared by the Rust stages here

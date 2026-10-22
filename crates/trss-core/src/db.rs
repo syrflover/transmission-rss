@@ -340,7 +340,7 @@ impl Db {
     /// [`Db::run`] for a boxed call, so the blocking task around it is
     /// compiled once rather than for every closure: a task per closure type
     /// was the largest part of the code that crates and their tests compile
-    /// (ticket 0160).
+    /// (ticket lighter-structure/0160).
     async fn run_boxed(&self, call: Call) -> Result<Box<dyn Any + Send>, JoinError> {
         let conn = Arc::clone(&self.conn);
         let announcing = self.announcing.clone();
@@ -411,7 +411,7 @@ pub fn database_at(path: &Path, n: usize) -> Connection {
 /// New databases copied from one migrated once per test process. A workspace
 /// test run opens some 1,800 new databases, and running every migration for
 /// each took a quarter of the tests' time on glibc and two thirds on musl
-/// (2026-10-07, ticket 0093): SQLite parses each migration and, after each
+/// (2026-10-07, ticket refactoring-between-5-and-6/0093): SQLite parses each migration and, after each
 /// `ALTER TABLE`, the whole schema again, and on musl those allocations from
 /// many test threads queue on one malloc lock. A database that is there
 /// already is migrated as a release build migrates it, so the migration tests
@@ -3636,7 +3636,7 @@ mod tests {
         names.collect()
     }
 
-    // A database a release before ticket 0153 left with a job running: its
+    // A database a release before ticket lighter-structure/0153 left with a job running: its
     // file effects, receipts and relocation removals under way. The job's
     // interruption at the start is `trss-jobs`' (`interrupted` tests).
     #[tokio::test]

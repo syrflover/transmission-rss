@@ -47,7 +47,7 @@
 //! it moves, which belong to Transmission's user, as its downloads do. (The
 //! spec asks new folders to take the owner and group of the destination's
 //! parent; that holds when Transmission's user owns the media, and the rest is
-//! an open decision, see ticket 0011.)
+//! an open decision, see ticket 2-work-discovery-and-subscriptions/0011.)
 //!
 //! A rerun after a stop at any point repeats the three steps on what is left:
 //! the checks see the part already moved at the destination and the rest at

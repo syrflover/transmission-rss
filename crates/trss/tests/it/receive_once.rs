@@ -1,7 +1,7 @@
 //! `다시 받기` (a retry, stored as the `receive_once` command) from the record
 //! tab, end to end: the real commands and history HTTP API, the real worker
 //! code and Transmission client, a fake Transmission and fake RSS feeds.
-//! Ticket 0008's completion rows.
+//! Ticket 1-app-owned-collection/0008's completion rows.
 //!
 //! What a retry decides (where it adds, what it names the file, which torrent
 //! is its own, which request ends at once, how the original link is got back)
@@ -1148,7 +1148,7 @@ async fn a_started_process_runs_again_the_commands_an_earlier_one_left_open() {
 
 // --- what a rule missed while it was off ------------------------------------------------------
 
-// --- commands at once, beside the cycles (ticket 0031) -----------------------------------------
+// --- commands at once, beside the cycles (ticket 3-subtitle-candidates-and-receiving/0031) -----------------------------------------
 
 /// The state of command `id` as the screen reads it.
 async fn state_of(s: &Scene, id: &str) -> String {

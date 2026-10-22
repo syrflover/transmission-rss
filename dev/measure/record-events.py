@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""What a running trss tells the screens through `GET /api/events` (ticket 0164).
+"""What a running trss tells the screens through `GET /api/events` (ticket lighter-structure/0164).
 
     dev/measure/record-events.py record <out.tsv> [url]
     dev/measure/record-events.py count <in.tsv> [from] [to]

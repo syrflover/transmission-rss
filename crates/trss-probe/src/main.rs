@@ -1,6 +1,6 @@
 //! Checks, on a real disk and under the worker's limits, the file behavior
 //! that trss's archiving and subtitle placing rely on, and prints a plain-text
-//! report (ticket 0060).
+//! report (ticket 4-store-apply-and-replace/0060).
 //!
 //! It makes its test folders under the folders it is given, named
 //! `.trss-probe-<pid>-<n>`, and removes them (and nothing else) when it ends.

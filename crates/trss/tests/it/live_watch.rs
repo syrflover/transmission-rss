@@ -1,4 +1,4 @@
-//! What the worker does around the watching of the watch folders (ticket 0016):
+//! What the worker does around the watching of the watch folders (ticket 2-work-discovery-and-subscriptions/0016):
 //! an archive move and the alerts it raises do not interleave, the running
 //! worker watches the folders registered while it runs, and a real `trss`
 //! process records a new episode between cycles. A real worker, real temporary

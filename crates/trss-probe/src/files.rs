@@ -362,7 +362,7 @@ pub fn staging(r: &mut Report, label: &str, dir: &Path, sub: &str, final_name: &
 /// A file staged in the subfolder `sub` of `dir` and the file `current_name`
 /// in `dir` swapped with `renameat2(RENAME_EXCHANGE)`: the new file takes the
 /// name in one step and the old one ends in the subfolder, which is how a
-/// subtitle beside its video is replaced (ticket 0151). Both files are made
+/// subtitle beside its video is replaced (ticket lighter-structure/0151). Both files are made
 /// here; the subfolder must exist.
 pub fn exchange(r: &mut Report, label: &str, dir: &Path, sub: &str, current_name: &str) {
     let staged = dir.join(sub).join("new");

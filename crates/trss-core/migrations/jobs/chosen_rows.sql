@@ -1,5 +1,5 @@
 -- A stored subtitle a person chose to apply, and how (`trss_jobs::place::records::choose_stored`;
--- docs/specs/subtitles.md, 보관본과 적용본; ticket 0072).
+-- docs/specs/subtitles.md, 보관본과 적용본; ticket 4-store-apply-and-replace/0072).
 --
 -- `chosen` on a plan row is what the person asked of the job that received
 -- the stored subtitle (`stored_id`), written when the row is queued again to

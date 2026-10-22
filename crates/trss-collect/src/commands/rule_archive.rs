@@ -50,7 +50,7 @@
 //! is on from when it was pressed.
 //!
 //! A `start` of a subscription carries the past items the person ticked while
-//! subscribing ([`RuleArchive::receive`], ticket 0125). Once the rule is on, the
+//! subscribing ([`RuleArchive::receive`], ticket 5-deployed-verification/0125). Once the rule is on, the
 //! command accepts a `receive_once` for each, in order, which the worker runs
 //! after this command like any other: the same receive as `다시 받기`, which
 //! checks the rule picks the item and decides the rule's first episode offset.

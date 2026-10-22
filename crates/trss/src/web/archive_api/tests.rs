@@ -1,4 +1,4 @@
-//! The archive suggestions API (ticket 0023): the shape of the list, the
+//! The archive suggestions API (ticket 2-work-discovery-and-subscriptions/0023): the shape of the list, the
 //! facts the web hands to the rule, `수집 유지`, and what archiving would do
 //! with the folder. The rules themselves (the grounds, the 4 weeks of reading,
 //! which rules are listed and in what order, the forecast sentences) are tested

@@ -1499,7 +1499,7 @@ pub struct Preview {
     /// There are more matching items than `items` lists.
     pub truncated: bool,
     /// What the app offers a new subscription's offset before anything is
-    /// received (ticket 0126): only for a preview asked for a subscription
+    /// received (ticket 5-deployed-verification/0126): only for a preview asked for a subscription
     /// (`subscribing`), and only with a value. The rule detail carries its own
     /// in the rule's view.
     #[serde(skip_serializing_if = "Option::is_none")]

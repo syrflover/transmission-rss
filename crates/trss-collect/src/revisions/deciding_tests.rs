@@ -1,7 +1,7 @@
 //! What a cycle decides about a selected revision ([`plan`], then
 //! `cycle::leave_revisions` and `cycle::process_job`): replace the video,
 //! skip it, hold it as `버전 미상` or receive it as an ordinary item
-//! (`docs/specs/collection.md`, 영상 수정본의 대체; ticket 0025). The cases
+//! (`docs/specs/collection.md`, 영상 수정본의 대체; ticket 2-work-discovery-and-subscriptions/0025). The cases
 //! run through [`World::cycle`] against the fake Transmission, which acts on
 //! the media folder the way Transmission does.
 

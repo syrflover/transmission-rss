@@ -1,4 +1,4 @@
-//! A rule's episode offset in the rule detail (ticket 0024): the grounds of an
+//! A rule's episode offset in the rule detail (ticket 2-work-discovery-and-subscriptions/0024): the grounds of an
 //! offset the app set, the suggestion for a rule whose offset it did not set,
 //! and `적용` of that suggestion.
 //!
@@ -21,7 +21,7 @@
 //! whatever its field holds, when the value differs from it
 //! ([`trss_collect::episode_offset::worth_offering`]). One that has picked
 //! nothing yet is offered what the earliest of its past items would give, when
-//! that gives a value ([`episode_offset::before_receiving`], ticket 0126), so
+//! that gives a value ([`episode_offset::before_receiving`], ticket 5-deployed-verification/0126), so
 //! the person sees it before the first item is received and named; so is a
 //! subscription about to be made, in the preview ([`for_new_subscription`]).
 

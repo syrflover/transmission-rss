@@ -1,6 +1,6 @@
 //! The web's own part of the past episode search: the request checks, the
 //! shapes of the context, the poll and the range label, and the end of a
-//! search (ticket 0026). What a search judges, pages and refuses is
+//! search (ticket 2-work-discovery-and-subscriptions/0026). What a search judges, pages and refuses is
 //! trss-collect's (`past_search`); the receive of a result is `commands_api`'s
 //! (`past_tests`). The cases run the real API and search service against the
 //! fake tracker.

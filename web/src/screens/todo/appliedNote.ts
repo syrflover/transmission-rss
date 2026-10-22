@@ -2,7 +2,7 @@
  * What a job's detail says of a file that was applied (`docs/specs/subtitles.md`, 보관본과 적용본). Each applied row
  * keeps its own note, which tells what was done for its episode: `기존 자막을 새 자막으로 교체했어요` for a replaced
  * subtitle, `이 회차에 같은 자막이 이미 있어 그 파일을 적용본으로 기록했어요` for one found beside the video with the
- * same bytes (0121). A job's other episodes never lend theirs. No imports, so `node --test` runs it.
+ * same bytes (5-deployed-verification/0121). A job's other episodes never lend theirs. No imports, so `node --test` runs it.
  */
 
 /** The words after `적용함` for a placement: its episode and its own note, each when it has one. */

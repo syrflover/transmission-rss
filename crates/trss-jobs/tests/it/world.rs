@@ -181,7 +181,7 @@ impl Base {
     }
 
     /// [`Base::new`] over a database whose writes are announced, and what it
-    /// announces from now on. The screens listen to those (`docs/tickets/0155`).
+    /// announces from now on. The screens listen to those (lighter-structure/0155).
     pub async fn announcing() -> (Base, Heard) {
         let changes = Changes::default();
         let heard = Heard(changes.subscribe());

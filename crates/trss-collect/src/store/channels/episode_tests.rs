@@ -1,4 +1,4 @@
-//! The episode offset the app sets for a rule (ticket 0024) in the store: who
+//! The episode offset the app sets for a rule (ticket 2-work-discovery-and-subscriptions/0024) in the store: who
 //! may set it, what a save or an import does to its grounds, and `적용`.
 
 use crate::store::channels::*;

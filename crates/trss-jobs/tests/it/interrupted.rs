@@ -193,7 +193,7 @@ async fn a_job_left_running_in_any_step_is_interrupted_there_and_one_that_waits_
     }
 }
 
-// 화면 알림(0155): 프로세스를 시작하며 끊긴 작업이 `중단됨`이 되는 것과 사람의 `다시 시작`은
+// 화면 알림(lighter-structure/0155): 프로세스를 시작하며 끊긴 작업이 `중단됨`이 되는 것과 사람의 `다시 시작`은
 // 작업의 상태가 바뀌는 것이므로, 작업 목록과 작업 상세가 읽는 `subtitle_job` 이벤트가 그
 // 작업 ID로 가요.
 #[tokio::test]
@@ -248,7 +248,7 @@ async fn attempts(base: &Base, id: &str) -> i64 {
         .unwrap()
 }
 
-/// The migrations of a release before ticket 0153, which recorded file
+/// The migrations of a release before ticket lighter-structure/0153, which recorded file
 /// effects (`subtitle_file_effects`) and compared them with the disk.
 const BEFORE_NO_EFFECT_RECORDS: usize = 65;
 
@@ -580,7 +580,7 @@ async fn the_start_empties_the_receive_attempts_folder_and_leaves_the_rest_of_th
     made(".partial/9c2e4d6f-8a0b-4c1d-9e3f-7a5b1c2d4e04/b (2).zip");
     made(".partial/stray");
     // A site check's download, an upload's staging, an attempt of a release
-    // before 0153 and a job's received file: none of them is the start's.
+    // before lighter-structure/0153 and a job's received file: none of them is the start's.
     let kept = [
         made(".tmp/check-job-1/ep1.srt"),
         made(".tmp/4f0c2f6e-1c1f-4a52-9a43-0a7b8f1d2c01/upload.ass"),

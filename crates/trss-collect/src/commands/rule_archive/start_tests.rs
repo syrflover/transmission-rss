@@ -1,5 +1,5 @@
 //! A rule that starts collecting while its work folder is in the archive
-//! folder (ticket 0123): what the web decides before it makes or turns on the
+//! folder (ticket 5-deployed-verification/0123): what the web decides before it makes or turns on the
 //! rule ([`plan_start`], [`archived_work`], [`ask_start`]) and the order the
 //! `start` command keeps (move first, turn on after). The move's checks and
 //! renames are in `work_folder/tests.rs`; the command around the move with

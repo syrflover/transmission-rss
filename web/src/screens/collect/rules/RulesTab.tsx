@@ -48,7 +48,7 @@ function useListScroll(detailOpen: boolean): () => void {
  * - `/collect/rules` the list;
  * - `/collect/rules?rule=<id>` a stored rule;
  * - `/collect/rules/new?channel=<id>&match=<title>` a new rule, prefilled.
- *   Nothing is saved until the user saves. Ticket 0008 links here from a
+ *   Nothing is saved until the user saves. Ticket 1-app-owned-collection/0008 links here from a
  *   history item.
  */
 export function RulesTab() {

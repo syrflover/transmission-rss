@@ -1,5 +1,5 @@
 //! What only a process shows of replacing a video with a higher revision of
-//! the same release (ticket 0025, `docs/specs/collection.md` 영상 수정본의
+//! the same release (ticket 2-work-discovery-and-subscriptions/0025, `docs/specs/collection.md` 영상 수정본의
 //! 대체). The replacement's own rules (what a cycle decides, how each step
 //! advances, what `다시 받기` does, and how the web shows a failure) are tested
 //! in trss-collect and `trss::web` (ADR 0015); this file keeps what the worker's

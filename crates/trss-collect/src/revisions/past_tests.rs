@@ -1,5 +1,5 @@
 //! A revision chosen in a past episode search (`receive_past::run`; tickets
-//! 0026, 0033): it is decided as a cycle decides a revision of a video the
+//! 2-work-discovery-and-subscriptions/0026, 3-subtitle-candidates-and-receiving/0033): it is decided as a cycle decides a revision of a video the
 //! folder holds ([`crate::commands::receive_past`] `decide_revision`). The
 //! new torrent keeps its name until it is checked, the folder's own video
 //! stays until then, and a revision that a higher one replaced is not added.

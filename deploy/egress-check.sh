@@ -3,7 +3,7 @@
 # egress.rs), from inside the running trss-browser, to reach this host's LAN
 # address, the gateways of the Docker networks and the container's loopback,
 # the way Chromium's connections reach it, and one public site as a control
-# (ticket 0082). The proxy must refuse every local destination with 403 and
+# (ticket 5-deployed-verification/0082). The proxy must refuse every local destination with 403 and
 # let the public one through with 200. The image has no curl, so the requests
 # are written with bash's /dev/tcp; the proxy listens on a port of the
 # container's loopback chosen when the launcher starts, found from

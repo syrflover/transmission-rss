@@ -1,4 +1,4 @@
-//! The process side of an automatic episode offset's `되돌리기` (ticket 0024),
+//! The process side of an automatic episode offset's `되돌리기` (ticket 2-work-discovery-and-subscriptions/0024),
 //! end to end: the real worker, a real library scan of temporary folders, the
 //! HTTP API and a fake Transmission. Deciding the offset, its grounds and the
 //! suggestion are rules of trss-collect (`offsets`, `episode_offset`) and the

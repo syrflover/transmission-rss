@@ -1,5 +1,5 @@
 //! A Google Drive font that did not change is not received again (ticket
-//! 0074, `trss_jobs::place::unchanged`): the runner against a local server
+//! 4-store-apply-and-replace/0074, `trss_jobs::place::unchanged`): the runner against a local server
 //! shaped like Blogger, Naver and Google Drive ([`trss_subtitles::testing`]),
 //! storing into a work's folder, with what the job's detail says of each font
 //! and the restarts around a font not received.
@@ -539,7 +539,7 @@ async fn a_zip_whose_font_is_kept_is_received_whole_and_adds_no_font() {
     assert_eq!(new_assets(&plan, &made).get(archive.id.as_str()), Some(&0));
 }
 
-// Whether a row's store made its file is recorded by the store (ticket 0153),
+// Whether a row's store made its file is recorded by the store (ticket lighter-structure/0153),
 // not derived from the records' dates and names: a second font of one post
 // with the first one's name and bytes uses the file the first made.
 #[tokio::test]

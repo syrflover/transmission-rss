@@ -86,7 +86,7 @@
 //!
 //! # erulabo
 //!
-//! erulabo's files come only through the site's check (ticket 0041), so no
+//! erulabo's files come only through the site's check (ticket 3-subtitle-candidates-and-receiving/0041), so no
 //! file's size can be read without one. The source is asked about the post
 //! instead ([`trss_subtitles::Source::recheck_post`]: the post over HTTP, no
 //! browser), and two things come of it:

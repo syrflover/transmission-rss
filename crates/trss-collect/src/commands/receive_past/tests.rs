@@ -1,5 +1,5 @@
 //! `받기` of a result of a past episode search (`receive_past::run` on a
-//! command the web accepted; ticket 0026): what a confirmed result does, and
+//! command the web accepted; ticket 2-work-discovery-and-subscriptions/0026): what a confirmed result does, and
 //! when a result that was offered again, because history says its episode is
 //! gone from the work, is not added after all. The cases run through
 //! [`World::past`] against the fake Transmission; the revision cases are in
@@ -253,7 +253,7 @@ async fn a_paused_rule_after_an_unanswered_add_ends_the_command_with_the_add_una
 
 // --- a work folder in the archive folder ----------------------------------------------
 
-/// Ticket 0123, follow-up 2: a result received into a work folder that is in
+/// Ticket 5-deployed-verification/0123, follow-up 2: a result received into a work folder that is in
 /// the archive folder waits for the folder to come into the collect folder, as
 /// every other path that adds into a rule's folder does.
 #[tokio::test]

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Each test's time in one test binary, run alone and run together (ticket 0160).
+"""Each test's time in one test binary, run alone and run together (ticket lighter-structure/0160).
 
     test-each.py <out dir> <cargo test selection> ...
 

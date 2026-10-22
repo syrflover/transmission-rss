@@ -7,7 +7,7 @@
 //! ([`AuthBrowser::close_page`]); the page the run opened the post in is
 //! never closed so. Such a window becomes a page within 2 seconds, and one
 //! whose first request is a blocklisted address shows the browser's blocked
-//! error page (ticket 0054).
+//! error page (ticket 3-subtitle-candidates-and-receiving/0054).
 //!
 //! Needs Docker and the browser image (`TRSS_BROWSER_IMAGE`, default
 //! `ghcr.io/syrflover/trss-browser:local`, built from `Dockerfile.browser`):
@@ -371,7 +371,7 @@ async fn a_person_goes_to_a_past_post_and_its_attachments_are_the_runs_downloads
     // The pool sets a popup up and lets it go without waiting for an answer of
     // the set-up (`Network.enable` is not answered while the popup waits for
     // the debugger; waiting for it held the popup for `cdp::COMMAND_TIMEOUT`,
-    // 30 s, ticket 0054).
+    // 30 s, ticket 3-subtitle-candidates-and-receiving/0054).
     let popup = open_popup(&screen, &auth, &prepared, "popup").await;
     // The post's own page stays; the popup closes.
     assert!(

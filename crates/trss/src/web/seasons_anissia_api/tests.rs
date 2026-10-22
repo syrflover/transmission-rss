@@ -696,7 +696,7 @@ fn every_kind_of_search_failure_says_the_schedule_is_another_place_to_pick_from(
     );
 }
 
-// --- subtitle candidates (ticket 0035) ----------------------------------------
+// --- subtitle candidates (ticket 3-subtitle-candidates-and-receiving/0035) ----------------------------------------
 
 use trss_collect::anissia::captions::CaptionObserver;
 

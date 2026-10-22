@@ -1,6 +1,6 @@
 //! Replacing the subtitle an episode has once a person approves it
 //! (`docs/specs/subtitles.md`, 교체 비교와 승인 and 승인 증거와 반영 직전
-//! 검사; `docs/tickets/0068-replacement-approval.md`).
+//! 검사; 4-store-apply-and-replace/0068).
 
 use crate::{
     world::{cut_and_restart, Base, Shows},
@@ -1886,7 +1886,7 @@ async fn an_approved_plan_mounted_again_with_another_device_number_is_carried_ou
     assert_eq!(s.read(TARGET), fake::ass("Show-02v2"));
 }
 
-// ---- the comparison a plan is made with (ticket 0069)
+// ---- the comparison a plan is made with (ticket 4-store-apply-and-replace/0069)
 
 /// The dialogue lines of an ASS as text lines, replaced by `edit`, which gets
 /// each one's index and returns its new text (`None` drops the line).

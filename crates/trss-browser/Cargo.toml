@@ -6,7 +6,7 @@ autobins = false
 
 # No documentation tests: the docs hold no Rust examples, and finding none
 # still cost rustdoc a quarter of a second per crate in every `cargo test`
-# (ticket 0160).
+# (ticket lighter-structure/0160).
 [lib]
 doctest = false
 

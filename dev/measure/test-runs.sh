@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # The workspace's test run time, measured as the lighter-structure baseline
-# measured it (tickets 0144 and 0160).
+# measured it (tickets lighter-structure/0144 and lighter-structure/0160).
 #
 #   dev/measure/test-runs.sh <out dir> [<runs>]
 #

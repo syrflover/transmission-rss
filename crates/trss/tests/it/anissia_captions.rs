@@ -1,4 +1,4 @@
-//! What the worker does around the Anissia captions (tickets 0035, 0045): it
+//! What the worker does around the Anissia captions (tickets 3-subtitle-candidates-and-receiving/0035, 3-subtitle-candidates-and-receiving/0045): it
 //! carries out the `anissia_captions` command the web stored for a season link
 //! (and fails it when it reads no Anissia), it makes and runs the subscribed
 //! creator's job when the observer finds an episode or a season entry is stored,

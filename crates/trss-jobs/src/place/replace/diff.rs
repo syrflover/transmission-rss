@@ -1,5 +1,5 @@
 //! The content comparison a plan keeps (`docs/specs/subtitles.md`, 교체 비교와
-//! 승인; ticket 0069): what differs between the subtitle the episode has and
+//! 승인; ticket 4-store-apply-and-replace/0069): what differs between the subtitle the episode has and
 //! the new one, made when the plan is, by the engine of
 //! [`trss_subtitles::compare`].
 //!

@@ -657,7 +657,7 @@ async fn editing_a_subscription_rule_keeps_its_subscription_and_a_stale_version_
     );
 }
 
-/// The rule detail (ticket 0019): the switches, the creator, `편성표와 연결` and
+/// The rule detail (ticket 2-work-discovery-and-subscriptions/0019): the switches, the creator, `편성표와 연결` and
 /// what the rule's view says of its season.
 mod rule_detail {
     use std::collections::BTreeSet;

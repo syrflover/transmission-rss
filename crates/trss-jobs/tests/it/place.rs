@@ -1,6 +1,6 @@
-//! Storing and applying what a candidate's job received (ticket 0063,
+//! Storing and applying what a candidate's job received (ticket 4-store-apply-and-replace/0063,
 //! `trss_jobs::place`), and doing a store or an apply again after a run was
-//! cut short (ticket 0153).
+//! cut short (ticket lighter-structure/0153).
 
 use crate::{
     world::{cut_and_restart, Base, Shows},
@@ -1179,7 +1179,7 @@ async fn the_migration_puts_received_candidate_jobs_back_in_line() {
 }
 
 // ---------------------------------------------------------------------------
-// Packages of several files (ticket 0064)
+// Packages of several files (ticket 4-store-apply-and-replace/0064)
 
 /// A job of `origin` for the fake package post of the files `names`, as
 /// Anissia's episode `episode`.

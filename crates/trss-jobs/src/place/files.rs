@@ -38,7 +38,7 @@ pub const SUBTITLES_DIR: &str = ".trss/subtitles";
 /// until it removes it ([`super::relocate`]), relative to the work folder:
 /// `<ID>`, a new one each. A run removes what it put there once it is done
 /// with it; nothing else removes anything there, so what a run cut short
-/// left stays. Releases before 0153 used `.trss/tmp/` for these and for
+/// left stays. Releases before lighter-structure/0153 used `.trss/tmp/` for these and for
 /// their staged copies; nothing touches that folder now.
 pub const ASIDE_DIR: &str = ".trss/aside";
 /// Where a store or an apply writes its new copy before publishing it,

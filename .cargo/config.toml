@@ -11,7 +11,7 @@ LIBSQLITE3_FLAGS = "-DSQLITE_DEFAULT_MEMSTATUS=0"
 # tests, `cargo run`). cargo sets SSL_CERT_FILE and SSL_CERT_DIR for the
 # processes it starts, and every HTTP client built then read the bundle and
 # every file of /etc/ssl/certs: 5.2 ms a client instead of 0.8, three of them
-# in each API test's app state (2026-10-22, ticket 0160). The bundle holds the
+# in each API test's app state (2026-10-22, ticket lighter-structure/0160). The bundle holds the
 # same roots as the folder on the development PC. Built images run without
 # cargo and are not affected.
 SSL_CERT_DIR = { value = "", force = true }

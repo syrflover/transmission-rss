@@ -1,5 +1,5 @@
 //! Choosing a stored subtitle to apply (`docs/specs/subtitles.md`, 보관본과
-//! 적용본; `docs/tickets/0072-choose-stored-subtitle.md`,
+//! 적용본; 4-store-apply-and-replace/0072,
 //! `trss_jobs::place::records::choose_stored`): as the episode's subtitle, which
 //! is a replacement to compare when the episode has one and a past revision
 //! restored when a newer one is stored, or added beside the creator's applied

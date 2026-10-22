@@ -1,7 +1,7 @@
 //! The ad and tracker addresses a run's pages do not load.
 //!
 //! They cover the page and its frames with fewer requests and less memory
-//! (ticket 0032: 103 requests became 87 and the process memory fell with
+//! (ticket 3-subtitle-candidates-and-receiving/0032: 103 requests became 87 and the process memory fell with
 //! them). The patterns are the glob form `Network.setBlockedURLs` takes. The
 //! authentication services (`challenges.cloudflare.com` for Cloudflare
 //! Turnstile, Google's sign-in and Drive hosts) are never in the list.

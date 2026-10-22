@@ -1,4 +1,4 @@
-//! Getting the original link back for `다시 받기` (ticket 0008): the history
+//! Getting the original link back for `다시 받기` (ticket 1-app-owned-collection/0008): the history
 //! keeps a link with its secret values masked, so a retry fills them back from
 //! the channel's URL when it can tell the result is the link the feed gave,
 //! and reads the current feed when it cannot. A masked link is never handed

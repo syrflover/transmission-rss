@@ -1,5 +1,5 @@
 //! The moments at which what the web decides from the clock changes, announced
-//! to the event stream (ticket 0156). The rule of each moment is tested in the
+//! to the event stream (ticket lighter-structure/0156). The rule of each moment is tested in the
 //! crate that owns the rule; here the service sleeps to the moments on a clock
 //! the test sets, in paused time, and announces them.
 

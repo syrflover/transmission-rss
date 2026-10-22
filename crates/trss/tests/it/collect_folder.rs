@@ -1,4 +1,4 @@
-//! The app-wide collect folder in the worker's cycle (ticket 0010).
+//! The app-wide collect folder in the worker's cycle (ticket 2-work-discovery-and-subscriptions/0010).
 //!
 //! While no collect folder is set the cycle adds nothing, records no failure,
 //! tallies what waits in its report, and removes no torrent from Transmission;

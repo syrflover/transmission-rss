@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Runs a measurement when no other build or test uses the machine, and says
-# whether one started while it ran (ticket 0161).
+# whether one started while it ran (ticket lighter-structure/0161).
 #
 #   dev/measure/when-quiet.sh <log> <command> [<arg>...]
 #

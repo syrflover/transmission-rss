@@ -1,4 +1,4 @@
-//! The snapshots a worker cycle leaves for the status board (ticket 0006):
+//! The snapshots a worker cycle leaves for the status board (ticket 1-app-owned-collection/0006):
 //! whether each channel's feed could be read and Transmission's torrent counts.
 //! The web reads these instead of the feed or Transmission.
 

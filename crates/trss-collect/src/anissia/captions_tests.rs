@@ -562,7 +562,7 @@ async fn the_queue_reads_the_recent_list_once_and_then_waits_for_the_period() {
     assert_eq!(env.recent_requests(), 2);
 }
 
-// --- follow-ups of the review of ticket 0035 ----------------------------------
+// --- follow-ups of the review of ticket 3-subtitle-candidates-and-receiving/0035 ----------------------------------
 
 #[tokio::test]
 async fn a_reading_cut_short_is_not_started_over_by_a_restart_before_its_period_is_up() {

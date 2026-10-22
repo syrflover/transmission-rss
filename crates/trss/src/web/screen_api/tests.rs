@@ -1767,7 +1767,7 @@ async fn a_person_asks_the_worker_to_start_the_run_anew_and_the_web_ends_no_run(
 }
 
 // ---------------------------------------------------------------------------
-// The page's dialogs (ticket 0057)
+// The page's dialogs (ticket 3-subtitle-candidates-and-receiving/0057)
 
 /// A phone's screen on `run-1`, its size applied and a frame drawn.
 async fn phone_on(s: &Setup) -> Socket {

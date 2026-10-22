@@ -120,7 +120,7 @@ test("a burst of matching events during a read leads to exactly one more read", 
   await settle();
   assert.equal(s.log.started, 1);
 
-  // What a collection cycle and a subtitle job announce within milliseconds (docs/tickets/0164-db-change-events.md).
+  // What a collection cycle and a subtitle job announce within milliseconds (lighter-structure/0164).
   for (let i = 0; i < 250; i++) s.source().change("history", String(i));
   for (let i = 0; i < 12; i++) s.source().change("subtitle_job", "job-1");
   await settle();
@@ -453,7 +453,7 @@ test("a collection cycle's burst reads the schedule and the board once more, and
     await settle();
     assert.equal(s.log.started, 1);
 
-    // What one cycle announces within milliseconds, none of it new (docs/tickets/0164-db-change-events.md).
+    // What one cycle announces within milliseconds, none of it new (lighter-structure/0164).
     s.source().change("collect_status", null);
     for (let i = 0; i < 250; i++) s.source().change("history", String(i));
     for (let i = 0; i < 3; i++) s.source().change("collect_status", null);

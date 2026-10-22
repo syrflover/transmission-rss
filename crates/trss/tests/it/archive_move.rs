@@ -2,9 +2,9 @@
 //! command), end to end: the real commands and rules HTTP API, the real worker
 //! and Transmission client, a fake Transmission that moves torrent data on the
 //! real disk, and real temporary folders as the collect and archive folders.
-//! Ticket 0011's completion rows.
+//! Ticket 2-work-discovery-and-subscriptions/0011's completion rows.
 //!
-//! What stays here is what only a process shows (ADR 0015, ticket 0101): that a
+//! What stays here is what only a process shows (ADR 0015, ticket refactoring-between-5-and-6/0101): that a
 //! command the web accepted reaches the worker and ends, the turns of the
 //! folders, the order of the commands and the cycles beside a move, and
 //! a move cut short by the worker stopping. The rules of the move (the checks,
@@ -785,7 +785,7 @@ async fn a_retry_passes_a_rescan_of_the_collect_folder_queued_behind_a_move_of_a
     assert_eq!(rescan["outcome"]["result"], "scanned", "{rescan}");
 }
 
-// --- 9. a rule starts collecting while its work folder is in the archive folder (ticket 0123) ---
+// --- 9. a rule starts collecting while its work folder is in the archive folder (ticket 5-deployed-verification/0123) ---
 
 impl Scene {
     /// `POST /api/rules` of a rule on `channel`, as the rule-add form sends it.
@@ -1060,7 +1060,7 @@ async fn a_start_stopped_midway_leaves_the_rule_off_until_the_next_run_finishes_
     assert_eq!(s.h.tr.calls_of("torrent-set-location").len(), 1);
 }
 
-// --- 10. the worker checks again right before receiving (ticket 0123, follow-up 2) ---
+// --- 10. the worker checks again right before receiving (ticket 5-deployed-verification/0123, follow-up 2) ---
 
 impl Scene {
     /// A rule saving to `directory`, made straight in the store and on, as a
@@ -1128,7 +1128,7 @@ async fn a_cycle_reports_the_item_waiting_for_its_work_folder_and_the_move_it_as
     );
 }
 
-// --- 11. the past items ticked while subscribing (ticket 0125) -------------------------------------
+// --- 11. the past items ticked while subscribing (ticket 5-deployed-verification/0125) -------------------------------------
 
 #[tokio::test]
 async fn a_subscriptions_start_receives_the_ticked_items_into_the_work_folder_that_came_over() {

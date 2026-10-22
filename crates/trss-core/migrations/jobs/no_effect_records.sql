@@ -1,6 +1,6 @@
 -- A subtitle job no longer records its file effects before it makes them, and
 -- a restart no longer compares such records with the disk: a step cut short
--- is done again from its start (ticket 0153; docs/adr/0020-interrupted-jobs-
+-- is done again from its start (ticket lighter-structure/0153; docs/adr/0020-interrupted-jobs-
 -- wait-for-a-restart.md; docs/specs/jobs.md, 체크포인트와 중단 복구). What
 -- only those records held goes, and the rows an earlier release left under
 -- way end as the current code would leave them. No file is touched: what
@@ -35,7 +35,7 @@ UPDATE subtitle_job_plan
 DROP TABLE subtitle_file_effects;
 
 -- A receipt still being received (`intended`), or received and not yet
--- published (`fetched`, written by releases before 0153), is received anew
+-- published (`fetched`, written by releases before lighter-structure/0153), is received anew
 -- by its job's next run, which removes its attempt's bytes. Such a receipt
 -- has no members, and no plan row, receipt sharing it (`same_as`) or later
 -- volume (`volume_of`) names it: those are made from `done` receipts only.

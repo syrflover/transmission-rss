@@ -1970,7 +1970,7 @@ async fn an_episode_the_user_does_not_receive_is_left_while_the_others_follow_th
     assert_eq!(w.job_count().await, 3);
 }
 
-// 화면 알림(0155): 회차 확인 필요(`episode_check`)는 읽을 때 매핑과 충돌에서 셈하므로, 충돌을
+// 화면 알림(lighter-structure/0155): 회차 확인 필요(`episode_check`)는 읽을 때 매핑과 충돌에서 셈하므로, 충돌을
 // 적는 `evaluate`와 사람의 매핑 저장이 `subtitle_mapping` 이벤트를 그 작품 ID로 보내야 할 일
 // 목록이 다시 읽어요.
 #[tokio::test]

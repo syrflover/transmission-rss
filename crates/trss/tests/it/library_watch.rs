@@ -1,4 +1,4 @@
-//! What the worker does with the watch folders (ticket 0012): a cycle reads
+//! What the worker does with the watch folders (ticket 2-work-discovery-and-subscriptions/0012): a cycle reads
 //! every watch folder after the RSS work and an unreadable one stops neither,
 //! and a `다시 확인` command the web accepted reaches the worker and runs once
 //! per command ID. The real web API, the real worker, real temporary folders
