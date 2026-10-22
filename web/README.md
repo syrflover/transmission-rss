@@ -64,5 +64,6 @@ In the Docker image these are `0.0.0.0`, `8080` and `/usr/local/share/trss/web`.
 - `src/app/` app shell: main menu (top bar on PC, icon-only top bar on tablet, bottom bar on phone); the screen mode is set in `src/screens/settings/theme/`
 - `src/screens/` one file per main menu; each screen owns its content
 - `src/lib/theme.ts` screen mode (시스템 / 라이트 / 다크) store
+- `src/lib/api-types/` the API's TypeScript types, generated from its Rust types and committed; do not edit them by hand, but run `cargo types` in the repository root after changing an API type, as the web app requirements' [공통 라이브러리의 모듈 구성](../docs/requirements/web-app.md#공통-라이브러리의-모듈-구성) describes
 - `src/components/ui/` shadcn/ui components (project-owned source)
 - `src/index.css` design tokens (from the accepted redesign prototype) and their shadcn/ui mapping
