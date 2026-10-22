@@ -1,5 +1,7 @@
 # 규칙은 그 규칙을 가진 크레이트에서 한 번만 테스트해요
 
+`trss-web`과 `trss-worker`는 2026-10-21에 `trss` 크레이트 하나가 됐어요([한 프로세스 ADR](0019-one-process-for-web-and-worker.md)). 아래의 trss-web API 테스트는 지금 `trss`의 API 테스트이고, trss-worker 테스트는 `trss`의 프로세스 테스트예요. 결정은 그대로예요.
+
 2026-10-07 `6c175f1`에서 Rust 테스트는 2,759개였고, Rust 코드 229,557줄 중 101,698줄이 테스트 파일이었어요.
 같은 규칙을 기능 크레이트, trss-web의 API 테스트, trss-worker의 통합 테스트에서 각각 테스트해 왔어요.
 
