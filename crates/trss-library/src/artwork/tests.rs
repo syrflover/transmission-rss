@@ -1499,7 +1499,11 @@ async fn a_request_that_stops_waiting_for_room_or_for_its_read_leaves_the_room_a
     assert_eq!(env.art.serving_free(), SERVING_BUDGET);
 
     // Dropped while the file is read: the read ends, and its bytes go with it.
+    // The read is held, so it is still under way when the caller stops
+    // waiting on the first poll, however fast the file is read.
+    env.art.hold_reads();
     let gave_up = tokio::time::timeout(Duration::ZERO, env.art.image(image)).await;
+    env.art.release_reads();
     assert!(gave_up.is_err());
     let deadline = Instant::now() + Duration::from_secs(10);
     while env.art.serving_free() != SERVING_BUDGET {

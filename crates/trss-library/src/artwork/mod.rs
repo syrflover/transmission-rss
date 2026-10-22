@@ -178,6 +178,33 @@ pub struct Artwork {
     body_timeout: Duration,
     /// The queue's loop, which one task at a time runs ([`Artwork::run_queue`]).
     queue: Queue,
+    /// Holds the file reads of [`Artwork::image`] and [`Artwork::image_state`]
+    /// while a test needs one under way.
+    #[cfg(test)]
+    read_hold: Arc<ReadHold>,
+}
+
+/// A gate the blocking file reads wait at while it is held (tests): a caller
+/// that stops waiting then stops while its read is under way, however the
+/// threads are scheduled.
+#[cfg(test)]
+#[derive(Default)]
+struct ReadHold {
+    held: std::sync::Mutex<bool>,
+    released: std::sync::Condvar,
+}
+
+#[cfg(test)]
+impl ReadHold {
+    fn set(&self, held: bool) {
+        *self.held.lock().unwrap() = held;
+        self.released.notify_all();
+    }
+
+    fn wait(&self) {
+        let held = self.held.lock().unwrap();
+        drop(self.released.wait_while(held, |held| *held).unwrap());
+    }
 }
 
 impl Artwork {
@@ -203,7 +230,20 @@ impl Artwork {
             verified: Arc::default(),
             body_timeout: UPLOAD_BODY_TIMEOUT,
             queue: Queue::new(queue::QUEUE, POLL),
+            #[cfg(test)]
+            read_hold: Arc::default(),
         }
+    }
+
+    /// Makes the file reads wait until [`Artwork::release_reads`] (tests).
+    #[cfg(test)]
+    fn hold_reads(&self) {
+        self.read_hold.set(true);
+    }
+
+    #[cfg(test)]
+    fn release_reads(&self) {
+        self.read_hold.set(false);
     }
 
     /// Overrides how long an upload's body may take to arrive (tests).
@@ -408,7 +448,11 @@ impl Artwork {
             .await
             .expect("never closed");
         let verified = self.verified.clone();
+        #[cfg(test)]
+        let read_hold = self.read_hold.clone();
         tokio::task::spawn_blocking(move || {
+            #[cfg(test)]
+            read_hold.wait();
             files::check(&app, &image, &verified, read).map(|bytes| {
                 bytes.map(|data| {
                     Bytes::from_owner(Held {

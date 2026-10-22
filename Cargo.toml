@@ -88,11 +88,24 @@ zip = { version = "7", default-features = false, features = ["deflate-flate2-zli
 # fast in debug builds too; the workspace crates stay at opt-level 0 for
 # debugging. On 2026-10-06 (one thread): SQLite's parser, which the migrations
 # of each database a test opens run, 180 → 64 ms a database; rustls reading
-# the system's root certificates, which each HTTP client does, 40 → 6 ms.
+# the system's root certificates, which each HTTP client does, 40 → 6 ms. On
+# 2026-10-22 (ticket 0160): the deflate and the CRC32 of the ZIPs the archive
+# tests build, 1,031 → 36 ms for a 64 MiB member and 2,001 empty ones; the
+# SHA-256 of the files the tests store and check, 2.92 → 0.55 s for the
+# subtitle upload peak test, which hashes a 128 MiB body.
 [profile.dev.package.libsqlite3-sys]
 opt-level = 3
 
 [profile.dev.package.rustls-pki-types]
+opt-level = 3
+
+[profile.dev.package.zlib-rs]
+opt-level = 3
+
+[profile.dev.package.crc32fast]
+opt-level = 3
+
+[profile.dev.package.sha2]
 opt-level = 3
 
 # Debug info for everyday builds and tests: dependencies keep only the line
