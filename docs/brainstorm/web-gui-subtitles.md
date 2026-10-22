@@ -274,7 +274,7 @@ trss 제품 코드는 아직 실행·변경하지 않았으며, 파일 수신과
 
 ### trname 형식
 
-[현재 의존성이 고정한 trname README](https://github.com/syrflover/trname/blob/6169808/readme.md)는 TheTVDB 시즌 명명에 맞춘 `작품/Season 01/작품 S01E01.mkv`와 같은 구조를 보여줘요.
+[현재 의존성이 고정한 trname README](https://github.com/syrflover/trname/blob/ee46f04/readme.md)는 TheTVDB 시즌 명명에 맞춘 `작품/Season 01/작품 S01E01.mkv`와 같은 구조를 보여줘요.
 영상과 자막은 확장자를 제외한 이름이 같아요.
 이 문서는 Movie·OVA 같은 Special은 지원하지 않는다고 명시하지만, 사용자가 설치한 trname의 버전까지 확인한 것은 아니에요.
 이 형식은 로컬 작품·시즌·회차를 읽는 근거이며, Anissia의 작품 식별자와 회차 번호가 자동으로 일치한다는 증거는 아니에요.
