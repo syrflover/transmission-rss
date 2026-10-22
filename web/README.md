@@ -6,23 +6,45 @@ no Node server at runtime.
 
 ## Commands
 
-```sh
-bun install            # install (bun.lock is the lockfile)
-bun run dev            # Vite dev server; proxies /api to http://127.0.0.1:8080
-bun run build          # type-check, then build into dist/
-bun run typecheck      # type-check the app and its tests without building
-bun run test           # run the unit tests (node --test)
-```
+Run these in the `web/` folder.
+
+| Command | What it does |
+| --- | --- |
+| `bun install` | Installs the dependencies (`bun.lock` is the lockfile) |
+| `bun run dev` | Starts the Vite dev server, which proxies `/api` to `http://127.0.0.1:8080` |
+| `bun run build` | Type-checks, then builds into `dist/` |
+| `bun run typecheck` | Type-checks the app and its tests without building |
+| `bun run test` | Runs the unit tests (`node --test`) |
 
 `npm` works as well for a one-off (`npm install`, `npm run build`), but the lockfile
 is bun's, so use bun to change dependencies.
 
 ## Run it with the Rust server
 
+Run both commands in the repository root, not in `web/`: `trss` finds the build through `TRSS_WEB_STATIC_DIR`, which defaults to `web/dist` relative to the current directory. The first command builds the frontend:
+
 ```sh
-bun run build
-cargo run --bin trss          # http://127.0.0.1:8080, serves ./web/dist
+bun run --cwd web build
 ```
+
+The second starts `trss` on `http://127.0.0.1:8080` with the two variables it requires (see the table below): a new database in a temporary folder, and the RPC address Transmission publishes in `docker-compose.yml`.
+
+Not tested:
+
+- A `TRANSMISSION_URL` that nothing answers at (2026-10-22).
+
+```sh
+TRSS_DB_PATH="$(mktemp -d)/trss.db" TRANSMISSION_URL=http://127.0.0.1:9091/transmission/rpc cargo run --bin trss
+```
+
+<details>
+<summary>Tested runs</summary>
+
+Tested:
+
+- Both commands, in this order, from the repository root with `TRSS_WEB_PORT=18080` added because port 8080 was in use, against a Transmission answering at the URL above: `trss` started, logged `static files: web/dist`, and answered `200` with the built `index.html` (2026-10-22, commit 3eb14067).
+
+</details>
 
 `trss` reads these environment variables for its web:
 
