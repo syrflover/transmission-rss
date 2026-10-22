@@ -351,7 +351,7 @@ Tested:
 - `fsync`;
 - the stability of `dev:inode` across a rename;
 - the owner and mode of what it makes (expected 1000:1000);
-- a test subfolder in an existing work folder;
+- a test subfolder in an existing work folder, and in it a swap of two files of its own with `renameat2(RENAME_EXCHANGE)`, which replacing a subtitle relies on;
 - a 300 MiB write and read under the container's memory limit, with the cgroup's `memory.current` peak and `oom_kill`.
 
 With `--unpack FILE[,FILE...]` (repeatable; the volumes of a split archive comma-separated, in order) it also unpacks each archive in a test folder under the data folder, as trss does with `trss-extract`, and reports the outcome, the time, the memory peaks and the new `oom_kill` events (a new kill fails the check; a refusal does not).
