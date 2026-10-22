@@ -1,14 +1,14 @@
 # 0150 `trss` 크레이트의 테스트를 테스트 나눔 ADR에 맞춰요
 
 - 상태: 완료
-- 출처: [구조 가볍게 하기 명세의 테스트 정리](lighter-structure.md#테스트-정리), [테스트 나눔 ADR](../adr/0015-test-a-rule-once-in-its-crate.md)
+- 출처: [구조 가볍게 하기 명세의 테스트 정리](lighter-structure.md#테스트-정리), [테스트 나눔 ADR](../../../adr/0015-test-a-rule-once-in-its-crate.md)
 - 막는 티켓: [0148](0148-one-instance-lock-and-cycle-stall.md)(인계와 잠금을 없앤 뒤)
 
 ## 작업
 
 [0145](0145-merge-web-and-worker-crates.md)–[0148](0148-one-instance-lock-and-cycle-stall.md) 뒤 `trss` 크레이트에는 web의 API 테스트와 worker의 프로세스 테스트가 함께 있어요. 2026-10-21에 web의 단위 테스트는 468개(7.0초)였고 worker의 `it`은 91개(6.6초)였어요. 없어진 인계만 확인하던 테스트는 0147과 0148이 지웠어요.
 
-[테스트 나눔 ADR](../adr/0015-test-a-rule-once-in-its-crate.md)은 규칙을 그 규칙을 가진 크레이트에서 한 번만 확인하게 해요. 이 티켓은 `trss` 크레이트의 테스트를 그 ADR에 맞추고 바이너리 배치를 정리해요. 다른 크레이트의 테스트 양은 줄이지 않아요(사용자 결정, 2026-10-21).
+[테스트 나눔 ADR](../../../adr/0015-test-a-rule-once-in-its-crate.md)은 규칙을 그 규칙을 가진 크레이트에서 한 번만 확인하게 해요. 이 티켓은 `trss` 크레이트의 테스트를 그 ADR에 맞추고 바이너리 배치를 정리해요. 다른 크레이트의 테스트 양은 줄이지 않아요(사용자 결정, 2026-10-21).
 
 - API 테스트는 요청과 응답의 모양만 확인해요. 상태 코드, JSON 모양, 접근 경계, 오류 본문이 여기에 들어가요.
 - 프로세스 테스트는 다시 시작, 단일 실행 잠금, 동시 실행, 이벤트처럼 프로세스에서 생기는 일만 확인해요.
@@ -50,11 +50,11 @@
 - `artwork_serving_peak`: 표지 요청이 몰릴 때 전역 할당자가 세는, 할당하고 아직 돌려주지 않은 바이트의 최고치를 측정해요.
 - `artwork_upload_peak`: 표지 올리기의 본문을 읽는 동안 `/proc/self`의 상주 메모리를 측정해요.
 
-`remote_screen_docker`는 환경 변수나 현재 폴더 같은 프로세스 전역 상태를 바꾸지 않고 컨테이너 이름도 프로세스 번호와 테스트마다 달라서, 자기 프로세스가 필요하지 않아요. 그래서 `tests/it`의 모듈로 옮기고 `trss`의 `remote-screen-docker` 기능으로 가렸어요. 실행하는 방법은 테스트 파일의 설명과 readme의 [Tests](../../readme.md#tests)에 있어요. 바이너리의 `src/main.rs`에는 테스트가 없어서 `test = false`로 빌드하지 않아요.
+`remote_screen_docker`는 환경 변수나 현재 폴더 같은 프로세스 전역 상태를 바꾸지 않고 컨테이너 이름도 프로세스 번호와 테스트마다 달라서, 자기 프로세스가 필요하지 않아요. 그래서 `tests/it`의 모듈로 옮기고 `trss`의 `remote-screen-docker` 기능으로 가렸어요. 실행하는 방법은 테스트 파일의 설명과 readme의 [Tests](../../../../readme.md#tests)에 있어요. 바이너리의 `src/main.rs`에는 테스트가 없어서 `test = false`로 빌드하지 않아요.
 
 ### 테스트 나누기
 
-`trss-web`과 `trss-worker`의 테스트는 [0101](../archive/tickets/refactoring-between-5-and-6/0101-receive-line-tests.md), [0110](../archive/tickets/refactoring-between-5-and-6/0110-job-line-tests.md), [0113](../archive/tickets/refactoring-between-5-and-6/0113-remaining-area-tests.md)이 테스트 나눔 ADR대로 모두 나눴어요. 그래서 0113을 마친 `cc91ce55` 뒤에 생기거나 바뀐 테스트만 다시 봤어요.
+`trss-web`과 `trss-worker`의 테스트는 [0101](../refactoring-between-5-and-6/0101-receive-line-tests.md), [0110](../refactoring-between-5-and-6/0110-job-line-tests.md), [0113](../refactoring-between-5-and-6/0113-remaining-area-tests.md)이 테스트 나눔 ADR대로 모두 나눴어요. 그래서 0113을 마친 `cc91ce55` 뒤에 생기거나 바뀐 테스트만 다시 봤어요.
 
 - `cc91ce55`와 지금의 테스트 이름을 견주니 새 이름이 30개였어요. 11개는 0147과 0148이 프로세스 일(명령 흐름, 단일 실행 잠금, 주기의 차례)을 확인하려고 더하거나 바꾼 것이고, 19개는 0.7.0 뒤 기능 티켓이 web에 더한 것이에요. 19개 중 하나는 이름만 바뀐 것이에요.
 - `cc91ce55` 뒤에 몸통이 바뀐 web 테스트를 diff로 찾아 읽었어요. 경로·크레이트 이름·깨우기만 바뀐 것은 뺐어요.
@@ -85,4 +85,4 @@
 
 ### 문서
 
-[라이브러리 명세](../specs/library.md)의 극장판 AniList 연결 검증 행에서 지운 테스트를, [웹 앱 공통 명세](../specs/web-app.md)의 수집 상태 검증 행에서 이름을 바꾼 테스트를 고쳤어요. readme의 로컬 개발 환경 절에 [Tests](../../readme.md#tests)를 더했어요.
+[라이브러리 명세](../../../specs/library.md)의 극장판 AniList 연결 검증 행에서 지운 테스트를, [웹 앱 공통 명세](../../../specs/web-app.md)의 수집 상태 검증 행에서 이름을 바꾼 테스트를 고쳤어요. readme의 로컬 개발 환경 절에 [Tests](../../../../readme.md#tests)를 더했어요.

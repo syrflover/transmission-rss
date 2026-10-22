@@ -93,7 +93,7 @@ Anissia의 종영일이 든 주에는 그 작품의 카드에 조용한 `이번 
 수집 상태를 먼저 두고, RSS의 `확인`·`다음` 시각(`오늘 17:53`처럼 날과 시각으로 적고, 수집 화면의 상태판도 같은 모양이에요. 사용자 결정, 2026-10-01), [수집 화면](collection.md#수집-화면)과 같은 기록에서 센 `최근 7일 추가 N개`(휴대폰 요약은 `7일`), Transmission의 받는 중·시딩 수를 보여줘요.
 수집 주기가 멈추면 `다음` 자리에 `RSS 확인이 멈췄어요. 컨테이너 로그를 확인해 주세요.`를 강조 색으로 두고, 휴대폰 요약에는 `RSS 멈춤`만 둬요. 수집 화면의 상태판도 같아요(사용자 결정, 2026-10-01).
 멈춤은 수집 주기만 보고 판정해요. 끝나지 않은 주기가 `max(30분, 주기 간격의 10배)`를 넘게 돌거나, 끝난 주기의 다음 확인 시각이 한 주기 넘게 지났는데 다음 주기가 시작하지 않았으면 멈춘 것이에요. 감시 폴더 읽기와 명령은 판정에 들어가지 않아요. 다만 주기는 끝을 적은 뒤 같은 차례에서 감시 폴더를 읽으므로, 그 읽기가 길어 다음 주기가 한 간격 넘게 늦으면 멈춤으로 보여요.
-화면이 보인다면 `trss` 프로세스는 살아 있으므로, 문구는 프로세스가 도는지 대신 로그를 확인하라고 해요([구조 가볍게 하기](../tickets/lighter-structure.md#수집이-멈췄는지의-판정), 2026-10-21).
+화면이 보인다면 `trss` 프로세스는 살아 있으므로, 문구는 프로세스가 도는지 대신 로그를 확인하라고 해요([구조 가볍게 하기](../archive/tickets/lighter-structure/lighter-structure.md#수집이-멈췄는지의-판정), 2026-10-21).
 다음 분기 구독은 제목 대기 수와 편성표에서 추가하는 바로가기를 둬요.
 [처음 설정](settings.md#처음-실행) 중에는 편성 자리에 체크리스트를 두고 수집 상태·다음 분기 구독·휴대폰 요약 줄을 두지 않아요.
 
@@ -486,7 +486,7 @@ cargo types
 [0127]: ../archive/tickets/5-deployed-verification/0127-row-waits-for-library-after-apply.md
 [0141]: ../tickets/0141-anissia-status-shown.md
 [0142]: ../tickets/0142-phone-top-bar-and-theme-setting.md
-[0147]: ../tickets/0147-commands-start-at-once.md
-[0154]: ../tickets/0154-change-events-and-command-reads.md
-[0164]: ../tickets/0164-db-change-events.md
+[0147]: ../archive/tickets/lighter-structure/0147-commands-start-at-once.md
+[0154]: ../archive/tickets/lighter-structure/0154-change-events-and-command-reads.md
+[0164]: ../archive/tickets/lighter-structure/0164-db-change-events.md
 [0114]: ../archive/tickets/refactoring-between-5-and-6/0114-refactor-final-check.md#실제-서버-2026-10-10-070

@@ -1,7 +1,7 @@
 # 0145 `trss-web`과 `trss-worker` 크레이트를 `trss` 크레이트 하나로 합쳐요
 
 - 상태: 완료 (2026-10-21, 아래 "결과")
-- 출처: [구조 가볍게 하기 명세의 한 프로세스와 이름](lighter-structure.md#한-프로세스와-이름), [한 프로세스 ADR](../adr/0019-one-process-for-web-and-worker.md)
+- 출처: [구조 가볍게 하기 명세의 한 프로세스와 이름](lighter-structure.md#한-프로세스와-이름), [한 프로세스 ADR](../../../adr/0019-one-process-for-web-and-worker.md)
 - 막는 티켓: [0144](0144-lighter-structure-baseline.md)(기준값)
 
 ## 작업
