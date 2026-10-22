@@ -1,5 +1,7 @@
 # 웹도 서버 브라우저 네트워크에 들어가고, 브라우저 쪽 연결은 받지 않아요
 
+웹과 worker는 2026-10-21에 `trss` 프로세스 하나가 됐어요([한 프로세스 ADR](0019-one-process-for-web-and-worker.md)). 아래의 웹과 worker는 지금 `trss`이고, 그 프로세스가 `browser_net`에 들어가 그 쪽에서 오는 연결을 받지 않는다는 결정은 그대로예요.
+
 원격 인증 화면(0040)에서 웹은 서버 브라우저 실행의 CDP에 닿아 화면을 받고 입력을 넘겨야 해요. [서버 브라우저 ADR](0002-server-browser-subtitle-authentication.md)은 브라우저를 worker와만 나누는 네트워크(`browser_net`)에 뒀어요.
 2026-10-03에 trss-web도 `browser_net`에 넣어 실행기의 토큰 보호 CDP 중계에 직접 닿게 했어요(사용자 결정). worker가 화면을 중계하는 길은 worker에 HTTP 서버와 두 번의 프레임 중계가 생겨서 고르지 않았어요. 실행의 시작·종료는 계속 worker만 해요.
 

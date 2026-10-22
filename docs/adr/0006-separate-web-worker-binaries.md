@@ -1,5 +1,7 @@
 # 공통 코드를 사용하는 웹·작업 바이너리를 분리해요
 
+이 기록은 2026-10-21에 [한 프로세스 ADR](0019-one-process-for-web-and-worker.md)이 대체했어요. 부분마다 대체한 기록은 아래와 같고, 브라우저를 앱과 분리한 컨테이너에 둔다는 결정은 [서버 브라우저 ADR](0002-server-browser-subtitle-authentication.md)에 있어요.
+
 공통 라이브러리를 패키지 하나에 둔다는 부분은 [기능별 크레이트 ADR](0011-feature-crate-workspace.md)이 대체했어요: 공통 기반·기능·바이너리 크레이트의 Cargo workspace로 나눠요.
 
 웹과 worker를 별도 바이너리·컨테이너로 나누고 웹만 재시작해도 worker 작업을 유지한다는 부분은 2026-10-21에 [한 프로세스 ADR](0019-one-process-for-web-and-worker.md)로 바뀌었어요.
