@@ -261,7 +261,7 @@
 | [테스트 정리](#테스트-정리) | `trss`의 테스트는 단위 테스트, `tests/it`, 메모리 최고치를 측정하는 바이너리 셋에 있고, `remote_screen_docker`는 기능을 켤 때만 빌드돼요([0150](0150-trss-crate-tests-by-adr-0015.md)). [0160](0160-test-setup-costs.md)이 테스트마다의 준비 비용을 측정해, 고친 원인은 전과 뒤의 값을, 고치지 않은 원인은 까닭을 적었어요. |
 | [다시 측정과 기능 크레이트 결정](#다시-측정과-기능-크레이트-결정) | [다시 측정한 값](#다시-측정한-값)에 있어요. 사용자는 기능 크레이트를 묶지 않기로 했어요(2026-10-22). |
 | [서버 확인](#서버-확인) | 2026-10-22에 사용자 승인을 받아 0.8.0을 올렸고, 되돌림 사본은 서버의 `~/trss-rollback-0.7.0`에 있어요. 첫 주기에 오류가 없었고, 토렌트 4개가 그대로였고, 컨테이너는 `trss`와 `trss-browser` 둘이었어요. `다시 확인` 명령의 결과가 누른 뒤 0.25초 안에 이벤트로 화면에 닿았어요([0162](0162-deploy-lighter-structure.md)). |
-| [문서](#문서) | 티켓마다 결과에 고친 문서를 적었어요. 상자는 비워 뒀어요. [0146](0146-one-trss-process-and-container.md)이 [자막 명세](../../../specs/subtitles.md)의 압축 해제 검증 행에 worker 컨테이너의 256M 한도를 남겨서, 완료 확인에서 `e017b36e`로 고쳤어요. 같은 확인에서 크레이트를 합쳐 낡은 [ADR 0004](../../../adr/0004-rust-react-web-stack.md)와 [ADR 0015](../../../adr/0015-test-a-rule-once-in-its-crate.md)의 맨 위에 바뀐 부분을 적었어요(`661ff139`). [한 프로세스 ADR](../../../adr/0019-one-process-for-web-and-worker.md)과 [끊긴 작업 ADR](../../../adr/0020-interrupted-jobs-wait-for-a-restart.md)은 구현과 같아서 고치지 않았어요. |
+| [문서](#문서) | 티켓마다 결과에 고친 문서를 적었어요. 상자는 비워 뒀어요. [0146](0146-one-trss-process-and-container.md)이 [자막 명세](../../../specs/subtitles.md)의 압축 해제 검증 행에 worker 컨테이너의 256M 한도를 남겨서, 완료 확인에서 `e017b36e`로 고쳤어요. 같은 확인에서 크레이트와 프로세스를 합쳐 낡은 [ADR 0002](../../../adr/0002-server-browser-subtitle-authentication.md), [ADR 0004](../../../adr/0004-rust-react-web-stack.md), [ADR 0005](../../../adr/0005-local-sqlite-app-state.md), [ADR 0015](../../../adr/0015-test-a-rule-once-in-its-crate.md)의 맨 위에 바뀐 부분을 적었어요(`32e49a87`). [한 프로세스 ADR](../../../adr/0019-one-process-for-web-and-worker.md)과 [끊긴 작업 ADR](../../../adr/0020-interrupted-jobs-wait-for-a-restart.md)은 구현과 같아서 고치지 않았어요. |
 
 ### 완료 확인에서 본 것
 
@@ -579,4 +579,4 @@ warm에서는 합친 `trss` 크레이트의 단위 테스트가 혼자 빌드의
 - [0164](0164-db-change-events.md)
   - `d1e4a61d` feat(core)!: announce the tables a committed write changed from the database connection
 
-명세와 티켓, 결과, ADR을 적은 `docs` 커밋은 이 명세의 `82904edd`, 티켓의 `d8432c8a`부터 완료 확인의 `661ff139`까지 24개예요. 완료 확인에서 고친 문서는 `e017b36e`와 `661ff139`이고, 이 기록과 보관은 그 뒤의 커밋이에요.
+명세와 티켓, 결과, ADR을 적은 `docs` 커밋은 이 명세의 `82904edd`, 티켓의 `d8432c8a`부터 완료 확인의 `32e49a87`까지 24개예요. 완료 확인에서 고친 문서는 `e017b36e`와 `32e49a87`이고, 이 기록과 보관은 그 뒤의 커밋이에요.
