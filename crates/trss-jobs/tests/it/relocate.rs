@@ -1,6 +1,6 @@
 //! A source's episode mapping changes: what follows it is re-evaluated, and
 //! the copies the app applied move once a person confirms the relocation
-//! (`docs/specs/library.md`, 자막의 회차 대응; ticket 4-store-apply-and-replace/0071,
+//! (`docs/requirements/library.md`, 자막의 회차 대응; ticket 4-store-apply-and-replace/0071,
 //! `trss_jobs::place::relocate`).
 
 use crate::{

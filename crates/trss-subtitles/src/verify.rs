@@ -1,4 +1,4 @@
-//! Whether received bytes are a file (`docs/specs/jobs.md`, 공통 수신 결과와
+//! Whether received bytes are a file (`docs/requirements/jobs.md`, 공통 수신 결과와
 //! 실패 분류), for every source alike. A job checks a file's bytes with
 //! [`check`] before it counts them as received, after a restart as well.
 //!

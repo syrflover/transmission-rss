@@ -5,7 +5,7 @@ import { findShown } from "./findState.ts";
 
 export { sizeText };
 
-/** What a failure class is called (`docs/specs/jobs.md`, 공통 수신 결과와 실패 분류). */
+/** What a failure class is called (`docs/requirements/jobs.md`, 공통 수신 결과와 실패 분류). */
 export const FAILURE_LABEL: Record<FailureKind, string> = {
   missing: "원본 없음",
   expired: "만료",

@@ -1,4 +1,4 @@
-//! Work artwork (`docs/specs/library.md`, 작품 표지): a cover for each work,
+//! Work artwork (`docs/requirements/library.md`, 작품 표지): a cover for each work,
 //! selected automatically from AniList when the work's folder name names
 //! exactly one AniList entry, or chosen by the user from AniList's results or
 //! as an uploaded file.

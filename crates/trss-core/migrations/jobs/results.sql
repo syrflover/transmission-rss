@@ -1,4 +1,4 @@
--- The common receive result (`docs/specs/jobs.md`, 공통 수신 결과와 실패
+-- The common receive result (`docs/requirements/jobs.md`, 공통 수신 결과와 실패
 -- 분류): what a receipt of a file came to, the same for every source.
 --
 -- `subtitle_job_files`:

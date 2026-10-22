@@ -1,4 +1,4 @@
-//! Receiving and publishing the files of an item (`docs/specs/jobs.md`,
+//! Receiving and publishing the files of an item (`docs/requirements/jobs.md`,
 //! 체크포인트와 중단 복구). The runner's loop decides the order and asks
 //! [`Receiver`] for one file ([`Receiver::receive`]), once it has cleared what
 //! an earlier run left ([`Receiver::start_over`]); everything a file's receipt

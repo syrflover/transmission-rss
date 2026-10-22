@@ -1,4 +1,4 @@
-//! The episode mapping of a subtitle source to a season (`docs/specs/library.md`,
+//! The episode mapping of a subtitle source to a season (`docs/requirements/library.md`,
 //! 자막의 회차 대응): which episode of the season a creator's Anissia episode is.
 //!
 //! A mapping is one default per (work, season, source): Anissia's whole

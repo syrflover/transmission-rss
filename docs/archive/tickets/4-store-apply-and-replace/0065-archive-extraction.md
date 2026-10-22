@@ -1,7 +1,7 @@
 # 0065 압축 파일을 한도를 건 별도 프로세스에서 풀어요
 
 - 상태: 완료 (2026-10-08, 실제 서버의 측정은 아래 "실제 서버의 측정")
-- 출처: [압축 해제의 격리와 한도](../../../specs/subtitles.md#압축-해제의-격리와-한도)(사용자 결정, 2026-10-04), [묶음 분석](../../../specs/subtitles.md#자막-묶음-분석과-안전한-배치-판단)의 위험 사례, 올리기가 넘긴 ZIP이 아닌 압축 파일([0047](../3-subtitle-candidates-and-receiving/0047-subtitle-upload.md))
+- 출처: [압축 해제의 격리와 한도](../../../requirements/subtitles.md#압축-해제의-격리와-한도)(사용자 결정, 2026-10-04), [묶음 분석](../../../requirements/subtitles.md#자막-묶음-분석과-안전한-배치-판단)의 위험 사례, 올리기가 넘긴 ZIP이 아닌 압축 파일([0047](../3-subtitle-candidates-and-receiving/0047-subtitle-upload.md))
 - 막는 티켓: [0059](0059-archive-tools-and-limits.md)(도구와 한도), [0064](0064-multi-file-packages.md)(멤버를 받을 분석)
 
 ## 작업
@@ -11,7 +11,7 @@
 - 형식은 ZIP, RAR(4·5), 7z, gzip, bzip2, xz, tar와 나뉜 조각이에요. 같은 묶음의 조각을 모아 풀어요. 0059에서 풀지 못한다고 정한 형식은 `풀지 못함`과 그 까닭이에요.
 - 경로 이탈(`..`, 절대 경로), 심볼릭·하드 링크, 장치 파일, 한도 초과, 중첩 한도 초과, 암호는 거부해요. 그 묶음만 실패하고 까닭을 작업 상세에 적으며, 이미 보관한 파일은 그대로예요.
 - 풀지 못한 압축 파일은 수신 영역에 남겨, 나중에 풀 수 있게 되면 다시 받지 않고 분석해요.
-  이 컴퓨터 쪽의 실패(디스크, 메모리 한도, 시간 한도, 자식 프로세스 오류)는 처음을 포함해 3번까지 원 수신물에서 다시 풀어요. 다음 시도는 1시간 뒤와 worker의 다음 시작 가운데 먼저 오는 때예요. 압축 파일 탓의 거절은 다시 풀지 않아요(사용자 결정, 2026-10-05). 자세한 규칙은 [압축 해제의 격리와 한도](../../../specs/subtitles.md#압축-해제의-격리와-한도)에 있어요.
+  이 컴퓨터 쪽의 실패(디스크, 메모리 한도, 시간 한도, 자식 프로세스 오류)는 처음을 포함해 3번까지 원 수신물에서 다시 풀어요. 다음 시도는 1시간 뒤와 worker의 다음 시작 가운데 먼저 오는 때예요. 압축 파일 탓의 거절은 다시 풀지 않아요(사용자 결정, 2026-10-05). 자세한 규칙은 [압축 해제의 격리와 한도](../../../requirements/subtitles.md#압축-해제의-격리와-한도)에 있어요.
 - 풀던 중 worker가 죽으면 원 수신물에서 다시 풀어요. 자식 프로세스가 남지 않게 해요.
 - 실제 서버의 256M worker 컨테이너 안에서 큰 정상 묶음과 폭탄 표본을 풀어, 최대 메모리와 `oom_kill`을 재요. [0060](0060-server-filesystem-probe.md)의 탐침 방식을 써요.
   worker 한도는 자식 프로세스의 `RLIMIT_AS` 256MiB가 들어가도록 128M에서 256M로 올렸어요(사용자 결정, 2026-10-05). web은 128M 그대로예요.
@@ -53,7 +53,7 @@
 - **탐침**: `trss-probe --unpack FILE[,FILE...]`가 worker와 같은 방식으로 자식 프로세스를 띄워 풀고, 그동안 `memory.current`·`memory.stat`의 최대치와 `memory.events`의 `oom_kill`을 재요. `deploy/probe.sh`는 `--samples DIR`(컨테이너의 `/samples`)과 `--extract FILE`을 받아요. `probe-binary` 빌드 대상이 `trss-probe`와 `trss-extract`를 함께 내보내요.
 - **API와 화면**: 작업 상세의 받은 압축 파일마다 `파일 N개를 풀었어요 (자막 a · 폰트 b)`, `풀지 못함`과 까닭, `나뉜 조각 · 첫 조각과 함께 풀어요`가 나와요. 올리기 결과와 작품 상세의 올리기 칸은 압축 파일에 `받은 뒤 풀어요`를 붙이고, 풀기 전에는 `풀기를 기다려요`라고 적어요.
 - **가짜 출처**: `fake.trss.invalid/pack/` 게시물의 이름에 `%2F`가 있으면 그 앞을 폴더로 줘요. 같은 이름의 조각이 두 폴더에 있는 묶음을 만들 수 있어요.
-- **명세·문서**: [압축 해제의 격리와 한도](../../../specs/subtitles.md#압축-해제의-격리와-한도)에 자식 프로세스, 한도 표, 실패의 두 갈래, 멤버 검사의 512MiB를 적었어요. [작업](../../../specs/jobs.md)과 readme에 압축 파일을 받은 올리기 작업과 자원 한도를 적었어요.
+- **명세·문서**: [압축 해제의 격리와 한도](../../../requirements/subtitles.md#압축-해제의-격리와-한도)에 자식 프로세스, 한도 표, 실패의 두 갈래, 멤버 검사의 512MiB를 적었어요. [작업](../../../requirements/jobs.md)과 readme에 압축 파일을 받은 올리기 작업과 자원 한도를 적었어요.
 
 ### 컴퓨터 쪽 실패의 재시도 (2026-10-06)
 
@@ -185,4 +185,4 @@
    chmod +x probe.sh trss-probe trss-extract
    ./probe.sh --samples ./samples -- --size-mib 0 --unpack /samples/big.zip --unpack /samples/big.7z --unpack /samples/big.tar.xz --unpack /samples/big.rar --unpack /samples/many100k.zip --unpack /samples/nested30.zip --unpack /samples/dict1536m.xz --unpack /samples/dict4095m.7z --unpack /samples/dict_rar50_1g.rar --unpack /samples/zeros1g.rar --unpack /samples/enc_aes.zip --unpack /samples/esc.zip 2>&1 | tee unpack-$(date +%F).txt
    ```
-4. `unpack-<날짜>.txt`의 내용을 저에게 붙여 주세요. 제가 날짜·커널과 표본마다의 최대 `memory.current`·`oom_kill`을 이 티켓에 적어요. `oom_kill`이 생기면 [0058](../../../tickets/0058-server-oom-and-resource-limits.md)에서 한도를 다시 정해요.
+4. `unpack-<날짜>.txt`의 내용을 저에게 붙여 주세요. 제가 날짜·커널과 표본마다의 최대 `memory.current`·`oom_kill`을 이 티켓에 적어요. `oom_kill`이 생기면 [0058](../../../specs/2026-10-04-server-resource-limits/0058-server-oom-and-resource-limits.md)에서 한도를 다시 정해요.

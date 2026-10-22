@@ -3,7 +3,7 @@
 //!
 //! A suggestion is only a suggestion: the review shows it, the user checks the
 //! ones to keep, and only checked ones become subscriptions
-//! (`docs/specs/settings.md`, 기존 YAML). The comment is read by
+//! (`docs/requirements/settings.md`, 기존 YAML). The comment is read by
 //! [`super::comments`]; this module adds what the rules around it decide.
 
 use std::{collections::HashMap, path::Path};

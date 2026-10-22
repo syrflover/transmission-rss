@@ -3,7 +3,7 @@
 //! The screens used to ask the server again and again whether a command had
 //! ended or a search had got further. They now keep this one stream open and
 //! read again, through the routes they always read from, when it says that
-//! the thing they show changed (`docs/specs/web-app.md`, 웹 명령과 상태 갱신).
+//! the thing they show changed (`docs/requirements/web-app.md`, 웹 명령과 상태 갱신).
 //! The stream carries no data of the things: only their kind and ID, so the
 //! data has one source, the route that serves it.
 //!

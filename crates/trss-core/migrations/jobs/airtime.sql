@@ -1,4 +1,4 @@
--- The episode mapping decided by air time (`docs/specs/library.md`, 자막의
+-- The episode mapping decided by air time (`docs/requirements/library.md`, 자막의
 -- 회차 대응; `trss_jobs::mapping`).
 --
 -- `subtitle_episode_mappings.retired_offset` is the offset an `auto` mapping

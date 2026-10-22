@@ -1,5 +1,5 @@
 //! Connecting a subscription to the season its videos appeared in
-//! (`docs/specs/collection.md`, 방영작 구독, and `docs/specs/library.md`, 머리와
+//! (`docs/requirements/collection.md`, 방영작 구독, and `docs/requirements/library.md`, 머리와
 //! 시즌).
 //!
 //! A subscription rule that has no season yet gets one from the videos *its own*

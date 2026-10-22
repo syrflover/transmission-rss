@@ -1,4 +1,4 @@
--- When Anissia was last found not to list an anime (`docs/specs/web-app.md`,
+-- When Anissia was last found not to list an anime (`docs/requirements/web-app.md`,
 -- 이번 주 편성): the worker's daily refresh asked every week of Anissia's
 -- schedule, all of them answered, and none listed the anime. NULL while the
 -- anime is listed or nobody has looked. A refresh that failed, was refused

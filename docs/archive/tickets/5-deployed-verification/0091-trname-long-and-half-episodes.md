@@ -1,7 +1,7 @@
 # 0091 trname이 세 자리 회차와 .5 회차를 맞게 읽어요
 
 - 상태: 완료 (2026-10-07)
-- 출처: [영상 회차 변환](../../../specs/collection.md#영상-회차-변환), [0090](0090-release-name-corpus.md)
+- 출처: [영상 회차 변환](../../../requirements/collection.md#영상-회차-변환), [0090](0090-release-name-corpus.md)
 - 막는 티켓: [0090](0090-release-name-corpus.md)(실제 릴리스 이름 묶음)
 
 ## 작업

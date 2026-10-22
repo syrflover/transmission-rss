@@ -1,8 +1,8 @@
 //! The status lines of a card on the weekly schedule
-//! (`docs/specs/web-app.md`, 이번 주 편성): one for the video and, unless the
+//! (`docs/requirements/web-app.md`, 이번 주 편성): one for the video and, unless the
 //! subscription takes no subtitles, one for the subtitle. Also Anissia's word
 //! on the anime's run ([`run_state`]), which the subscription cards and the
-//! schedule picker show (`docs/specs/collection.md`, 방영작 구독).
+//! schedule picker show (`docs/requirements/collection.md`, 방영작 구독).
 
 use serde::Serialize;
 
@@ -82,7 +82,7 @@ pub fn is_off(anime: &Anime) -> bool {
 }
 
 /// Where an anime's run is, as the subscription cards and the schedule picker
-/// say it (`표: Anissia의 방영 상태` in `docs/specs/web-app.md`).
+/// say it (`표: Anissia의 방영 상태` in `docs/requirements/web-app.md`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "snake_case")]

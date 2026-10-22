@@ -1,4 +1,4 @@
-//! Season info (`docs/specs/library.md`, 시즌 정보): each local season is
+//! Season info (`docs/requirements/library.md`, 시즌 정보): each local season is
 //! linked to one or more AniList entries, and the season's airing, amount,
 //! studios, genres, original title and synopsis are those entries'.
 //!

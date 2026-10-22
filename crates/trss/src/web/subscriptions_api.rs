@@ -1,5 +1,5 @@
 //! `/api/anissia` and `/api/subscriptions`: Anissia's schedule, and the rules
-//! that follow an anime of it (`docs/specs/collection.md`, 방영작 구독).
+//! that follow an anime of it (`docs/requirements/collection.md`, 방영작 구독).
 //!
 //! | call                                         | success                                        |
 //! | -------------------------------------------- | ---------------------------------------------- |
@@ -1164,7 +1164,7 @@ async fn change_creator(
     let written = state.channels.set_creator(&id, b.version, creator).await;
     let answer = rule_after(&state, &id, written).await?;
     // The new creator's episodes are received now; what the earlier one's
-    // left in place stays (`docs/specs/subtitles.md`, 구독 제작자 자동 수신).
+    // left in place stays (`docs/requirements/subtitles.md`, 구독 제작자 자동 수신).
     jobs_api::follow_now(&state).await;
     Ok(answer)
 }

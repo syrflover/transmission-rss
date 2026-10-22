@@ -1,6 +1,6 @@
 //! Archive suggestions: the rules the app suggests archiving because the anime
-//! has ended or nothing new has come for a while (`docs/specs/collection.md`,
-//! 규칙 보관, and `docs/specs/jobs.md`, 할 일).
+//! has ended or nothing new has come for a while (`docs/requirements/collection.md`,
+//! 규칙 보관, and `docs/requirements/jobs.md`, 할 일).
 //!
 //! A suggestion is not stored. It is read off the rules, the Anissia snapshots
 //! and the history every time, so it appears and goes with the facts it rests

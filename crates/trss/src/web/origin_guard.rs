@@ -2,7 +2,7 @@
 //! route (the app, `/api` and WebSockets alike).
 //!
 //! The web has no sign-in; the network in front of it is the boundary
-//! (`docs/specs/web-app.md`, 접근 경계와 기기). Two kinds of page could still
+//! (`docs/requirements/web-app.md`, 접근 경계와 기기). Two kinds of page could still
 //! use it from a browser inside that boundary, and these checks refuse them:
 //!
 //! - **DNS rebinding.** A page of an attacker's name that later resolves to

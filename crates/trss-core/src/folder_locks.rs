@@ -30,7 +30,7 @@
 //!   other, in the order they came: a rule that has picked nothing decides
 //!   its episode offset from the first item it receives, and items asked for
 //!   together are sent earliest number first so that the earliest number
-//!   decides (`docs/specs/collection.md`, 영상 회차 변환). A rule is not a
+//!   decides (`docs/requirements/collection.md`, 영상 회차 변환). A rule is not a
 //!   folder: it overlaps the same rule alone.
 //!
 //! Two folders overlap when they are the same or one is inside the other, by

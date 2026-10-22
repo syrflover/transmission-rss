@@ -1,4 +1,4 @@
-//! A movie's link to an Anissia anime (`docs/specs/library.md`, 작품 연결과
+//! A movie's link to an Anissia anime (`docs/requirements/library.md`, 작품 연결과
 //! 제외; `docs/adr/0018-movies-in-season-zero-with-their-own-link.md`): the
 //! table `movie_anissia`, whose rules are in its migration.
 //!

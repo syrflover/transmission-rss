@@ -3,7 +3,7 @@ import { aboutTarget, ofKinds } from "../../lib/changeMatch.ts";
 
 /**
  * Which changes make the 할 일 screen, the menu's 할 일 badge and the job
- * detail read again (`docs/specs/web-app.md`, 웹 명령과 상태 갱신). Each list of
+ * detail read again (`docs/requirements/web-app.md`, 웹 명령과 상태 갱신). Each list of
  * kinds is the tables the screen's route reads, grouped as the server announces
  * them (`crates/trss-core/src/changes/tables.rs`, `TABLES`). A kind that is
  * only likely to matter is in the list too: a read too many costs little, a

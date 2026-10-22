@@ -1,5 +1,5 @@
-//! The videos a person is asked about (`docs/specs/library.md`, 할 일과 회차
-//! 목록; `docs/specs/jobs.md`, 할 일): `회차 확인 필요` for a video directly in a
+//! The videos a person is asked about (`docs/requirements/library.md`, 할 일과 회차
+//! 목록; `docs/requirements/jobs.md`, 할 일): `회차 확인 필요` for a video directly in a
 //! season folder other than `Season 00` whose name gives no episode, or another
 //! season's ([`crate::discovery`]). The app does not put such a video on an
 //! episode, and does not count it missing either: it asks.

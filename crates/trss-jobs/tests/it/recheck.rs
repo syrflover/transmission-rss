@@ -1,5 +1,5 @@
 //! The 14-day recheck of the files of the episodes received from the
-//! subscribed creator (`docs/specs/subtitles.md`, 구독 제작자 자동 수신), with
+//! subscribed creator (`docs/requirements/subtitles.md`, 구독 제작자 자동 수신), with
 //! the local servers shaped like Drive, Tistory and Naver
 //! ([`trss_subtitles::testing`]), and once against the real sites (ignored).
 //!

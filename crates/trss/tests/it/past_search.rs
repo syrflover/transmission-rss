@@ -1,5 +1,5 @@
 //! The past episode search of the rule detail (ticket 2-work-discovery-and-subscriptions/0026,
-//! `docs/specs/collection.md` 지난 회차 검색), end to end: the real web API
+//! `docs/requirements/collection.md` 지난 회차 검색), end to end: the real web API
 //! and search service, a fake nyaa search RSS, the worker's `receive_past`
 //! command against the fake Transmission, and a temporary media folder.
 //!

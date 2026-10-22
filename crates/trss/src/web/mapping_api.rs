@@ -1,5 +1,5 @@
 //! The episode mapping the user sets for a subtitle source of a season
-//! (`docs/specs/library.md`, 자막의 회차 대응 and 자막 후보 구역;
+//! (`docs/requirements/library.md`, 자막의 회차 대응 and 자막 후보 구역;
 //! [`trss_jobs::mapping`]).
 //!
 //! | method and path                                                                  | body                                                                    |

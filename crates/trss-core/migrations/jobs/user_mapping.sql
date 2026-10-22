@@ -1,4 +1,4 @@
--- The episode mapping the user sets (`docs/specs/library.md`, 자막의 회차
+-- The episode mapping the user sets (`docs/requirements/library.md`, 자막의 회차
 -- 대응; `trss_jobs::mapping`).
 --
 -- `subtitle_episode_mappings.version` is what a save from the work detail

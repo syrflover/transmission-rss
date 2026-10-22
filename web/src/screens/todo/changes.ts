@@ -8,8 +8,8 @@ import type {
 } from "../../lib/api-types";
 
 /**
- * What the content comparison of a replacement shows (`docs/specs/subtitles.md`, 교체 비교와 승인; the 교체 승인
- * card's reason line in `docs/specs/jobs.md`, 할 일 화면), decided from the API's `Comparison` and lines alone, so
+ * What the content comparison of a replacement shows (`docs/requirements/subtitles.md`, 교체 비교와 승인; the 교체 승인
+ * card's reason line in `docs/requirements/jobs.md`, 할 일 화면), decided from the API's `Comparison` and lines alone, so
  * the components only draw it and a test can say what appears when. A part that was not compared is never shown as
  * a number: it says `비교 불가` and why.
  */
@@ -60,7 +60,7 @@ export interface ReceivedFact {
 }
 
 /**
- * The time line of the work detail's `교체 승인` card (`docs/specs/library.md`, 할 일과 회차 목록): when the current
+ * The time line of the work detail's `교체 승인` card (`docs/requirements/library.md`, 할 일과 회차 목록): when the current
  * and the new subtitle were received, the newest of each when several plans wait, said as the job detail's version
  * lines say it (`replacementView.ts`, `versionFacts`). A current file the app did not manage has its file time.
  */

@@ -6,7 +6,7 @@ import { sharedEvents } from "./sharedEvents";
 
 /**
  * Reads again when the server says something changed
- * (`docs/specs/web-app.md`, 웹 명령과 상태 갱신). `reread` is called for a
+ * (`docs/requirements/web-app.md`, 웹 명령과 상태 갱신). `reread` is called for a
  * change `match` accepts, and for every screen when the connection was made or
  * fell behind, so it has to read everything the screen shows.
  *

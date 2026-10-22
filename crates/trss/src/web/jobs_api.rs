@@ -1,4 +1,4 @@
-//! `/api/subtitle-jobs`: the subtitle jobs (`docs/specs/jobs.md`, 할 일 화면
+//! `/api/subtitle-jobs`: the subtitle jobs (`docs/requirements/jobs.md`, 할 일 화면
 //! and 작업 상세). The web makes them; the worker carries them out
 //! ([`trss_jobs`]).
 //!

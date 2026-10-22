@@ -1,4 +1,4 @@
-//! A work's cover (`docs/specs/library.md`, 작품 표지): its state, its image,
+//! A work's cover (`docs/requirements/library.md`, 작품 표지): its state, its image,
 //! and the user's choices from the cover view of the work detail screen.
 //!
 //! | method and path                                   | body                                    |

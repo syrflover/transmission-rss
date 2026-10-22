@@ -5,7 +5,7 @@ import { MOVIE_LABEL } from "../library/detail/movie.ts";
 import type { Replacement, ReplacementDecision, ReplacementPath, ReplacementVersion } from "../../lib/api-types";
 
 /**
- * What the decision card of a job's replacement (`docs/specs/subtitles.md`, 교체 비교와 승인) shows, decided from
+ * What the decision card of a job's replacement (`docs/requirements/subtitles.md`, 교체 비교와 승인) shows, decided from
  * the API's `Replacement` alone, so the components only draw it and a test can say what appears when.
  */
 
@@ -33,7 +33,7 @@ export function cardLayout(open: number, index: number): { sticky: boolean; fixe
 }
 
 /**
- * Whether the job's plans to decide are an episode list (`docs/specs/subtitles.md`, 교체 비교와 승인): when there are
+ * Whether the job's plans to decide are an episode list (`docs/requirements/subtitles.md`, 교체 비교와 승인): when there are
  * several, the list is the main area and each row opens to its comparison; one plan keeps its decision card.
  */
 export function asEpisodeList(open: readonly Replacement[]): boolean {

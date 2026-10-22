@@ -1,5 +1,5 @@
 //! `/api/library/watch-folders`: the folders the app watches for works
-//! (`docs/specs/library.md`, 작품 발견과 감시 폴더; `docs/specs/settings.md`,
+//! (`docs/requirements/library.md`, 작품 발견과 감시 폴더; `docs/requirements/settings.md`,
 //! 설정 화면의 감시 폴더).
 //!
 //! | call                                   | success                                   |

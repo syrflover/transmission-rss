@@ -1,5 +1,5 @@
 -- Storing and applying what a job received (`trss-jobs`'s `place`, and
--- docs/specs/subtitles.md, 보관본과 적용본; docs/specs/jobs.md, 체크포인트와
+-- docs/requirements/subtitles.md, 보관본과 적용본; docs/requirements/jobs.md, 체크포인트와
 -- 중단 복구).
 --
 -- A job goes on after receiving: it waits for a person to say which episode
@@ -47,7 +47,7 @@ ALTER TABLE subtitle_job_steps_next RENAME TO subtitle_job_steps;
 -- was stored: set before the removal, so a removal cut short is done again.
 ALTER TABLE subtitle_job_files ADD COLUMN cleared_at INTEGER;
 
--- What the library keeps (docs/specs/settings.md, 보관 관계 필드). None of it
+-- What the library keeps (docs/requirements/settings.md, 보관 관계 필드). None of it
 -- names its work by reference: the records outlive a work's folder, as jobs
 -- do, and the files in `.trss/` stay with the folder.
 --

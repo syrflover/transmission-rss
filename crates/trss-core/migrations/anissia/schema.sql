@@ -1,5 +1,5 @@
 -- Subscriptions to Anissia anime (see `store::anissia`, `store::channels` and
--- `docs/specs/collection.md`, 방영작 구독).
+-- `docs/requirements/collection.md`, 방영작 구독).
 --
 -- `anissia_anime` is the schedule snapshot of an anime a rule subscribes to, as
 -- Anissia last listed it, so a rule's detail and the weekly schedule read

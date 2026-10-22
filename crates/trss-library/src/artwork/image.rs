@@ -2,7 +2,7 @@
 //! name, an extension or a declared MIME type), then the size the header
 //! states, under the limits of [`super`], so a non-image, a file whose header
 //! cannot be read and one too large to show is refused before it is stored
-//! (`docs/specs/library.md`, 이미지 파일의 수명).
+//! (`docs/requirements/library.md`, 이미지 파일의 수명).
 //!
 //! Nothing is decoded (user decision, 2026-10-01). The app stores and serves
 //! the bytes as they came, so decoding would only have found files damaged

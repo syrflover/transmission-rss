@@ -1,4 +1,4 @@
-//! A person's `확인함` on a video the app asks about (`docs/specs/library.md`,
+//! A person's `확인함` on a video the app asks about (`docs/requirements/library.md`,
 //! 할 일과 회차 목록): a video directly in a season folder other than
 //! `Season 00` whose name gives no episode of it, which is a `회차 확인 필요`
 //! to-do ([`super::todo_api`], `video_check`) until the person checks it

@@ -1,4 +1,4 @@
-//! The common policy (`docs/specs/settings.md`, 공통 정책): the order of the
+//! The common policy (`docs/requirements/settings.md`, 공통 정책): the order of the
 //! subtitle formats, and the server browser's idle time and how many jobs may
 //! use it at once. The three are one record with one version, saved together.
 //!

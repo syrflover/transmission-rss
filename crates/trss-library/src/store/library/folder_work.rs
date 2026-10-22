@@ -1,5 +1,5 @@
 //! The work a folder of a watch folder is (ticket 2-work-discovery-and-subscriptions/0024: where a rule's videos
-//! will land), and the works a save folder is chosen from (`docs/specs/
+//! will land), and the works a save folder is chosen from (`docs/requirements/
 //! collection.md`, 방영작 구독).
 
 use rusqlite::{params, Connection, OptionalExtension};

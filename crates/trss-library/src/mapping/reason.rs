@@ -1,5 +1,5 @@
 //! Why an episode is not placed in the season, in the words the screens show
-//! (`docs/specs/subtitles.md`, 파일의 회차): the sentences built from an
+//! (`docs/requirements/subtitles.md`, 파일의 회차): the sentences built from an
 //! episode text, the season episode a [`Mapping`] puts it on, and the season's
 //! episode count.
 //!

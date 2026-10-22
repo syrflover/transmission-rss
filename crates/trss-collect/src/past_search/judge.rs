@@ -1,4 +1,4 @@
-//! The preview of a past episode search (`docs/specs/collection.md`, 지난 회차
+//! The preview of a past episode search (`docs/requirements/collection.md`, 지난 회차
 //! 검색): what each search result is, given the rule, the range the person
 //! confirmed and what the work already has.
 //!
@@ -39,7 +39,7 @@
 //! # Revisions
 //!
 //! A result that is a revision (`14v2`) of an episode the work has follows the
-//! replacement of `docs/specs/collection.md`, 영상 수정본의 대체, the way
+//! replacement of `docs/requirements/collection.md`, 영상 수정본의 대체, the way
 //! `crate::revisions::plan` decides it for the worker:
 //!
 //! - the video's release is known from history (a torrent of the rule got the

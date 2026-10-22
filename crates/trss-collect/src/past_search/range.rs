@@ -1,4 +1,4 @@
-//! The release range a search starts with (`docs/specs/collection.md`, 지난
+//! The release range a search starts with (`docs/requirements/collection.md`, 지난
 //! 회차 검색): `릴리스 13–24 → S02E01–12`, the correspondence between the
 //! numbers the releases carry and the work folder's.
 //!

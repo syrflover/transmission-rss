@@ -1,4 +1,4 @@
-//! What `되돌리기` renames (`docs/specs/collection.md`, 영상 회차 변환): the
+//! What `되돌리기` renames (`docs/requirements/collection.md`, 영상 회차 변환): the
 //! videos a rule received under the app's offset take the names the value
 //! put back gives them, through Transmission when their torrent is there and
 //! on disk when it is gone, and never over a name that is taken. The cases

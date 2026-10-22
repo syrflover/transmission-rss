@@ -1,5 +1,5 @@
 //! Starting the child process that unpacks an archive and reading what it
-//! answers (`docs/specs/subtitles.md`, 압축 해제의 격리와 한도).
+//! answers (`docs/requirements/subtitles.md`, 압축 해제의 격리와 한도).
 //!
 //! The parent gives the child a process group of its own, so that the time limit
 //! and a cancellation end the child and everything it started, and kills the

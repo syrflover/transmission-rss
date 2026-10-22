@@ -1,4 +1,4 @@
-//! The save folder of a subscription or a rule (`docs/specs/collection.md`,
+//! The save folder of a subscription or a rule (`docs/requirements/collection.md`,
 //! 방영작 구독): a work folder and a season, `<work>/Season NN`, and how both
 //! are suggested from a release's work or a work of the library.
 //!

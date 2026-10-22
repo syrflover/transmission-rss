@@ -1,5 +1,5 @@
 -- A person confirms the placement plan of an upload or a find job before any
--- of it is kept (`docs/specs/subtitles.md`, 배치 확인; `trss_jobs::place`).
+-- of it is kept (`docs/requirements/subtitles.md`, 배치 확인; `trss_jobs::place`).
 --
 -- `placement_confirmed_at` is when the person applied the job's 배치 확인
 -- table; `NULL` until then. Until it is set, such a job is analysed and

@@ -1,5 +1,5 @@
 //! The state one extraction keeps across its archives, nested ones included,
-//! and the files it writes (`docs/specs/subtitles.md`, 압축 해제의 격리와 한도).
+//! and the files it writes (`docs/requirements/subtitles.md`, 압축 해제의 격리와 한도).
 //!
 //! A format reads its archive's listing first and has every member admitted by
 //! a [`Planner`] (path, kind, counts, declared sizes), so that an archive that

@@ -1,4 +1,4 @@
-//! The pure parts of subscribing to an Anissia anime (`docs/specs/collection.md`,
+//! The pure parts of subscribing to an Anissia anime (`docs/requirements/collection.md`,
 //! 방영작 구독): the titles a channel's history offers (grouped by the work
 //! [`crate::release_name`] reads from them) and the quarter a subscription
 //! belongs to. The save folder suggested for a work is [`crate::save_folder`]'s.

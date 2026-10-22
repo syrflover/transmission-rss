@@ -1,4 +1,4 @@
-//! A season's Anissia anime, changed from the work detail (`docs/specs/
+//! A season's Anissia anime, changed from the work detail (`docs/requirements/
 //! library.md`, 작품 연결과 제외).
 //!
 //! The link itself is the season's (`trss_library::store::seasons::anissia`).

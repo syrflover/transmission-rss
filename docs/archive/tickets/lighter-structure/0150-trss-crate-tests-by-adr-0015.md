@@ -85,4 +85,4 @@
 
 ### 문서
 
-[라이브러리 명세](../../../specs/library.md)의 극장판 AniList 연결 검증 행에서 지운 테스트를, [웹 앱 공통 명세](../../../specs/web-app.md)의 수집 상태 검증 행에서 이름을 바꾼 테스트를 고쳤어요. readme의 로컬 개발 환경 절에 [Tests](../../../../readme.md#tests)를 더했어요.
+[라이브러리 명세](../../../requirements/library.md)의 극장판 AniList 연결 검증 행에서 지운 테스트를, [웹 앱 공통 명세](../../../requirements/web-app.md)의 수집 상태 검증 행에서 이름을 바꾼 테스트를 고쳤어요. readme의 로컬 개발 환경 절에 [Tests](../../../../readme.md#tests)를 더했어요.

@@ -39,4 +39,4 @@ Transmission 접속 주소·기존 속도 제한·큐 크기, 서버 포트와 D
 
 이 기록은 선택한 방향이며 아직 구현된 동작은 아니에요.
 앱 내부 저장소는 [로컬 SQLite](0005-local-sqlite-app-state.md)로 정했으며, 새 YAML의 교환 계약은 아래 명세에서 다뤄요.
-현재 요구와 완료 조건은 [설정과 이전 명세](../specs/settings.md)에 있고, 선택 배경과 조사 근거는 [주제 문서](../brainstorm/web-gui-subtitles.md)에 있어요.
+현재 요구와 완료 조건은 [설정과 이전 명세](../requirements/settings.md)에 있고, 선택 배경과 조사 근거는 [주제 문서](../brainstorm/web-gui-subtitles.md)에 있어요.

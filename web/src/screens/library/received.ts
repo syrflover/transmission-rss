@@ -21,7 +21,7 @@ export function sameDay(a: number, b: number): boolean {
 /**
  * Whether the date of `entry` carries its time: another of the entries shown with it (`shown`, which may include
  * `entry` itself) is the same copy by the card's grouping (`sameCopy`) and was received the same day
- * (docs/specs/subtitles.md, 지난 수정본).
+ * (docs/requirements/subtitles.md, 지난 수정본).
  */
 export function carriesTime<T extends { id: string; stored_at: number }>(
   entry: T,

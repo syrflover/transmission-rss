@@ -1,5 +1,5 @@
 -- What differs between the current subtitle of a replacement plan and the new
--- one (`trss_jobs::place::replace`; docs/specs/subtitles.md, 교체 비교와
+-- one (`trss_jobs::place::replace`; docs/requirements/subtitles.md, 교체 비교와
 -- 승인; ticket 4-store-apply-and-replace/0069): one row for each plan the app made after it compared
 -- contents, written with the plan in one transaction. A plan made before has
 -- no row, and nothing makes one for it: its screens say it was not compared.

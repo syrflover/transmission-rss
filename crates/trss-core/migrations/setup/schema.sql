@@ -1,4 +1,4 @@
--- The first run (`docs/specs/settings.md`, 처음 실행): the `처음 설정`
+-- The first run (`docs/requirements/settings.md`, 처음 실행): the `처음 설정`
 -- checklist that takes the place of the weekly schedule on a new install.
 --
 -- `first_run` has a row only while the install is one that began empty: the

@@ -1,5 +1,5 @@
 //! The runner reading a Tistory post whose subtitle is in WinPNG images
-//! (`docs/specs/jobs.md`, 출처별 단계 초안). The browser behind the reader is
+//! (`docs/requirements/jobs.md`, 출처별 단계 초안). The browser behind the reader is
 //! a fake that puts files where the real one would; the viewer's own page
 //! script is tested against a real viewer (`trss-subtitles`'s ignored
 //! `winpng_sample`).

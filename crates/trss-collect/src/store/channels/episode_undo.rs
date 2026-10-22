@@ -1,4 +1,4 @@
-//! `되돌리기` of an automatic episode offset (`docs/specs/collection.md`, 영상
+//! `되돌리기` of an automatic episode offset (`docs/requirements/collection.md`, 영상
 //! 회차 변환) in the store: putting the previous value back together with the
 //! plan of the renames, and recording each rename with the video revision rows
 //! it moves. The worker's side is [`crate::commands::episode_undo`].

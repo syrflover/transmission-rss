@@ -1,4 +1,4 @@
-//! The worker's reading of the watch folders (`docs/specs/library.md`, 작품
+//! The worker's reading of the watch folders (`docs/requirements/library.md`, 작품
 //! 발견과 감시 폴더).
 //!
 //! Every cycle, after the RSS work, [`scan_all`] reads

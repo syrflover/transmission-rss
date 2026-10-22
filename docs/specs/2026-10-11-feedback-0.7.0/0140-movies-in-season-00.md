@@ -1,16 +1,16 @@
 # 0140 Season 00 회차를 Anissia 극장판에 이어 자막을 받아요
 
 - 상태: 대기
-- 출처: [작품 발견과 감시 폴더](../specs/library.md#작품-발견과-감시-폴더), [작품 연결과 제외](../specs/library.md#작품-연결과-제외), [자막의 회차 대응](../specs/library.md#자막의-회차-대응), [할 일과 회차 목록](../specs/library.md#할-일과-회차-목록), [자막 후보 구역](../specs/library.md#자막-후보-구역)의 극장판(2026-10-11에 더한 요구), [극장판 ADR](../adr/0017-movies-by-place-and-anissia-link.md), 0.7.0을 써 본 사용자 피드백(2026-10-11)
+- 출처: [작품 발견과 감시 폴더](../../requirements/library.md#작품-발견과-감시-폴더), [작품 연결과 제외](../../requirements/library.md#작품-연결과-제외), [자막의 회차 대응](../../requirements/library.md#자막의-회차-대응), [할 일과 회차 목록](../../requirements/library.md#할-일과-회차-목록), [자막 후보 구역](../../requirements/library.md#자막-후보-구역)의 극장판(2026-10-11에 더한 요구), [극장판 ADR](../../adr/0017-movies-by-place-and-anissia-link.md), 0.7.0을 써 본 사용자 피드백(2026-10-11)
 - 막는 티켓: [0139](0139-movie-only-works.md)(극장판을 DB에 담는 꼴과 극장판 연결)
 
 ## 작업
 
 2026-10-10 서버의 Re Zero, Made in Abyss, Konosuba는 극장판을 `Season 00`에 `S00Exx` 이름으로 뒀어요. 0.7.0은 이 영상을 보통 회차로 보여주고, `Season 00`에는 Anissia 작품을 하나만 이을 수 있어서 극장판마다의 자막 후보를 받을 수 없어요.
 
-[극장판 ADR](../adr/0017-movies-by-place-and-anissia-link.md)과 라이브러리 명세의 극장판 요구대로 만들어요. 사용자가 정한 것은 다음과 같아요(2026-10-11).
+[극장판 ADR](../../adr/0017-movies-by-place-and-anissia-link.md)과 라이브러리 명세의 극장판 요구대로 만들어요. 사용자가 정한 것은 다음과 같아요(2026-10-11).
 
-[0139](0139-movie-only-works.md)가 극장판을 시즌 0의 회차로 담고, 회차마다 Anissia에 잇는 극장판 연결(`movie_anissia`)과 그 경로(`/api/library/works/{id}/movies/{episode}/anissia`)를 만들었어요([극장판을 담는 꼴의 ADR](../adr/0018-movies-in-season-zero-with-their-own-link.md)). 이 티켓은 그 연결을 `Season 00`의 회차에 써요. 0139의 극장판 연결은 스캔이 잠깐 회차를 놓쳐도 남고 작품과 함께 사라져요.
+[0139](0139-movie-only-works.md)가 극장판을 시즌 0의 회차로 담고, 회차마다 Anissia에 잇는 극장판 연결(`movie_anissia`)과 그 경로(`/api/library/works/{id}/movies/{episode}/anissia`)를 만들었어요([극장판을 담는 꼴의 ADR](../../adr/0018-movies-in-season-zero-with-their-own-link.md)). 이 티켓은 그 연결을 `Season 00`의 회차에 써요. 0139의 극장판 연결은 스캔이 잠깐 회차를 놓쳐도 남고 작품과 함께 사라져요.
 
 - 시즌이 있는 작품의 극장판은 `Season 00`에 그대로 둬요. 지금 서버의 파일은 옮기지 않아요.
 - `Season 00`의 회차는 Anissia 작품을 이으면 극장판이 되고, 끊으면 보통 회차로 돌아가요. 이은 회차 줄에는 `극장판`과 이은 Anissia 제목이 보이고, 그 작품의 자막 후보가 들어와요.
@@ -35,4 +35,4 @@
   - 두 극장판의 후보가 서로 섞이지 않아요.
   - 회차 표시가 `0`인 후보도 그 극장판 회차에 붙어요.
   - 시즌 연결의 후보가 극장판 회차를 덮지 않아요(위에서 정한 규칙대로).
-- [라이브러리 명세의 검증 표](../specs/library.md#검증-표)에서 극장판 행을 고쳐요.
+- [라이브러리 명세의 검증 표](../../requirements/library.md#검증-표)에서 극장판 행을 고쳐요.

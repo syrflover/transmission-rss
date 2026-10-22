@@ -1,5 +1,5 @@
 //! How the app reads an episode text (`13`, `013`, `13.5`, `SP1`) as a key,
-//! orders episodes, and writes one as `13화` (`docs/specs/library.md`, 자막의
+//! orders episodes, and writes one as `13화` (`docs/requirements/library.md`, 자막의
 //! 회차 대응). It also writes an offset ([`signed`]) and a run of episodes
 //! ([`ranges`], and [`EpisodeSet`] for episodes given as texts) as the screens
 //! do.

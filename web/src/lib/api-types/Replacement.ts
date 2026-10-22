@@ -8,7 +8,7 @@ import type { ReplacementPath } from "./ReplacementPath";
 import type { ReplacementVersion } from "./ReplacementVersion";
 
 /**
- * A row's latest replacement plan (`docs/specs/subtitles.md`, 교체 비교와
+ * A row's latest replacement plan (`docs/requirements/subtitles.md`, 교체 비교와
  * 승인).
  */
 export type Replacement = { 

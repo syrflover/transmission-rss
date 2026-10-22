@@ -19,4 +19,4 @@
 대신 작품 폴더만 다른 서버로 복사하면 사용자가 고른 표지와 첨부는 따라가지 않으며, 앱 데이터 폴더는 DB와 함께 백업해야 해요.
 
 이 기록은 선택한 방향이며 아직 구현된 동작은 아니에요.
-선택 배경은 [웹 재설계 주제 문서](../brainstorm/web-redesign.md#자막-보관-위치와-수정본)에, 현재 요구는 [자막 명세](../specs/subtitles.md#보관본과-적용본)와 [표지](../specs/library.md#작품-표지)에 있어요.
+선택 배경은 [웹 재설계 주제 문서](../brainstorm/web-redesign.md#자막-보관-위치와-수정본)에, 현재 요구는 [자막 명세](../requirements/subtitles.md#보관본과-적용본)와 [표지](../requirements/library.md#작품-표지)에 있어요.

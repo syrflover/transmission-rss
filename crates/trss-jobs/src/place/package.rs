@@ -1,5 +1,5 @@
 //! What each file of a package is and where it goes
-//! (`docs/specs/subtitles.md`, 자막 묶음 분석과 안전한 배치 판단, 파일의 회차,
+//! (`docs/requirements/subtitles.md`, 자막 묶음 분석과 안전한 배치 판단, 파일의 회차,
 //! 고르지 않은 회차, 폰트): the plan of one post's receipts, made without the
 //! database so its rules can be read and tested here.
 //!

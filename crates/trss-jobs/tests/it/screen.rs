@@ -1,5 +1,5 @@
 //! A job whose post needs a person's check in the server browser
-//! (`docs/specs/jobs.md`, 작업 화면 안의 인증과 브라우저 수명): the run that
+//! (`docs/requirements/jobs.md`, 작업 화면 안의 인증과 브라우저 수명): the run that
 //! shows the check is bound to the job, the worker watches it for the file,
 //! and a run that ends leaves the job waiting with no run. The browser is a
 //! fake; the real one is tested by `trss-subtitles`'s ignored `auth_sample`

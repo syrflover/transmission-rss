@@ -2,7 +2,7 @@
 -- entry's AniList synonyms that contain Hangul, as a JSON list in AniList's
 -- order. Anissia's full-list search matches Korean titles, so the work detail
 -- shows them next to the entry's other titles for the user to search with
--- (`docs/specs/library.md`, 작품 연결과 제외).
+-- (`docs/requirements/library.md`, 작품 연결과 제외).
 --
 -- Entries stored before this migration have an empty list. They get their
 -- titles when the entry is received from AniList again, which the worker does

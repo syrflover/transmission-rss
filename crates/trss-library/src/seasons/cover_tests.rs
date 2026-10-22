@@ -1,4 +1,4 @@
-//! A work's cover following its seasons' links (`docs/specs/library.md`, 시즌
+//! A work's cover following its seasons' links (`docs/requirements/library.md`, 시즌
 //! 정보; ticket 2-work-discovery-and-subscriptions/0027) against a fake AniList ([`trss_anilist::fake`]), a
 //! temporary app data folder and a clock the test moves.
 

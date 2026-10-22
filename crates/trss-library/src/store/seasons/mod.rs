@@ -1,5 +1,5 @@
 //! Season info: which AniList entries each local season is linked to, and the
-//! entries as AniList described them (`docs/specs/library.md`, 시즌 정보). The
+//! entries as AniList described them (`docs/requirements/library.md`, 시즌 정보). The
 //! rules that look entries up, link them and turn them into what the screen
 //! shows live in [`crate::seasons`]; this store keeps the state and its
 //! invariants.

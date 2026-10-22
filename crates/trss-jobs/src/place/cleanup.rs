@@ -1,6 +1,6 @@
 //! Cleaning a work's stored files, one stored subtitle at a time
-//! (`docs/specs/library.md`, 보관 파일의 정리; `docs/specs/subtitles.md`,
-//! 보관본과 적용본 and 폰트; `docs/specs/jobs.md`, 체크포인트와 중단 복구;
+//! (`docs/requirements/library.md`, 보관 파일의 정리; `docs/requirements/subtitles.md`,
+//! 보관본과 적용본 and 폰트; `docs/requirements/jobs.md`, 체크포인트와 중단 복구;
 //! `migrations/jobs/cleanup.sql` in `trss-core`).
 //!
 //! # What a person may clean

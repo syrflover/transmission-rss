@@ -52,7 +52,7 @@ worker의 백그라운드 큐 네 개(표지, 시즌 정보, Anissia 편성, Ani
 
 ### 검증한 것
 
-2026-10-09에 `cargo test --locked --workspace -j 4`로 확인했어요. 기존 테스트는 고치지도, 옮기지도, 지우지도 않았어요. 그래서 [RSS 수집 명세의 검증 표](../../../specs/collection.md#검증-표)는 고칠 것이 없어요.
+2026-10-09에 `cargo test --locked --workspace -j 4`로 확인했어요. 기존 테스트는 고치지도, 옮기지도, 지우지도 않았어요. 그래서 [RSS 수집 명세의 검증 표](../../../requirements/collection.md#검증-표)는 고칠 것이 없어요.
 
 | 커밋 | 통과 | 실패 | 무시 |
 | --- | ---: | ---: | ---: |

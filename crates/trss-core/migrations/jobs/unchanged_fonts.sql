@@ -1,5 +1,5 @@
 -- A Google Drive font that is not received again because it did not change
--- (`docs/specs/subtitles.md`, 폰트; `trss_jobs::place::unchanged`).
+-- (`docs/requirements/subtitles.md`, 폰트; `trss_jobs::place::unchanged`).
 --
 -- Before a job receives a Drive file (`file_key` `drive:<id>`) that the work
 -- keeps already as a font in the job's creator folder, a `HEAD` reads its

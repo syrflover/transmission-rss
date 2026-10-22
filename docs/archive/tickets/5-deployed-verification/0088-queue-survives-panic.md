@@ -1,7 +1,7 @@
 # 0088 worker의 백그라운드 큐가 항목 하나의 패닉으로 멈추지 않아요
 
 - 상태: 완료 (2026-10-07)
-- 출처: [작품 표지](../../../specs/library.md#작품-표지), [시즌 정보](../../../specs/library.md#시즌-정보), [방영작 구독](../../../specs/collection.md#방영작-구독), [자막 후보 조회](../../../specs/subtitles.md#자막-후보-조회)
+- 출처: [작품 표지](../../../requirements/library.md#작품-표지), [시즌 정보](../../../requirements/library.md#시즌-정보), [방영작 구독](../../../requirements/collection.md#방영작-구독), [자막 후보 조회](../../../requirements/subtitles.md#자막-후보-조회)
 - 막는 티켓: 없음
 
 ## 작업

@@ -1,4 +1,4 @@
-//! The first run's checklist state (`docs/specs/settings.md`, 처음 실행).
+//! The first run's checklist state (`docs/requirements/settings.md`, 처음 실행).
 //!
 //! The `first_run` row (see `schema.sql` and `ended.sql`) exists only for an
 //! install that began empty. It keeps everything the checklist is made of: the

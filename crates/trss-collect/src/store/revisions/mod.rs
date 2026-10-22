@@ -1,4 +1,4 @@
-//! The replacement of video revisions (`docs/specs/collection.md`, 영상
+//! The replacement of video revisions (`docs/requirements/collection.md`, 영상
 //! 수정본의 대체): what the worker decided about each higher revision a rule
 //! selected for an episode whose folder already holds a video, and how far
 //! the replacement has come. The worker ([`crate::revisions`]) is the

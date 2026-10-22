@@ -49,6 +49,6 @@
 
 ### 테스트와 문서
 
-문구를 확인하던 테스트 둘, 곧 `web/src/screens/todo/unpack.test.ts`의 다음 시도 문구와 `trss-jobs` `tests/it/unpack.rs`의 작업 기록 문구를 고쳤어요. 명세 중에는 [자막 명세의 압축 해제](../../../specs/subtitles.md#압축-해제의-격리와-한도)가 다음 시도 문구를 그대로 적고 있어서 고쳤어요. 명세가 내부 구성 요소의 이름으로 쓰는 `worker`는 문구가 아니라서 그대로 뒀어요.
+문구를 확인하던 테스트 둘, 곧 `web/src/screens/todo/unpack.test.ts`의 다음 시도 문구와 `trss-jobs` `tests/it/unpack.rs`의 작업 기록 문구를 고쳤어요. 명세 중에는 [자막 명세의 압축 해제](../../../requirements/subtitles.md#압축-해제의-격리와-한도)가 다음 시도 문구를 그대로 적고 있어서 고쳤어요. 명세가 내부 구성 요소의 이름으로 쓰는 `worker`는 문구가 아니라서 그대로 뒀어요.
 
 2026-10-21에 `cargo test --locked --workspace -j 4`를 돌렸더니 통과 3,055개, 실패 0개, 건너뛴 것 14개였고, 테스트 바이너리 시간의 합은 43.7초였어요. `cargo clippy --workspace --all-targets -j 4`에 경고가 없고, 웹의 `npm run typecheck`와 `npm test`(238개)도 통과했어요. 화면에서 바뀐 문구를 눈으로 보지는 않았어요. 바꾼 것은 문자열뿐이고 조건과 동작은 그대로예요.

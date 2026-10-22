@@ -1,6 +1,6 @@
 //! A replacement carried through its states by [`advance`]: the new video
 //! received and checked, the old one removed, the new one named as the
-//! episode, and what each step that cannot go on leaves (`docs/specs/
+//! episode, and what each step that cannot go on leaves (`docs/requirements/
 //! collection.md`, 영상 수정본의 대체; tickets 2-work-discovery-and-subscriptions/0025, 3-subtitle-candidates-and-receiving/0033). The cases run
 //! through [`World::cycle`] against the fake Transmission, which acts on the
 //! media folder the way Transmission does.

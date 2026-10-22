@@ -1,4 +1,4 @@
--- The first run's checklist, ended for good (`docs/specs/settings.md`, 처음
+-- The first run's checklist, ended for good (`docs/requirements/settings.md`, 처음
 -- 실행): a checklist that has ended never comes back, even if the folders or
 -- channels that finished it are removed later.
 --

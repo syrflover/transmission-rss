@@ -2,7 +2,7 @@ import { stepLabel } from "./steps.ts";
 
 /**
  * A job the process stopped in the middle of a step (`중단됨`) is the only one with `다시 시작`: a person starts it
- * again and it goes on from the step it was cut in (`docs/specs/jobs.md`, 체크포인트와 중단 복구).
+ * again and it goes on from the step it was cut in (`docs/requirements/jobs.md`, 체크포인트와 중단 복구).
  */
 export function canRestart(job: { state: string }): boolean {
   return job.state === "interrupted";

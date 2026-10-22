@@ -1,4 +1,4 @@
-//! A job's replacements (`docs/specs/subtitles.md`, 교체 비교와 승인): what
+//! A job's replacements (`docs/requirements/subtitles.md`, 교체 비교와 승인): what
 //! its detail shows of each row's latest plan, and the person's decision on
 //! one (see the module docs of [`super`]).
 
@@ -268,7 +268,7 @@ pub(in crate::web) enum Limit {
     LinesUnknown,
 }
 
-/// A row's latest replacement plan (`docs/specs/subtitles.md`, 교체 비교와
+/// A row's latest replacement plan (`docs/requirements/subtitles.md`, 교체 비교와
 /// 승인).
 #[derive(Debug, Serialize)]
 #[cfg_attr(test, derive(ts_rs::TS), ts(rename = "Replacement"))]

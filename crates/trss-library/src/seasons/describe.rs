@@ -1,4 +1,4 @@
-//! AniList's description as plain text (`docs/specs/library.md`, 시즌 정보 and
+//! AniList's description as plain text (`docs/requirements/library.md`, 시즌 정보 and
 //! 오른쪽 카드 열): the line breaks and paragraphs stay, a tag is dropped and its
 //! text stays, and character references are decoded, so the screen puts text on
 //! the page and never markup.

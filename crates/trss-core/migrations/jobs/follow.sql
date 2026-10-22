@@ -1,6 +1,6 @@
 -- The subscribed creator's subtitles received without a pick
--- (`docs/specs/subtitles.md`, 구독 제작자 자동 수신; `trss_jobs::follow`), and
--- the episode mapping of a subtitle source (`docs/specs/library.md`, 자막의
+-- (`docs/requirements/subtitles.md`, 구독 제작자 자동 수신; `trss_jobs::follow`), and
+-- the episode mapping of a subtitle source (`docs/requirements/library.md`, 자막의
 -- 회차 대응; `trss_jobs::mapping`).
 --
 -- `subtitle_jobs`:

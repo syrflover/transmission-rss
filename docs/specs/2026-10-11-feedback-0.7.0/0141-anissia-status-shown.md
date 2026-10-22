@@ -1,7 +1,7 @@
 # 0141 Anissia 방영 상태를 편성표 고르기, 구독 카드, 이번 주 편성에 보여줘요
 
 - 상태: 완료 (2026-10-13, 개발 환경에서 확인. 서버 확인은 [0143](0143-deploy-feedback-fixes.md)에서 해요. 아래 "결과")
-- 출처: [방영작 구독](../specs/collection.md#방영작-구독), [수집 화면](../specs/collection.md#수집-화면), [이번 주 편성](../specs/web-app.md#이번-주-편성), [문구와 표기](../specs/web-app.md#문구와-표기)의 Anissia 상태(2026-10-11에 더한 요구), 0.7.0을 써 본 사용자 피드백(2026-10-11)
+- 출처: [방영작 구독](../../requirements/collection.md#방영작-구독), [수집 화면](../../requirements/collection.md#수집-화면), [이번 주 편성](../../requirements/web-app.md#이번-주-편성), [문구와 표기](../../requirements/web-app.md#문구와-표기)의 Anissia 상태(2026-10-11에 더한 요구), 0.7.0을 써 본 사용자 피드백(2026-10-11)
 - 막는 티켓: 없음
 
 ## 작업
@@ -32,7 +32,7 @@ Anissia는 작품마다 상태(`ON`·`OFF`·`END`)와 방영 시작일·종영�
   - 종영일이 이번 주에 든 작품의 카드는 `이번 주 종영`이에요.
   - 종영일이 지난 주에 있었던 작품은 카드가 없어요.
   - `OFF`인 작품은 `결방`이에요.
-- [수집 명세](../specs/collection.md#검증-표)와 [웹 앱 공통 명세](../specs/web-app.md#검증-표)의 검증 표에서 이 요구의 행을 고쳐요.
+- [수집 명세](../../requirements/collection.md#검증-표)와 [웹 앱 공통 명세](../../requirements/web-app.md#검증-표)의 검증 표에서 이 요구의 행을 고쳐요.
 
 ## 결과
 

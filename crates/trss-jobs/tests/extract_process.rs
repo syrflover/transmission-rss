@@ -1,5 +1,5 @@
 //! The child process that unpacks an archive, run as the worker runs it
-//! (`docs/specs/subtitles.md`, 압축 해제의 격리와 한도).
+//! (`docs/requirements/subtitles.md`, 압축 해제의 격리와 한도).
 
 use std::{
     io::{Cursor, Write},

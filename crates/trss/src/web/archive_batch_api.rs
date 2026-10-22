@@ -1,5 +1,5 @@
 //! `/api/archive-batches`: how a `rule_archive_batch` command is going
-//! (`docs/specs/collection.md`, 규칙 보관).
+//! (`docs/requirements/collection.md`, 규칙 보관).
 //!
 //! | call                                | success                                              |
 //! | ----------------------------------- | ---------------------------------------------------- |

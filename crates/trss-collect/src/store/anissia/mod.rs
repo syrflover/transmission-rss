@@ -1,5 +1,5 @@
 //! Anissia's schedule as the app keeps it for the anime it subscribes to
-//! (`docs/specs/collection.md`, 방영작 구독): the snapshot of each subscribed
+//! (`docs/requirements/collection.md`, 방영작 구독): the snapshot of each subscribed
 //! anime. (The pace of requests to Anissia is kept by `trss-anissia`.)
 //!
 //! The subscription itself is part of a rule ([`crate::store::channels`]); this

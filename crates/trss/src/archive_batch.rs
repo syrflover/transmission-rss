@@ -1,5 +1,5 @@
 //! `rule_archive_batch`, shown on the screen as `모두 보관` and `N개 보관` of
-//! the archive suggestions (`docs/specs/collection.md`, 규칙 보관): the rules
+//! the archive suggestions (`docs/requirements/collection.md`, 규칙 보관): the rules
 //! the person chose, archived one after another by the server.
 //!
 //! The screen used to send a `rule_archive` command per rule and wait for each

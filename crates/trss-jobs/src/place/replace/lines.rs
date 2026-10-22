@@ -1,5 +1,5 @@
 //! How many dialogue lines a subtitle file has, for the version lines of a
-//! replacement's decision card (`docs/specs/subtitles.md`, 교체 비교와
+//! replacement's decision card (`docs/requirements/subtitles.md`, 교체 비교와
 //! 승인). It looks for each format's line markers only and parses nothing
 //! else; the content comparison is the diff's.
 

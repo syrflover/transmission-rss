@@ -87,7 +87,7 @@ export type {
 export type { TodoList };
 
 /**
- * The 할 일 screen and the job detail (`docs/specs/jobs.md`, 할 일 화면 and
+ * The 할 일 screen and the job detail (`docs/requirements/jobs.md`, 할 일 화면 and
  * 작업 상세) read these: the to-dos that need the user (`/api/todo`,
  * `src/web/todo_api.rs`) and the subtitle jobs the worker carries out
  * (`/api/subtitle-jobs`, `src/web/jobs_api.rs`). The suggestions (`제목 후보`,

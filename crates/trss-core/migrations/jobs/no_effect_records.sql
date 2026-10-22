@@ -1,7 +1,7 @@
 -- A subtitle job no longer records its file effects before it makes them, and
 -- a restart no longer compares such records with the disk: a step cut short
 -- is done again from its start (ticket lighter-structure/0153; docs/adr/0020-interrupted-jobs-
--- wait-for-a-restart.md; docs/specs/jobs.md, 체크포인트와 중단 복구). What
+-- wait-for-a-restart.md; docs/requirements/jobs.md, 체크포인트와 중단 복구). What
 -- only those records held goes, and the rows an earlier release left under
 -- way end as the current code would leave them. No file is touched: what
 -- earlier releases moved aside stays in the work folders' `.trss/tmp/`.

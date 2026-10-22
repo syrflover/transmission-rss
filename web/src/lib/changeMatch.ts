@@ -3,7 +3,7 @@ import type { Change, ChangeKind } from "./api-types";
 /**
  * Helpers for saying which changes a screen reads again for. A screen matches
  * a change by the kind of what changed and, where it can, by the ID of its
- * target (`docs/specs/web-app.md`, 웹 명령과 상태 갱신). It has no `@/` imports so it
+ * target (`docs/requirements/web-app.md`, 웹 명령과 상태 갱신). It has no `@/` imports so it
  * runs under `node --test`.
  */
 

@@ -1,4 +1,4 @@
-//! The rules of the weekly schedule (`docs/specs/web-app.md`, 이번 주 편성),
+//! The rules of the weekly schedule (`docs/requirements/web-app.md`, 이번 주 편성),
 //! apart from the stores and the API that feed them:
 //!
 //! - `trss_core::calendar`: the Seoul calendar and its Monday-to-Sunday week;

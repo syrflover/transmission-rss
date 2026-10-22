@@ -1,5 +1,5 @@
 -- Unpacking a received archive in a child process with limits
--- (`docs/specs/subtitles.md`, 압축 해제의 격리와 한도; `trss_jobs::place::unpack`).
+-- (`docs/requirements/subtitles.md`, 압축 해제의 격리와 한도; `trss_jobs::place::unpack`).
 --
 -- A received archive (the first volume of a split one) is unpacked into the
 -- receive area's `<job id>/.unpack/<file id>/`. `unpacked_at` is when its

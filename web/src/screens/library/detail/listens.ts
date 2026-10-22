@@ -3,7 +3,7 @@ import { aboutTarget, ofKinds } from "../../../lib/changeMatch.ts";
 
 /**
  * Which changes make the work detail's parts read again
- * (`docs/specs/web-app.md`, 웹 명령과 상태 갱신), by the tables their routes
+ * (`docs/requirements/web-app.md`, 웹 명령과 상태 갱신), by the tables their routes
  * read, grouped as the server announces them
  * (`crates/trss-core/src/changes/tables.rs`, `TABLES`). A change with no ID
  * (`null`) of a kind a part reads always matches; a kind that is only likely to

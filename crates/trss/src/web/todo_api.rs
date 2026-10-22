@@ -1,4 +1,4 @@
-//! The to-dos (`docs/specs/jobs.md`, 할 일).
+//! The to-dos (`docs/requirements/jobs.md`, 할 일).
 //!
 //! `GET /api/todo` is what needs the person (`처리 필요`), the cards of the
 //! to-do screen, and `count`, the menu badge:

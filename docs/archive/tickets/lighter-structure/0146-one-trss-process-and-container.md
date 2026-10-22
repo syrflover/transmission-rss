@@ -13,7 +13,7 @@
 - 합친 프로세스는 미디어를 쓰기로 마운트해요. 접근 경계인 LAN·VPN과 origin 검사는 그대로예요(사용자 결정, 2026-10-21).
 - 메모리 한도는 지금 두 한도의 합인 384M(worker 256M, web 128M)로 시작해요. 합친 프로세스의 사용량을 서버에서 측정하는 일은 [0162](0162-deploy-lighter-structure.md)가 해요.
 - 지금 서버는 `trss-web`과 `trss-worker` 컨테이너로 돌아요. 업데이트 절차가 두 컨테이너를 없애고 `trss` 하나를 띄워야 해요.
-- [0135](../../../tickets/0135-deploy-settings-item.md)는 web이 자기 환경 변수만 알아서 Transmission 주소를 보여줄 수 없다고 적어요. 합친 뒤에는 한 프로세스가 둘 다 알므로 그 티켓의 문장을 고쳐요.
+- [0135](../../../specs/2026-09-30-web-redesign/0135-deploy-settings-item.md)는 web이 자기 환경 변수만 알아서 Transmission 주소를 보여줄 수 없다고 적어요. 합친 뒤에는 한 프로세스가 둘 다 알므로 그 티켓의 문장을 고쳐요.
 
 ## 완료 기준
 
@@ -27,10 +27,10 @@
 - [x] 같은 커밋에서 다음 문서를 고쳐요.
   - [readme](../../../../readme.md)의 Docker Compose, 실행·중지·업데이트, 1000:1000 실행, 자원 한도, 개발 환경
   - [개요](../../../overview.md)의 구성 요소와 지금 상태를 보는 곳
-  - [웹 앱 공통 명세의 구현 경계와 실행 순서](../../../specs/web-app.md#구현-경계와-실행-순서)에서 프로세스와 컨테이너를 적은 부분
-  - [자막 명세의 압축 해제의 격리와 한도](../../../specs/subtitles.md#압축-해제의-격리와-한도)에서 worker 컨테이너의 한도를 적은 부분
-  - [RSS 수집 명세](../../../specs/collection.md), [설정과 이전 명세](../../../specs/settings.md), [작업과 인증 명세](../../../specs/jobs.md)에서 worker를 실행 주체로 적은 문장
-  - 열린 티켓 [0058](../../../tickets/0058-server-oom-and-resource-limits.md)의 한도 문장과 [0135](../../../tickets/0135-deploy-settings-item.md)의 환경 변수 문장
+  - [웹 앱 공통 명세의 구현 경계와 실행 순서](../../../requirements/web-app.md#구현-경계와-실행-순서)에서 프로세스와 컨테이너를 적은 부분
+  - [자막 명세의 압축 해제의 격리와 한도](../../../requirements/subtitles.md#압축-해제의-격리와-한도)에서 worker 컨테이너의 한도를 적은 부분
+  - [RSS 수집 명세](../../../requirements/collection.md), [설정과 이전 명세](../../../requirements/settings.md), [작업과 인증 명세](../../../requirements/jobs.md)에서 worker를 실행 주체로 적은 문장
+  - 열린 티켓 [0058](../../../specs/2026-10-04-server-resource-limits/0058-server-oom-and-resource-limits.md)의 한도 문장과 [0135](../../../specs/2026-09-30-web-redesign/0135-deploy-settings-item.md)의 환경 변수 문장
 - [x] [명세의 동작 보존 조건](lighter-structure.md#동작-보존)을 지켜요.
 - [x] 구현이 [한 프로세스 ADR](../../../adr/0019-one-process-for-web-and-worker.md)과 맞아요. 다르게 해야 하면 마치기 전에 사용자 결정을 받아 ADR을 고쳐요.
 

@@ -1,4 +1,4 @@
-//! A find job (직접 찾기, `docs/specs/subtitles.md` §직접 찾기와 자막 올리기):
+//! A find job (직접 찾기, `docs/requirements/subtitles.md` §직접 찾기와 자막 올리기):
 //! the server browser opens the chosen creator's newest post, a person browses
 //! it on the job's remote screen, and every download the run completes becomes
 //! a file of the job's one package, judged as an upload's files are, until the

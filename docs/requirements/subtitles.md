@@ -9,7 +9,7 @@ Anissia의 한국어 자막 후보를 찾아 구독 제작자의 새 회차는 �
 작업의 진행·인증·중단 복구는 [작업과 인증 명세](jobs.md)를, 작품·회차 대응과 작품 상세의 자막 표시는 [라이브러리와 작품 명세](library.md)를, 보관 관계의 교환 필드는 [설정과 이전 명세](settings.md#보관-관계-필드)를 따라요.
 근거와 선택 배경은 [처음 주제 문서](../brainstorm/web-gui-subtitles.md)와 [웹 재설계 주제 문서](../brainstorm/web-redesign.md#자막-제작자-자동-수신)에 있어요.
 
-## 요구사항과 완료 기준
+## 요구사항
 
 ### 자막 후보 조회
 
@@ -991,7 +991,7 @@ worker를 다시 시작하면 기다리는 작업을 한 번 다시 살펴보고
 
 | 요구 | 실제 사용에서 본 것 | 테스트로 확인한 것 | 확인하지 않은 것 |
 | --- | --- | --- | --- |
-| 보관본의 위치·이름·번호와 연결별 보관본 | (1)~(4) 2026-10-07 서버: 코코렛 자막이 `.trss/subtitles/코코렛/`에 받은 이름의 `.smi`로 보관되고 소유가 1000:1000이었어요 ([0081])<br>(7) 2026-10-06 개발(서버 DB 사본): 다른 연결의 보관본을 쓰던 줄이 제 연결의 새 보관본으로 옮겨져 v4가 적용됐어요 ([0076]) | `trss-jobs` `tests/it/place.rs`: (1) `a_name_taken_by_other_bytes_is_numbered_and_the_same_bytes_are_one_file` (3) `a_creator_named_in_another_case_keeps_one_attachment_folder` (4) `a_file_of_other_bytes_under_the_name_after_a_cut_is_left_and_the_next_number_taken`, `a_store_cut_after_publishing_records_the_file_it_left_without_writing_it_again` (5) `a_received_subtitle_is_stored_applied_beside_its_video_and_leaves_the_receive_area`<br>(2) `trss-jobs` `area.rs` `names_are_made_safe_and_numbered`<br>(6)(7) `trss-jobs` `tests/it/placement.rs` `a_row_on_a_stored_subtitle_of_another_link_is_given_its_own_before_it_is_compared`<br>(8) `trss-jobs` `place/files.rs` `a_copy_is_checked_and_published_without_replacing` | (2) `:`·`?`와 예약 이름 `con`·`LPT1.x`만 입력으로 썼어요. 다른 금지 문자, `COM1`–`COM9`, 실제 SMB·Windows 공유는 확인하지 않았어요.<br>(5) 보관 관계를 내보내는 기능이 아직 없어([목표 6](../tickets/README.md#6-앱-yaml-내보내기와-가져오기)) DB 기록과 견주지 못했어요.<br>(8) SSA·WebVTT를 제작자 폴더에 두는 통합 테스트가 없어요. |
+| 보관본의 위치·이름·번호와 연결별 보관본 | (1)~(4) 2026-10-07 서버: 코코렛 자막이 `.trss/subtitles/코코렛/`에 받은 이름의 `.smi`로 보관되고 소유가 1000:1000이었어요 ([0081])<br>(7) 2026-10-06 개발(서버 DB 사본): 다른 연결의 보관본을 쓰던 줄이 제 연결의 새 보관본으로 옮겨져 v4가 적용됐어요 ([0076]) | `trss-jobs` `tests/it/place.rs`: (1) `a_name_taken_by_other_bytes_is_numbered_and_the_same_bytes_are_one_file` (3) `a_creator_named_in_another_case_keeps_one_attachment_folder` (4) `a_file_of_other_bytes_under_the_name_after_a_cut_is_left_and_the_next_number_taken`, `a_store_cut_after_publishing_records_the_file_it_left_without_writing_it_again` (5) `a_received_subtitle_is_stored_applied_beside_its_video_and_leaves_the_receive_area`<br>(2) `trss-jobs` `area.rs` `names_are_made_safe_and_numbered`<br>(6)(7) `trss-jobs` `tests/it/placement.rs` `a_row_on_a_stored_subtitle_of_another_link_is_given_its_own_before_it_is_compared`<br>(8) `trss-jobs` `place/files.rs` `a_copy_is_checked_and_published_without_replacing` | (2) `:`·`?`와 예약 이름 `con`·`LPT1.x`만 입력으로 썼어요. 다른 금지 문자, `COM1`–`COM9`, 실제 SMB·Windows 공유는 확인하지 않았어요.<br>(5) 보관 관계를 내보내는 기능이 아직 없어([목표 6](../specs/2026-09-30-web-redesign/spec.md#6-앱-yaml-내보내기와-가져오기)) DB 기록과 견주지 못했어요.<br>(8) SSA·WebVTT를 제작자 폴더에 두는 통합 테스트가 없어요. |
 | 앱 데이터 폴더의 첨부·구성 파일 | 참고(가짜 출처): 2026-10-05 개발(서버 DB 사본)에서 `readme.txt`가 `subtitle-files/<작품 ID>/가짜 출처/`에 놓였어요 ([0064]) | `trss-jobs` `tests/it/place.rs` `another_seasons_file_and_an_executable_are_told_apart` | 첨부 확장자는 `.TXT`와 `.docx`만 입력으로 썼어요. 이미지와 `hwp` 같은 나머지는 확인하지 않았어요. |
 | 묶음의 `entries`와 보관하지 않는 멤버 | 2026-10-07 서버: ZIP 안 `__MACOSX/`의 `._*.ko.ass` 12개가 "받은 바이트는 ASS 형식이 아니에요"라는 까닭으로 보관되지 않았어요 ([0083]) | `trss-jobs` `tests/it/unpack.rs` `members_in_folders_are_placed_and_one_that_is_no_file_is_dropped_with_why` | `entries` 표의 내용을 직접 단언한 테스트가 없어요(행 수 1개와 계획의 멤버 경로만 봐요). |
 | 수신 영역 원 수신물의 삭제 | 2026-10-04 개발(서버 DB 사본): 보관·적용을 마친 작업 `d0c42b4b`의 원 수신물이 수신 영역에서 지워졌어요 ([0063]) | `trss-jobs` `tests/it/place.rs` `a_received_subtitle_is_stored_applied_beside_its_video_and_leaves_the_receive_area` | 서버에서 수신물이 지워진 것을 직접 본 기록이 없어요. |
@@ -1176,8 +1176,8 @@ worker를 다시 시작하면 기다리는 작업을 한 번 다시 살펴보고
 [0122]: ../archive/tickets/5-deployed-verification/0122-imported-copy-choosable.md
 [0124]: ../archive/tickets/5-deployed-verification/0124-kept-copy-off-episode-row.md
 [0127]: ../archive/tickets/5-deployed-verification/0127-row-waits-for-library-after-apply.md
-[결과 목표 3 기록]: ../tickets/README.md#3-자막-후보와-수신
+[결과 목표 3 기록]: ../specs/2026-09-30-web-redesign/spec.md#3-자막-후보와-수신
 [경로별 재확인]: ../brainstorm/web-gui-subtitles.md#2026-10-02-경로별-재확인
 [작업과 인증 명세]: jobs.md#작업-화면-안의-인증과-브라우저-수명
-[티켓 목록]: ../tickets/README.md
+[티켓 목록]: ../specs/2026-09-30-web-redesign/spec.md
 [0114]: ../archive/tickets/refactoring-between-5-and-6/0114-refactor-final-check.md#실제-서버-2026-10-10-070

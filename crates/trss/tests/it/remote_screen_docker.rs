@@ -2,7 +2,7 @@
 //! browser (ignored): the worker's runner brings the post to the check and
 //! waits (`인증`), a tap relayed through the web's remote screen passes it,
 //! the browser downloads the file, and the job receives it (`받기`, then
-//! done) and lets the run go (`docs/specs/jobs.md`, 작업 화면 안의 인증과
+//! done) and lets the run go (`docs/requirements/jobs.md`, 작업 화면 안의 인증과
 //! 브라우저 수명).
 //!
 //! Needs Docker and the browser image (`TRSS_BROWSER_IMAGE`, default

@@ -1,4 +1,4 @@
-//! Carrying out the jobs (`docs/specs/jobs.md`, 체크포인트와 중단 복구).
+//! Carrying out the jobs (`docs/requirements/jobs.md`, 체크포인트와 중단 복구).
 //!
 //! # Order
 //!
@@ -46,7 +46,7 @@
 //!   the second item's receipt names the first (`same_as`).
 //! - A network failure while opening a post or receiving a file is tried
 //!   again, after each of [`RETRY_WAITS`], before the item fails. The other
-//!   failure classes are not (`docs/specs/jobs.md`, 공통 수신 결과와 실패
+//!   failure classes are not (`docs/requirements/jobs.md`, 공통 수신 결과와 실패
 //!   분류); an expired address is the source's to read again.
 //! - A failed item and a failed receipt keep the class of their failure, and
 //!   a receipt the answer's status, media type and size.

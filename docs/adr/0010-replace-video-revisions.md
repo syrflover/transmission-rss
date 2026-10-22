@@ -17,4 +17,4 @@ trss가 받은 영상은 수집 이력의 원래 릴리스 이름과 파일의 C
 
 이 기록은 선택한 방향이에요.
 방영 중 RSS의 대체는 [티켓 0025](../archive/tickets/2-work-discovery-and-subscriptions/0025-replace-video-revisions.md)로 구현했고, 지난 회차 검색에서 받는 수정본은 아직이에요.
-선택 배경은 [웹 재설계 주제 문서](../brainstorm/web-redesign.md#영상-수정본의-대체)에, 현재 요구는 [RSS 수집 명세](../specs/collection.md#영상-수정본의-대체)에 있어요.
+선택 배경은 [웹 재설계 주제 문서](../brainstorm/web-redesign.md#영상-수정본의-대체)에, 현재 요구는 [RSS 수집 명세](../requirements/collection.md#영상-수정본의-대체)에 있어요.

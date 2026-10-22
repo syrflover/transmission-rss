@@ -188,7 +188,7 @@ pub(super) async fn replacements(sources: &Sources<'_>) -> Result<Vec<Todo>, Tod
 }
 
 /// The `회차 확인 필요` to-dos of jobs: one per job whose files wait for a
-/// person to say their episode (`docs/specs/jobs.md`, 할 일), which opens the
+/// person to say their episode (`docs/requirements/jobs.md`, 할 일), which opens the
 /// job's detail. Gone once the job no longer waits for it.
 pub(super) async fn placement_checks(sources: &Sources<'_>) -> Result<Vec<Todo>, TodoError> {
     let waits = sources

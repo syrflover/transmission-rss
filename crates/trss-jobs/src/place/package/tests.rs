@@ -345,7 +345,7 @@ fn a_package_without_the_candidates_file_says_so() {
     assert_eq!(planned.rows[0].action, PlanAction::Store);
 }
 
-// `docs/specs/subtitles.md`, 파일의 회차: a candidate whose own episode cannot
+// `docs/requirements/subtitles.md`, 파일의 회차: a candidate whose own episode cannot
 // be told has its file asked about, not called missing.
 #[test]
 fn the_file_of_a_candidate_whose_episode_cannot_be_told_is_asked() {
@@ -382,7 +382,7 @@ fn the_file_of_a_candidate_whose_episode_cannot_be_told_is_asked() {
     assert!(planned.rows[0].question.is_none() && planned.rows[2].question.is_none());
 }
 
-// `docs/specs/subtitles.md`, 파일의 회차: a single file of another number.
+// `docs/requirements/subtitles.md`, 파일의 회차: a single file of another number.
 #[test]
 fn a_single_file_of_another_number_is_asked() {
     let mut case = Case::new("14", vec!["Show - 13.ass"]);

@@ -28,13 +28,13 @@ export interface SettingsItem {
   icon: ComponentType<ComponentProps<"svg">>;
   /**
    * Shown in the panel while the item has no content yet (the file sizes show it while no work has a stored file).
-   * Each item is filled by the result goal that owns it (see docs/specs/settings.md); only the common policy, the
+   * Each item is filled by the result goal that owns it (see docs/requirements/settings.md); only the common policy, the
    * collect folder, the watch folders, the file sizes, the import and the screen mode are built so far.
    */
   empty?: string;
 }
 
-/** The settings items in list order, grouped as in docs/specs/settings.md#설정-화면. */
+/** The settings items in list order, grouped as in docs/requirements/settings.md#설정-화면. */
 export const SETTINGS_ITEMS: SettingsItem[] = [
   { id: "policy", group: "공통 정책", title: "자막 형식·브라우저", icon: CaptionIcon },
   { id: "collection", group: "수집", title: "수집 폴더", icon: FolderIcon },

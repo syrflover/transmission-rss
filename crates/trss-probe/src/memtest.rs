@@ -1,6 +1,6 @@
 //! A big file written and read back under the container's memory limit, with
 //! the cgroup's own numbers: the page cache of a copy is what the limit
-//! meets (ticket 0058, the kernel's retry of a charge that cannot be made).
+//! meets (ticket server-resource-limits/0058, the kernel's retry of a charge that cannot be made).
 
 use std::{
     fs::{self, File},

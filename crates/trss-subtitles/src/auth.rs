@@ -1,5 +1,5 @@
 //! A post whose file comes only after a person passes the site's check in the
-//! server browser (`docs/specs/jobs.md`, 작업 화면 안의 인증과 브라우저 수명).
+//! server browser (`docs/requirements/jobs.md`, 작업 화면 안의 인증과 브라우저 수명).
 //!
 //! # The seam
 //!
@@ -14,7 +14,7 @@
 //! same page. The site then starts a download in the browser:
 //! [`AuthBrowser::wait_file`] takes it out of the run into a folder of the
 //! job's, and [`arrived`] makes it the post's file, which the job receives
-//! through the same steps as any other file (`docs/specs/jobs.md`, 공통 수신
+//! through the same steps as any other file (`docs/requirements/jobs.md`, 공통 수신
 //! 결과와 실패 분류).
 //!
 //! A site adds a variant to [`AuthPage`] and its driver: what opens the post,
@@ -39,7 +39,7 @@
 //!
 //! # A page a person browses
 //!
-//! A find job (`docs/specs/subtitles.md`, 직접 찾기와 자막 올리기) asks for
+//! A find job (`docs/requirements/subtitles.md`, 직접 찾기와 자막 올리기) asks for
 //! [`AuthPage::Browse`]: the post is opened and nothing on it is clicked. The
 //! person goes to an earlier post on the job's remote screen, opens its
 //! popups, passes a site's check there, and starts the downloads. Every

@@ -1,4 +1,4 @@
-//! Google Drive files linked from a post (`docs/specs/jobs.md`, 공통 수신
+//! Google Drive files linked from a post (`docs/requirements/jobs.md`, 공통 수신
 //! 결과와 실패 분류), for every source whose posts link them: Blogger's, and
 //! Tistory's and Naver's when the subtitle is in the body rather than
 //! attached.

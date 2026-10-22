@@ -1,4 +1,4 @@
-//! Subtitle jobs (`docs/specs/jobs.md`): what a person asked to receive, and
+//! Subtitle jobs (`docs/requirements/jobs.md`): what a person asked to receive, and
 //! the worker carrying it out.
 //!
 //! - [`store`]: the records (`subtitle_jobs` and the tables beside it, see

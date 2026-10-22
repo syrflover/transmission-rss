@@ -1,4 +1,4 @@
-//! A season's info (`docs/specs/library.md`, 시즌 정보): the AniList entries it
+//! A season's info (`docs/requirements/library.md`, 시즌 정보): the AniList entries it
 //! is linked to, what the screen shows of them, and the user's choices about
 //! the link.
 //!

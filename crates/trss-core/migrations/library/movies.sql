@@ -1,4 +1,4 @@
--- Movies (`docs/specs/library.md`, 작품 연결과 제외 and 자막의 회차 대응;
+-- Movies (`docs/requirements/library.md`, 작품 연결과 제외 and 자막의 회차 대응;
 -- `docs/adr/0018-movies-in-season-zero-with-their-own-link.md`): a movie is
 -- an episode of season 0 that has an Anissia anime of its own.
 --

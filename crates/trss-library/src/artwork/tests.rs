@@ -1,5 +1,5 @@
 //! The artwork flow end to end against a fake AniList ([`super::fake`]) and a
-//! temporary app data folder: the rows of `docs/specs/library.md` 작품 표지 and
+//! temporary app data folder: the rows of `docs/requirements/library.md` 작품 표지 and
 //! of ticket 2-work-discovery-and-subscriptions/0015, except the YAML import (goal 5).
 
 use std::{

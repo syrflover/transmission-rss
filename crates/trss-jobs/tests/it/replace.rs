@@ -1,5 +1,5 @@
 //! Replacing the subtitle an episode has once a person approves it
-//! (`docs/specs/subtitles.md`, 교체 비교와 승인 and 승인 증거와 반영 직전
+//! (`docs/requirements/subtitles.md`, 교체 비교와 승인 and 승인 증거와 반영 직전
 //! 검사; 4-store-apply-and-replace/0068).
 
 use crate::{

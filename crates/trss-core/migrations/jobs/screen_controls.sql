@@ -1,4 +1,4 @@
--- The browser controls of a remote screen (`docs/specs/jobs.md`, 작업 화면 안의
+-- The browser controls of a remote screen (`docs/requirements/jobs.md`, 작업 화면 안의
 -- 인증과 브라우저 수명; `trss_jobs::screen`).
 --
 -- `subtitle_job_screens.pages` is the pages of the bound run a person may see

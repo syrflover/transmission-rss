@@ -1,7 +1,7 @@
 # 0084 세 재생기에서 적용본, 폰트, 다시 읽기를 확인해요
 
 - 상태: 완료 (2026-10-07, Infuse의 관찰과 사용자 결정. 아래 "결과")
-- 출처: [실제 재생 환경](../../../specs/subtitles.md#실제-재생-환경), [폰트](../../../specs/subtitles.md#폰트)
+- 출처: [실제 재생 환경](../../../requirements/subtitles.md#실제-재생-환경), [폰트](../../../requirements/subtitles.md#폰트)
 - 막는 티켓: [0081](0081-deploy-new-release.md), [0061](../4-store-apply-and-replace/0061-infuse-placement-check.md)
 
 ## 작업

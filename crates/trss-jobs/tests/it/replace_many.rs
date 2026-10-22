@@ -1,5 +1,5 @@
 //! Deciding the replacements of several episodes of one job at once
-//! (`docs/specs/subtitles.md`, 교체 비교와 승인; 4-store-apply-and-replace/0070).
+//! (`docs/requirements/subtitles.md`, 교체 비교와 승인; 4-store-apply-and-replace/0070).
 //!
 //! The work `Show` (season 1) has a video for each of episodes 1 to 12. A
 //! first job applies a subtitle to all of them; a second job of the same

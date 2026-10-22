@@ -1,5 +1,5 @@
 //! `/api/save-folder`: what the save folder of a subscription or a rule is
-//! chosen from (`docs/specs/collection.md`, 방영작 구독). The screens take the
+//! chosen from (`docs/requirements/collection.md`, 방영작 구독). The screens take the
 //! folder as a work and a season, `<work>/Season NN`.
 //!
 //! | call                                   | success                                    |

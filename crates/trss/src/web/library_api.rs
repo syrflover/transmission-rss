@@ -1,5 +1,5 @@
 //! `GET /api/library/works`: the library list, one page at a time
-//! (`docs/specs/library.md`, 라이브러리 화면). The server sorts, filters and
+//! (`docs/requirements/library.md`, 라이브러리 화면). The server sorts, filters and
 //! searches; the screen asks for the next page when it reaches the end.
 //!
 //! ```text

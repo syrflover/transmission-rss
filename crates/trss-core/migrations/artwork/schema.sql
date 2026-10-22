@@ -1,4 +1,4 @@
--- Work artwork (see `store::artwork` and `docs/specs/library.md`, 작품 표지).
+-- Work artwork (see `store::artwork` and `docs/requirements/library.md`, 작품 표지).
 --
 -- `work_artwork` is one row per work: the selection (`settings.works[].artwork`
 -- of the app YAML) and the current image (`library.works[].artwork_image`) in

@@ -1,4 +1,4 @@
--- Subtitle jobs (see `trss-jobs` and `docs/specs/jobs.md`, 작업 결과 and
+-- Subtitle jobs (see `trss-jobs` and `docs/requirements/jobs.md`, 작업 결과 and
 -- 체크포인트와 중단 복구): what the user asked to receive, how far the worker
 -- got, and enough about every file it touched to tell, after a restart, what
 -- it can reuse and what it cannot vouch for.

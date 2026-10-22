@@ -1,4 +1,4 @@
-//! Unpacks a received archive under hard limits (`docs/specs/subtitles.md`,
+//! Unpacks a received archive under hard limits (`docs/requirements/subtitles.md`,
 //! 압축 해제의 격리와 한도).
 //!
 //! The unpacking runs in a child process of its own, so that a decompression

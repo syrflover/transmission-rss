@@ -1,5 +1,5 @@
 //! One work with everything recorded under it, for the work detail screen
-//! (`docs/specs/library.md`, 작품 상세 화면): its seasons, the episodes of each
+//! (`docs/requirements/library.md`, 작품 상세 화면): its seasons, the episodes of each
 //! with their video and subtitle files and the files that could not be attached
 //! to an episode. Read with a fixed number of queries.
 //!

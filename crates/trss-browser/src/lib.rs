@@ -1,4 +1,4 @@
-//! The server browser (`docs/specs/jobs.md`, 작업 화면 안의 인증과 브라우저 수명).
+//! The server browser (`docs/requirements/jobs.md`, 작업 화면 안의 인증과 브라우저 수명).
 //!
 //! Two halves, in one crate because they speak one protocol:
 //!

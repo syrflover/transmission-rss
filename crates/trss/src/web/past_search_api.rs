@@ -1,5 +1,5 @@
 //! `/api/rules/{id}/past-search` and `/api/past-searches/{id}`: the rule
-//! detail's `지난 회차 검색` (`docs/specs/collection.md`, 지난 회차 검색).
+//! detail's `지난 회차 검색` (`docs/requirements/collection.md`, 지난 회차 검색).
 //!
 //! | call                               | success                                              |
 //! | ---------------------------------- | ---------------------------------------------------- |

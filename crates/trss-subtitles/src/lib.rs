@@ -1,4 +1,4 @@
-//! The subtitle sources (`docs/specs/jobs.md`, 출처별 단계 초안): how the
+//! The subtitle sources (`docs/requirements/jobs.md`, 출처별 단계 초안): how the
 //! app reads a creator's post and receives the files it offers.
 //!
 //! A job ([`trss-jobs`]) hands a candidate's post address to [`Sources`], which
@@ -11,7 +11,7 @@
 //! or why it cannot ([`Failure`]). It then receives one file at a time
 //! ([`Source::fetch`]) as a stream of bytes with the length the site announced
 //! before them, which the job writes to its own temporary file and checks
-//! ([`verify`]) before it counts as received (`docs/specs/jobs.md`, 공통 수신
+//! ([`verify`]) before it counts as received (`docs/requirements/jobs.md`, 공통 수신
 //! 결과와 실패 분류).
 //!
 //! Sources are an enum rather than trait objects: the set is closed and each
@@ -203,7 +203,7 @@ impl Snapshot {
 }
 
 /// What a source reads again about a file it received before, without
-/// receiving it ([`Source::recheck`]; `docs/specs/subtitles.md`, 구독 제작자
+/// receiving it ([`Source::recheck`]; `docs/requirements/subtitles.md`, 구독 제작자
 /// 자동 수신). Each value is what the site gives with no sign-in; one the site
 /// does not give is `None`, and a missing value is never a difference.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -254,7 +254,7 @@ impl std::fmt::Debug for Received {
 }
 
 /// What a source read again about a post whose files it cannot read without a
-/// person's check ([`Source::recheck_post`]; `docs/specs/subtitles.md`, 구독
+/// person's check ([`Source::recheck_post`]; `docs/requirements/subtitles.md`, 구독
 /// 제작자 자동 수신).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PostReading {
@@ -304,7 +304,7 @@ pub enum Opened {
     },
 }
 
-/// Why a post or a file could not be read (`docs/specs/jobs.md`, 공통 수신
+/// Why a post or a file could not be read (`docs/requirements/jobs.md`, 공통 수신
 /// 결과와 실패 분류).
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error("{reason}")]

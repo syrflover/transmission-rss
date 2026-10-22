@@ -1,5 +1,5 @@
 //! Google Drive fonts that are not received again when they did not change
-//! (`docs/specs/subtitles.md`, 폰트; `migrations/jobs/unchanged_fonts.sql` in
+//! (`docs/requirements/subtitles.md`, 폰트; `migrations/jobs/unchanged_fonts.sql` in
 //! `trss-core`).
 //!
 //! # The record

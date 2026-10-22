@@ -1,5 +1,5 @@
 //! The daily recheck of the files of the episodes received from the subscribed
-//! creator (`docs/specs/subtitles.md`, 구독 제작자 자동 수신; ADR 0009).
+//! creator (`docs/requirements/subtitles.md`, 구독 제작자 자동 수신; ADR 0009).
 //!
 //! Anissia's line stays as it was when a creator fixes a post or its file, so
 //! the fix shows only in the post. For 14 days after an episode of the

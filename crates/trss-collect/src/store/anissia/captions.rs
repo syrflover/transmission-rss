@@ -1,5 +1,5 @@
 //! The observations of Anissia's subtitle lines and the sources they belong to
-//! (`docs/specs/subtitles.md`, 자막 후보 조회; the tables are in the migration
+//! (`docs/requirements/subtitles.md`, 자막 후보 조회; the tables are in the migration
 //! `anissia/captions.sql`).
 //!
 //! A *line* is what Anissia keeps for one creator of one anime: the last
@@ -133,7 +133,7 @@ pub fn episode_key(text: &str) -> String {
 /// anime.
 ///
 /// A candidate is a *revision candidate* when the app holds a subtitle of the
-/// same creator for the same episode (`docs/specs/subtitles.md`, 자막 후보
+/// same creator for the same episode (`docs/requirements/subtitles.md`, 자막 후보
 /// 조회): a subtitle received from an earlier observation of the creator's
 /// source with the same episode text. Two limits of what is known now:
 ///
@@ -163,7 +163,7 @@ pub fn revision_of(candidate: &Candidate, received: &[Received]) -> Option<Revis
 }
 
 /// The revision mark of `candidate` by the subtitle files of the library whose
-/// creator the user named (`docs/specs/subtitles.md`, 자막 후보 조회): the
+/// creator the user named (`docs/requirements/subtitles.md`, 자막 후보 조회): the
 /// season holds a subtitle of the candidate's creator for the same episode.
 ///
 /// `offset` is what the creator's source maps Anissia's whole episode to the
@@ -204,7 +204,7 @@ pub fn revision_by_attribution(
 }
 
 /// The revision mark of `candidate` when the user's exception says which
-/// season episode it is (`docs/specs/library.md`, 자막의 회차 대응): the season
+/// season episode it is (`docs/requirements/library.md`, 자막의 회차 대응): the season
 /// holds a subtitle of the candidate's creator for that episode. Like
 /// [`revision_by_attribution`], the mark carries no `of` and no `same_post`;
 /// an episode below 1 is none.

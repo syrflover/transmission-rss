@@ -1,5 +1,5 @@
 //! `receive_past`, shown on the screen as `받기` of a past episode search
-//! (`docs/specs/collection.md`, 지난 회차 검색): adds one result of a search
+//! (`docs/requirements/collection.md`, 지난 회차 검색): adds one result of a search
 //! the person confirmed.
 //!
 //! The web names the result by what history would store for it: its identity

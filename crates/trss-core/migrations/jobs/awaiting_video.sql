@@ -1,5 +1,5 @@
 -- A received subtitle whose episode has no video waits for the video
--- (`docs/specs/subtitles.md`, 영상 대기; `trss_jobs::place`).
+-- (`docs/requirements/subtitles.md`, 영상 대기; `trss_jobs::place`).
 --
 -- A plan row to apply that found no video (`action = 'apply'`,
 -- `outcome = 'no_video'`) is no longer settled as stored only: it waits for

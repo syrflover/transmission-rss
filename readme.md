@@ -707,7 +707,11 @@ A release is a tag: pushing one makes the [Deploy workflow](.github/workflows/de
 dev/musl-test.sh
 ```
 
-Arguments after the script name go to `cargo test`. Then update the server as [Run, stop, update](#run-stop-update) says.
+Arguments after the script name go to `cargo test`.
+
+When the release has a migration, check it on a fresh copy of the server's database before it goes on the server, as ticket [5-deployed-verification/0080](docs/archive/tickets/5-deployed-verification/0080-server-db-migration-check.md) did. Change the database structure only through migrations that keep the data. Both rules were set for [the refactoring between goals 5 and 6](docs/archive/tickets/refactoring-between-5-and-6/refactoring.md) (user decision, 2026-10-07) and kept after it (user decision, 2026-10-10).
+
+Then update the server as [Run, stop, update](#run-stop-update) says.
 
 <details>
 <summary>Why the tests run on musl, and what the script does</summary>

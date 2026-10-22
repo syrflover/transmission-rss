@@ -1,4 +1,4 @@
-//! The child process that unpacks an archive (`docs/specs/subtitles.md`, 압축 해제의
+//! The child process that unpacks an archive (`docs/requirements/subtitles.md`, 압축 해제의
 //! 격리와 한도, the row for the child process).
 //!
 //! It is started by [`crate::run::Unpacker`] with the arguments

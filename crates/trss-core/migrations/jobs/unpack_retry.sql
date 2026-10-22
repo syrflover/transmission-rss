@@ -1,5 +1,5 @@
 -- Unpacking a received archive again after this machine failed it
--- (`docs/specs/subtitles.md`, 압축 해제의 격리와 한도; `trss_jobs::place::unpack`).
+-- (`docs/requirements/subtitles.md`, 압축 해제의 격리와 한도; `trss_jobs::place::unpack`).
 --
 -- A failure that is not the archive's (a full disk, the memory or time
 -- limit, a child that died or did not start) is tried again, three tries in

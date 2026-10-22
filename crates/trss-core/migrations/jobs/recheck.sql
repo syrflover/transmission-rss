@@ -1,4 +1,4 @@
--- The recheck of a received episode's files (`docs/specs/subtitles.md`, 구독
+-- The recheck of a received episode's files (`docs/requirements/subtitles.md`, 구독
 -- 제작자 자동 수신; `trss_jobs::recheck`): once a day for 14 days after an
 -- episode of the subscribed creator was received, the worker reads again what
 -- the source tells about the files without receiving them, and receives the

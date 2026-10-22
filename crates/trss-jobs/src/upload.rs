@@ -1,4 +1,4 @@
-//! Subtitles and fonts a person uploads (`docs/specs/subtitles.md`, 직접
+//! Subtitles and fonts a person uploads (`docs/requirements/subtitles.md`, 직접
 //! 찾기와 자막 올리기).
 //!
 //! An upload makes one job whose files are one subtitle package. It is made

@@ -1,4 +1,4 @@
-//! The stored episode mappings of the subtitle sources (`docs/specs/library.md`,
+//! The stored episode mappings of the subtitle sources (`docs/requirements/library.md`,
 //! 자막의 회차 대응): the rows of `subtitle_episode_mappings`, their exceptions
 //! and conflicts, and the writes that decide, set and revert them.
 //!

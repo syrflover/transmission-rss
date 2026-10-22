@@ -1,5 +1,5 @@
 -- What the app keeps of a rule's episode offset when it sets it by itself
--- (`docs/specs/collection.md`, 영상 회차 변환).
+-- (`docs/requirements/collection.md`, 영상 회차 변환).
 --
 -- `episode_basis` is the sentence the rule's detail shows beside `자동`. It is
 -- kept with the value because the AniList counts and the library it came from

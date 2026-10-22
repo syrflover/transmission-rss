@@ -1,5 +1,5 @@
 //! Changes in the watch folders, taken from the kernel's inotify alerts instead
-//! of a read of every folder each cycle (`docs/specs/library.md`, 작품 발견과
+//! of a read of every folder each cycle (`docs/requirements/library.md`, 작품 발견과
 //! 감시 폴더; ticket 2-work-discovery-and-subscriptions/0016).
 //!
 //! The worker watches each watch folder's root, work folders and season

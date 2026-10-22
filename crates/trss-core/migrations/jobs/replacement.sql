@@ -1,6 +1,6 @@
 -- Replacing the subtitle an episode has, once a person approves it
--- (`trss-jobs`'s `place::replace`; docs/specs/subtitles.md, 교체 비교와 승인
--- and 승인 증거와 반영 직전 검사; docs/specs/jobs.md, 체크포인트와 중단 복구).
+-- (`trss-jobs`'s `place::replace`; docs/requirements/subtitles.md, 교체 비교와 승인
+-- and 승인 증거와 반영 직전 검사; docs/requirements/jobs.md, 체크포인트와 중단 복구).
 --
 -- Run with foreign keys off (a remake, see `db.rs`): `subtitle_packages` and
 -- `subtitle_file_effects` are made anew for their CHECKs.

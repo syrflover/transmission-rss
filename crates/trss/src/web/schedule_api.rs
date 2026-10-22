@@ -1,5 +1,5 @@
 //! `GET /api/schedule/week`: what the home screen, `이번 주 편성`, shows
-//! (`docs/specs/web-app.md`).
+//! (`docs/requirements/web-app.md`).
 //!
 //! ```json
 //! { "now": 1790780400000,

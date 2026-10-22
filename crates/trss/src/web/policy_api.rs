@@ -1,4 +1,4 @@
-//! `/api/settings/policy`: the common policy (`docs/specs/settings.md`, 공통
+//! `/api/settings/policy`: the common policy (`docs/requirements/settings.md`, 공통
 //! 정책): the order of the subtitle formats and the server browser's idle time
 //! and concurrent jobs, one version for all three
 //! ([`trss_core::settings::policy`]).

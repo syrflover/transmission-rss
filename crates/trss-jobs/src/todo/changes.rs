@@ -1,5 +1,5 @@
 //! What the open plans of a `교체 승인` to-do change, summed, and when their
-//! subtitles were received (`docs/specs/jobs.md`, 할 일).
+//! subtitles were received (`docs/requirements/jobs.md`, 할 일).
 
 use serde::Serialize;
 

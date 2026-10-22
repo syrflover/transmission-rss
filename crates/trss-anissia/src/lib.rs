@@ -1,4 +1,4 @@
-//! The Anissia client (`docs/specs/collection.md`, 방영작 구독): the weekly
+//! The Anissia client (`docs/requirements/collection.md`, 방영작 구독): the weekly
 //! anime schedule and the subtitle creators of an anime, read from
 //! `api.anissia.net`.
 //!

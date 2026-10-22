@@ -1,4 +1,4 @@
-//! What differs between two subtitle files (`docs/specs/subtitles.md`, 교체
+//! What differs between two subtitle files (`docs/requirements/subtitles.md`, 교체
 //! 비교와 승인; ticket 4-store-apply-and-replace/0069): the content a person judges when a new subtitle
 //! would replace a current one. Pure: bytes in, a value out, no I/O.
 //!

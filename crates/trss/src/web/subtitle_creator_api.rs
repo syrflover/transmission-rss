@@ -1,4 +1,4 @@
-//! The creator of the subtitle files of a season (`docs/specs/library.md`,
+//! The creator of the subtitle files of a season (`docs/requirements/library.md`,
 //! 머리와 시즌의 `제작자 지정`): a subtitle file found in a watch folder is by
 //! `제작자 알 수 없음` until the user names one of the creators of the Anissia
 //! anime the season is linked to.

@@ -12,7 +12,7 @@ const FIND_TITLE = "직접 찾기";
 
 /**
  * The job's check on the site, done on the server browser's page from here
- * (`docs/specs/jobs.md`, 작업 화면 안의 인증과 브라우저 수명): the remote screen
+ * (`docs/requirements/jobs.md`, 작업 화면 안의 인증과 브라우저 수명): the remote screen
  * when a browser run shows the check, else what the screen is waiting for. A
  * closed screen is prepared again by `다시 열기`, which is the person asking;
  * nothing here asks for a browser by itself. A find job (`find`) shows the

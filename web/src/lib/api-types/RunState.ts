@@ -2,6 +2,6 @@
 
 /**
  * Where an anime's run is, as the subscription cards and the schedule picker
- * say it (`표: Anissia의 방영 상태` in `docs/specs/web-app.md`).
+ * say it (`표: Anissia의 방영 상태` in `docs/requirements/web-app.md`).
  */
 export type RunState = "upcoming" | "on" | "off" | "end";

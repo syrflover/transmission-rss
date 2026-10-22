@@ -1,7 +1,7 @@
 # 0061 Infuse에서 적용본과 `.trss/`가 어떻게 보이는지 확인해요
 
 - 상태: 완료 (2026-10-07, 실제 서버의 작품 폴더에서 사용자가 확인했어요. 아래 "결과")
-- 출처: [실제 재생 환경](../../../specs/subtitles.md#실제-재생-환경), [작품 폴더 배치 ADR](../../../adr/0008-trss-folder-and-app-data-files.md)
+- 출처: [실제 재생 환경](../../../requirements/subtitles.md#실제-재생-환경), [작품 폴더 배치 ADR](../../../adr/0008-trss-folder-and-app-data-files.md)
 - 막는 티켓: 없음
 
 ## 작업

@@ -1,4 +1,4 @@
-//! What a season shows out of its linked entries (`docs/specs/library.md`, 시즌
+//! What a season shows out of its linked entries (`docs/requirements/library.md`, 시즌
 //! 정보): one entry's values as they are, several in order as one.
 //!
 //! - **Airing** runs from the first entry's start to the last entry's end. It

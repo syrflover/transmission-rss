@@ -5,7 +5,9 @@ collections:
     ignore:
       - "archive/**"
     context:
-      "/": "trss 웹 재설계의 현재 문서: 주제별 명세, ADR, 용어집, 실행 계획과 티켓, 브레인스토밍 기록"
+      "/": "trss의 현재 문서: 주제별 명세, 변경 명세와 티켓, ADR, 용어집, 열린 관찰, 브레인스토밍 기록"
+      "/requirements": "주제별 명세: 지금 동작의 요구를 영역마다 담고, 현재 요구의 권위예요"
+      "/specs": "변경 명세와 티켓: 진행 중인 변경마다 날짜 붙은 폴더에 spec.md와 티켓을 둬요"
   root:
     path: .
     pattern: "*.md"
@@ -16,7 +18,7 @@ collections:
     pattern: "**/*.{md,mdx,txt}"
     includeByDefault: false
     context:
-      "/": "끝난 결과 목표의 티켓 묶음. 당시의 결과와 근거를 담은 역사 기록이며 현재 요구는 docs의 명세가 권위예요"
+      "/": "끝난 변경의 명세와 티켓 묶음. 당시의 결과와 근거를 담은 역사 기록이며 현재 요구는 docs/requirements의 주제별 명세가 권위예요"
 models:
   embed: hf:Qwen/Qwen3-Embedding-0.6B-GGUF/Qwen3-Embedding-0.6B-Q8_0.gguf
   generate: hf:tobil/qmd-query-expansion-1.7B-gguf/qmd-query-expansion-1.7B-q4_k_m.gguf

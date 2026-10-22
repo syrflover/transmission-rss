@@ -1,5 +1,5 @@
 //! Work artwork: which cover each work has and the image files the app made
-//! for them (`docs/specs/library.md`, 작품 표지; `docs/specs/settings.md`, 작품
+//! for them (`docs/requirements/library.md`, 작품 표지; `docs/requirements/settings.md`, 작품
 //! 표지 필드). The rules that decide, fetch and verify live in
 //! [`crate::artwork`]; this store keeps the state and its invariants.
 //!

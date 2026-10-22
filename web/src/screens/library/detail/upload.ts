@@ -1,6 +1,6 @@
 /**
  * What the `자막 올리기` section works out before anything is sent
- * (`docs/specs/subtitles.md`, 직접 찾기와 자막 올리기): which of the chosen
+ * (`docs/requirements/subtitles.md`, 직접 찾기와 자막 올리기): which of the chosen
  * files are subtitles, fonts and ZIPs and which are left out, whether they
  * are within the limits, and whether the browser can pick a folder. No
  * browser API is called here, so it runs under `node --test`. `UploadLimits` is the generated type

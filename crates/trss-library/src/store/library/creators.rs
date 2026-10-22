@@ -1,4 +1,4 @@
-//! The creator of a subtitle file (`docs/specs/library.md`, 머리와 시즌의 `제작자
+//! The creator of a subtitle file (`docs/requirements/library.md`, 머리와 시즌의 `제작자
 //! 지정`): which creator of the season's Anissia anime made the file, as the
 //! user said. The columns are in the migration `library/subtitle_creator.sql`.
 //!

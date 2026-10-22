@@ -1,4 +1,4 @@
-//! The observation of Anissia's subtitle lines (`docs/specs/subtitles.md`,
+//! The observation of Anissia's subtitle lines (`docs/requirements/subtitles.md`,
 //! 자막 후보 조회).
 //!
 //! Anissia keeps one line per anime and creator and overwrites it, so the app

@@ -223,7 +223,7 @@ impl RuleInput {
     }
 }
 
-/// How a subscription gets subtitles (`docs/specs/collection.md`, 방영작 구독).
+/// How a subscription gets subtitles (`docs/requirements/collection.md`, 방영작 구독).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "snake_case")]
@@ -256,7 +256,7 @@ impl SubtitleMode {
 }
 
 /// The subscription of a rule: the rule follows an anime of Anissia's
-/// schedule (`docs/specs/collection.md`, 방영작 구독). A rule without one is not
+/// schedule (`docs/requirements/collection.md`, 방영작 구독). A rule without one is not
 /// a subscription.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Subscription {

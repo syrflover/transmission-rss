@@ -1,5 +1,5 @@
 //! `/api/first-run`: the `처음 설정` checklist that takes the place of the
-//! weekly schedule on an install that began empty (`docs/specs/settings.md`,
+//! weekly schedule on an install that began empty (`docs/requirements/settings.md`,
 //! 처음 실행).
 //!
 //! | call                       | success                                   |

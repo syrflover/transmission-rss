@@ -2,7 +2,7 @@
 //!
 //! A person who followed anime with the old file wrote, above each rule, where
 //! the anime is on Anissia and which subtitle creator to follow
-//! (`docs/specs/settings.md`, 기존 YAML). The YAML parser drops comments, so
+//! (`docs/requirements/settings.md`, 기존 YAML). The YAML parser drops comments, so
 //! this module scans the file's lines itself: [`rule_comments`] finds the
 //! comment lines directly above each rule (the last two are read), and [`read`] turns one rule's
 //! comment into a [`Reading`].

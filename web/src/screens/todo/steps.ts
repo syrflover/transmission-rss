@@ -1,5 +1,5 @@
 /**
- * What each step of a job is called on the screens (`docs/specs/jobs.md`, 작업 상세). The keys are the step kinds,
+ * What each step of a job is called on the screens (`docs/requirements/jobs.md`, 작업 상세). The keys are the step kinds,
  * but this file does not import `api.ts`, so the modules the tests reach stay free of it; `JobSteps.tsx` checks that
  * every `StepKind` has a label.
  */

@@ -41,7 +41,7 @@ function WorkRow({ work }: { work: StorageWork }) {
 /**
  * `파일 용량·정리`: the works that have stored files or a cover, the biggest first, each with its size per kind and
  * how many stored subtitles can be cleaned. A row opens that work's 파일 card; nothing is deleted here, because a
- * clean is done one file at a time there (docs/specs/library.md, 보관 파일의 정리).
+ * clean is done one file at a time there (docs/requirements/library.md, 보관 파일의 정리).
  */
 export function StoragePanel() {
   const storage = useCached<StorageOverview>(STORAGE_KEY, loadStorage, LOAD_FAILED);

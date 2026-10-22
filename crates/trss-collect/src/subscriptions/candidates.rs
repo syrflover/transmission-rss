@@ -1,6 +1,6 @@
 //! Title candidates: the works that first show up in a channel's history while a
-//! subscription there is waiting for its title (`docs/specs/collection.md`,
-//! 방영작 구독, and `docs/specs/jobs.md`, 할 일).
+//! subscription there is waiting for its title (`docs/requirements/collection.md`,
+//! 방영작 구독, and `docs/requirements/jobs.md`, 할 일).
 //!
 //! A candidate is not stored. It is read off the channel's rules and history
 //! every time, so it appears and disappears with the facts it rests on. A work

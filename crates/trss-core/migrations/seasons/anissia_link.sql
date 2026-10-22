@@ -1,5 +1,5 @@
 -- A season's link to an Anissia anime (see `store::seasons::anissia` in
--- `trss-library` and `docs/specs/library.md`, 작품 연결과 제외): the anime whose
+-- `trss-library` and `docs/requirements/library.md`, 작품 연결과 제외): the anime whose
 -- subtitles the season gets candidates from. The link is the season's, not a
 -- subscription's: a season nobody subscribes to is linked from the work detail.
 --

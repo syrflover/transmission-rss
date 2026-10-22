@@ -1,7 +1,7 @@
 -- A job the process stopped in the middle of a step is `interrupted`
 -- (`중단됨`): it stays where it was cut (`stage`) until a person restarts it
 -- (`trss-jobs`'s `JobRun::interrupt_running` and `JobRequests::restart`;
--- docs/adr/0020-interrupted-jobs-wait-for-a-restart.md, docs/specs/jobs.md,
+-- docs/adr/0020-interrupted-jobs-wait-for-a-restart.md, docs/requirements/jobs.md,
 -- 체크포인트와 중단 복구).
 --
 -- Run with foreign keys off (a remake, see `db.rs`): `subtitle_jobs` is made

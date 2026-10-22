@@ -1,5 +1,5 @@
 //! The subscribed creator's subtitles, received without a pick
-//! (`docs/specs/subtitles.md`, 구독 제작자 자동 수신; ADR 0009), and the
+//! (`docs/requirements/subtitles.md`, 구독 제작자 자동 수신; ADR 0009), and the
 //! `자막 구독` suggestion of a subscription whose creator is not chosen yet.
 //!
 //! # Which subscriptions

@@ -1,5 +1,5 @@
-//! Naver blog attachments (`docs/specs/subtitles.md`, 출처별 다운로드;
-//! `docs/specs/jobs.md`, 출처별 단계 초안): a post on `blog.naver.com` read
+//! Naver blog attachments (`docs/requirements/subtitles.md`, 출처별 다운로드;
+//! `docs/requirements/jobs.md`, 출처별 단계 초안): a post on `blog.naver.com` read
 //! over HTTPS with no cookie, and the files attached to it received from the
 //! signed addresses it gives, also with no cookie and no `Referer`.
 //!

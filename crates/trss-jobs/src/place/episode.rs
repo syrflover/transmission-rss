@@ -1,4 +1,4 @@
-//! Which episode of the season a received subtitle is (`docs/specs/subtitles.md`,
+//! Which episode of the season a received subtitle is (`docs/requirements/subtitles.md`,
 //! 파일의 회차): for a candidate's job, the candidate's episode taken through
 //! its source's mapping, checked against the number the file's name says.
 
@@ -9,7 +9,7 @@ use trss_subtitles::episode::{holds, Holds};
 use crate::mapping::{whole, Mapping};
 
 /// What puts a stored subtitle on an episode (`assignment` in
-/// `docs/specs/settings.md`, 보관 관계 필드).
+/// `docs/requirements/settings.md`, 보관 관계 필드).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "snake_case")]
@@ -223,7 +223,7 @@ mod tests {
         }
     }
 
-    // The examples of `docs/specs/subtitles.md`, 파일의 회차.
+    // The examples of `docs/requirements/subtitles.md`, 파일의 회차.
     #[test]
     fn the_candidates_episode_goes_through_the_mapping() {
         let m = offset(-12);

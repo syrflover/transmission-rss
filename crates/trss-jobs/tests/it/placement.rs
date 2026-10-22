@@ -1,4 +1,4 @@
-//! 배치 확인 (ticket 4-store-apply-and-replace/0066, `docs/specs/subtitles.md`): an upload's or a find
+//! 배치 확인 (ticket 4-store-apply-and-replace/0066, `docs/requirements/subtitles.md`): an upload's or a find
 //! job's files go on the episodes their names say, through the source's
 //! mapping, and nothing of them is kept until a person confirms the table;
 //! then the job keeps and applies what the person placed.

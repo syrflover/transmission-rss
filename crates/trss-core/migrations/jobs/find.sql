@@ -1,5 +1,5 @@
 -- A job a person makes to find a subtitle in the server browser
--- (`docs/specs/subtitles.md`, 직접 찾기와 자막 올리기; `trss_jobs::runner`).
+-- (`docs/requirements/subtitles.md`, 직접 찾기와 자막 올리기; `trss_jobs::runner`).
 --
 -- A find job has `origin` `find`, the creator the person chose
 -- (`source_id`, `creator`), and one item that stands for its package, with no

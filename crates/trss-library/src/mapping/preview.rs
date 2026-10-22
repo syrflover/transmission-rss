@@ -1,5 +1,5 @@
 //! What the `회차 대응 정하기` dialog shows before anything is saved
-//! (`docs/specs/library.md`, 자막의 회차 대응), and the one line a group shows
+//! (`docs/requirements/library.md`, 자막의 회차 대응), and the one line a group shows
 //! for its mapping afterwards.
 //!
 //! The dialog holds what the user typed as it is ([`Input`]: the radio chosen,

@@ -1,6 +1,6 @@
 //! Several revisions of one episode in flight: which one takes the name, and
 //! what a lower one does once a higher one has failed, been abandoned or
-//! replaced the video (`docs/specs/collection.md`, 영상 수정본의 대체;
+//! replaced the video (`docs/requirements/collection.md`, 영상 수정본의 대체;
 //! tickets 2-work-discovery-and-subscriptions/0025, 3-subtitle-candidates-and-receiving/0033). The cases run through [`World::cycle`] against the
 //! fake Transmission.
 

@@ -1,5 +1,5 @@
 //! The CRC32 of a video and the identity of the file it was read from, for
-//! the replacement of video revisions (`docs/specs/collection.md`, 영상
+//! the replacement of video revisions (`docs/requirements/collection.md`, 영상
 //! 수정본의 대체). What a release name says about its revision and its CRC32
 //! is read by [`crate::release_name`].
 

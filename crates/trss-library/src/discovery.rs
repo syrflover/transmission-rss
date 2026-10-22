@@ -1,5 +1,5 @@
 //! Discovering works, seasons and episodes in a watch folder
-//! (`docs/specs/library.md`, 작품 발견과 감시 폴더).
+//! (`docs/requirements/library.md`, 작품 발견과 감시 폴더).
 //!
 //! The web (when a watch folder is added) and the worker (every cycle, and on
 //! `다시 확인`) read a folder with the same scan, which only looks: it never
@@ -36,7 +36,7 @@
 //!
 //! Of these, a video directly in a season folder other than `Season 00` whose
 //! name has no `SxxEyy` or another season's is one a person is asked about
-//! (`회차 확인 필요`, `docs/specs/library.md`): the scan reads its size and
+//! (`회차 확인 필요`, `docs/requirements/library.md`): the scan reads its size and
 //! modification time ([`Unrecognized::check`]), so that the person's `확인함`
 //! holds for that file and not for another one put at the same path later.
 //!

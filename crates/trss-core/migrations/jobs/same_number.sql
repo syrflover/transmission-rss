@@ -1,7 +1,7 @@
 -- A file put on its observed episode's own number because its source has no
 -- episode mapping yet (`same_number`) follows the mapping decided later
--- (`trss-jobs`'s `place::relocate`; docs/specs/library.md, 자막의 회차 대응;
--- docs/specs/subtitles.md, 파일의 회차). Before, it was `explicit`, as a
+-- (`trss-jobs`'s `place::relocate`; docs/requirements/library.md, 자막의 회차 대응;
+-- docs/requirements/subtitles.md, 파일의 회차). Before, it was `explicit`, as a
 -- person's choice is, and no mapping moved it.
 --
 -- Run with foreign keys off (a remake, see `db.rs`): `subtitle_stored`,

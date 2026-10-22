@@ -17,7 +17,7 @@
 //! | `gone`      | 410    | a remote screen's socket for a browser run that is no longer the job's |
 //!
 //! `message` is shown to the user as is, so it is a full Korean sentence and
-//! never contains secret values (see `docs/specs/collection.md`, 채널 URL의
+//! never contains secret values (see `docs/requirements/collection.md`, 채널 URL의
 //! 비밀 값).
 
 use axum::{

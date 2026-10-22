@@ -1,14 +1,14 @@
 # 0138 Anissia에 이은 작품을 한글 작품명으로 보여줘요
 
 - 상태: 완료 (2026-10-13, 개발 환경에서 확인. 서버 확인은 [0143](0143-deploy-feedback-fixes.md)에서 해요. 아래 "결과")
-- 출처: [라이브러리 화면](../specs/library.md#라이브러리-화면)의 작품명(2026-10-11에 더한 요구), [용어집의 작품명](../glossary.md), 0.7.0을 써 본 사용자 피드백(2026-10-11)
+- 출처: [라이브러리 화면](../../requirements/library.md#라이브러리-화면)의 작품명(2026-10-11에 더한 요구), [용어집의 작품명](../../glossary.md), 0.7.0을 써 본 사용자 피드백(2026-10-11)
 - 막는 티켓: 없음
 
 ## 작업
 
 0.7.0은 한국어 제목을 작품 상세 머리에만 써요. 그 제목도 구독이 이어진 시즌의 Anissia 제목에서만 가져와요(`trss-web` `library_work_api.rs`의 `korean_title`). 그래서 작품 상세에서 손으로 Anissia에 이은 `All Works Maid`는 폴더 이름으로 보이고, 라이브러리 격자와 목록은 모든 작품이 폴더 이름이에요.
 
-[라이브러리 화면](../specs/library.md#라이브러리-화면)의 작품명 요구대로 만들어요. 사용자가 정한 것은 다음과 같아요(2026-10-11).
+[라이브러리 화면](../../requirements/library.md#라이브러리-화면)의 작품명 요구대로 만들어요. 사용자가 정한 것은 다음과 같아요(2026-10-11).
 
 - 작품명은 구독으로 이은 시즌과 손으로 이은 시즌에서 모두 가져와요.
 - 시즌마다 다른 Anissia 작품에 이었으면 가장 앞 시즌(시즌 1 이상)의 제목을 써요. `Season 00`의 극장판 연결은 쓰지 않아요.
@@ -32,16 +32,16 @@
   - `Season 00`만 이었으면 폴더 이름이에요.
   - 이은 것이 없으면 폴더 이름이에요.
 - `제목순` 정렬과 검색을 trss-library나 trss-web 테스트가 확인해요. 작품 폴더 이름으로도 찾아져요.
-- [라이브러리 명세의 검증 표](../specs/library.md#검증-표)에서 작품명 행을 고쳐요.
+- [라이브러리 명세의 검증 표](../../requirements/library.md#검증-표)에서 작품명 행을 고쳐요.
 
 ## 결과
 
 ### 정한 것
 
 - **작품명을 정하는 곳.** trss-library의 `WORK_TITLE`(`crates/trss-library/src/store/seasons/anissia.rs`)이 작품명을 읽는 SQL 식 하나예요. 기록된 시즌 가운데 시즌 1 이상에서 Anissia에 이은 가장 앞 시즌의 제목을 고르고, 없으면 폴더 이름이에요. 자동 표지처럼 기록된 시즌만 세므로, 잠시 옮겨진 시즌 폴더의 연결은 그동안 작품명에 쓰지 않아요. 구독의 연결(`trss-collect`의 `link_season`)과 작품 상세의 연결이 같은 `season_anissia` 행을 쓰므로 누가 이었는지는 묻지 않아요.
-- 목록(`WorkOverview::title`), 작품 상세(`WorkDetail::title`), 규칙 상세의 시즌(`SeasonHoldings::title`), `영상 확인` 할 일, 자막 작업의 행(`trss-jobs` `JOB_COLUMNS`), `자막 구독` 제안과 회차 확인(`trss-jobs` `follow.rs`), `받기 실패`(`trss-collect` `work_at`)가 모두 이 식을 써요. 설정의 자막 형식 순서 목록은 `trss-core`가 읽으므로 `trss-web`이 `LibraryStore::titles`로 이름을 바꿔 넣어요. 기능 규칙을 `trss-core`에 두지 않는다는 [ADR 0016](../adr/0016-shared-parts-in-core.md) 때문이에요.
+- 목록(`WorkOverview::title`), 작품 상세(`WorkDetail::title`), 규칙 상세의 시즌(`SeasonHoldings::title`), `영상 확인` 할 일, 자막 작업의 행(`trss-jobs` `JOB_COLUMNS`), `자막 구독` 제안과 회차 확인(`trss-jobs` `follow.rs`), `받기 실패`(`trss-collect` `work_at`)가 모두 이 식을 써요. 설정의 자막 형식 순서 목록은 `trss-core`가 읽으므로 `trss-web`이 `LibraryStore::titles`로 이름을 바꿔 넣어요. 기능 규칙을 `trss-core`에 두지 않는다는 [ADR 0016](../../adr/0016-shared-parts-in-core.md) 때문이에요.
 - API는 목록과 작품 상세에 작품명 `title`을 더하고 `name`을 폴더 이름으로 남겨요. 작품 상세의 `korean_title`은 없앴어요. 작품명만 보내는 다른 API(할 일과 작업의 `work.name`, 규칙의 `work_name`, `파일 용량·정리`와 자막 형식 순서의 `name`)는 필드 이름을 그대로 두고 값을 작품명으로 바꿨어요.
-- **작품명을 쓰는 곳의 목록.** 이번 주 편성 카드, 구독 카드, 자막 작업과 그 할 일, `자막 구독` 제안은 한 시즌의 Anissia 작품을 다루므로 그 작품의 Anissia 제목을 그대로 쓰고, Anissia 작품이 없을 때만 작품명을 써요. 이 결정은 [라이브러리 화면](../specs/library.md#라이브러리-화면)에 리드 결정으로 적었어요.
+- **작품명을 쓰는 곳의 목록.** 이번 주 편성 카드, 구독 카드, 자막 작업과 그 할 일, `자막 구독` 제안은 한 시즌의 Anissia 작품을 다루므로 그 작품의 Anissia 제목을 그대로 쓰고, Anissia 작품이 없을 때만 작품명을 써요. 이 결정은 [라이브러리 화면](../../requirements/library.md#라이브러리-화면)에 리드 결정으로 적었어요.
 - 작품 상세에서 Anissia 연결을 바꾸면 머리의 작품명이 따라오도록 페이지와 라이브러리 목록을 다시 읽어요. 표지 창의 AniList 검색은 한글 작품명이 아니라 폴더 이름으로 시작해요.
 
 ### 개발 환경 확인 (2026-10-13)

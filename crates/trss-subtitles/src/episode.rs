@@ -1,4 +1,4 @@
-//! Which links of a post serve a candidate's episode (`docs/specs/jobs.md`,
+//! Which links of a post serve a candidate's episode (`docs/requirements/jobs.md`,
 //! 공통 수신 결과와 실패 분류): a post on Blogger, or a Tistory post whose
 //! subtitle is in Google Drive, links one file per episode, a ZIP of a range
 //! of them, a font, or all of these together, and says which is which only in

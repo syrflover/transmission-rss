@@ -1,6 +1,6 @@
 //! The collection feature: the channels and their rules, the feeds, the
 //! decisions about what to receive, the commands that receive or move videos,
-//! and the subscriptions to airing anime (`docs/specs/collection.md`).
+//! and the subscriptions to airing anime (`docs/requirements/collection.md`).
 //!
 //! The loop that runs the cycles and the commands is in `trss::worker`; the web
 //! calls the checks and the requests here. The crate holds:

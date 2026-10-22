@@ -1,5 +1,5 @@
 //! Replacing a video with a higher revision of the same release
-//! (`docs/specs/collection.md`, 영상 수정본의 대체; ADR 0010). Only the worker
+//! (`docs/requirements/collection.md`, 영상 수정본의 대체; ADR 0010). Only the worker
 //! does this, inside its collection cycle, so one process writes the media
 //! folders.
 //!

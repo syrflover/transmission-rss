@@ -1,5 +1,5 @@
 //! The library feature: the watch folders, the works and seasons found in them,
-//! each work's cover and each season's AniList info (`docs/specs/library.md`).
+//! each work's cover and each season's AniList info (`docs/requirements/library.md`).
 //!
 //! - [`discovery`] reads a watch folder's directories into works and seasons;
 //! - [`automatic_watch`] plans the watch folders the collect and archive

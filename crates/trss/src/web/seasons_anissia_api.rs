@@ -1,4 +1,4 @@
-//! A season's Anissia link (`docs/specs/library.md`, 작품 연결과 제외): which
+//! A season's Anissia link (`docs/requirements/library.md`, 작품 연결과 제외): which
 //! Anissia anime the season is linked to, finding it, and the user's choice.
 //!
 //! | method and path                                          | body                                                  |
@@ -51,7 +51,7 @@
 //!   subtitle lines at once (`anissia_captions`, [`super::commands_api`]), so
 //!   the answer does not wait for Anissia.
 //!
-//! `candidates` is the season's 자막 후보 (`docs/specs/subtitles.md`): the
+//! `candidates` is the season's 자막 후보 (`docs/requirements/subtitles.md`): the
 //! observations the app has of the season's linked anime, whatever was observed
 //! before the season was linked ([`trss_collect::anissia::captions`]).
 //!

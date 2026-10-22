@@ -1,4 +1,4 @@
-//! A job the process stopped in the middle of a step (`docs/specs/jobs.md`,
+//! A job the process stopped in the middle of a step (`docs/requirements/jobs.md`,
 //! 체크포인트와 중단 복구; `docs/adr/0020-interrupted-jobs-wait-for-a-restart.md`):
 //! it is `interrupted` (`중단됨`) when the process starts, stays where it was
 //! cut, and goes on from that step when a person restarts it.

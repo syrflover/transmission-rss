@@ -358,7 +358,7 @@ function ResultStep({
 }
 
 /**
- * `지난 회차 검색` of the rule detail (`docs/specs/collection.md`): the range
+ * `지난 회차 검색` of the rule detail (`docs/requirements/collection.md`): the range
  * the person confirms, the judged results, and receiving the ones they tick.
  * The server searches and judges; a search is never saved as a channel.
  */

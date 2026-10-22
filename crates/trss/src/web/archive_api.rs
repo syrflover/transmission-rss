@@ -1,5 +1,5 @@
 //! `/api/archive-suggestions`: the rules the app suggests archiving
-//! (`docs/specs/collection.md`, 규칙 보관).
+//! (`docs/requirements/collection.md`, 규칙 보관).
 //!
 //! | call                                  | success                                     |
 //! | ------------------------------------- | ------------------------------------------- |

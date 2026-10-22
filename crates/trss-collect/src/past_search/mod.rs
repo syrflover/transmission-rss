@@ -1,4 +1,4 @@
-//! The past episode search (`docs/specs/collection.md`, 지난 회차 검색; ticket
+//! The past episode search (`docs/requirements/collection.md`, 지난 회차 검색; ticket
 //! 2-work-discovery-and-subscriptions/0026): reading a tracker's search RSS for the episodes a feed no longer
 //! holds, and judging what comes back before the person chooses.
 //!

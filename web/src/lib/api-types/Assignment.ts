@@ -2,6 +2,6 @@
 
 /**
  * What puts a stored subtitle on an episode (`assignment` in
- * `docs/specs/settings.md`, 보관 관계 필드).
+ * `docs/requirements/settings.md`, 보관 관계 필드).
  */
 export type Assignment = "mapped" | "same_number" | "explicit";

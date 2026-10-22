@@ -1,5 +1,5 @@
 //! The library: what discovery found in the watch folders
-//! (`docs/specs/library.md`, 작품 발견과 감시 폴더).
+//! (`docs/requirements/library.md`, 작품 발견과 감시 폴더).
 //!
 //! A [`WatchFolder`] is a folder the user registered. The worker (every cycle,
 //! and on `다시 확인`) and the web (when a folder is added) read it with

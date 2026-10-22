@@ -1,4 +1,4 @@
-//! The to-dos that need a person (`docs/specs/jobs.md`, 할 일): `처리 필요`,
+//! The to-dos that need a person (`docs/requirements/jobs.md`, 할 일): `처리 필요`,
 //! the cards of the to-do screen and the library list's badges.
 //!
 //! This is where they are gathered from what waits for a person (the jobs,

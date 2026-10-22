@@ -1,4 +1,4 @@
-//! The to-dos that need a person (`trss_jobs::todo::list`, `docs/specs/jobs.md`
+//! The to-dos that need a person (`trss_jobs::todo::list`, `docs/requirements/jobs.md`
 //! 할 일), gathered from the records the jobs and the history leave: a site's
 //! check, a failed receipt, and the order and the count they come in.
 //! (`todo/tests.rs` of the crate has the sums and the order of made-up

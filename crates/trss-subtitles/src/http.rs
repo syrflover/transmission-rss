@@ -1,4 +1,4 @@
-//! What the sources over HTTP share (`docs/specs/jobs.md`, 공통 수신 결과와
+//! What the sources over HTTP share (`docs/requirements/jobs.md`, 공통 수신 결과와
 //! 실패 분류): a client with no cookie and no `Referer` that follows a
 //! redirect only where the source allows, a pace per host, the reading of a
 //! post's page, and the taking of a file's answer as its bytes.

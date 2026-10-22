@@ -1,4 +1,4 @@
--- Subtitles and fonts a person uploads (`docs/specs/subtitles.md`, 직접 찾기와
+-- Subtitles and fonts a person uploads (`docs/requirements/subtitles.md`, 직접 찾기와
 -- 자막 올리기; `trss_jobs::upload`).
 --
 -- An upload makes one job with `origin` `upload`, already `done` (there is

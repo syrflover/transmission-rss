@@ -140,7 +140,7 @@ impl ChannelPlan {
     /// The plan for reading a channel that has no history yet. Its
     /// subscription rules sit out, as paused rules do: whatever the feed
     /// already holds is for the user to pick, not for a subscription to
-    /// receive (`docs/specs/collection.md`, 방영작 구독), so the items are
+    /// receive (`docs/requirements/collection.md`, 방영작 구독), so the items are
     /// judged by the other rules and the ones nothing takes are recorded as
     /// `no_match`. Later plans call those items past ([`ChannelPlan::is_past`]).
     pub fn for_first_read(
@@ -216,7 +216,7 @@ impl ChannelPlan {
     /// a subscription, before a subscription that waited for its title was
     /// given one, or while the rule was paused or archived (before it was last
     /// turned back on). Only the user receives those, after looking at them
-    /// (`docs/specs/collection.md`, 방영작 구독 and `영상 받기`). So is what the
+    /// (`docs/requirements/collection.md`, 방영작 구독 and `영상 받기`). So is what the
     /// feed already held when the channel was first read, whenever the
     /// subscription began: the first read has no history to tell the old
     /// items from the new, so a subscription (never a plain rule) leaves all

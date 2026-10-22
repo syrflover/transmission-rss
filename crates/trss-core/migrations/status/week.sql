@@ -1,4 +1,4 @@
--- What the weekly schedule (`docs/specs/web-app.md`, 이번 주 편성) needs the
+-- What the weekly schedule (`docs/requirements/web-app.md`, 이번 주 편성) needs the
 -- worker to leave besides the counts of `transmission_snapshot`.
 --
 -- `transmission_downloading` holds the hashes of the torrents Transmission was

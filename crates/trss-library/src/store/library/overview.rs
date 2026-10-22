@@ -2,7 +2,7 @@
 //! (works, media files, unrecognized files, linked season entries) however many
 //! works there are.
 //!
-//! What a summary says (`docs/specs/library.md`, 라이브러리 화면):
+//! What a summary says (`docs/requirements/library.md`, 라이브러리 화면):
 //!
 //! - **Holdings** are those of the work's *latest season*: the highest season
 //!   number recorded for it. The episodes that have a video, and those that have

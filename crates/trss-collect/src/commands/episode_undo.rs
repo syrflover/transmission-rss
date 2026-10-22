@@ -1,5 +1,5 @@
 //! `episode_undo`, shown on the screen as `되돌리기` beside an episode offset
-//! the app set (`docs/specs/collection.md`, 영상 회차 변환): puts back the
+//! the app set (`docs/requirements/collection.md`, 영상 회차 변환): puts back the
 //! value the rule had before and renames the videos the rule received under
 //! the app's value to the names they get with it (`S03E01` → `S03E25`).
 //!

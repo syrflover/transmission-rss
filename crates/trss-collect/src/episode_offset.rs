@@ -1,4 +1,4 @@
-//! The episode offset of a new season's rule (`docs/specs/collection.md`, 영상
+//! The episode offset of a new season's rule (`docs/requirements/collection.md`, 영상
 //! 회차 변환): what the app can tell from the first release a rule picks.
 //!
 //! A rule's `episode` turns a release's number into the number in the video's
@@ -9,7 +9,7 @@
 //! leaves the value alone and suggests one (or says why it cannot) in the
 //! rule's detail.
 //!
-//! This is not the 자막의 회차 대응 of `docs/specs/library.md`: that maps a
+//! This is not the 자막의 회차 대응 of `docs/requirements/library.md`: that maps a
 //! subtitle source's numbers to the library's, and nothing here reads or writes it.
 //!
 //! # What the grounds are

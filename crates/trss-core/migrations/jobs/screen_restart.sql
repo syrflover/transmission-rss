@@ -1,5 +1,5 @@
 -- A person's request to start the browser run of a remote screen anew
--- (`docs/specs/jobs.md`, 작업 화면 안의 인증과 브라우저 수명;
+-- (`docs/requirements/jobs.md`, 작업 화면 안의 인증과 브라우저 수명;
 -- `trss_jobs::screen`).
 --
 -- `subtitle_job_screens.restart_run_id` is the run the person asked to start

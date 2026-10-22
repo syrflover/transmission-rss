@@ -189,7 +189,7 @@ pub struct ItemRow {
     pub state: ItemState,
     pub wait: Option<Wait>,
     pub reason: Option<String>,
-    /// The class of a failed item's failure (`docs/specs/jobs.md`, 공통 수신
+    /// The class of a failed item's failure (`docs/requirements/jobs.md`, 공통 수신
     /// 결과와 실패 분류), when it has one.
     pub failure: Option<FailureKind>,
     /// For an item of a revision job whose files are the same bytes as the

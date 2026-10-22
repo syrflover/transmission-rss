@@ -1,6 +1,6 @@
 //! The subscribed creator's subtitles received without a pick, with the fake
 //! source and Anissia's lines as the app stores what it observed
-//! (`docs/specs/subtitles.md`, 구독 제작자 자동 수신).
+//! (`docs/requirements/subtitles.md`, 구독 제작자 자동 수신).
 
 use crate::{
     world::{ticking_from, told, Base, TodoStores},
@@ -1867,7 +1867,7 @@ async fn another_creators_job_that_has_not_failed_still_holds_an_attributed_epis
     assert_eq!(w.job_count().await, 1);
 }
 
-// --- the mapping the user sets (docs/specs/library.md, 자막의 회차 대응) -------------------
+// --- the mapping the user sets (docs/requirements/library.md, 자막의 회차 대응) -------------------
 
 /// The user saves the creator's mapping with `offset` and `exceptions`, from
 /// the version the app has stored now (0 for none).

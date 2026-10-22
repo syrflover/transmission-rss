@@ -1,7 +1,7 @@
 # 0079 배포하기 전에 테스트를 musl 대상으로도 돌려요
 
 - 상태: 완료 (2026-10-07)
-- 출처: [테스트 나눔 ADR](../../../adr/0015-test-a-rule-once-in-its-crate.md), [검증 근거와 완료 판정](../../../specs/web-app.md#검증-근거와-완료-판정)
+- 출처: [테스트 나눔 ADR](../../../adr/0015-test-a-rule-once-in-its-crate.md), [검증 근거와 완료 판정](../../../requirements/web-app.md#검증-근거와-완료-판정)
 - 막는 티켓: 없음
 
 ## 작업

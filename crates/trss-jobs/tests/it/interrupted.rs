@@ -1,4 +1,4 @@
-//! A job the process left `running` (`docs/specs/jobs.md`, 체크포인트와 중단
+//! A job the process left `running` (`docs/requirements/jobs.md`, 체크포인트와 중단
 //! 복구; `docs/adr/0020-interrupted-jobs-wait-for-a-restart.md`): the start of
 //! the process makes it `interrupted`, a person's restart puts it back to
 //! `running` from the step it was cut in, and the readers that tell a job's

@@ -1,5 +1,5 @@
 //! Moving one work folder between the collect folder and the archive folder
-//! (`docs/specs/collection.md`, 보관과 복원의 폴더 이동).
+//! (`docs/requirements/collection.md`, 보관과 복원의 폴더 이동).
 //!
 //! Where a work folder is, is never stored: every run looks at the disk and at
 //! Transmission and does what is left. That is what lets a move cut short (the

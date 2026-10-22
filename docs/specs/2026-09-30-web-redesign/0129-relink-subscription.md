@@ -1,8 +1,8 @@
 # 0129 잘못 이은 구독을 규칙 상세에서 다른 Anissia 작품으로 다시 이어요
 
 - 상태: 대기
-- 출처: [방영작 구독](../specs/collection.md#방영작-구독)의 스위치 항목, [0101](../archive/tickets/refactoring-between-5-and-6/0101-receive-line-tests.md)에서 만든 [검증 표](../specs/collection.md#검증-표)(2026-10-09)
-- 막는 티켓: [0114](../archive/tickets/refactoring-between-5-and-6/0114-refactor-final-check.md)(리팩터링 마지막 확인)
+- 출처: [방영작 구독](../../requirements/collection.md#방영작-구독)의 스위치 항목, [0101](../../archive/tickets/refactoring-between-5-and-6/0101-receive-line-tests.md)에서 만든 [검증 표](../../requirements/collection.md#검증-표)(2026-10-09)
+- 막는 티켓: [0114](../../archive/tickets/refactoring-between-5-and-6/0114-refactor-final-check.md)(리팩터링 마지막 확인)
 
 ## 작업
 
@@ -17,7 +17,7 @@
 
 - 규칙 상세의 `방영` 옆에 `변경`을 두고, 고른 작품으로 구독의 Anissia 작품을 바꿔요.
 - 규칙의 일치 문구, 저장 폴더, 검사 순서, 회차 변환 값, 상태, 수집 이력은 그대로예요.
-- 이전 작품으로 이은 시즌 연결은 풀고, 새 작품의 시즌은 [Anissia 연결의 확정](../specs/collection.md#방영작-구독) 규칙대로 그 규칙이 받은 영상으로 다시 정해요.
+- 이전 작품으로 이은 시즌 연결은 풀고, 새 작품의 시즌은 [Anissia 연결의 확정](../../requirements/collection.md#방영작-구독) 규칙대로 그 규칙이 받은 영상으로 다시 정해요.
 - 새 작품에 지금 정한 자막 제작자가 없으면 제작자를 다시 정하게 해요.
 
 ## 완료 기준
@@ -25,4 +25,4 @@
 - 구독인 규칙을 규칙 상세에서 다른 Anissia 작품으로 다시 이을 수 있고, 규칙의 일치 문구, 저장 폴더, 검사 순서, 회차 변환 값, 상태, 수집 이력이 그대로예요. 테스트가 확인해요.
 - 다시 이을 때 이전 작품의 시즌 연결과 자막 제작자가 어떻게 되는지가 명세에 있고, 테스트가 확인해요.
 - 연결을 바꾸려면 구독을 먼저 삭제하라는 안내가 남아 있지 않아요.
-- [RSS 수집 명세의 검증 표](../specs/collection.md#검증-표)에서 이 요구의 행을 고쳐요.
+- [RSS 수집 명세의 검증 표](../../requirements/collection.md#검증-표)에서 이 요구의 행을 고쳐요.

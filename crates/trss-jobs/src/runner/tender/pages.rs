@@ -1,5 +1,5 @@
 //! The pages of a bound run on the job's remote screen, for a find job and a
-//! site's check alike (`docs/specs/jobs.md`, 작업 화면 안의 인증과 브라우저
+//! site's check alike (`docs/requirements/jobs.md`, 작업 화면 안의 인증과 브라우저
 //! 수명).
 //!
 //! While a run is bound to a job, the job's watch keeps a follower

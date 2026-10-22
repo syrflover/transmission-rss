@@ -1,7 +1,7 @@
 //! Web commands: user actions the web accepts and the worker part carries out.
 //!
 //! A command is the first thing that crosses from the web to the worker. The
-//! contract (`docs/specs/web-app.md`, 웹 명령과 상태 갱신) is built here so
+//! contract (`docs/requirements/web-app.md`, 웹 명령과 상태 갱신) is built here so
 //! later commands reuse it:
 //!
 //! - **The browser makes the ID.** One user action has one command ID, sent

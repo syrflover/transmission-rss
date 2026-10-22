@@ -1,4 +1,4 @@
--- Archive suggestions (docs/specs/collection.md, 규칙 보관).
+-- Archive suggestions (docs/requirements/collection.md, 규칙 보관).
 --
 -- A suggestion is not stored: it is read off the rule, the Anissia snapshot and
 -- the history each time (`archive_suggestions`). What is stored is what the

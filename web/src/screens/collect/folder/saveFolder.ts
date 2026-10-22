@@ -2,7 +2,7 @@ import type { Anime } from "../../../lib/api-types/Anime";
 
 /**
  * A save folder taken as a work and a season, `<work>/Season NN`
- * (`docs/specs/collection.md`, 방영작 구독). The subscribe, title and rule
+ * (`docs/requirements/collection.md`, 방영작 구독). The subscribe, title and rule
  * screens share the two fields; the rule screens can also take a path whole.
  */
 

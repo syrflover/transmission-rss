@@ -1,4 +1,4 @@
-//! A job's 배치 확인 (`docs/specs/subtitles.md`, 배치 확인): the table its
+//! A job's 배치 확인 (`docs/requirements/subtitles.md`, 배치 확인): the table its
 //! detail shows while the job waits for a person to place its files, and the
 //! person's placing of it (see the module docs of [`super`]).
 

@@ -2,7 +2,7 @@ import type { Change, ChangeKind } from "../../../lib/api-types";
 import { ofKinds } from "../../../lib/changeMatch.ts";
 
 /**
- * Which changes make the 수집 상태판 read again (`docs/specs/web-app.md`, 수집
+ * Which changes make the 수집 상태판 read again (`docs/requirements/web-app.md`, 수집
  * 상태판 and 웹 명령과 상태 갱신). The kinds are the tables its route
  * (`GET /api/collect/status`) reads, grouped as the server announces them
  * (`crates/trss-core/src/changes/tables.rs`, `TABLES`). It has no `@/` imports

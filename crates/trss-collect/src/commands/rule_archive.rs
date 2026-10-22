@@ -1,6 +1,6 @@
 //! `rule_archive`, shown on the screen as `보관` and `복원` of a rule: turns a
 //! rule off or on and moves its work folder between the collect folder and
-//! the archive folder (`docs/specs/collection.md`, 규칙 보관 and 보관과 복원의
+//! the archive folder (`docs/requirements/collection.md`, 규칙 보관 and 보관과 복원의
 //! 폴더 이동).
 //!
 //! The web accepts the command with a [`RuleArchive`] payload (the rule and a

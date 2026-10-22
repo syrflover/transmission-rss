@@ -1,5 +1,5 @@
 //! The limits, the members written and the refusals of an extraction
-//! (`docs/specs/subtitles.md`, 압축 해제의 격리와 한도).
+//! (`docs/requirements/subtitles.md`, 압축 해제의 격리와 한도).
 
 use std::fmt;
 

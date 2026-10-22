@@ -134,7 +134,7 @@ codes! {
 }
 
 codes! {
-    /// What a kept file is (`docs/specs/settings.md`, 보관 관계 필드).
+    /// What a kept file is (`docs/requirements/settings.md`, 보관 관계 필드).
     AssetKind {
         Subtitle = "subtitle",
         Font = "font",

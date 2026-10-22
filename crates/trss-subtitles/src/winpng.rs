@@ -1,5 +1,5 @@
-//! WinPNG: subtitles inside a post's PNG images (`docs/specs/subtitles.md`,
-//! 출처별 다운로드; `docs/specs/jobs.md`, 출처별 단계 초안).
+//! WinPNG: subtitles inside a post's PNG images (`docs/requirements/subtitles.md`,
+//! 출처별 다운로드; `docs/requirements/jobs.md`, 출처별 단계 초안).
 //!
 //! A Tistory skin that carries the WinPNG viewer opens a `.png` image of the
 //! post in a panel that takes the files out of it (SMI and ASS files, or a

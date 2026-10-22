@@ -749,7 +749,7 @@ fn enums_serialize_as_their_codes() {
 }
 
 /// Every type a route of the API sends or takes as JSON is generated for the
-/// screens (`docs/specs/web-app.md`, 공통 라이브러리의 모듈 구성).
+/// screens (`docs/requirements/web-app.md`, 공통 라이브러리의 모듈 구성).
 ///
 /// The check reads the sources of `web/`: each `Json<…>` of a handler names
 /// the types of its request or response. Each name is resolved to a full path

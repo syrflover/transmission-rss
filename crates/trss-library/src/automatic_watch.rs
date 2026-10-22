@@ -1,5 +1,5 @@
 //! The watch folders that follow the collection settings
-//! (`docs/specs/library.md`, 작품 발견과 감시 폴더).
+//! (`docs/requirements/library.md`, 작품 발견과 감시 폴더).
 //!
 //! The collect folder and the archive folder are always watch folders. [`plan`]
 //! compares the folders the settings call for with the registered watch folders

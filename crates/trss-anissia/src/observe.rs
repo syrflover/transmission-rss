@@ -1,4 +1,4 @@
-//! Reading Anissia's caption lines for observation (`docs/specs/subtitles.md`,
+//! Reading Anissia's caption lines for observation (`docs/requirements/subtitles.md`,
 //! 자막 후보 조회): the recent list (`/anime/caption/recent/<page>`) and the
 //! captions of one anime (`/anime/caption/animeNo/<n>`).
 //!

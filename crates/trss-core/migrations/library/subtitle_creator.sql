@@ -1,4 +1,4 @@
--- The creator of a subtitle file the library found (`docs/specs/library.md`,
+-- The creator of a subtitle file the library found (`docs/requirements/library.md`,
 -- 머리와 시즌의 `제작자 지정`; `store::library::creators` in `trss-library`).
 --
 -- A subtitle file the scan found in a watch folder, or the user put there,

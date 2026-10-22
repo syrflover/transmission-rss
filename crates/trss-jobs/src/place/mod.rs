@@ -1,6 +1,6 @@
 //! Storing what a job received and applying it beside its video
-//! (`docs/specs/subtitles.md`, 보관본과 적용본 and 파일의 회차;
-//! `docs/specs/jobs.md`, 체크포인트와 중단 복구).
+//! (`docs/requirements/subtitles.md`, 보관본과 적용본 and 파일의 회차;
+//! `docs/requirements/jobs.md`, 체크포인트와 중단 복구).
 //!
 //! # Order
 //!
@@ -1526,7 +1526,7 @@ impl Placer {
     /// Links the stored subtitles of each package of the job whose files are
     /// all kept (or settled otherwise) to the package's fonts, attachments
     /// and companion files: a companion to the subtitle of its name only
-    /// (`docs/specs/subtitles.md`, 폰트).
+    /// (`docs/requirements/subtitles.md`, 폰트).
     async fn link(&self, job: &str, items: &[ItemRow]) -> Result<(), JobError> {
         let id = job.to_owned();
         let rows = self.read(move |c| records::plan(c, &id)).await?;

@@ -1,5 +1,5 @@
 //! `GET /api/library/works/{id}`: one work for the work detail screen
-//! (`docs/specs/library.md`, 작품 상세 화면), the video side: what the library
+//! (`docs/requirements/library.md`, 작품 상세 화면), the video side: what the library
 //! recorded for the work and the rules that collect into its folder; with the
 //! cleanup of its stored files (보관 파일의 정리) and `GET /api/library/storage`
 //! for the settings' 파일 용량과 정리.

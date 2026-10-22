@@ -1,4 +1,4 @@
-//! Member names: decoded to text, then judged as paths (`docs/specs/subtitles.md`,
+//! Member names: decoded to text, then judged as paths (`docs/requirements/subtitles.md`,
 //! 압축 해제의 격리와 한도, the row for paths).
 
 use crate::{Limits, Refusal};

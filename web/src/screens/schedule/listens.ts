@@ -2,7 +2,7 @@ import type { Change, ChangeKind } from "../../lib/api-types";
 import { ofKinds } from "../../lib/changeMatch.ts";
 
 /**
- * Which changes make the 이번 주 편성 read again (`docs/specs/web-app.md`, 이번
+ * Which changes make the 이번 주 편성 read again (`docs/requirements/web-app.md`, 이번
  * 주 편성 and 웹 명령과 상태 갱신). The kinds are the tables its route
  * (`GET /api/schedule/week`) reads, grouped as the server announces them
  * (`crates/trss-core/src/changes/tables.rs`, `TABLES`); a kind that is only

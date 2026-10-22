@@ -1,5 +1,5 @@
 //! What a file a person uploads is, judged by its bytes and never by its name
-//! (`docs/specs/subtitles.md`, 직접 찾기와 자막 올리기).
+//! (`docs/requirements/subtitles.md`, 직접 찾기와 자막 올리기).
 //!
 //! An upload keeps subtitles and fonts and nothing else. [`judge`] reads the
 //! start of the file (and a ZIP to its end, which checks every CRC, as

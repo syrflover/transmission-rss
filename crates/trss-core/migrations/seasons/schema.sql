@@ -1,4 +1,4 @@
--- Season info (see `store::seasons` and `docs/specs/library.md`, 시즌 정보): the
+-- Season info (see `store::seasons` and `docs/requirements/library.md`, 시즌 정보): the
 -- AniList entries linked to each local season, and the entries as AniList last
 -- described them.
 --

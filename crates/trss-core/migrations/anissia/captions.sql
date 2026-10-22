@@ -1,5 +1,5 @@
 -- The observation of Anissia's subtitle lines (see `store::anissia::captions`
--- in `trss-collect` and `docs/specs/subtitles.md`, 자막 후보 조회).
+-- in `trss-collect` and `docs/requirements/subtitles.md`, 자막 후보 조회).
 --
 -- Anissia keeps one line per anime and creator (the last episode, post and
 -- update the creator entered) and overwrites it. The worker reads the lines

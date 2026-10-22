@@ -1,7 +1,7 @@
 import type { ConfirmEpisode, ConfirmView, Placement, PlacementChoice } from "../../lib/api-types";
 
 /**
- * What the 배치 확인 table of a job (`docs/specs/subtitles.md`, 배치 확인) shows and sends, decided from the API's
+ * What the 배치 확인 table of a job (`docs/requirements/subtitles.md`, 배치 확인) shows and sends, decided from the API's
  * `Placement`s and `ConfirmView` alone, so the component only draws it and a test can say what appears when.
  */
 

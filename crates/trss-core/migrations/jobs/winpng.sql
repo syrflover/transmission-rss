@@ -1,4 +1,4 @@
--- What a post's WinPNG images need (`docs/specs/jobs.md`, 공통 수신 결과와 실패
+-- What a post's WinPNG images need (`docs/requirements/jobs.md`, 공통 수신 결과와 실패
 -- 분류; `trss_subtitles::winpng`).
 --
 -- `subtitle_job_items.failure` has two classes more: `no_subtitle` (the

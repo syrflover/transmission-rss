@@ -1,5 +1,5 @@
 //! `다시 받기` of a video revision (`receive_once::run` on a command the web
-//! accepted; `docs/specs/collection.md`, 영상 수정본의 대체; tickets 2-work-discovery-and-subscriptions/0025,
+//! accepted; `docs/requirements/collection.md`, 영상 수정본의 대체; tickets 2-work-discovery-and-subscriptions/0025,
 //! 3-subtitle-candidates-and-receiving/0033): a revision with no CRC32 in its name confirmed, a download that
 //! stopped received again, an ended replacement checked and started again,
 //! and the requests that are refused with a reason. The cases run through

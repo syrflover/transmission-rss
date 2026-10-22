@@ -1,4 +1,4 @@
-//! erulabo's posts (`docs/specs/subtitles.md`, 출처별 다운로드; `docs/specs/
+//! erulabo's posts (`docs/requirements/subtitles.md`, 출처별 다운로드; `docs/requirements/
 //! jobs.md`, 출처별 단계 초안): a post's subtitle comes only after a person
 //! passes the site's check (Cloudflare Turnstile) in the server browser
 //! ([`crate::auth`]).
@@ -32,7 +32,7 @@
 //!   through the check again.
 //! - A file cannot be read again without the check: [`ErulaboSource::recheck`]
 //!   answers [`FailureKind::Changed`] for every key. What the daily recheck
-//!   (`docs/specs/subtitles.md`, 구독 제작자 자동 수신) has instead is
+//!   (`docs/requirements/subtitles.md`, 구독 제작자 자동 수신) has instead is
 //!   [`ErulaboSource::recheck_post`]: the post read again over HTTP for its
 //!   `dateModified` (a change makes a person pass the check again), and a
 //!   `HEAD` of the Google Drive file whose ID the receipt kept, with no
@@ -354,7 +354,7 @@ impl ErulaboSource {
         Ok(PostReading { modified, observed })
     }
 
-    /// Nothing of a file is told without the check (`docs/specs/subtitles.md`,
+    /// Nothing of a file is told without the check (`docs/requirements/subtitles.md`,
     /// 구독 제작자 자동 수신): every key answers [`FailureKind::Changed`].
     pub(crate) async fn recheck(
         &self,
@@ -730,7 +730,7 @@ mod tests {
             Some(FailureKind::Expired)
         );
         // Drive's own answers are the file gone or not shared: no address
-        // is to blame (the table of `docs/specs/jobs.md`).
+        // is to blame (the table of `docs/requirements/jobs.md`).
         for status in [401, 403, 404] {
             assert_eq!(
                 kind(&drive, status, Some("text/html")),

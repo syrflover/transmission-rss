@@ -1,4 +1,4 @@
-//! A rule's episode offset when the app sets it (`docs/specs/collection.md`,
+//! A rule's episode offset when the app sets it (`docs/requirements/collection.md`,
 //! 영상 회차 변환), and the user's `적용` of a suggestion.
 //!
 //! The offset is `rules.episode`, and `rules.episode_auto` says the app chose

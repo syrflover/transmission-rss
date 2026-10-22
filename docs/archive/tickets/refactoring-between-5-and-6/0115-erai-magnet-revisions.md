@@ -1,7 +1,7 @@
 # 0115 Erai-raws magnet 피드의 수정본이 수정본 대체를 거쳐요
 
 - 상태: 완료
-- 출처: [0090](../5-deployed-verification/0090-release-name-corpus.md), [영상 수정본의 대체](../../../specs/collection.md#영상-수정본의-대체)
+- 출처: [0090](../5-deployed-verification/0090-release-name-corpus.md), [영상 수정본의 대체](../../../requirements/collection.md#영상-수정본의-대체)
 - 막는 티켓: [0098](0098-release-name-reading.md)(이름 읽기), [0099](0099-one-receive-path.md)(받기 경로)
 
 ## 작업
@@ -18,7 +18,7 @@
 - 같은 릴리스인지는 이름의 `stem`이 같은지로 가려요. Erai 제목 끝의 자막 언어 태그 목록은 같은 회차의 원본과 수정본에서 다를 수 있어요. 수집 이력의 그 수정본에는 원본에 없는 `[pl]`이 있어요.
 
 코드로 보면, 보통 항목으로 받은 수정본은 회차 이름이 이미 있으므로 이름을 바꾸지 않고(`Not renaming …: … is taken`) 두 파일이 폴더에 남아요. 실제로 일어난 것을 보지는 않았어요.
-[영상 수정본의 대체](../../../specs/collection.md#영상-수정본의-대체)대로라면 이름에 CRC가 없는 수정본은 받지 않고 `버전 미상`으로 남아야 해요.
+[영상 수정본의 대체](../../../requirements/collection.md#영상-수정본의-대체)대로라면 이름에 CRC가 없는 수정본은 받지 않고 `버전 미상`으로 남아야 해요.
 
 회차 이름을 확장자 없는 제목에서 어떻게 정할지와, 언어 태그를 빼고 같은 릴리스를 가리는 방법은 이 티켓에서 정해요.
 
@@ -45,7 +45,7 @@
 ### 바꾼 것
 
 - `fix(collect): read a revision written as (V2) after the episode number`: `(V2)` 읽기예요. 묶음의 Kusuriya 줄에서 `version` 실패 표시를 지웠어요.
-- `fix(collect): send Erai-raws magnet feed revisions through the revision replacement`(이 결과를 담은 커밋): `release_key`, `episode_file`, `names_file`, `SEVERAL_VIDEOS`와 확장자 검사를 더했어요. 같은 릴리스를 견주는 곳은 trss-collect의 `revisions`(`plan_at` 두 곳, `Replaced`, `old_video`), `past_search::judge` 세 곳과 `past_search::world`의 중복 제거, trss-web `in_place` 두 곳이에요. `in_place`의 "이미 놓였는지" 확인은 `episode_name` 대신 `names_file`로 해요. [영상 수정본의 대체](../../../specs/collection.md#영상-수정본의-대체)에 이름 읽기, 같은 릴리스, magnet 제목의 회차 영상, 확장자 차이를 적고 표에 네 줄을 더했어요.
+- `fix(collect): send Erai-raws magnet feed revisions through the revision replacement`(이 결과를 담은 커밋): `release_key`, `episode_file`, `names_file`, `SEVERAL_VIDEOS`와 확장자 검사를 더했어요. 같은 릴리스를 견주는 곳은 trss-collect의 `revisions`(`plan_at` 두 곳, `Replaced`, `old_video`), `past_search::judge` 세 곳과 `past_search::world`의 중복 제거, trss-web `in_place` 두 곳이에요. `in_place`의 "이미 놓였는지" 확인은 `episode_name` 대신 `names_file`로 해요. [영상 수정본의 대체](../../../requirements/collection.md#영상-수정본의-대체)에 이름 읽기, 같은 릴리스, magnet 제목의 회차 영상, 확장자 차이를 적고 표에 네 줄을 더했어요.
 
 ### 검증한 것
 

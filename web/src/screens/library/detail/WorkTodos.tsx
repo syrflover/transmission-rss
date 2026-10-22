@@ -30,7 +30,7 @@ import { episodeCheckPath, episodeCheckReason, receiveFailedAction, receiveFaile
 import { VideoCheckActions } from "../../todo/VideoCheck";
 
 /**
- * The work's `할 일` (`docs/specs/library.md`, 할 일과 회차 목록): its to-dos that need the person, as cards with a
+ * The work's `할 일` (`docs/requirements/library.md`, 할 일과 회차 목록): its to-dos that need the person, as cards with a
  * coloured border, above the 자막 후보. They are the 할 일 screen's (`KEYS.todos`, read again when the server says the to-dos
  * changed), so one handled anywhere is gone at the next read. A work with none, or before the list is read, has no
  * heading, list or space.

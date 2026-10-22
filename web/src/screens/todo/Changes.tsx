@@ -71,7 +71,7 @@ function useLines(jobId: string, planId: string, enabled: boolean): { state: Lin
 }
 
 /**
- * `변경 사항` of an open replacement (`docs/specs/subtitles.md`, 교체 비교와 승인): the content of the new subtitle
+ * `변경 사항` of an open replacement (`docs/requirements/subtitles.md`, 교체 비교와 승인): the content of the new subtitle
  * against the current one, as the decision's body. Four items, collapsed at first, each with its number tags; an item
  * expands to what changed. The dialogue and timing lines are read when one of them is first opened.
  */

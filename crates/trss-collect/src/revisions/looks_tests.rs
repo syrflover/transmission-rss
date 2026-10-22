@@ -1,7 +1,7 @@
 //! A replacement whose new video is looked at again: gone after the old
 //! torrent was removed, missing on one look or two, replaced or changed
 //! after its check, or the episode left with no video
-//! ([`advance`]; `docs/specs/collection.md`, 영상 수정본의 대체; tickets 2-work-discovery-and-subscriptions/0025,
+//! ([`advance`]; `docs/requirements/collection.md`, 영상 수정본의 대체; tickets 2-work-discovery-and-subscriptions/0025,
 //! 3-subtitle-candidates-and-receiving/0033). The cases run through [`World::cycle`] against the fake
 //! Transmission, which acts on the media folder the way Transmission does.
 

@@ -1,4 +1,4 @@
-//! What a release name says (`docs/specs/collection.md`, 영상 수정본의 대체 and
+//! What a release name says (`docs/requirements/collection.md`, 영상 수정본의 대체 and
 //! 영상 회차 변환): which work and which episode it is, whether it is a batch,
 //! its revision (`14v2`), the CRC32 the release group put in it, and how it
 //! writes the episode number. One reader, [`ReleaseName::read`], for the names

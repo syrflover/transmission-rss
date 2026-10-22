@@ -43,7 +43,7 @@
 //! A moment is a bound, never a promise that the screen changes: the screen
 //! reads again and may find the same. A moment missing from the list is a
 //! state that the next change announces anyway or that no screen shows; the
-//! ones left out on purpose are in `docs/specs/web-app.md`.
+//! ones left out on purpose are in `docs/requirements/web-app.md`.
 
 use std::time::Duration;
 

@@ -1,5 +1,5 @@
-//! Tistory's general attachments (`docs/specs/subtitles.md`, 출처별 다운로드;
-//! `docs/specs/jobs.md`, 출처별 단계 초안): a post on `<blog>.tistory.com`
+//! Tistory's general attachments (`docs/requirements/subtitles.md`, 출처별 다운로드;
+//! `docs/requirements/jobs.md`, 출처별 단계 초안): a post on `<blog>.tistory.com`
 //! read over HTTPS with no cookie, and each file of its `.fileblock`s received
 //! from the signed address the post gives, also with no cookie and no
 //! `Referer`, not even on a redirect.
@@ -23,7 +23,7 @@
 //!   knows, the post has [`FailureKind::Changed`].
 //! - A file a browser took out of a WinPNG image is received from where it
 //!   was put ([`PostFile`]'s staged path); a recheck does not read the images
-//!   again, so such a file answers [`FailureKind::Changed`] (`docs/specs/jobs.md`).
+//!   again, so such a file answers [`FailureKind::Changed`] (`docs/requirements/jobs.md`).
 //! - A redirect is followed only to where the request may go itself: from a
 //!   post to an `https` blog on `tistory.com`, from a file to the CDN, ten at
 //!   most. Anything else is the redirect's answer, [`FailureKind::Changed`].
@@ -71,7 +71,7 @@ pub fn cdn_host(host: &str) -> bool {
         .any(|suffix| host.strip_suffix(suffix).is_some_and(|sub| !sub.is_empty()))
 }
 
-/// A post's body, the containers seen on real posts (`docs/specs/jobs.md`,
+/// A post's body, the containers seen on real posts (`docs/requirements/jobs.md`,
 /// 공통 수신 결과와 실패 분류): the editor's `tt_article_useless_p_margin
 /// contents_style` in every skin seen, inside `#article-view` in some.
 pub const BODY: &str = ".tt_article_useless_p_margin, .contents_style, #article-view";

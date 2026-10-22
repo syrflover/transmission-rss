@@ -1,5 +1,5 @@
 -- The remote screen of a job that waits for a person's check on the site
--- (`docs/specs/jobs.md`, 작업 화면 안의 인증과 브라우저 수명; `trss_jobs::screen`).
+-- (`docs/requirements/jobs.md`, 작업 화면 안의 인증과 브라우저 수명; `trss_jobs::screen`).
 -- The worker owns the server browser's runs; the web shows a run's page and
 -- relays a person's input to it. They share what they need to know of each
 -- other here and wake each other through the wake socket.

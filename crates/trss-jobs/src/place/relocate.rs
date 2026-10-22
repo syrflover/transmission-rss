@@ -1,7 +1,7 @@
 //! A source's episode mapping changes: its stored subtitles and the unfinished
 //! rows of its jobs go to their new episodes, and the copies the app applied
-//! move with a person's confirmation (재배치; `docs/specs/library.md`, 자막의
-//! 회차 대응; `docs/specs/subtitles.md`, 배치 확인; `docs/specs/jobs.md`,
+//! move with a person's confirmation (재배치; `docs/requirements/library.md`, 자막의
+//! 회차 대응; `docs/requirements/subtitles.md`, 배치 확인; `docs/requirements/jobs.md`,
 //! 체크포인트와 중단 복구).
 //!
 //! # Re-evaluation

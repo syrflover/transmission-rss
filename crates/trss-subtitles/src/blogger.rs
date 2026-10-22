@@ -1,4 +1,4 @@
-//! Blogger posts (`docs/specs/subtitles.md`, 출처별 다운로드; `docs/specs/
+//! Blogger posts (`docs/requirements/subtitles.md`, 출처별 다운로드; `docs/requirements/
 //! jobs.md`, 출처별 단계 초안): a post on `<blog>.blogspot.com` read over
 //! HTTPS with no cookie, whose subtitle is a Google Drive file linked in its
 //! body ([`drive`]).

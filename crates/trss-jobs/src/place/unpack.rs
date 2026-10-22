@@ -1,4 +1,4 @@
-//! Unpacking a received archive (`docs/specs/subtitles.md`, 압축 해제의 격리와
+//! Unpacking a received archive (`docs/requirements/subtitles.md`, 압축 해제의 격리와
 //! 한도 and the package analysis's rows for archives and split archives).
 //!
 //! Before the analysis, each received archive not tried yet is unpacked by a
@@ -230,7 +230,7 @@ fn volume(name: &str) -> Volume {
 
 /// Puts received archives named `names` (their folders included) together:
 /// each whole archive alone, and the volumes of a split one as one archive
-/// from its first volume (`docs/specs/subtitles.md`, ZIP 밖의 압축 형식·나뉜 압축
+/// from its first volume (`docs/requirements/subtitles.md`, ZIP 밖의 압축 형식·나뉜 압축
 /// 파일). A `.rar` with no `.r00` beside it is a whole archive, and so is a
 /// `.zip` with no `.z01`.
 pub fn group(names: &[&str]) -> Vec<Group> {

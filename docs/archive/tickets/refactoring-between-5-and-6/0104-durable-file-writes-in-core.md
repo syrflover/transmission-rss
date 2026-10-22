@@ -89,7 +89,7 @@ Transmission이 RPC로 하는 이름 바꾸기에는 fsync를 더할 수 없어�
 - 줄인 것: trss-browser `tests/it/pool.rs`의 `a_download_is_moved_into_the_given_folder_by_its_suggested_name`에서 두 번째 내려받기 부분을 뺐어요. trss-browser `files::tests::a_file_moves_and_nothing_is_replaced`가 같은 경우예요.
 - 남긴 것: 자리를 차지한 이름을 기능마다 다르게 다루는 테스트 5개예요. trss-jobs `place/files.rs`의 `a_copy_is_checked_and_published_without_replacing`, trss-library `artwork::tests::a_taken_place_is_never_overwritten`, trss-browser `files::tests::a_file_moves_and_nothing_is_replaced`, trss-collect `renaming_tests::a_name_that_is_taken_is_never_renamed_onto_and_the_others_go_on`, `replacing_tests::row_7_a_taken_episode_name_is_never_renamed_over`예요.
 - 2026-10-07에 약 6개로 셌던 테스트 대부분은 [0101](0101-receive-line-tests.md)에서 이미 옮기거나 지웠어요.
-- [RSS 수집 명세의 검증 표](../../../specs/collection.md#검증-표)가 인용한 테스트는 옮기거나 지우지 않았어요.
+- [RSS 수집 명세의 검증 표](../../../requirements/collection.md#검증-표)가 인용한 테스트는 옮기거나 지우지 않았어요.
 
 ### 검증한 것
 

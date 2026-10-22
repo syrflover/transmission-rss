@@ -1,4 +1,4 @@
-//! The automatic decision (`docs/specs/library.md`, 자동 판정): a work's
+//! The automatic decision (`docs/requirements/library.md`, 자동 판정): a work's
 //! folder name against the titles of AniList's search results.
 //!
 //! Titles are compared after Unicode NFC, case folding, trimming and collapsing

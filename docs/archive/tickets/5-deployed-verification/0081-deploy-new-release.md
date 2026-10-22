@@ -1,7 +1,7 @@
 # 0081 실제 서버를 새 릴리스로 올리고 1000:1000으로 바꿔요
 
 - 상태: 완료 (2026-10-07)
-- 출처: [구현 경계와 실행 순서](../../../specs/web-app.md#구현-경계와-실행-순서), [실제 재생 환경](../../../specs/subtitles.md#실제-재생-환경), [0062](../4-store-apply-and-replace/0062-run-as-media-user.md)의 남은 일
+- 출처: [구현 경계와 실행 순서](../../../requirements/web-app.md#구현-경계와-실행-순서), [실제 재생 환경](../../../requirements/subtitles.md#실제-재생-환경), [0062](../4-store-apply-and-replace/0062-run-as-media-user.md)의 남은 일
 - 막는 티켓: [0079](0079-musl-test-run.md)(musl 테스트), [0080](0080-server-db-migration-check.md)(마이그레이션), [0086](0086-feed-redirect-referer.md)–[0089](0089-package-season-reason.md)와 [0091](0091-trname-long-and-half-episodes.md)(배포 전에 고칠 결함), [0116](0116-allocator-measurement.md)(메모리 할당기), [0060](../4-store-apply-and-replace/0060-server-filesystem-probe.md)(서버 미디어 디스크의 파일 쓰기)
 
 ## 작업
@@ -100,7 +100,7 @@ readme의 [Running as 1000:1000](../../../../readme.md#running-as-10001000)를 �
 | 파일 | `.trss/subtitles/코코렛/` 아래의 받은 이름 그대로인 `.smi`(보관본) | 1000:1000 | `0644` |
 
 - 작품 폴더와 `Season 01`은 Transmission이 만든 원래 폴더예요. 안에 항목이 더해져서 ctime만 바뀌었어요.
-- 빈 `.trss/tmp`는 [자막 명세](../../../specs/subtitles.md)가 임시 파일과 옮겨 둔 파일(`.aside`)을 두는 자리예요.
+- 빈 `.trss/tmp`는 [자막 명세](../../../requirements/subtitles.md)가 임시 파일과 옮겨 둔 파일(`.aside`)을 두는 자리예요.
 - 처음에는 mtime(`find -newer`)으로 찾았어요. 그러자 사용자가 예전에 넣은 `.smi`가 여럿 섞였어요. 그 파일들의 mtime은 2107-12-31 23:59로, ZIP의 DOS 시각이 나타낼 수 있는 마지막 날이에요. 그런데 ctime은 2026년 5–7월이고 모드는 `0664`예요. 배포와 상관없는 파일이에요. 그래서 디스크에서 바뀐 것은 ctime으로 견줘요.
 
 ### 웹 화면

@@ -1,4 +1,4 @@
-//! Image files in the app data folder (`docs/specs/library.md`, 이미지 파일의
+//! Image files in the app data folder (`docs/requirements/library.md`, 이미지 파일의
 //! 수명; `docs/adr/0008-trss-folder-and-app-data-files.md`).
 //!
 //! The app data folder is the folder of the database. Images live in
@@ -270,7 +270,7 @@ pub fn image_ref(origin: Source, relative_path: String, bytes: &[u8], format: Fo
     }
 }
 
-/// Why a referenced image is not served (`docs/specs/settings.md`, 가져오기
+/// Why a referenced image is not served (`docs/requirements/settings.md`, 가져오기
 /// 검증과 파일 가용성).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Unavailable {

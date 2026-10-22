@@ -1,5 +1,5 @@
 //! The remote screen of a job that waits for a person's check on the site
-//! (`docs/specs/jobs.md`, 작업 화면 안의 인증과 브라우저 수명).
+//! (`docs/requirements/jobs.md`, 작업 화면 안의 인증과 브라우저 수명).
 //!
 //! The worker's browser pool brought the post's page to the check in a run of
 //! the server browser and bound the run to the job ([`trss_jobs::screen`]).

@@ -1,4 +1,4 @@
-//! A season's link to an Anissia anime (`docs/specs/library.md`, 작품 연결과
+//! A season's link to an Anissia anime (`docs/requirements/library.md`, 작품 연결과
 //! 제외): the table `season_anissia`, whose rules are in its migration.
 //!
 //! This store keeps the link and its version. It does not decide who may
@@ -24,7 +24,7 @@ pub struct AnissiaLink {
     pub anime_no: Option<i64>,
 }
 
-/// The work title (작품명, `docs/specs/library.md` 라이브러리 화면) of the work
+/// The work title (작품명, `docs/requirements/library.md` 라이브러리 화면) of the work
 /// a query names `w`, as an SQL expression to put in its columns: the Anissia
 /// title of the lowest-numbered recorded season, from 1 on, linked to an anime;
 /// else, for a movie-only work ([`super::movie`]), the Anissia title of its

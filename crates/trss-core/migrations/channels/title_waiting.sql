@@ -1,4 +1,4 @@
--- Title-waiting subscriptions (docs/specs/collection.md, 방영작 구독).
+-- Title-waiting subscriptions (docs/requirements/collection.md, 방영작 구독).
 --
 -- `rule_subscriptions.titled_at` (Unix ms) is when the match phrase of a
 -- subscription was last given or cleared: a subscription that waited for its

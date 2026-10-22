@@ -1,7 +1,7 @@
 # 0136 같은 파일을 가리키는 두 번째 보관본에 바꿀 것 없는 `교체 비교`를 남기지 않아요
 
 - 상태: 대기
-- 출처: [보관본과 적용본](../specs/subtitles.md#보관본과-적용본), [0121의 구현 결정](../archive/tickets/5-deployed-verification/0121-identical-copy-becomes-applied.md#구현-결정-2026-10-07), [0114의 실제 서버 확인](../archive/tickets/refactoring-between-5-and-6/0114-refactor-final-check.md#실제-서버-2026-10-10-070)
+- 출처: [보관본과 적용본](../../requirements/subtitles.md#보관본과-적용본), [0121의 구현 결정](../../archive/tickets/5-deployed-verification/0121-identical-copy-becomes-applied.md#구현-결정-2026-10-07), [0114의 실제 서버 확인](../../archive/tickets/refactoring-between-5-and-6/0114-refactor-final-check.md#실제-서버-2026-10-10-070)
 - 막는 티켓: 없음
 
 ## 작업
@@ -20,4 +20,4 @@
 
 - 근거만 다르고 바이트가 같은 두 보관본이 한 회차에 있을 때, 그 회차의 줄과 `자막` 카드에 바꿀 것이 없는 `교체 비교`가 보이지 않아요. 이 경우를 규칙을 가진 크레이트의 테스트로 확인해요.
 - 두 보관본이 번갈아 `교체 비교`를 보이지 않는 것을 테스트로 확인해요.
-- [자막 명세](../specs/subtitles.md)의 보관본과 적용본에 고친 동작을 적고, 검증 표의 `영상 옆 같은 바이트는 적용본으로 기록` 행을 고쳐요.
+- [자막 명세](../../requirements/subtitles.md)의 보관본과 적용본에 고친 동작을 적고, 검증 표의 `영상 옆 같은 바이트는 적용본으로 기록` 행을 고쳐요.

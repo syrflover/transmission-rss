@@ -38,7 +38,7 @@ export interface Listen<T> {
 }
 
 /**
- * Keeps the cached value of `key` fresh (`docs/specs/web-app.md`, 웹 명령과
+ * Keeps the cached value of `key` fresh (`docs/requirements/web-app.md`, 웹 명령과
  * 상태 갱신): it reads when the screen starts, and again when the event stream
  * says something `listen.match` accepts changed or that changes may have been
  * missed (the connection was made again, or fell behind: `events.ts`). The reads
