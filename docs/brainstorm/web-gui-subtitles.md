@@ -199,7 +199,7 @@ RSS 채널은 작품 분류가 아니라 수집 경로·설정으로 다뤄요.
 제공자로 AniList를 선택하고, 직접 지정은 임의 URL 입력이 아니라 이미지 파일 업로드만 받으며, 작품 폴더의 `.trss-artwork/`에 앱이 관리하는 파일로 보관하기로 했어요.
 표지 파일을 작품과 함께 옮길 수 있고 앱이 받는 외부 URL의 범위를 제한하는 선택으로, DB 관계와 YAML 메타데이터는 파일 바이트 백업을 대신하지 않아요.
 표지를 작품 폴더의 `.trss-artwork/`에 두는 부분은 [작품 폴더 배치 ADR](../adr/0008-trss-folder-and-app-data-files.md)이 대체했어요. 표지는 앱 데이터 폴더에 두고 DB에서 작품 ID로 연결해요.
-제품의 표지 자동 검색·매칭·수신 흐름과 실제 PC·모바일 화면은 아직 구현·검증하지 않았으며, 프로토타입용 개별 정보·이미지 조회와 구분해요.
+제품의 표지 자동 검색·매칭·수신 흐름은 이후 구현했고, 요구는 [라이브러리 명세의 작품 표지](../requirements/library.md#작품-표지)에 있어요. 이 절의 조회는 프로토타입용 개별 정보·이미지 조회예요.
 기존 Anissia 클라이언트의 자막 메타데이터와 trname의 경로 정리는 표지 URL이나 다른 서비스의 작품 ID를 제공하는 연동이 아니에요.
 확인한 [Anissia API 문서](https://github.com/anissia-net/anissia/blob/master/docs/anime_schdule.md)의 작품·자막 필드에도 표지 정보가 없으며, trname의 TheTVDB식 명명만으로 TheTVDB 작품 연결이 확보됐다고 간주하지 않아요.
 공식 문서에는 Anissia의 제목 `subject` 외에 선택적 원제 `originalSubject`와 시작일 `startDate`가 있어 검색 힌트로 사용할 수 있어요.
