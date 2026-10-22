@@ -3,6 +3,7 @@
 //! The database is a local SQLite file (WAL mode) that both binaries open.
 //! It must not live on a network share (see ADR 0005).
 
+use std::any::Any;
 use std::panic::{self, AssertUnwindSafe};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -10,6 +11,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use rusqlite::{Connection, OpenFlags, TransactionBehavior};
+use tokio::task::JoinError;
 
 use crate::changes::{tables, Changes};
 
@@ -328,6 +330,18 @@ impl Db {
         T: Send + 'static,
         E: From<DbError> + Send + 'static,
     {
+        let call: Call = Box::new(move |conn| Box::new(f(conn)));
+        let done = self.run_boxed(call).await.map_err(DbError::Task)?;
+        *done
+            .downcast::<Result<T, E>>()
+            .expect("a call gives back what its closure returned")
+    }
+
+    /// [`Db::run`] for a boxed call, so the blocking task around it is
+    /// compiled once rather than for every closure: a task per closure type
+    /// was the largest part of the code that crates and their tests compile
+    /// (ticket 0160).
+    async fn run_boxed(&self, call: Call) -> Result<Box<dyn Any + Send>, JoinError> {
         let conn = Arc::clone(&self.conn);
         let announcing = self.announcing.clone();
         tokio::task::spawn_blocking(move || {
@@ -335,21 +349,23 @@ impl Db {
             // so the connection itself is still usable.
             let mut guard = conn.lock().unwrap_or_else(|e| e.into_inner());
             let Some(announcing) = announcing else {
-                return f(&mut guard);
+                return call(&mut guard);
             };
             // A call that only reads changes nothing, so it never looks at
             // what the triggers noted.
             let before = guard.total_changes();
             // A panic rolls back the transaction it unwinds out of, but what
-            // `f` committed before it is announced before the panic goes on.
-            let result = panic::catch_unwind(AssertUnwindSafe(|| f(&mut guard)));
+            // the call committed before it is announced before the panic goes on.
+            let result = panic::catch_unwind(AssertUnwindSafe(|| call(&mut guard)));
             announcing.after_call(&guard, before);
             result.unwrap_or_else(|payload| panic::resume_unwind(payload))
         })
         .await
-        .map_err(|e| E::from(DbError::Task(e)))?
     }
 }
+
+/// A closure given to [`Db::run`], returning its result boxed.
+type Call = Box<dyn FnOnce(&mut Connection) -> Box<dyn Any + Send> + Send>;
 
 impl Announcing {
     /// Tells the channel what the call that began with `before` total changes
