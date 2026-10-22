@@ -242,7 +242,7 @@ Anissia의 `subject`, 선택적인 `originalSubject`와 `startDate`는 해당 �
 ### 라이브러리 화면
 
 라이브러리는 전체 작품을 한 목록으로 보여주고, 표지 격자와 목록 보기를 사용자가 바꿀 수 있어요.
-고른 보기는 페이지가 열려 있는 동안 유지하고, 새로고침하거나 새 페이지로 열면 표지 격자로 시작해요(사용자 결정, 2026-10-04).
+고른 보기는 이 브라우저에 저장해서, 새로고침하거나 새 페이지로 열어도 그 보기로 시작해요(사용자 결정, 2026-10-23).
 목록은 서버가 정렬·필터·검색한 결과를 페이지로 나눠, 끝에 닿으면 다음 페이지를 이어서 불러와요(사용자 결정, 2026-10-01). 작품 수와 작품마다 붙는 정보가 늘어도 한 번에 받는 양이 커지지 않게 하려는 거예요.
 라이브러리의 작품은 500편을 넘을 것으로 보고, 약 520편의 자료로 격자·목록·정렬·검색이 느려지거나 스크롤 위치를 잃지 않는지 확인해요.
 
@@ -281,9 +281,10 @@ Anissia의 `subject`, 선택적인 `originalSubject`와 `startDate`는 해당 �
 보관 폴더를 정하지 않았으면 폴더 고르기를 두지 않아요(구현 결정, 2026-10-23). 고르기는 검색칸 옆에 보기 전환과 같은 모양으로 두고, 필터 칩과 떨어뜨려 둘이 따로 고른다는 것을 보여줘요(구현 결정, 2026-10-23).
 작품명·작품 폴더 이름·원제·영문명으로 작품과 등록 시즌을 찾아요.
 작품 상세 방문·뒤로 가기에서 보기·정렬·검색·필터·폴더·스크롤 위치를 잃지 않으며, 정렬 변경만으로 작업 선택이나 다운로드·승인이 생기지 않아요.
-보기·정렬·검색·필터는 페이지가 열려 있는 동안만 유지해요. 새로고침하거나 새 페이지로 열면 표지 격자·최근 자막 추가순·빈 검색·`전체`로 시작해요(사용자 결정, 2026-10-04).
-폴더 고르기도 같아서, 새로 열면 `전체`로 시작해요(구현 결정, 2026-10-23).
-정렬은 다섯 기준의 서로 다른 기대 순서를 가진 자료로 상세 이동·뒤로 가기와 새로고침 뒤의 기본 정렬까지 확인해요.
+보기·정렬·필터·폴더 고르기는 이 브라우저에 저장해서, 새로고침하거나 새 탭으로 열어도 마지막 값으로 시작해요. 화면 모드처럼 기기와 브라우저마다 따로 저장해요(사용자 결정, 2026-10-23). 검색어는 페이지가 열려 있는 동안만 유지해서, 새로고침하면 비어요(사용자 결정, 2026-10-23).
+0.8.0까지는 2026-10-04의 사용자 결정대로 보기·정렬·검색·필터를 페이지가 열려 있는 동안만 유지하고, 새로 열면 표지 격자·최근 자막 추가순·빈 검색·`전체`로 시작했어요.
+브라우저 저장소를 쓸 수 없거나 저장한 값이 지금은 없는 보기·정렬·필터·폴더면, 그 항목만 기본값인 표지 격자·최근 자막 추가순·`전체`로 시작해요. 보관 폴더가 없어 폴더 고르기가 없으면 저장한 폴더 대신 `전체`로 보고, 그 `전체`를 저장해요.
+정렬은 다섯 기준의 서로 다른 기대 순서를 가진 자료로 상세 이동·뒤로 가기와 새로고침 뒤에 고른 정렬이 남는 것까지 확인해요.
 
 ### 작품 상세 화면
 
@@ -571,8 +572,9 @@ Anissia의 `subject`, 선택적인 `originalSubject`와 `startDate`는 해당 �
 | 항목 전체가 작품 상세 진입, 올려 두면 배경을 밝힘 | 2026-10-04 개발(개발 환경): iPhone Safari에서 61번째 이후 작품을 열었다가 뒤로 가면 같은 위치였어요 ([2-work-discovery-and-subscriptions/0013]) | 없음 | 항목의 어느 자리를 눌러도 열리는지와 밑줄이 없는지는 시험도 실제 사용도 없고, 배경이 밝아지는 것은 임시 DB에서만 봤어요 ([2-work-discovery-and-subscriptions/0013]) |
 | 목록 안에서 회차 상태를 펼치지 않고 작품 상세로 이동 | 2026-10-04 개발(개발 환경): 목록 항목을 눌러 작품 상세로 갔다 돌아왔어요 ([2-work-discovery-and-subscriptions/0013]) | 없음 | 펼침이 없다는 것은 시험이 없고 눈으로 본 것뿐이에요 |
 | 자막 보유 범위(`자막 1–10화`), 구간 분리, 중복 회차, 소수 회차, `자막 없음`, `자막 확인 필요`, 보관만 한 자막 제외, 최신 로컬 시즌 기준 | 2026-10-02 서버: `자막 1–4·6–8화`처럼 빈 회차로 나뉜 범위와 `자막 확인 필요`가 보였어요 ([2-work-discovery-and-subscriptions/0013]) | (1) `trss-core` `src/episode.rs` `consecutive_episodes_make_one_run_and_a_gap_splits_it`<br>(2) `trss-library` `src/store/library/overview.rs` `a_subtitle_written_with_a_zero_fraction_covers_the_video_of_that_number`<br>(3) `trss-core` `src/episode.rs` `episodes_that_are_not_whole_numbers_stay_apart_and_come_last`<br>(4) `trss-library` `src/store/library/overview.rs` `holdings_follow_the_latest_season_and_times_span_every_season`<br>(5) `trss-library` `src/store/library/tests.rs` `an_unrecognized_subtitle_asks_for_a_check_and_a_download_in_progress_does_not` | 보관만 한 자막을 범위에 세지 않는 것과 관리 전부터 있던 자막을 세는 것을 직접 가리키는 시험은 찾지 못했어요<br>소수 회차를 실제 자료로 본 적이 없어요<br>특정 시즌을 가리키는 링크가 대상을 유지하는지는 시험이 없어요<br>`자막 확인 필요`의 원인 가운데 파일 누락과 검증 실패는 만들지 않았어요 ([web-redesign/0132](../specs/2026-09-30-web-redesign/0132-library-unbuilt-parts.md)). `subtitle_check_needed`(`store/library/overview.rs`)는 scan이 회차에 놓지 못한 자막 파일에만 올라요 |
-| 정렬 다섯 가지, 날짜 미상과 같은 값의 처리, 추가 시각의 의미, 필터, 검색, 목록 상태 유지, 새로고침 뒤 기본값, 정렬 확인 | 2026-10-04 개발(개발 환경): 목록·제목순·검색어 `re`·`확인 필요`를 건 채 작품에 다녀와도 그대로였고 새로고침하면 기본값으로 돌아갔어요 ([2-work-discovery-and-subscriptions/0013]) | (1) `trss-library` `src/store/library/page.rs` `a_time_sort_is_latest_first_with_unknown_after_known_and_title_then_id_on_ties`<br>(2) 같은 파일 `the_year_sort_is_latest_first_with_unknown_last_by_title_and_the_pages_follow_it`<br>(3) 같은 파일 `filters_pick_the_works_their_definitions_name`<br>(4) 같은 파일 `search_matches_the_title_by_nfc_text_without_case_and_total_counts_the_matches`<br>(5) `trss-library` `src/store/library/tests.rs` `the_first_scan_leaves_times_unknown_and_a_later_one_stamps_only_what_is_new` | 기본 정렬이 최근 자막 추가순인 것을 가리키는 시험이 없어요(서버 기본값은 `subtitle`)<br>보기·정렬·검색·필터·스크롤 위치 유지의 화면 시험이 없어요 ([2-work-discovery-and-subscriptions/0013])<br>추가 시각은 실제 NAS 폴더나 운영 DB로 보지 않았고 ([2-work-discovery-and-subscriptions/0013]), `forgetLibrary`(감시 폴더 해제 뒤 상세 캐시 버리기)는 브라우저에서 해 보지 않았어요 ([2-work-discovery-and-subscriptions/0013])<br>다섯 기준의 서로 다른 기대 순서 자료로 상세 이동·뒤로 가기·새로고침 뒤 기본 정렬까지 보는 확인과, 정렬만으로 작업 선택이 생기지 않는다는 시험은 없어요 |
-| 폴더 고르기(`전체`·`수집`·`보관`, 필터와 함께 적용, 보관 폴더가 없으면 없음, 페이지가 열린 동안 유지)와 격자·목록의 `보관` 배지 | 2026-10-23 개발(서버 DB 사본): `전체` 92편 가운데 `수집`이 10편, `보관`이 82편이었어요. `보관`과 `자막 없음`을 함께 고르자 `작품 6편`이 격자와 목록에 `보관` 배지를 달고 떴어요. 390px에서 가로로 넘치지 않았고, 작품에 다녀와도 `보관`·`목록`·`자막 없음`이 그대로였어요 ([feedback-0.8.0/0004](../specs/2026-10-23-feedback-0.8.0/0004-library-folder-choice.md)) | `trss-library` `src/store/library/page.rs` `the_folder_keeps_one_watch_folders_works_and_applies_with_the_filter_and_the_search`<br>`trss` `src/web/library_api/tests.rs` `the_place_keeps_the_collect_or_the_archive_folders_works_and_marks_the_archived` | 폴더 고르기와 배지는 화면 테스트가 없어요. 보관 폴더를 지운 뒤 남은 `보관` 고르기가 `전체`로 돌아가는 것은 개발 환경에서 해 보지 않았어요. |
+| 정렬 다섯 가지, 날짜 미상과 같은 값의 처리, 추가 시각의 의미, 필터, 검색, 목록 상태 유지, 정렬 확인 | 2026-10-04 개발(개발 환경): 목록·제목순·검색어 `re`·`확인 필요`를 건 채 작품에 다녀와도 그대로였고 새로고침하면 기본값으로 돌아갔어요 ([2-work-discovery-and-subscriptions/0013])<br>2026-10-23 개발(서버 DB 사본): `목록`·`제목순`·`보관`·검색어 `a`를 건 채 작품에 다녀와도 그대로였고, 1000px 내려가 연 작품에서 돌아와도 같은 위치였어요 ([feedback-0.8.0/0005](../specs/2026-10-23-feedback-0.8.0/0005-library-list-remembers.md)) | (1) `trss-library` `src/store/library/page.rs` `a_time_sort_is_latest_first_with_unknown_after_known_and_title_then_id_on_ties`<br>(2) 같은 파일 `the_year_sort_is_latest_first_with_unknown_last_by_title_and_the_pages_follow_it`<br>(3) 같은 파일 `filters_pick_the_works_their_definitions_name`<br>(4) 같은 파일 `search_matches_the_title_by_nfc_text_without_case_and_total_counts_the_matches`<br>(5) `trss-library` `src/store/library/tests.rs` `the_first_scan_leaves_times_unknown_and_a_later_one_stamps_only_what_is_new` | 기본 정렬이 최근 자막 추가순인 것을 가리키는 시험이 없어요(서버 기본값은 `subtitle`)<br>보기·정렬·검색·필터·스크롤 위치 유지의 화면 시험이 없어요 ([2-work-discovery-and-subscriptions/0013])<br>추가 시각은 실제 NAS 폴더나 운영 DB로 보지 않았고 ([2-work-discovery-and-subscriptions/0013]), `forgetLibrary`(감시 폴더 해제 뒤 상세 캐시 버리기)는 브라우저에서 해 보지 않았어요 ([2-work-discovery-and-subscriptions/0013])<br>다섯 기준의 서로 다른 기대 순서 자료로 상세 이동·뒤로 가기·새로고침 뒤에 고른 정렬이 남는 것까지 보는 확인과, 정렬만으로 작업 선택이 생기지 않는다는 시험은 없어요 |
+| 폴더 고르기(`전체`·`수집`·`보관`, 필터와 함께 적용, 보관 폴더가 없으면 없음, 작품에 다녀와도 유지)와 격자·목록의 `보관` 배지 | 2026-10-23 개발(서버 DB 사본): `전체` 92편 가운데 `수집`이 10편, `보관`이 82편이었어요. `보관`과 `자막 없음`을 함께 고르자 `작품 6편`이 격자와 목록에 `보관` 배지를 달고 떴어요. 390px에서 가로로 넘치지 않았고, 작품에 다녀와도 `보관`·`목록`·`자막 없음`이 그대로였어요 ([feedback-0.8.0/0004](../specs/2026-10-23-feedback-0.8.0/0004-library-folder-choice.md)) | `trss-library` `src/store/library/page.rs` `the_folder_keeps_one_watch_folders_works_and_applies_with_the_filter_and_the_search`<br>`trss` `src/web/library_api/tests.rs` `the_place_keeps_the_collect_or_the_archive_folders_works_and_marks_the_archived` | 폴더 고르기와 배지는 화면 테스트가 없어요. |
+| 보기·정렬·필터·폴더 고르기를 이 브라우저에 저장, 검색어는 페이지가 열려 있는 동안만, 저장소를 쓸 수 없거나 모르는 값이면 그 항목만 기본값, 보관 폴더가 없으면 `전체` | 2026-10-23 개발(서버 DB 사본): `목록`·`제목순`·`보관`·`자막 없음`과 검색어 `a`를 건 뒤 새로고침하자 넷은 그대로 `작품 6편`이었고 검색칸은 비었어요. 새 탭도 저장한 값으로 열렸어요. 저장한 값의 보기·정렬·폴더를 모르는 값으로 바꾸고 새로고침하자 그 셋만 기본값이 되고 `자막 없음`은 남았어요. JSON이 아닌 값이면 모두 기본값으로 `작품 92편`을 보여 줬어요 ([feedback-0.8.0/0005](../specs/2026-10-23-feedback-0.8.0/0005-library-list-remembers.md))<br>참고(가짜 출처): 같은 날 같은 환경에서 목록 답의 `has_archive_folder`를 거짓으로 바꿔 넣자, 저장한 `보관`으로 한 번 읽은 뒤 `전체`로 돌아가 그 값을 저장했고 폴더 고르기가 사라졌어요 ([feedback-0.8.0/0005](../specs/2026-10-23-feedback-0.8.0/0005-library-list-remembers.md)) | `web` `src/lib/stored-choices.test.ts` | 저장소를 쓸 수 없는 브라우저(사생활 보호 창, 사이트 데이터 끔)는 단위 테스트로만 봤어요. 보관 폴더가 없을 때 `전체`로 돌아가는 것은 화면 테스트가 없고, 설정에서 보관 폴더를 실제로 지워 보지 않았어요. 서버와 실제 기기에서는 보지 않았어요 |
 
 ### 작품 상세 화면
 
@@ -660,7 +662,7 @@ Anissia의 `subject`, 선택적인 `originalSubject`와 `startDate`는 해당 �
 
 ### 확인하지 않은 요구
 
-실제 사용에서 본 것도 없고 테스트도 없는 요구는 96행 중 4행이에요.
+실제 사용에서 본 것도 없고 테스트도 없는 요구는 97행 중 4행이에요.
 
 - 명세에만 있고 만들지 않은 요구 셋: 이미지 파일의 수명의 `표: AniList 제목과 로컬 시즌 번호만 같거나 Anissia 제목·시작일이 빠진 상태`, 할 일과 회차 목록의 `표: 방영 전 회차`, 오른쪽 카드 열의 `최근 활동`. [web-redesign/0132](../specs/2026-09-30-web-redesign/0132-library-unbuilt-parts.md)에서 만들어요.
 - 머리와 시즌: 표지 크게 보기. 가짜 출처로만 봤어요.

@@ -1,14 +1,19 @@
 import { useCallback, useState } from "react";
 
+import { readStoredChoices, writeStoredChoices, type Choices } from "@/lib/stored-choices";
+import { browserStore } from "@/lib/theme";
+
 import type { FilterKey, PlaceKey, SortKey } from "./api";
-import { DEFAULT_SORT, FILTERS, PLACES } from "./model";
+import { DEFAULT_SORT, FILTERS, PLACES, SORTS } from "./model";
 
 /**
  * What the library list remembers: the view (cover grid or list), the sort,
- * the search text, the filter and the folder, for the life of the page. Going
- * to a work and back (or to another menu and back) finds them as they were; a
- * reload or a new page starts from the cover grid, the default sort, no search,
- * every work (user decision, 2026-10-04) and every folder.
+ * the filter and the folder in this browser, so a reload or a new tab starts
+ * from the last ones (src/lib/stored-choices.ts), and the search text for the
+ * life of the page (user decision, 2026-10-23). Going to a work and back (or to
+ * another menu and back) finds all of them as they were. A kept value the list
+ * no longer offers, or storage that cannot be used, starts that item from the
+ * cover grid, the default sort, every work or every folder.
  */
 
 export type ViewKey = "grid" | "list";
@@ -21,7 +26,20 @@ interface Kept {
   place: PlaceKey;
 }
 
-let kept: Kept = { view: "grid", sort: DEFAULT_SORT, search: "", filter: "all", place: "all" };
+type Stored = Omit<Kept, "search">;
+
+const STORAGE_KEY = "trss-library-list-v1";
+
+const DEFAULTS: Stored = { view: "grid", sort: DEFAULT_SORT, filter: "all", place: "all" };
+
+const CHOICES: Choices<Stored> = {
+  view: ["grid", "list"],
+  sort: SORTS.map((s) => s.key),
+  filter: FILTERS.map((f) => f.key),
+  place: PLACES.map((p) => p.key),
+};
+
+let kept: Kept = { ...readStoredChoices(browserStore(), STORAGE_KEY, DEFAULTS, CHOICES), search: "" };
 
 export interface LibraryPrefs extends Kept {
   setView: (view: ViewKey) => void;
@@ -36,6 +54,10 @@ export function useLibraryPrefs(): LibraryPrefs {
 
   const remember = useCallback((next: Partial<Kept>) => {
     kept = { ...kept, ...next };
+    if (next.search === undefined) {
+      const { search: _search, ...stored } = kept;
+      writeStoredChoices(browserStore(), STORAGE_KEY, stored);
+    }
     setCurrent(kept);
   }, []);
 

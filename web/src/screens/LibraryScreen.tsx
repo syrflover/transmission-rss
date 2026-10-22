@@ -62,6 +62,9 @@ export function LibraryScreen() {
       ) : null;
   } else if (pages.error !== null) {
     body = <LoadError message={pages.error} onRetry={pages.reload} />;
+  } else if (noPlaces && prefs.place !== "all") {
+    // The kept folder's works would show until the effect above reads 전체.
+    body = null;
   } else if (data.libraryCount === 0) {
     body = <EmptyState>아직 발견한 작품이 없어요. 감시 폴더를 연결하면 작품이 여기에 나타나요.</EmptyState>;
   } else if (data.works.length === 0 && !pages.stale) {

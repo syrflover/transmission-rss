@@ -33,7 +33,8 @@ export const THEME_LABEL: Record<ThemePreference, string> = {
 
 const DARK_QUERY = "(prefers-color-scheme: dark)";
 
-function browserStore(): PreferenceStore | null {
+/** The browser's localStorage, or null where reading it throws; the library list keeps its choices there too. */
+export function browserStore(): PreferenceStore | null {
   try {
     return window.localStorage;
   } catch {
