@@ -171,6 +171,8 @@ docker compose -f docker-compose.trss.yml down
 
 The screens and the collection run in one process: restarting `trss` stops both for the few seconds it takes.
 
+A subtitle job that was running a step when `trss` stopped is `중단됨` after the next start, and it goes on from that step only when someone presses `다시 시작` on its row or its page. Jobs that wait for a person, are held or are in line stay as they were.
+
 #### Update
 
 1. Set `TRSS_VERSION` in `.env` to the new release.
