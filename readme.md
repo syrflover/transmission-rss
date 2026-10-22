@@ -670,8 +670,9 @@ A rule's detail has a `지난 회차 검색` section for episodes the feed no lo
 | Command | What it does |
 | --- | --- |
 | `dev/compose.sh pull` | Copies the server's data, once; `--force` replaces it |
-| `dev/compose.sh up` | Builds the images and starts Transmission, `trss-browser` and `trss` |
+| `dev/compose.sh up` | Builds the images, unless given `--no-build`, and starts Transmission, `trss-browser` and `trss` |
 | `dev/compose.sh logs` | Follows `trss`; `dev/compose.sh logs trss-browser` follows the browser |
+| `dev/compose.sh status` | Shows the containers of both compose files |
 | `dev/compose.sh down` | Stops them; `dev/local` stays for the next `up` |
 
 - `up` builds with cargo's caches: the crates.io registry, the git checkouts and `target/` are BuildKit cache mounts of the local Docker builder, shared by `Dockerfile` and `Dockerfile.browser` and by every checkout and worktree that builds on the machine. The first build compiles every dependency; after a change only the workspace crates whose files changed and the crates that depend on them compile, and the binaries relink. Cargo tells there which files changed by their content, not their times (`deploy/stamp-sources.sh`), so a build never takes binaries that another worktree's sources produced.
