@@ -348,3 +348,109 @@ cold에서 오래 걸린 단위는 trss-web 단위 테스트(51.8초), trss-coll
 | `trss-worker` | 3,444 | 0 | 7,059 | 10,503 |
 
 `src`의 테스트 파일은 `tests.rs`와 `tests/` 폴더 아래의 파일이에요. 다른 파일 안의 `mod tests`는 테스트 파일 밖으로 세요.
+
+### 다시 측정한 값
+
+2026-10-22에 `ace59821`을 [기준값](#기준값)과 같은 PC, 명령, 스크립트, 빌드 상태로 측정했어요. 코드를 바꾸는 마지막 티켓인 [0160](0160-test-setup-costs.md)을 마친 커밋이고, rustc도 1.99.1로 같아요. 테스트 바이너리 시간의 합은 43.0초에서 37.0·36.8초로, `trss-core`를 고친 뒤의 cold 빌드는 81.2초에서 53.1초로 줄었어요. warm 빌드는 13.7초에서 15.7초로 늘었어요. 원자료는 이 PC의 `dev/local/measure/0161/`에 있어요.
+
+측정은 새 `dev/measure/when-quiet.sh`로 돌렸어요. 이 스크립트는 다른 저장소의 cargo·rustc·테스트 바이너리와 이 저장소의 rust-analyzer check가 90초 동안 없을 때 측정을 시작하고, 측정하는 동안 1초마다 다시 봐서 하나라도 있으면 그 측정을 버리게 해요. 아래 값을 낸 빌드 측정과 테스트 측정은 둘 다 첫 시도에서 아무것도 보지 않았어요. 그 전에 같은 커밋을 측정한 빌드 두 번과 테스트 두 번은 다른 세션이 다른 저장소를 빌드하던 시간과 겹쳐서 쓰지 않았어요. 측정 스크립트는 시작할 때만 확인해서, 도중에 시작한 빌드를 잡지 못했어요.
+
+#### 테스트 시간의 비교
+
+| | 0144 1회 | 0144 2회 | 0161 1회 | 0161 2회 |
+| --- | ---: | ---: | ---: | ---: |
+| cargo의 `Finished … in` | 0.11s | 0.11s | 0.11s | 0.11s |
+| 테스트 바이너리 | 31개 | 31개 | 27개 | 27개 |
+| 테스트 바이너리의 `finished in` 합 | 43.0초 | 43.0초 | 37.0초 | 36.8초 |
+| 통과·실패·무시 | 3,086·0·14 | 3,086·0·14 | 3,201·0·12 | 3,201·0·12 |
+
+줄어든 6초는 대부분 메모리 최고치를 측정하는 테스트 셋에서 나왔어요. 셋의 합이 6.3초에서 1.9초가 됐고, 그중 `subtitle_upload_peak`가 2.92초에서 0.55초로, `revision_crc_peak`가 1.91초에서 0.32초로 줄었어요. 이 둘은 [0160](0160-test-setup-costs.md)이 dev 빌드에서 SHA-256과 zlib-rs·crc32fast를 최적화해 줄인 거예요. 합친 크레이트의 단위 테스트와 `tests/it`은 6.0초와 7.0초로, 0144의 `trss-web` 단위 테스트(7.00초)와 `trss-worker` `tests/it`(6.59초)을 더한 것보다 0.6초 짧아요.
+
+바이너리는 `trss-web`과 `trss-worker`의 9개가 `trss`의 5개가 됐어요. 두 단위 테스트가 하나가 됐고, 두 `main`의 테스트 바이너리와 `remote_screen_docker`는 기본 빌드에서 빠졌어요.
+
+테스트 바이너리마다의 `finished in`이에요.
+
+| 바이너리 | 1회 | 2회 |
+| --- | ---: | ---: |
+| trss `tests/it` | 7.03초 | 7.03초 |
+| trss lib | 5.99초 | 6.00초 |
+| trss-browser `tests/it` | 3.14초 | 3.14초 |
+| trss-jobs `tests/it` | 2.93초 | 3.01초 |
+| trss-jobs `tests/extract_process.rs` | 2.72초 | 2.72초 |
+| trss-collect lib | 2.50초 | 2.62초 |
+| trss-archive `tests/it` | 2.34초 | 1.90초 |
+| trss-library lib | 1.67초 | 1.67초 |
+| trss-core lib | 1.56초 | 1.56초 |
+| trss-jobs lib | 1.55초 | 1.55초 |
+| trss-browser lib | 1.50초 | 1.50초 |
+| trss `tests/artwork_serving_peak.rs` | 1.05초 | 1.05초 |
+| trss-subtitles lib | 0.98초 | 0.98초 |
+| trss-anilist lib | 0.69초 | 0.69초 |
+| trss `tests/subtitle_upload_peak.rs` | 0.55초 | 0.55초 |
+| trss-collect `tests/revision_crc_peak.rs` | 0.32초 | 0.32초 |
+| trss-anissia lib | 0.20초 | 0.21초 |
+| trss-library `tests/artwork_header_check.rs` | 0.11초 | 0.11초 |
+| trss `tests/artwork_upload_peak.rs` | 0.10초 | 0.10초 |
+| trss-probe main | 0.08초 | 0.08초 |
+| trss-import lib | 0.01초 | 0.01초 |
+| trss-transmission lib | 0.01초 | 0.01초 |
+| 나머지 5개 | 각 0.00초 | 각 0.00초 |
+
+나머지 5개는 trss-archive lib, trss-subtitles `tests/it`, trss-jobs의 `trss-extract`, trss-browser의 main과 `fake_chromium`이에요.
+
+#### `trss-core`를 고친 뒤의 빌드 시간 비교
+
+| | 0144 warm | 0161 warm | 0144 cold | 0161 cold |
+| --- | ---: | ---: | ---: | ---: |
+| wall time | 13.7초 | 15.7초 | 81.2초 | 53.1초 |
+| 빌드한 단위 | 43개 | 37개 | 43개 | 37개 |
+| 단위 시간의 합 | 50.7초 | 55.5초 | 306.6초 | 190.0초 |
+
+prime은 15.5초였어요. 크레이트마다 단위 시간의 합이에요. 0144의 `trss` 값은 `trss-web`과 `trss-worker`를 더한 거예요.
+
+| 크레이트 | 0144 warm | 0161 warm | 0144 cold | 0161 cold |
+| --- | ---: | ---: | ---: | ---: |
+| trss | 22.3초 | 18.8초 | 157.2초 | 71.4초 |
+| trss-jobs | 7.2초 | 8.6초 | 44.3초 | 30.9초 |
+| trss-collect | 5.5초 | 6.4초 | 38.5초 | 26.0초 |
+| trss-library | 3.8초 | 4.6초 | 19.3초 | 17.5초 |
+| trss-browser | 4.3초 | 5.7초 | 16.2초 | 16.2초 |
+| trss-subtitles | 2.7초 | 3.6초 | 11.0초 | 9.8초 |
+| trss-core | 1.4초 | 2.0초 | 10.7초 | 7.7초 |
+| trss-anilist | 1.3초 | 2.2초 | 4.0초 | 4.2초 |
+| trss-anissia | 1.4초 | 1.9초 | 3.4초 | 3.6초 |
+| trss-import | 0.8초 | 1.6초 | 2.1초 | 2.7초 |
+
+cold가 줄어든 것은 크레이트를 합친 덕분이 아니라 [0160](0160-test-setup-costs.md)의 수정 덕분이에요. 0160이 시작할 때 측정한 `a19eb94b`는 web과 worker를 합치고 그 뒤의 기능도 들어간 커밋인데, cold가 82.6초로 0144와 비슷했고 warm은 16.9초였어요. 0160이 `Db::run`의 closure를 상자에 담고 디버그 정보를 줄 정보만 남기자 cold가 51.9초, warm이 14.4초가 됐어요.
+
+warm에서는 합친 `trss` 크레이트의 단위 테스트가 혼자 빌드의 끝을 정해요. 이 단위는 7.4초에 시작해 8.3초 돌아서, 다른 단위가 모두 끝난 14.1초 뒤에도 1.5초를 혼자 돌아요. 0144의 warm에서는 가장 큰 단위가 `trss-web` 단위 테스트(6.0초)였고, 단위 셋이 마지막 0.6초 안에 끝났어요. 크레이트 하나는 rustc 하나가 컴파일하므로, 크레이트를 합쳐 단위가 커지면 이렇게 혼자 도는 시간이 길어지기 쉬워요. warm의 크레이트마다 합은 `trss`를 빼고 모두 0.5–1.4초 늘었는데, 까닭은 찾지 않았어요. 같은 커밋을 0160이 측정한 warm이 14.4초였으니, warm은 측정할 때마다 1초쯤 달라질 수 있어요.
+
+#### 인계 코드의 줄 수 비교
+
+`dev/measure/handoff-lines.sh ace59821`로 셌어요. `wake.rs`와 `heartbeat.rs`는 없어졌어요.
+
+| `trss-core`의 파일 | 0144 | 0161 |
+| --- | ---: | ---: |
+| `commands/` | 1,198 | 1,533 |
+| `queue.rs` | 558 | 493 |
+| `wake.rs` | 89 | 0 |
+| `heartbeat.rs` | 727 | 0 |
+| `lock.rs` | 770 | 119 |
+| `folder_locks.rs` | 531 | 531 |
+| 합 | 3,873 | 2,676 |
+
+| 크레이트와 커밋 | `src`의 테스트 파일 밖 | `src`의 테스트 파일 | `tests/` | 합 |
+| --- | ---: | ---: | ---: | ---: |
+| `trss-web`과 `trss-worker`, 0144 | 27,046 | 22,441 | 8,843 | 58,330 |
+| `trss`, 크레이트를 합친 `155fc5af` | 27,055 | 22,444 | 8,843 | 58,342 |
+| `trss`, [0150](0150-trss-crate-tests-by-adr-0015.md)을 마친 `19cac492` | 26,979 | 22,370 | 8,711 | 58,060 |
+| `trss`, 0161 | 30,760 | 24,208 | 9,703 | 64,671 |
+
+`trss-core`의 인계 코드는 1,197줄 줄었어요. `trss` 크레이트는 0150까지 282줄 줄었고, 그 뒤 6,611줄 늘었어요. 늘어난 줄의 대부분은 다음 티켓들이 더했어요. `git diff --numstat`으로 `crates/trss`의 `.rs` 파일에서 센 값이에요.
+
+| 티켓 | 더한 것 | 늘어난 줄 |
+| --- | --- | ---: |
+| [0163](0163-batch-archive-on-server.md) | 서버가 규칙 순서대로 하는 `모두 보관` | 2,188 |
+| [0157](0157-generated-types-collect.md)–[0159](0159-generated-types-rest-and-events.md) | 화면 타입 생성 | 2,439 |
+| [0156](0156-events-for-covers-schedule-status.md) | 시간만 지나 바뀌는 상태의 알림 | 888 |
+| [0154](0154-change-events-and-command-reads.md) | SSE로 바뀐 것 알리기 | 748 |
