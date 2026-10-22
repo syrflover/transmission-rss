@@ -14,7 +14,11 @@ export type WorkDetail = { id: string, name: string, title: string,
  * The work is a movie and nothing else: no season folder, one video
  * directly in its folder, which is the episode 1 of season 0.
  */
-movie_only: boolean, missing: boolean, watch_folder: WatchFolderRef, folder_path: string, added_at: number | null, native_title: string | null, subscriptions: Array<WorkSubscription>, seasons: Array<WorkSeason>, unrecognized: Array<UnrecognizedFile>, rules: Array<WorkRule>, 
+movie_only: boolean, missing: boolean, watch_folder: WatchFolderRef, 
+/**
+ * The work's watch folder is the archive folder.
+ */
+archived: boolean, folder_path: string, added_at: number | null, native_title: string | null, subscriptions: Array<WorkSubscription>, seasons: Array<WorkSeason>, unrecognized: Array<UnrecognizedFile>, rules: Array<WorkRule>, 
 /**
  * `보관 폴더로 옮기기` ([`archive`]).
  */

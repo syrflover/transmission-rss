@@ -100,6 +100,23 @@ const item =
   "block rounded-card bg-surface-2 text-text-primary no-underline hover:bg-surface-1 hover:no-underline dark:bg-surface-1 dark:hover:bg-surface-3";
 
 /**
+ * `보관`: the work's folder is in the archive folder. A quiet badge, as it says
+ * where the work is, not what it needs; the same on the cards and the detail.
+ */
+export function ArchivedBadge({ className }: { className?: string }) {
+  return (
+    <span
+      className={cn(
+        "inline-flex flex-none items-center rounded-full border border-hairline px-1.5 py-px text-[11.5px] font-semibold whitespace-nowrap text-text-secondary",
+        className,
+      )}
+    >
+      보관
+    </span>
+  );
+}
+
+/**
  * A grid item has its to-do badges (`인증 필요`, `교체 승인`, …) over the cover's top left. They come after the title
  * in the markup, so the link reads the title first.
  */
@@ -114,6 +131,7 @@ export const GridItem = memo(function GridItem({ work }: { work: Work }) {
         <Cover work={work} className="aspect-[2/3] w-full" letterClass="text-5xl" imageUrl={work.cover_url} />
         <span className="flex min-w-0 flex-col gap-1 px-0.5 pb-0.5">
           <span className="line-clamp-2 min-w-0 text-sm leading-snug font-semibold">{work.title}</span>
+          {work.archived && <ArchivedBadge className="self-start" />}
           <VideoLine work={work} />
           <SubtitleLine work={work} />
         </span>
@@ -148,7 +166,10 @@ export const ListItem = memo(function ListItem({ work }: { work: Work }) {
           letterClass="text-xl"
           imageUrl={work.cover_url}
         />
-        <span className="line-clamp-2 min-w-0 text-[14.5px] leading-snug font-semibold">{work.title}</span>
+        <span className="flex min-w-0 items-center gap-2">
+          <span className="line-clamp-2 min-w-0 text-[14.5px] leading-snug font-semibold">{work.title}</span>
+          {work.archived && <ArchivedBadge />}
+        </span>
         <VideoLine work={work} />
         <SubtitleLine work={work} />
       </Link>

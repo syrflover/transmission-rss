@@ -3,13 +3,14 @@
 //! searches; the screen asks for the next page when it reaches the end.
 //!
 //! ```text
-//! GET /api/library/works?sort=subtitle&filter=all&q=lycoris&after=<cursor>&limit=60
+//! GET /api/library/works?sort=subtitle&filter=all&place=all&q=lycoris&after=<cursor>&limit=60
 //! ```
 //!
 //! | parameter | meaning                                                              |
 //! | --------- | -------------------------------------------------------------------- |
 //! | `sort`    | `title`, `year`, `added`, `video`, `subtitle` (default `subtitle`)  |
 //! | `filter`  | `all`, `airing`, `complete`, `partial`, `none`, `check` (default `all`) |
+//! | `place`   | `all`, `collect`, `archive` (default `all`): every work, or the works of the collect or the archive folder |
 //! | `q`       | text the work title, the folder name or a linked AniList entry's native, English or romaji title contains, without regard to case; NFC-normalized |
 //! | `after`   | the `next` of the previous page; leave out for the first page        |
 //! | `limit`   | 1 to 200 works, default 60                                           |
@@ -17,7 +18,7 @@
 //! ```json
 //! { "items": [{
 //!     "id": "…", "name": "Lycoris Recoil", "title": "리코리스 리코일", "missing": false,
-//!     "watch_folder": { "id": "…", "path": "/media/anime" },
+//!     "watch_folder": { "id": "…", "path": "/media/anime" }, "archived": false,
 //!     "latest_season": 2, "movie_only": false,
 //!     "video":    [{ "first": "01", "last": "03", "text": "1–3" },
 //!                  { "first": "05", "last": "12", "text": "5–12" }],
@@ -30,15 +31,22 @@
 //!     "cover_url": "/api/library/works/…/artwork/image?v=…",
 //!     "todos": ["auth", "replacement"]
 //!   }],
-//!   "next": "7b2273…", "total": 520, "library_count": 520 }
+//!   "next": "7b2273…", "total": 520, "library_count": 520, "has_archive_folder": true }
 //! ```
 //!
 //! - `next` is an opaque cursor, `null` after the last page. It continues
 //!   *after the last item of this page*, so a work added while the client pages
 //!   never makes it see an item twice. A cursor goes with the same `sort` as
-//!   the page it came from (another sort is a `400`); the filter and the search
-//!   are sent again each time. `total` is how many works the filter and the
-//!   search match, `library_count` how many the library has.
+//!   the page it came from (another sort is a `400`); the place, the filter and
+//!   the search are sent again each time. `total` is how many works the place,
+//!   the filter and the search match, `library_count` how many the library has.
+//! - Place: `collect` and `archive` keep the works of the watch folder the
+//!   collection settings name as the collect or the archive folder (an
+//!   archived work is one in the archive folder); the works of other watch
+//!   folders are listed only under `all`. A folder the settings do not set
+//!   matches no work. `has_archive_folder` says whether an archive folder is
+//!   set: the screen offers `전체·수집·보관` only then, and `archived` marks
+//!   each work in it.
 //! - Order: the sort's time latest first (`added`: the work's, `video` /
 //!   `subtitle`: the latest known video / subtitle over every season), an
 //!   unknown time after every known one, then the work title (NFC, case
@@ -94,7 +102,8 @@ use super::{artwork_api::image_url, todo_api::todo_list, ApiError, AppState};
 use trss_core::episode::range_text;
 use trss_jobs::todo::Badge;
 use trss_library::store::library::{
-    Cursor, EpisodeRange, Filter, LibraryError, ListQuery, Sort, SubtitleCoverage, WorkOverview,
+    same_folder, Cursor, EpisodeRange, Filter, InFolder, LibraryError, ListQuery, Sort,
+    SubtitleCoverage, WorkOverview,
 };
 
 pub fn routes() -> Router<AppState> {
@@ -140,6 +149,8 @@ struct WorkView {
     title: String,
     missing: bool,
     watch_folder: WatchFolderRef,
+    /// The work's watch folder is the archive folder.
+    archived: bool,
     latest_season: Option<u32>,
     movie_only: bool,
     video: Vec<RangeView>,
@@ -154,10 +165,12 @@ struct WorkView {
 }
 
 impl WorkView {
+    /// `archive` is the archive folder, when it is set.
     fn new(
         work: WorkOverview,
         image_ids: &HashMap<String, String>,
         badges: &mut HashMap<String, Vec<&'static str>>,
+        archive: Option<&str>,
     ) -> Self {
         let todos = badges
             .remove(&work.id)
@@ -169,6 +182,7 @@ impl WorkView {
             cover_url: image_ids
                 .get(&work.id)
                 .map(|image| image_url(&work.id, image)),
+            archived: archive.is_some_and(|archive| same_folder(&work.watch_folder_path, archive)),
             todos,
             id: work.id,
             name: work.dir_name,
@@ -198,6 +212,7 @@ pub(super) struct WorkPage {
     next: Option<String>,
     total: usize,
     library_count: usize,
+    has_archive_folder: bool,
 }
 
 const DEFAULT_LIMIT: usize = 60;
@@ -209,12 +224,15 @@ const MAX_LIMIT: usize = 200;
 struct Params {
     sort: Option<String>,
     filter: Option<String>,
+    place: Option<String>,
     q: Option<String>,
     after: Option<String>,
     limit: Option<String>,
 }
 
-fn parse(params: Params) -> Result<ListQuery, ApiError> {
+/// `folders` are the collect folder and the archive folder, each when it is
+/// set: what `place` names.
+fn parse(params: Params, folders: (Option<String>, Option<String>)) -> Result<ListQuery, ApiError> {
     let sort = match params.sort.as_deref() {
         None | Some("") => Sort::Subtitle,
         Some(code) => Sort::from_code(code).ok_or_else(|| {
@@ -226,6 +244,18 @@ fn parse(params: Params) -> Result<ListQuery, ApiError> {
         Some(code) => Filter::from_code(code).ok_or_else(|| {
             ApiError::invalid("알 수 없는 필터예요. 전체·방영 중·자막 다 갖춤·자막 일부·자막 없음·확인 필요 중에서 골라 주세요.")
         })?,
+    };
+    let set = |folder: Option<String>| folder.map_or(InFolder::Unset, InFolder::Path);
+    let (collect, archive) = folders;
+    let folder = match params.place.as_deref() {
+        None | Some("" | "all") => InFolder::Any,
+        Some("collect") => set(collect),
+        Some("archive") => set(archive),
+        Some(_) => {
+            return Err(ApiError::invalid(
+                "알 수 없는 폴더예요. 전체·수집·보관 중에서 골라 주세요.",
+            ))
+        }
     };
     let after = match params.after.as_deref() {
         None | Some("") => None,
@@ -257,6 +287,7 @@ fn parse(params: Params) -> Result<ListQuery, ApiError> {
     Ok(ListQuery {
         sort,
         filter,
+        folder,
         search: params.q.unwrap_or_default(),
         after,
         limit,
@@ -270,7 +301,16 @@ async fn list(
     let Query(params) = params.map_err(|_| {
         ApiError::invalid("목록을 받을 조건을 읽지 못했어요. 주소를 확인해 주세요.")
     })?;
-    let query = parse(params)?;
+    let settings = state
+        .settings
+        .collection()
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    let (collect, archive) = match settings {
+        Some(settings) => (Some(settings.folder), settings.archive_folder),
+        None => (None, None),
+    };
+    let query = parse(params, (collect, archive.clone()))?;
     let page = state.library.list(query).await.map_err(|e| match e {
         LibraryError::Db(e) => ApiError::Internal(e.to_string()),
         other => ApiError::Internal(other.to_string()),
@@ -293,11 +333,12 @@ async fn list(
         items: page
             .items
             .into_iter()
-            .map(|work| WorkView::new(work, &image_ids, &mut badges))
+            .map(|work| WorkView::new(work, &image_ids, &mut badges, archive.as_deref()))
             .collect(),
         next: page.next.map(|cursor| cursor.encode()),
         total: page.total,
         library_count: page.library_count,
+        has_archive_folder: archive.is_some(),
     }))
 }
 

@@ -130,9 +130,13 @@ export type {
  * list shows, one page at a time. Times are Unix milliseconds, `null` when unknown.
  */
 
+/** Which folder's works the list shows: every work, or the collect or the archive folder's (`place`). */
+export type PlaceKey = "all" | "collect" | "archive";
+
 export interface WorkPageQuery {
   sort: SortKey;
   filter: FilterKey;
+  place: PlaceKey;
   /** The title text to search for; empty for none. */
   q: string;
   /** The `next` of the page before, none for the first page. */
@@ -142,7 +146,7 @@ export interface WorkPageQuery {
 }
 
 export function loadWorkPage(query: WorkPageQuery, signal?: AbortSignal): Promise<LibraryWorkPage> {
-  const params = new URLSearchParams({ sort: query.sort, filter: query.filter });
+  const params = new URLSearchParams({ sort: query.sort, filter: query.filter, place: query.place });
   if (query.q !== "") params.set("q", query.q);
   if (query.after) params.set("after", query.after);
   if (query.limit !== undefined) params.set("limit", String(query.limit));

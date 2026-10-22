@@ -85,7 +85,7 @@ pub use folder_work::FolderWork;
 use rusqlite::Transaction;
 
 pub use overview::{EpisodeRange, SubtitleCoverage, WorkOverview};
-pub use page::{Cursor, Filter, ListQuery, Page, Sort};
+pub use page::{same_folder, Cursor, Filter, InFolder, ListQuery, Page, Sort};
 
 use crate::discovery::{FileKind, Reason, Scan, ScanError};
 use trss_core::{

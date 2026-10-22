@@ -1632,10 +1632,9 @@ async fn a_work_moved_from_its_detail_loses_its_rules_at_once_and_the_worker_mov
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert_eq!(s.rule(&c.rules[1].id).await["state"], "active");
     assert!(s.collect.join("Clevatess").exists());
-    assert_eq!(
-        s.work(&work).await["archive"]["command"]["state"],
-        "pending"
-    );
+    let before = s.work(&work).await;
+    assert_eq!(before["archive"]["command"]["state"], "pending");
+    assert_eq!(before["archived"], false);
 
     assert_eq!(s.run().await, CommandsOutcome::Ran(1));
 
@@ -1652,9 +1651,10 @@ async fn a_work_moved_from_its_detail_loses_its_rules_at_once_and_the_worker_mov
         s.h.tr.torrent(&hash(1)).download_dir,
         text(s.archive.join("Clevatess/Season 02"))
     );
-    // The same work, now in the archive folder, offers no move.
+    // The same work, now in the archive folder, is archived and offers no move.
     let view = s.work(&work).await;
     assert_eq!(view["watch_folder"]["path"], text(&s.archive));
+    assert_eq!(view["archived"], true);
     assert_eq!(
         view["archive"],
         json!({ "available": false, "command": null })

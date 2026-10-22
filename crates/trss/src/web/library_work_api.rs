@@ -7,7 +7,7 @@
 //! ```json
 //! {
 //!   "id": "…", "name": "Lycoris Recoil", "title": "리코리스 리코일", "missing": false,
-//!   "watch_folder": { "id": "…", "path": "/media/anime" },
+//!   "watch_folder": { "id": "…", "path": "/media/anime" }, "archived": false,
 //!   "folder_path": "/media/anime/Lycoris Recoil",
 //!   "added_at": null,
 //!   "native_title": "リコリス・リコイル",
@@ -82,7 +82,8 @@
 //! - `name` is the work's folder name and `folder_path` the folder itself (the
 //!   watch folder's path and the name). A work whose folder is gone (`missing`)
 //!   answers what was recorded last; the screen shows it as the last record,
-//!   not as files that are there.
+//!   not as files that are there. `archived` says the watch folder is the
+//!   archive folder of the collection settings (an archived work, `보관`).
 //! - `episodes` are in ascending order. `episode` is as written in the file
 //!   names (`01` and `013`/`13` are one episode, written as the smallest form);
 //!   `sort` is its number, `null` when it is no number (`SP`). `added_at` is
@@ -325,7 +326,7 @@ use trss_library::discovery::Reason as UnrecognizedReason;
 use trss_library::seasons::combine::air_time_of;
 use trss_library::store::{
     artwork::JobKind,
-    library::{EpisodeDetail, FileRecord, LibraryError, WorkDetail},
+    library::{same_folder, EpisodeDetail, FileRecord, LibraryError, WorkDetail},
 };
 
 pub(super) mod archive;
@@ -585,6 +586,8 @@ pub(super) struct WorkDetailView {
     movie_only: bool,
     missing: bool,
     watch_folder: WatchFolderRef,
+    /// The work's watch folder is the archive folder.
+    archived: bool,
     folder_path: String,
     added_at: Option<i64>,
     native_title: Option<String>,
@@ -1056,6 +1059,8 @@ async fn show(
     );
     let rules = rules_of(&work, collect, archive_folder, &channels);
     let archive = archive::archive_view(&state, &work, &rules, collect, archive_folder).await?;
+    let archived =
+        archive_folder.is_some_and(|folder| same_folder(&work.watch_folder_path, folder));
 
     let (cover_url, cover_pending) = match state.artwork.store.selection(&work.id).await {
         Ok(selection) => (
@@ -1222,6 +1227,7 @@ async fn show(
             id: work.watch_folder_id,
             path: work.watch_folder_path,
         },
+        archived,
         folder_path,
         added_at: work.first_seen_at,
         native_title,

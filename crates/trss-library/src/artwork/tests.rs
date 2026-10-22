@@ -391,6 +391,7 @@ async fn two_entries_with_the_same_title_leave_the_cover_empty_and_the_work_as_i
         .list(ListQuery {
             sort: crate::store::library::Sort::Title,
             filter: crate::store::library::Filter::All,
+            folder: crate::store::library::InFolder::Any,
             search: String::new(),
             after: None,
             limit: 10,
@@ -727,6 +728,7 @@ async fn hundreds_of_new_works_are_searched_one_at_a_time_at_the_pace() {
         .list(ListQuery {
             sort: crate::store::library::Sort::Title,
             filter: crate::store::library::Filter::All,
+            folder: crate::store::library::InFolder::Any,
             search: String::new(),
             after: None,
             limit: 60,

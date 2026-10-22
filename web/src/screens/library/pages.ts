@@ -6,7 +6,7 @@ import { forgetPrefix, peek, store, useAfterDelay, useStored } from "@/lib/cache
 
 import { fetchTodos } from "../todo/api";
 import { withKinds } from "../todo/kinds";
-import { LIST_PREFIX, loadWorkPage, type FilterKey, type LibraryWorkPage, type SortKey } from "./api";
+import { LIST_PREFIX, loadWorkPage, type FilterKey, type LibraryWorkPage, type PlaceKey, type SortKey } from "./api";
 import { prepare, type Work } from "./model";
 
 /**
@@ -27,7 +27,7 @@ import { prepare, type Work } from "./model";
  * - The pages found as they were still have the to-do badges of when they were read, and a to-do may have been
  *   handled since (a work's 교체 승인 decided from its detail): the to-do list is read once behind them and each
  *   kept work takes its badges from it, the pages and the scroll staying where they are.
- * - Another sort, filter or search starts at the first page and the top of the page.
+ * - Another sort, folder, filter or search starts at the first page and the top of the page.
  * - An answer that is not for the current query any more (typing went on,
  *   another sort was picked) is dropped: reads of an old query are cancelled and
  *   an answer is stored only if nothing else changed the pages meanwhile.
@@ -37,15 +37,18 @@ export interface LoadedPages {
   works: Work[];
   /** Where the page after the last loaded one starts; `null` when it was the last. */
   next: string | null;
-  /** How many works the filter and the search match, over every page. */
+  /** How many works the folder, the filter and the search match, over every page. */
   total: number;
-  /** How many works the library has, whatever the filter and the search. */
+  /** How many works the library has, whatever the folder, the filter and the search. */
   libraryCount: number;
+  /** An archive folder is set: the screen offers the folder choice. */
+  hasArchiveFolder: boolean;
 }
 
 export interface WorkPagesQuery {
   sort: SortKey;
   filter: FilterKey;
+  place: PlaceKey;
   search: string;
 }
 
@@ -55,10 +58,16 @@ const LOAD_FAILED = "작품 목록을 불러오지 못했어요.";
 const needleOf = (search: string) => search.trim().normalize("NFC");
 
 const keyOf = (query: WorkPagesQuery) =>
-  `${LIST_PREFIX}${query.sort}:${query.filter}:${needleOf(query.search).toLocaleLowerCase()}`;
+  `${LIST_PREFIX}${query.sort}:${query.filter}:${query.place}:${needleOf(query.search).toLocaleLowerCase()}`;
 
 function firstPage(page: LibraryWorkPage): LoadedPages {
-  return { works: prepare(page.items), next: page.next, total: page.total, libraryCount: page.library_count };
+  return {
+    works: prepare(page.items),
+    next: page.next,
+    total: page.total,
+    libraryCount: page.library_count,
+    hasArchiveFolder: page.has_archive_folder,
+  };
 }
 
 /** The loaded pages and the page after them. A work that is on both (it moved) stays where it was first shown. */
@@ -70,6 +79,7 @@ function appended(loaded: LoadedPages, page: LibraryWorkPage): LoadedPages {
     next: page.next,
     total: page.total,
     libraryCount: page.library_count,
+    hasArchiveFolder: page.has_archive_folder,
   };
 }
 
@@ -106,8 +116,8 @@ export function useWorkPages(query: WorkPagesQuery): WorkPages {
   const [round, setRound] = useState(0);
 
   // The newest query, for reads that start from an event.
-  const latest = useRef({ key, sort: query.sort, filter: query.filter, needle });
-  latest.current = { key, sort: query.sort, filter: query.filter, needle };
+  const latest = useRef({ key, sort: query.sort, filter: query.filter, place: query.place, needle });
+  latest.current = { key, sort: query.sort, filter: query.filter, place: query.place, needle };
   const moreRead = useRef<AbortController | null>(null);
 
   const type = useNavigationType();
@@ -136,13 +146,14 @@ export function useWorkPages(query: WorkPagesQuery): WorkPages {
         () => {},
       );
     } else {
-      loadWorkPage({ sort: latest.current.sort, filter: latest.current.filter, q: latest.current.needle }, controller.signal).then(
+      const { sort, filter, place, needle: q } = latest.current;
+      loadWorkPage({ sort, filter, place, q }, controller.signal).then(
         (page) => {
           if (controller.signal.aborted) return;
           forgetPrefix(LIST_PREFIX);
           store(key, firstPage(page));
           setFailure(null);
-          // Another sort, filter or search starts the list over, at its top.
+          // Another sort, folder, filter or search starts the list over, at its top.
           if (!first && round === 0) window.scrollTo({ top: 0, left: 0, behavior: "instant" });
         },
         (e: unknown) => {
@@ -160,13 +171,13 @@ export function useWorkPages(query: WorkPagesQuery): WorkPages {
   }, [key, round]);
 
   const loadMore = useCallback(() => {
-    const { key: at, sort, filter, needle: q } = latest.current;
+    const { key: at, sort, filter, place, needle: q } = latest.current;
     const loaded = peek<LoadedPages>(at);
     if (loaded === undefined || loaded.next === null || moreRead.current !== null) return;
     const controller = new AbortController();
     moreRead.current = controller;
     setMore("loading");
-    loadWorkPage({ sort, filter, q, after: loaded.next }, controller.signal).then(
+    loadWorkPage({ sort, filter, place, q, after: loaded.next }, controller.signal).then(
       (page) => {
         if (controller.signal.aborted) return;
         moreRead.current = null;

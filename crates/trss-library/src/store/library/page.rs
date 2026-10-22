@@ -28,6 +28,10 @@
 //! - **Search** is a case-insensitive match of the NFC text in the work's
 //!   title, its folder name, or any native, English or romaji title of the
 //!   AniList entries linked to its seasons.
+//! - **Folder** keeps the works of one watch folder ([`InFolder`]): the web
+//!   asks for the collect or the archive folder by the path the settings give
+//!   it, so the library needs no notion of either. It applies with the filter
+//!   and the search.
 
 use serde::{Deserialize, Serialize};
 use unicode_normalization::UnicodeNormalization;
@@ -228,11 +232,40 @@ impl Cursor {
     }
 }
 
+/// The watch folder whose works the list keeps.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InFolder {
+    /// Every work, whichever watch folder it is in.
+    Any,
+    /// The works of the watch folder with this path; trailing slashes do not
+    /// count.
+    Path(String),
+    /// No work: the folder asked for is not set.
+    Unset,
+}
+
+impl InFolder {
+    fn admits(&self, work: &WorkOverview) -> bool {
+        match self {
+            InFolder::Any => true,
+            InFolder::Path(path) => same_folder(&work.watch_folder_path, path),
+            InFolder::Unset => false,
+        }
+    }
+}
+
+/// Whether two folder paths name the same folder as text, trailing slashes
+/// aside: the settings keep a path as typed, and a watch folder drops them.
+pub fn same_folder(a: &str, b: &str) -> bool {
+    a.trim_end_matches('/') == b.trim_end_matches('/')
+}
+
 /// What the library list is asked for.
 #[derive(Debug, Clone)]
 pub struct ListQuery {
     pub sort: Sort,
     pub filter: Filter,
+    pub folder: InFolder,
     /// Text the title must contain; empty for no search.
     pub search: String,
     pub after: Option<Cursor>,
@@ -246,9 +279,11 @@ pub struct Page {
     pub items: Vec<WorkOverview>,
     /// Where the page after this one starts; `None` after the last page.
     pub next: Option<Cursor>,
-    /// How many works the filter and the search match, over every page.
+    /// How many works the folder, the filter and the search match, over every
+    /// page.
     pub total: usize,
-    /// How many works the library has, whatever the filter and the search.
+    /// How many works the library has, whatever the folder, the filter and
+    /// the search.
     pub library_count: usize,
 }
 
@@ -258,7 +293,7 @@ pub fn page(works: Vec<WorkOverview>, query: &ListQuery) -> Page {
     let needle = fold(query.search.trim());
     let mut matched: Vec<(Key, WorkOverview)> = works
         .into_iter()
-        .filter(|work| query.filter.admits(work))
+        .filter(|work| query.folder.admits(work) && query.filter.admits(work))
         .filter_map(|work| {
             let title = fold(&work.title);
             if !needle.is_empty()
@@ -346,6 +381,7 @@ mod tests {
         ListQuery {
             sort,
             filter: Filter::All,
+            folder: InFolder::Any,
             search: String::new(),
             after: None,
             limit: 60,
@@ -765,6 +801,53 @@ mod tests {
         let p = page(library(), &airing);
         assert_eq!(ids(&p), ["b", "d"]);
         assert_eq!((p.total, p.library_count), (2, 5));
+    }
+
+    #[test]
+    fn the_folder_keeps_one_watch_folders_works_and_applies_with_the_filter_and_the_search() {
+        let at = |id: &str, name: &str, path: &str, coverage: SubtitleCoverage| WorkOverview {
+            watch_folder_path: path.into(),
+            subtitle_coverage: Some(coverage),
+            ..work(id, name)
+        };
+        let works = vec![
+            at("a", "Alpha", "/media/current", SubtitleCoverage::None),
+            at("b", "Beta", "/media/archive", SubtitleCoverage::None),
+            at("c", "Gamma", "/media/archive", SubtitleCoverage::All),
+            at("d", "Delta", "/media/archived", SubtitleCoverage::None),
+            at("e", "Beta Two", "/media/archive", SubtitleCoverage::None),
+        ];
+        let archive = ListQuery {
+            folder: InFolder::Path("/media/archive/".into()),
+            ..query(Sort::Title)
+        };
+
+        // The path as the settings typed it, trailing slash and all; a folder
+        // whose path only starts the same is another.
+        let p = page(works.clone(), &archive);
+        assert_eq!(ids(&p), ["b", "e", "c"]);
+        assert_eq!((p.total, p.library_count), (3, 5));
+
+        let none = ListQuery {
+            filter: Filter::None,
+            ..archive.clone()
+        };
+        assert_eq!(ids(&page(works.clone(), &none)), ["b", "e"]);
+        let searched = ListQuery {
+            search: "two".into(),
+            ..none
+        };
+        assert_eq!(ids(&page(works.clone(), &searched)), ["e"]);
+
+        let unset = page(
+            works,
+            &ListQuery {
+                folder: InFolder::Unset,
+                ..query(Sort::Title)
+            },
+        );
+        assert!(unset.items.is_empty());
+        assert_eq!((unset.total, unset.library_count), (0, 5));
     }
 
     #[test]

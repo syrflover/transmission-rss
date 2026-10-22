@@ -42,7 +42,7 @@ import { ArchiveAction, WorkArchiveNotice } from "./detail/WorkArchive";
 import { SubtitlesCard } from "./detail/SubtitlesCard";
 import { coverOf } from "./model";
 import { FILES_HASH } from "./storage.ts";
-import { Cover, FROM_LIBRARY } from "./WorkItem";
+import { ArchivedBadge, Cover, FROM_LIBRARY } from "./WorkItem";
 
 const LOAD_FAILED = "작품을 불러오지 못했어요.";
 
@@ -361,6 +361,11 @@ function Loaded({
           {work.native_title && (
             <p lang="ja" className="mt-1 text-[14px] leading-snug font-medium break-words text-text-secondary">
               {work.native_title}
+            </p>
+          )}
+          {work.archived && (
+            <p className="mt-1.5">
+              <ArchivedBadge />
             </p>
           )}
           {season && (subscription || hasSubtitles) && (

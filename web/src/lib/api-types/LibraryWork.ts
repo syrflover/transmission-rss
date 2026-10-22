@@ -7,4 +7,8 @@ import type { WatchFolderRef } from "./WatchFolderRef";
 /**
  * A work as the library list shows it.
  */
-export type LibraryWork = { id: string, name: string, title: string, missing: boolean, watch_folder: WatchFolderRef, latest_season: number | null, movie_only: boolean, video: Array<EpisodeRange>, subtitle: Array<EpisodeRange>, subtitle_coverage: SubtitleCoverage | null, subtitle_check_needed: boolean, added_at: number | null, video_added_at: number | null, subtitle_added_at: number | null, cover_url: string | null, todos: Array<TodoKind>, };
+export type LibraryWork = { id: string, name: string, title: string, missing: boolean, watch_folder: WatchFolderRef, 
+/**
+ * The work's watch folder is the archive folder.
+ */
+archived: boolean, latest_season: number | null, movie_only: boolean, video: Array<EpisodeRange>, subtitle: Array<EpisodeRange>, subtitle_coverage: SubtitleCoverage | null, subtitle_check_needed: boolean, added_at: number | null, video_added_at: number | null, subtitle_added_at: number | null, cover_url: string | null, todos: Array<TodoKind>, };

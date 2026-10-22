@@ -257,6 +257,7 @@ Anissia의 `subject`, 선택적인 `originalSubject`와 `startDate`는 해당 �
   배지는 처리 필요의 종류(`인증 필요`·`받기 실패`·`교체 승인`·`회차 확인 필요`)를 [할 일 화면](jobs.md#할-일-화면)과 같은 이름·색으로, 작품에 있는 종류마다 하나씩 할 일 순서로 쌓아요. 제안은 배지로 올리지 않아요(구현 결정, 2026-10-06).
   목록의 한 페이지가 배지를 함께 담아 오고, 작품마다 따로 요청하지 않아요. 뒤로 가기로 목록을 되찾으면 페이지를 다시 읽지 않는 대신 할 일 목록을 한 번 읽어 배지만 고쳐, 그 사이 처리한 할 일의 배지가 남지 않아요(구현 결정, 2026-10-06).
 - 목록 보기는 48px 폭의 표지와 제목·영상·자막 상태를 한 줄에 둬요.
+- [보관된 작품(Archived Work)](../glossary.md)에는 격자에서는 제목 아래에, 목록에서는 제목 옆에 `보관` 배지를 붙여요(사용자 결정, 2026-10-23). 할 일 배지와 달리 처리할 것이 아니라 작품이 있는 자리를 알리므로, 테두리만 있는 조용한 배지예요(구현 결정, 2026-10-23).
 - 이미지가 없거나 불러오지 못해도 작품명과 영상·자막 상태를 확인하고 작품을 열 수 있어야 해요.
 - 항목 전체로 작품 상세에 진입하고, 올려 두면 제목 밑줄 대신 항목 배경을 밝혀요.
 - 목록 안에서 회차 상태를 펼치지 않고 작품 상세로 바로 이동해요.
@@ -276,9 +277,12 @@ Anissia의 `subject`, 선택적인 `originalSubject`와 `startDate`는 해당 �
 추가 기록과 출처 갱신일·파일시스템 수정 시각을 혼동하지 않아요.
 영상·자막 파일의 추가 시각은 앱이 감시 폴더를 확인하다 그 파일을 처음 본 시각이고, 감시 폴더를 등록할 때의 첫 확인에 이미 있던 파일은 미상이에요. 작품 추가 시각도 같은 규칙으로 첫 확인 뒤 새로 나타난 작품 폴더만 가져요.
 필터는 `전체`·`방영 중`·`자막 다 갖춤`·`자막 일부`·`자막 없음`·`확인 필요`이고, 정렬과 함께 사용할 수 있어요.
+보관 폴더를 정해 두면 필터와 따로 `전체`·`수집`·`보관` 폴더 고르기가 있어서, 필터와 함께 적용할 수 있어요(사용자 결정, 2026-10-23). `수집`은 수집 폴더의 작품만, `보관`은 보관 폴더의 작품만 보여주고, 다른 감시 폴더의 작품은 `전체`에만 나와요. 기본은 `전체`예요.
+보관 폴더를 정하지 않았으면 폴더 고르기를 두지 않아요(구현 결정, 2026-10-23). 고르기는 검색칸 옆에 보기 전환과 같은 모양으로 두고, 필터 칩과 떨어뜨려 둘이 따로 고른다는 것을 보여줘요(구현 결정, 2026-10-23).
 작품명·작품 폴더 이름·원제·영문명으로 작품과 등록 시즌을 찾아요.
-작품 상세 방문·뒤로 가기에서 보기·정렬·검색·필터·스크롤 위치를 잃지 않으며, 정렬 변경만으로 작업 선택이나 다운로드·승인이 생기지 않아요.
+작품 상세 방문·뒤로 가기에서 보기·정렬·검색·필터·폴더·스크롤 위치를 잃지 않으며, 정렬 변경만으로 작업 선택이나 다운로드·승인이 생기지 않아요.
 보기·정렬·검색·필터는 페이지가 열려 있는 동안만 유지해요. 새로고침하거나 새 페이지로 열면 표지 격자·최근 자막 추가순·빈 검색·`전체`로 시작해요(사용자 결정, 2026-10-04).
+폴더 고르기도 같아서, 새로 열면 `전체`로 시작해요(구현 결정, 2026-10-23).
 정렬은 다섯 기준의 서로 다른 기대 순서를 가진 자료로 상세 이동·뒤로 가기와 새로고침 뒤의 기본 정렬까지 확인해요.
 
 ### 작품 상세 화면
@@ -290,6 +294,7 @@ Anissia의 `subject`, 선택적인 `originalSubject`와 `startDate`는 해당 �
 #### 머리와 시즌
 
 - 머리에는 표지·[작품명](#라이브러리-화면)·원제와 선택한 시즌의 자막 제작자를 둬요.
+- 보관 폴더에 있는 작품이면 머리의 작품명과 원제 아래에 라이브러리 카드와 같은 `보관` 배지를 붙여요(사용자 결정, 2026-10-23). `보관 폴더로 옮기기`가 끝나면 작품 상세를 다시 읽어 배지가 붙어요.
   자막 제작자는 시즌마다 다르거나 한 시즌에 여럿일 수 있으므로 선택한 시즌의 제작자를 모두 보여주고, 구독 제작자가 정해지지 않았으면 `제작자 미정`, 직접 넣은 파일처럼 제작자를 모르면 `제작자 알 수 없음`이에요.
   제작자는 이름만 보여주고, 구독 제작자에 `따라 받기`를 붙이지 않아요(사용자 결정, 2026-10-02). 이름표가 이미 자막 제작자라고 말하기 때문이에요. 제작자를 고르는 목록의 선택지도 이름만 두며, 무엇을 고르는지는 목록의 제목이 알려요.
   구독 제작자는 머리의 `제작자 변경`에서 바꿔요.
@@ -567,6 +572,7 @@ Anissia의 `subject`, 선택적인 `originalSubject`와 `startDate`는 해당 �
 | 목록 안에서 회차 상태를 펼치지 않고 작품 상세로 이동 | 2026-10-04 개발(개발 환경): 목록 항목을 눌러 작품 상세로 갔다 돌아왔어요 ([2-work-discovery-and-subscriptions/0013]) | 없음 | 펼침이 없다는 것은 시험이 없고 눈으로 본 것뿐이에요 |
 | 자막 보유 범위(`자막 1–10화`), 구간 분리, 중복 회차, 소수 회차, `자막 없음`, `자막 확인 필요`, 보관만 한 자막 제외, 최신 로컬 시즌 기준 | 2026-10-02 서버: `자막 1–4·6–8화`처럼 빈 회차로 나뉜 범위와 `자막 확인 필요`가 보였어요 ([2-work-discovery-and-subscriptions/0013]) | (1) `trss-core` `src/episode.rs` `consecutive_episodes_make_one_run_and_a_gap_splits_it`<br>(2) `trss-library` `src/store/library/overview.rs` `a_subtitle_written_with_a_zero_fraction_covers_the_video_of_that_number`<br>(3) `trss-core` `src/episode.rs` `episodes_that_are_not_whole_numbers_stay_apart_and_come_last`<br>(4) `trss-library` `src/store/library/overview.rs` `holdings_follow_the_latest_season_and_times_span_every_season`<br>(5) `trss-library` `src/store/library/tests.rs` `an_unrecognized_subtitle_asks_for_a_check_and_a_download_in_progress_does_not` | 보관만 한 자막을 범위에 세지 않는 것과 관리 전부터 있던 자막을 세는 것을 직접 가리키는 시험은 찾지 못했어요<br>소수 회차를 실제 자료로 본 적이 없어요<br>특정 시즌을 가리키는 링크가 대상을 유지하는지는 시험이 없어요<br>`자막 확인 필요`의 원인 가운데 파일 누락과 검증 실패는 만들지 않았어요 ([web-redesign/0132](../specs/2026-09-30-web-redesign/0132-library-unbuilt-parts.md)). `subtitle_check_needed`(`store/library/overview.rs`)는 scan이 회차에 놓지 못한 자막 파일에만 올라요 |
 | 정렬 다섯 가지, 날짜 미상과 같은 값의 처리, 추가 시각의 의미, 필터, 검색, 목록 상태 유지, 새로고침 뒤 기본값, 정렬 확인 | 2026-10-04 개발(개발 환경): 목록·제목순·검색어 `re`·`확인 필요`를 건 채 작품에 다녀와도 그대로였고 새로고침하면 기본값으로 돌아갔어요 ([2-work-discovery-and-subscriptions/0013]) | (1) `trss-library` `src/store/library/page.rs` `a_time_sort_is_latest_first_with_unknown_after_known_and_title_then_id_on_ties`<br>(2) 같은 파일 `the_year_sort_is_latest_first_with_unknown_last_by_title_and_the_pages_follow_it`<br>(3) 같은 파일 `filters_pick_the_works_their_definitions_name`<br>(4) 같은 파일 `search_matches_the_title_by_nfc_text_without_case_and_total_counts_the_matches`<br>(5) `trss-library` `src/store/library/tests.rs` `the_first_scan_leaves_times_unknown_and_a_later_one_stamps_only_what_is_new` | 기본 정렬이 최근 자막 추가순인 것을 가리키는 시험이 없어요(서버 기본값은 `subtitle`)<br>보기·정렬·검색·필터·스크롤 위치 유지의 화면 시험이 없어요 ([2-work-discovery-and-subscriptions/0013])<br>추가 시각은 실제 NAS 폴더나 운영 DB로 보지 않았고 ([2-work-discovery-and-subscriptions/0013]), `forgetLibrary`(감시 폴더 해제 뒤 상세 캐시 버리기)는 브라우저에서 해 보지 않았어요 ([2-work-discovery-and-subscriptions/0013])<br>다섯 기준의 서로 다른 기대 순서 자료로 상세 이동·뒤로 가기·새로고침 뒤 기본 정렬까지 보는 확인과, 정렬만으로 작업 선택이 생기지 않는다는 시험은 없어요 |
+| 폴더 고르기(`전체`·`수집`·`보관`, 필터와 함께 적용, 보관 폴더가 없으면 없음, 페이지가 열린 동안 유지)와 격자·목록의 `보관` 배지 | 2026-10-23 개발(서버 DB 사본): `전체` 92편 가운데 `수집`이 10편, `보관`이 82편이었어요. `보관`과 `자막 없음`을 함께 고르자 `작품 6편`이 격자와 목록에 `보관` 배지를 달고 떴어요. 390px에서 가로로 넘치지 않았고, 작품에 다녀와도 `보관`·`목록`·`자막 없음`이 그대로였어요 ([feedback-0.8.0/0004](../specs/2026-10-23-feedback-0.8.0/0004-library-folder-choice.md)) | `trss-library` `src/store/library/page.rs` `the_folder_keeps_one_watch_folders_works_and_applies_with_the_filter_and_the_search`<br>`trss` `src/web/library_api/tests.rs` `the_place_keeps_the_collect_or_the_archive_folders_works_and_marks_the_archived` | 폴더 고르기와 배지는 화면 테스트가 없어요. 보관 폴더를 지운 뒤 남은 `보관` 고르기가 `전체`로 돌아가는 것은 개발 환경에서 해 보지 않았어요. |
 
 ### 작품 상세 화면
 
@@ -583,6 +589,7 @@ Anissia의 `subject`, 선택적인 `originalSubject`와 `startDate`는 해당 �
 | 요구 | 실제 사용에서 본 것 | 테스트로 확인한 것 | 확인하지 않은 것 |
 | --- | --- | --- | --- |
 | 머리의 표지·작품명·원제·선택한 시즌의 자막 제작자(`제작자 미정`·`제작자 알 수 없음`, 이름만, `제작자 변경`) | 2026-10-07 서버: 머리에 `코코렛, 제작자 알 수 없음`이 떴어요(결함, 0118에서 고쳤어요) ([5-deployed-verification/0083])<br>2026-10-08 서버: 고친 뒤 `자막 제작자 · 코코렛 · 제작자 변경`으로 읽혔어요 ([5-deployed-verification/0118]) | `web` `src/screens/library/detail/fileCreators.test.ts` | `제작자 미정`, `따라 받기`를 붙이지 않는 것, 선택지가 이름만인 것은 시험도 실제 사용도 없어요 |
+| 머리의 `보관` 배지와 옮긴 뒤의 배지 | 2026-10-23 개발(서버 DB 사본): 보관 폴더의 `Kore Kaite Shine` 머리에 원제 아래 `보관`이 있었고, 수집 폴더의 `Sekai Saikyou no Majo, Hajimemashita`는 `archived`가 거짓이었어요 ([feedback-0.8.0/0004](../specs/2026-10-23-feedback-0.8.0/0004-library-folder-choice.md)) | `trss` `tests/it/archive_move.rs` `a_work_moved_from_its_detail_loses_its_rules_at_once_and_the_worker_moves_its_folder` | 개발 환경에서 작품을 옮긴 뒤 배지가 붙는 화면은 보지 않았어요. |
 | `제작자 지정`과 제작자 규칙(붙이기, 파일별 바꾸기, 머리 표시, 적용본, 경로 식별, 정한 시각, 극장판만 있는 작품) | (1) 2026-10-07 서버: `제작자 지정` 뒤 머리에 `에루샤`가 뜨고 `자막` 카드가 `제작자 1명 · 자막 12개`였어요 ([5-deployed-verification/0083]). 2026-10-03 개발(서버 DB 사본): 카이란을 파일 6개에 붙였고 낡은 버전 저장은 409였어요 ([3-subtitle-candidates-and-receiving/0048])<br>(2)(3) (1)과 같아요<br>(4) 2026-10-08 서버: 머리에 `코코렛`이 읽혔고 API는 적용본에 `creator: null`, `applied: {creator: 코코렛}`을 줬어요 ([5-deployed-verification/0118])<br>(5) 없음<br>(6) 2026-10-14 개발(로컬 개발 환경 DB의 사본, 시험 폴더): 극장판만 있는 작품의 `제작자 지정`이 그 극장판에 이은 3198의 제작자 `스모모`·`난장`을 보였어요. `스모모`를 고르자 머리가 `자막 제작자 스모모`가 되고 `파일` 카드의 자막에 `스모모`가 붙었어요 ([feedback-0.7.0/0139]) | (1) `trss` `src/web/subtitle_creator_api/tests.rs` `naming_a_creator_marks_all_twelve_unknown_files_and_makes_its_source_once`<br>(2) 같은 파일 `the_later_of_two_screens_changing_the_same_file_is_refused_with_the_file_as_it_is`<br>(3) `web` `src/screens/library/detail/fileCreators.test.ts`<br>(4) `trss-library` `src/store/library/creators_tests.rs` `a_named_file_the_app_replaced_shows_the_applied_copys_creator_and_the_named_one_returns_if_the_copy_is_gone`<br>(5) 같은 파일 `a_moved_work_folder_keeps_its_files_creators_and_a_merge_carries_them_over`<br>(6) `trss` `src/web/subtitle_creator_api/tests.rs` `a_movie_only_works_files_are_named_from_the_anime_its_movie_is_linked_to` | (1) 제작자를 붙인 뒤의 자동 수신은 사본에 구독 제작자의 파일이 없어 돌려 보지 못했어요 ([3-subtitle-candidates-and-receiving/0048]). Anissia 연결을 바꾸면 전에 붙인 제작자가 수정 후보로 안 뜨는 것과 연결이 없을 때 `제작자 지정` 자리의 안내는 시험도 실제 사용도 없어요<br>(2) 회차 줄에서 파일마다 바꾸는 화면은 시험이 없고 서버에서 보지 않았어요<br>(3) 한 파일만 다를 때 두 이름이 나란히 뜨는 화면은 본 적이 없어요<br>(4) 머리 하나만 브라우저에서 봤고 직접 넣은 자막·교체한 경로·제작자 알 수 없음의 적용본은 node 시험과 typecheck로만 닫았어요 ([5-deployed-verification/0118]). `파일` 카드와 회차 줄의 제작자는 본 적이 없어요<br>(5) 보관 폴더로 옮긴 뒤 제작자 유지는 0123을 쓸 때 시험이 없었고 위 시험이 뒤에 닫았어요 ([5-deployed-verification/0123])<br>(6) 극장판에 이은 작품이 없을 때 화면의 안내는 보지 않았어요 |
 | 표지 크게 보기 | 참고(가짜 출처): 2026-10-01 개발(스크래치 DB, 가짜 AniList): 작품 상세의 표지를 눌러 연 대화상자에서 AniList 후보를 고르자 머리와 대화상자의 표지가 바로 바뀌었어요 ([2-work-discovery-and-subscriptions/0015]) | 없음 | 실제 데이터로 표지를 눌러 크게 본 기록이 없고, 이것을 겨눈 화면 시험도 없어요(`CoverDialog`) |
 | 시즌 정보(`방영`·`분량`·`제작사`·`장르` 칸, 네 칸·두 칸, 모르는 값을 채우지 않음) | 2026-10-02 서버: 모든 시즌 정보가 `미상`이었어요(AniList 연결이 없어서) ([2-work-discovery-and-subscriptions/0014]) | `trss` `src/web/seasons_api/tests.rs` `a_season_without_a_link_is_unknown_and_never_filled_from_another_season` | 실제 AniList로 받아 본 적이 없어요 ([2-work-discovery-and-subscriptions/0017]). 칸 순서·네 칸/두 칸·아이콘과 함께 두는 텍스트는 시험이 없고 가짜 AniList의 임시 DB로만 봤어요 ([2-work-discovery-and-subscriptions/0017]) |
@@ -653,7 +660,7 @@ Anissia의 `subject`, 선택적인 `originalSubject`와 `startDate`는 해당 �
 
 ### 확인하지 않은 요구
 
-실제 사용에서 본 것도 없고 테스트도 없는 요구는 94행 중 4행이에요.
+실제 사용에서 본 것도 없고 테스트도 없는 요구는 96행 중 4행이에요.
 
 - 명세에만 있고 만들지 않은 요구 셋: 이미지 파일의 수명의 `표: AniList 제목과 로컬 시즌 번호만 같거나 Anissia 제목·시작일이 빠진 상태`, 할 일과 회차 목록의 `표: 방영 전 회차`, 오른쪽 카드 열의 `최근 활동`. [web-redesign/0132](../specs/2026-09-30-web-redesign/0132-library-unbuilt-parts.md)에서 만들어요.
 - 머리와 시즌: 표지 크게 보기. 가짜 출처로만 봤어요.

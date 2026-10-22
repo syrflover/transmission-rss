@@ -8,7 +8,7 @@ import { EmptyState, ScreenFrame } from "./ScreenFrame";
 import { btnNeutral, inputClass } from "./collect/channels/styles";
 import type { FilterKey, SortKey } from "./library/api";
 import { GridIcon, ListIcon } from "./library/icons";
-import { FILTERS, SORTS } from "./library/model";
+import { FILTERS, PLACES, SORTS } from "./library/model";
 import { useDebounced, useWorkPages } from "./library/pages";
 import { useLibraryPrefs, type ViewKey } from "./library/prefs";
 import { WorkItems } from "./library/WorkItem";
@@ -23,9 +23,17 @@ const VIEWS: { key: ViewKey; label: string; Icon: typeof GridIcon }[] = [
   { key: "list", label: "목록", Icon: ListIcon },
 ];
 
+/** The pill of a choice among a few (the view, the folder): the pressed one stands out of the track. */
+const segmentTrack = "flex items-center gap-1 rounded-full bg-surface-2 p-0.5";
+const segment = cn(
+  "inline-flex min-h-8 items-center gap-1.5 rounded-full px-3 text-[13px] font-medium text-text-secondary max-[720px]:min-h-9",
+  "aria-pressed:bg-surface-1 aria-pressed:font-bold aria-pressed:text-text-primary aria-pressed:shadow-(--card-shadow)",
+);
+
 /**
- * Library: the works as a cover grid or a list, with a sort, a filter and a
- * title search. The server sorts, filters and searches and answers one page at
+ * Library: the works as a cover grid or a list, with a sort, a folder (while an
+ * archive folder is set), a filter and a title search, the folder applying with
+ * the filter. The server sorts, filters and searches and answers one page at
  * a time; the next page is read when the end of the list comes into view (see
  * `library/pages.ts`). Pages already read stay in memory, so coming back from a
  * work shows them, tall enough to scroll to where the page was, in the first render.
@@ -34,8 +42,15 @@ export function LibraryScreen() {
   const prefs = useLibraryPrefs();
   // The list follows typing once it pauses, so the field itself never lags and a request is not sent per key.
   const search = useDebounced(prefs.search, SEARCH_PAUSE_MS);
-  const pages = useWorkPages({ sort: prefs.sort, filter: prefs.filter, search });
+  const pages = useWorkPages({ sort: prefs.sort, filter: prefs.filter, place: prefs.place, search });
   const data = pages.data;
+
+  // A folder kept from before the archive folder was cleared in the settings has nothing to choose from.
+  const noPlaces = data !== undefined && !pages.stale && !data.hasArchiveFolder;
+  useEffect(() => {
+    if (noPlaces && prefs.place !== "all") prefs.setPlace("all");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [noPlaces, prefs.place]);
 
   let body;
   if (data === undefined) {
@@ -53,6 +68,8 @@ export function LibraryScreen() {
     body =
       prefs.filter === "airing" ? (
         <EmptyState>방영 중인 작품이 없어요. 최신 시즌에 방영 중인 AniList 항목을 연결한 작품만 여기에 나와요.</EmptyState>
+      ) : prefs.place !== "all" && prefs.filter === "all" && search.trim() === "" ? (
+        <EmptyState>{prefs.place === "archive" ? "보관 폴더" : "수집 폴더"}에 있는 작품이 없어요.</EmptyState>
       ) : (
         <div className="flex flex-col items-start gap-2.5">
           <EmptyState>조건에 맞는 작품이 없어요.</EmptyState>
@@ -95,6 +112,21 @@ export function LibraryScreen() {
               spellCheck={false}
               className={cn(inputClass, "min-w-0 flex-1 basis-56")}
             />
+            {data.hasArchiveFolder && (
+              <div role="group" aria-label="폴더" className={segmentTrack}>
+                {PLACES.map(({ key, label }) => (
+                  <button
+                    key={key}
+                    type="button"
+                    aria-pressed={prefs.place === key}
+                    onClick={() => prefs.setPlace(key)}
+                    className={segment}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            )}
             <select
               aria-label="정렬"
               value={prefs.sort}
@@ -107,17 +139,14 @@ export function LibraryScreen() {
                 </option>
               ))}
             </select>
-            <div role="group" aria-label="보기" className="flex items-center gap-1 rounded-full bg-surface-2 p-0.5">
+            <div role="group" aria-label="보기" className={segmentTrack}>
               {VIEWS.map(({ key, label, Icon }) => (
                 <button
                   key={key}
                   type="button"
                   aria-pressed={prefs.view === key}
                   onClick={() => prefs.setView(key)}
-                  className={cn(
-                    "inline-flex min-h-8 items-center gap-1.5 rounded-full px-3 text-[13px] font-medium text-text-secondary max-[720px]:min-h-9",
-                    "aria-pressed:bg-surface-1 aria-pressed:font-bold aria-pressed:text-text-primary aria-pressed:shadow-(--card-shadow)",
-                  )}
+                  className={segment}
                 >
                   <Icon className="size-4" />
                   {label}

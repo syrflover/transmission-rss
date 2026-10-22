@@ -1,4 +1,4 @@
-import type { EpisodeRange, FilterKey, LibraryWork, SortKey } from "./api";
+import type { EpisodeRange, FilterKey, LibraryWork, PlaceKey, SortKey } from "./api";
 
 /**
  * The library list as the screen shows it: the names of the sorts and filters
@@ -88,6 +88,13 @@ export const SORTS: { key: SortKey; label: string }[] = [
 ];
 
 export const DEFAULT_SORT: SortKey = "subtitle";
+
+/** The folder choice, apart from the filters and applied with them; offered only while an archive folder is set. */
+export const PLACES: { key: PlaceKey; label: string }[] = [
+  { key: "all", label: "전체" },
+  { key: "collect", label: "수집" },
+  { key: "archive", label: "보관" },
+];
 
 export const FILTERS: { key: FilterKey; label: string }[] = [
   { key: "all", label: "전체" },

@@ -199,6 +199,7 @@ async fn a_bad_parameter_is_a_400_with_a_sentence() {
     for uri in [
         "/library/works?sort=newest".to_owned(),
         "/library/works?filter=everything".to_owned(),
+        "/library/works?place=elsewhere".to_owned(),
         "/library/works?limit=0".to_owned(),
         "/library/works?limit=201".to_owned(),
         "/library/works?limit=-1".to_owned(),
@@ -220,6 +221,85 @@ async fn a_bad_parameter_is_a_400_with_a_sentence() {
     assert_eq!(status, StatusCode::OK);
     let (status, _) = get(&state, "/library/works?limit=200").await;
     assert_eq!(status, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn the_place_keeps_the_collect_or_the_archive_folders_works_and_marks_the_archived() {
+    let state = state();
+    // The settings keep the folder as typed; the watch folder drops the slash.
+    state
+        .settings
+        .put_collection(0, "/media/current".into(), Some("/media/archive/".into()))
+        .await
+        .unwrap();
+    let video = || vec![file("01", FileKind::Video)];
+    let subtitled = || vec![file("01", FileKind::Video), file("01", FileKind::Subtitle)];
+    add_folder(
+        &state,
+        "/media/current",
+        vec![
+            work("Airing", video(), vec![]),
+            work("Airing Done", subtitled(), vec![]),
+        ],
+    )
+    .await;
+    add_folder(
+        &state,
+        "/media/archive",
+        vec![
+            work("Old", video(), vec![]),
+            work("Old Done", subtitled(), vec![]),
+        ],
+    )
+    .await;
+    add_folder(&state, "/other", vec![work("Elsewhere", video(), vec![])]).await;
+    let archived = |body: &Value| -> Vec<String> {
+        body["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|w| w["archived"] == true)
+            .map(|w| w["name"].as_str().unwrap().to_owned())
+            .collect()
+    };
+
+    let (_, all) = get(&state, "/library/works?sort=title").await;
+    assert_eq!(names(&all).len(), 5);
+    assert_eq!(all["has_archive_folder"], true);
+    assert_eq!(archived(&all), ["Old", "Old Done"]);
+
+    let (_, body) = get(&state, "/library/works?sort=title&place=archive").await;
+    assert_eq!(names(&body), ["Old", "Old Done"]);
+    assert_eq!(
+        (body["total"].as_u64(), body["library_count"].as_u64()),
+        (Some(2), Some(5))
+    );
+    let (_, body) = get(&state, "/library/works?sort=title&place=collect").await;
+    assert_eq!(names(&body), ["Airing", "Airing Done"]);
+    // With the filter and the search.
+    let (_, body) = get(&state, "/library/works?place=archive&filter=none").await;
+    assert_eq!(names(&body), ["Old"]);
+    let (_, body) = get(&state, "/library/works?place=collect&q=done").await;
+    assert_eq!(names(&body), ["Airing Done"]);
+    let (_, body) = get(&state, "/library/works?place=all&filter=none").await;
+    assert_eq!(body["total"], 3);
+
+    // No archive folder: nothing is archived, and asking for it finds nothing.
+    state
+        .settings
+        .put_collection(1, "/media/current".into(), None)
+        .await
+        .unwrap();
+    let (status, body) = get(&state, "/library/works?place=archive").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(names(&body), Vec::<&str>::new());
+    assert_eq!(
+        (body["total"].as_u64(), body["library_count"].as_u64()),
+        (Some(0), Some(5))
+    );
+    assert_eq!(body["has_archive_folder"], false);
+    let (_, all) = get(&state, "/library/works").await;
+    assert!(archived(&all).is_empty());
 }
 
 #[tokio::test]
