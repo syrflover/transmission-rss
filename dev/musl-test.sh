@@ -14,8 +14,9 @@
 #   the git checkouts are this machine's ($CARGO_HOME, else ~/.cargo), so
 #   nothing is downloaded again; the machine's own cargo config is not read,
 #   the project's .cargo/config.toml is.
-# - `-j 4`, as on the development machine: linking the test binaries with
-#   more jobs fills the memory.
+# - Cargo's default parallelism: a cold build linked up to 10 test binaries
+#   at once, and the development machine (12 threads, RAM 32 GB) kept 10 GiB
+#   available (2026-10-22).
 # - /tmp is a tmpfs, as on the development machine. The image's own /tmp is
 #   on the disk, where the tests' SQLite files sync each migration to it:
 #   trss-core's tests took 43 s there and 8 s on a tmpfs (2026-10-07).
@@ -42,4 +43,4 @@ exec docker run --rm --init "${tty[@]}" \
   -v "$CARGO_DIR/git:/opt/cargo/git" \
   -w /src \
   "$IMAGE" \
-  cargo test --locked --workspace -j 4 "$@"
+  cargo test --locked --workspace "$@"
