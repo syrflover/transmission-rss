@@ -692,7 +692,7 @@ docker builder prune --filter 'description~="with id \"/trss-"'
 Run the tests on this machine's glibc:
 
 ```sh
-cargo test --workspace -j 4
+cargo test --workspace
 ```
 
 This does not build `crates/trss/tests/it/remote_screen_docker.rs`, the remote screen against the real server browser, which needs Docker and the browser image (`TRSS_BROWSER_IMAGE`, by default `ghcr.io/syrflover/trss-browser:local`, which `dev/compose.sh up` builds). Its feature builds it, and its tests are ignored until asked for:
