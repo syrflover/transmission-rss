@@ -32,7 +32,7 @@
 - 지켜볼 것: 서버에서 `모두 보관`·`N개 보관`을 처음 할 때, 서버가 규칙 순서대로 보관하고 탭을 숨겨도 남은 규칙을 이어 가는지예요. 규칙이 4주 조용해져 보관 제안이 생겨야 할 수 있어요.
 - 드러나는 모습: 일괄 보관이 끝까지 가지 않고 멈추거나, 다시 보인 탭이 끝난 규칙 수를 틀리게 보여요.
 - 결과가 바꿀 것: `trss` 크레이트의 `archive_batch` 실행을 고쳐요.
-- 출처: [0163의 개발 환경에서 확인](archive/tickets/lighter-structure/0163-batch-archive-on-server.md#개발-환경에서-확인). 개발 환경의 Transmission에서만 봤어요.
+- 출처: [0163의 개발 환경에서 확인](archive/tickets/lighter-structure/0163-batch-archive-on-server.md#개발-환경에서-확인). 2026-10-21에 개발 환경의 Transmission에서만 봤어요.
 
 ## reverse proxy를 거친 이벤트
 
@@ -43,7 +43,7 @@
 
 ## 다른 파일시스템의 미디어
 
-- 지켜볼 것: 미디어를 다른 파일시스템(NFS, SMB, 대소문자를 가리지 않는 파일시스템)으로 옮길 때, 교체에 꼭 필요한 `RENAME_EXCHANGE`와 대소문자만 다른 이름 바꾸기가 되는지예요. 지금은 서버(j4105)의 xfs 작품 폴더에서만 확인했어요.
+- 지켜볼 것: 미디어를 다른 파일시스템(NFS, SMB, 대소문자를 가리지 않는 파일시스템)으로 옮길 때, 교체에 꼭 필요한 `RENAME_EXCHANGE`와 대소문자만 다른 이름 바꾸기가 되는지예요. 2026-10-21에 서버(j4105)의 xfs 작품 폴더에서만 확인했어요.
 - 드러나는 모습: 옮기기 전에 새 마운트에서 `deploy/probe.sh`를 돌리면 검사가 실패해요. 옮긴 뒤에는 자막 교체가 모두 실패해요.
 - 결과가 바꿀 것: 교체를 다른 방법으로 할지 사용자 결정을 받아요.
 - 출처: [lighter-structure/0151](archive/tickets/lighter-structure/0151-probe-rename-exchange.md)과 [0153의 바뀐 동작](archive/tickets/lighter-structure/0153-no-effect-records.md#바뀐-동작)

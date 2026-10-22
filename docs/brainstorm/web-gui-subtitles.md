@@ -250,6 +250,8 @@ TheTVDB는 [현재 요금표](https://thetvdb.com/api-information)에 연 매출
 
 ## 현재 제품의 근거와 한계
 
+아래 목록은 2026-09-25 저장소 조사 때의 상태예요.
+
 - [README](../../readme.md)는 RSS 피드(RSS Feed)의 항목을 규칙에 따라 Transmission에 추가하고 파일명을 변경하는 도구로 설명해요.
   현재 사용 안내는 Docker Compose, 환경 변수와 원격 YAML 설정 중심이에요.
 - 예약 실행 스크립트(`scripts/cron.sh`, 지금은 없음)는 5분 간격 실행과 로그 파일 출력을 설정해요.
