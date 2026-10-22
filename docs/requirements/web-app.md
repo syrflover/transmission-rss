@@ -288,7 +288,7 @@ cargo types
 
 생성한 파일을 커밋하는 까닭은 이미지에서 화면을 빌드하는 단계에 Rust가 없기 때문이에요. `web::api_types::committed_files_are_current` 테스트는 생성 결과와 커밋한 파일이 다르면 실패해요. 이 테스트는 임시 디렉터리에 생성해 비교하기만 하고 파일을 쓰지 않아요. Rust의 doc comment도 생성한 파일에 주석으로 들어가서, doc comment만 고쳐도 다시 생성해야 해요.
 
-새 API 타입은 처음부터 생성해서 써요. 화면에서 손으로 같은 모양의 타입을 쓰지 않고, Rust 타입에 `TS`를 붙인 뒤 `crates/trss/src/web/api_types.rs`의 `roots`에 그 타입이나 그 타입을 담은 타입을 올려요. ts-rs는 테스트 빌드에서만 컴파일되어 앱에는 들어가지 않아요.
+새 API 타입은 처음부터 생성해서 쓰세요. 화면에서 손으로 같은 모양의 타입을 쓰지 말고, Rust 타입에 `TS`를 붙인 뒤 `crates/trss/src/web/api_types.rs`의 `roots`에 그 타입이나 그 타입을 담은 타입을 올리세요. ts-rs는 테스트 빌드에서만 컴파일되어 앱에는 들어가지 않아요.
 
 라우트가 JSON으로 보내거나 받는 타입이 모두 생성 대상에 들어 있는지는 `web::api_types::every_json_type_of_a_route_is_generated` 테스트가 확인해요. 이 테스트는 `crates/trss/src/web/`의 핸들러가 `Json<…>`에 적은 타입을 읽어서, `roots`가 닿지 않는 타입이 있으면 그 타입의 전체 경로(예: `trss::web::settings_api::WriteBody`)와 파일을 알려 주며 실패해요. 이름이 같은 타입이 여러 모듈에 있어도 서로 가리지 않도록, `Json<…>`의 이름을 핸들러 파일의 모듈이나 `use`로 전체 경로까지 풀어서 생성된 타입의 `type_name`과 비교하고, 풀 수 없는 이름은 조용히 넘기지 않고 실패해요. 라우트 모듈을 `api.rs`의 라우터에 합치지 않은 경우도 같은 테스트가 잡아요. 이 방식이 보지 못하는 응답은 따로 올려요. 원격 화면 소켓의 메시지(`ServerMessage`, `ClientMessage`)와 이벤트 스트림의 이벤트(`StreamEvent`)는 `Json`을 거치지 않으므로 `roots`에 직접 올렸고, 교체 비교의 줄 목록은 저장해 둔 JSON 글을 그대로 보내므로 그 모양(`ReplacementLines`)을 `roots`에 직접 올렸어요. `POST /commands`의 원본 본문 `commands_api::CreateBody`는 화면이 `CommandRequest`로 쓰므로 테스트의 예외 목록에 적어 두었어요. 자막 올리기의 요청은 `multipart/form-data`라서 생성하지 않고, 쿼리 문자열과 표지 이미지 바이트도 생성 대상이 아니에요.
 
