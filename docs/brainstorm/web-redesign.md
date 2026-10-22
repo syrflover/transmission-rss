@@ -9,6 +9,11 @@
 기획은 기존 명세를 유지하면서 빠진 흐름을 보완해요.
 수렴한 요구는 2026-09-30에 [웹 앱 공통 명세](../requirements/web-app.md)와 주제별 명세([라이브러리](../requirements/library.md)·[RSS 수집](../requirements/collection.md)·[자막](../requirements/subtitles.md)·[작업과 인증](../requirements/jobs.md)·[설정과 이전](../requirements/settings.md))로 이관했고, 이전의 단일 구현 명세는 이 문서들로 대체됐어요.
 이 문서는 선택 이유와 근거를 보존하며, 이후 이 문서에 더하는 제안은 명세를 자동으로 바꾸지 않아요.
+[선택과 근거](#선택과-근거)의 현재 시제 문장은 그 결정을 내릴 때의 설계예요. 지금 동작의 요구는 주제별 명세가 담아요.
+
+이 방향은 [웹 재설계 명세](../specs/2026-09-30-web-redesign/spec.md)로 구현했어요. 결과 목표 1–3을 2026-10-04에, 4와 5를 2026-10-08에 닫았고, 그 뒤 [목표 5와 6 사이의 리팩터링](../specs/2026-09-30-web-redesign/spec.md#목표-5와-6-사이의-리팩터링)을 2026-10-10에, [구조 가볍게 하기](../specs/2026-09-30-web-redesign/spec.md#구조-가볍게-하기)를 2026-10-22에 마쳤어요.
+
+2026-10-22에 남은 범위는 [앱 YAML 내보내기와 가져오기](../specs/2026-09-30-web-redesign/spec.md#6-앱-yaml-내보내기와-가져오기)와 [리팩터링 뒤의 명세 차이 수정](../specs/2026-09-30-web-redesign/spec.md#리팩터링-뒤의-명세-차이-수정)이에요.
 
 ### 유지하는 것과 대체될 것
 
@@ -461,18 +466,18 @@ PC에서는 수집 화면 규칙 탭처럼 왼쪽 목록과 오른쪽 내용이�
 SubsPlease RSS는 최근 릴리스만 담으므로 첫 화가 나오기 전의 신작은 RSS 항목에서 고를 수 없어요.
 SubsPlease 사이트의 `/api/?f=schedule`은 2026-09-29 조회에서 `Asia/Seoul` 기준 요일별 제목·시간·페이지 식별자를 반환했지만, 문서화된 공개 API인지와 형식의 안정성은 확인하지 않았어요.
 
-## 미결 사항
+## 넘긴 것과 디자인 검토
 
 ### 기획 보완 대상
 
 이번 범위에서 보완하기로 한 흐름은 모두 통합 시안에 들어갔어요.
-정하지 않고 넘긴 것은 다음이에요.
+정하지 않고 넘긴 것은 다음이었어요.
 
 - 지난 회차 묶음 검색에서 한 묶음에 넣을 회차 수와 요청 간격([방영작 구독](#방영작-구독)).
-  구현 시 정할 수치로 [RSS 수집 명세](../requirements/collection.md#지난-회차-검색)가 넘겨받았어요.
-  구현에서 한 묶음에 회차 10개, 요청 간격 3초로 정했어요([0026](../archive/tickets/2-work-discovery-and-subscriptions/0026-past-episode-search.md)).
+  구현 시 정할 수치로 [RSS 수집 명세의 지난 회차 검색](../requirements/collection.md#지난-회차-검색)이 넘겨받았어요.
+  구현에서 한 묶음에 회차 10개, 요청 간격 3초로 정했어요([2-work-discovery-and-subscriptions/0026](../archive/tickets/2-work-discovery-and-subscriptions/0026-past-episode-search.md)).
 
-중복 영상의 선택 흐름과 외부 알림은 [웹 앱 공통 명세](../requirements/web-app.md#남은-구체화와-비차단-보류)에서 계속 보류해요.
+중복 영상의 선택 흐름과 외부 알림은 [웹 앱 공통 명세의 남은 구체화와 비차단 보류](../requirements/web-app.md#남은-구체화와-비차단-보류)에서 계속 보류해요.
 
 ### 디자인
 
