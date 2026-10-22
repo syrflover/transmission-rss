@@ -3,6 +3,12 @@ name = "trss-core"
 version.workspace = true
 edition.workspace = true
 
+# No documentation tests: the docs hold no Rust examples, and finding none
+# still cost rustdoc a quarter of a second per crate in every `cargo test`
+# (ticket 0160).
+[lib]
+doctest = false
+
 [features]
 # `db::database_at`, for the tests of the crates above that start from an
 # older schema, `queue::testing`, for the tests of the queues above,

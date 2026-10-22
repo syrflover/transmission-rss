@@ -3,6 +3,12 @@ name = "trss"
 version.workspace = true
 edition.workspace = true
 
+# No documentation tests: the docs hold no Rust examples, and finding none
+# still cost rustdoc a quarter of a second per crate in every `cargo test`
+# (ticket 0160).
+[lib]
+doctest = false
+
 # The binary has no unit tests of its own; they are the library's.
 [[bin]]
 name = "trss"

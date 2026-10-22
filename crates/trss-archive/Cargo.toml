@@ -3,6 +3,12 @@ name = "trss-archive"
 version.workspace = true
 edition.workspace = true
 
+# No documentation tests: the docs hold no Rust examples, and finding none
+# still cost rustdoc a quarter of a second per crate in every `cargo test`
+# (ticket 0160).
+[lib]
+doctest = false
+
 # `testing`: sample ZIPs for the tests of the crates that read or receive one.
 [features]
 test-support = []

@@ -3,6 +3,12 @@ name = "trss-library"
 version.workspace = true
 edition.workspace = true
 
+# No documentation tests: the docs hold no Rust examples, and finding none
+# still cost rustdoc a quarter of a second per crate in every `cargo test`
+# (ticket 0160).
+[lib]
+doctest = false
+
 [features]
 # What the tests of the crates above need from this one: the sample images and
 # the fake AniList server.

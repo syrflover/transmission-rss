@@ -3,6 +3,12 @@ name = "trss-collect"
 version.workspace = true
 edition.workspace = true
 
+# No documentation tests: the docs hold no Rust examples, and finding none
+# still cost rustdoc a quarter of a second per crate in every `cargo test`
+# (ticket 0160).
+[lib]
+doctest = false
+
 [features]
 # The fake feed and nyaa servers (`fake`), for the tests of the crates above.
 test-support = ["dep:axum", "trss-core/test-support", "trss-transmission/test-support"]

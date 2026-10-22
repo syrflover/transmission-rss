@@ -4,6 +4,12 @@ version.workspace = true
 edition.workspace = true
 autobins = false
 
+# No documentation tests: the docs hold no Rust examples, and finding none
+# still cost rustdoc a quarter of a second per crate in every `cargo test`
+# (ticket 0160).
+[lib]
+doctest = false
+
 # The launcher that runs in the browser container.
 [[bin]]
 name = "trss-browserd"

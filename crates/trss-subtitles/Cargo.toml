@@ -3,6 +3,12 @@ name = "trss-subtitles"
 version.workspace = true
 edition.workspace = true
 
+# No documentation tests: the docs hold no Rust examples, and finding none
+# still cost rustdoc a quarter of a second per crate in every `cargo test`
+# (ticket 0160).
+[lib]
+doctest = false
+
 [features]
 # `testing`: a local HTTP server shaped like Tistory, Blogger, Naver blogs
 # and Google Drive, for the tests of the crates above. Their ZIPs come from

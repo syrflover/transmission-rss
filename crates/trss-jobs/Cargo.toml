@@ -3,6 +3,12 @@ name = "trss-jobs"
 version.workspace = true
 edition.workspace = true
 
+# No documentation tests: the docs hold no Rust examples, and finding none
+# still cost rustdoc a quarter of a second per crate in every `cargo test`
+# (ticket 0160).
+[lib]
+doctest = false
+
 [features]
 # Derives `ts_rs::TS` for the types the API sends or takes, which the `trss`
 # tests turn into the screens' TypeScript types. Off in every build of the app.
