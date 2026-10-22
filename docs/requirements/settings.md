@@ -6,8 +6,8 @@
 설정 화면은 자주 열지 않으므로 들어가지 않고도 지금 상태를 읽을 수 있어야 하고, 가져오기는 사용자가 고른 것만 바꾸며 무엇이 없어지는지 적용 전에 보여줘야 해요.
 
 이 문서는 앱 소유 설정과 배포 설정의 경계, 공통 정책, 설정 화면, 앱 YAML의 구성과 필드, 가져오기·내보내기, 처음 실행의 요구를 담당해요.
-YAML 필드의 동작 의미는 해당 기능 문서에 있어요: 채널·규칙·구독은 [RSS 수집 명세](collection.md), 작품·회차 대응·표지는 [라이브러리와 작품 명세](library.md), 보관본·폰트는 [자막 명세](subtitles.md#보관본과-적용본)예요.
-결정 기록은 [앱 설정 ADR](../adr/0001-app-managed-download-rules.md)과 [저장소 ADR](../adr/0005-local-sqlite-app-state.md), 근거와 선택 배경은 [웹 재설계 주제 문서](../brainstorm/web-redesign.md#설정-화면의-구성)에 있어요.
+YAML 필드의 동작 의미는 해당 기능 문서에 있어요: 채널·규칙·구독은 [RSS 수집 명세](collection.md), 작품·회차 대응·표지는 [라이브러리와 작품 명세](library.md), 보관본·폰트는 [자막 명세의 보관본과 적용본](subtitles.md#보관본과-적용본)이에요.
+결정 기록은 [앱 설정 ADR](../adr/0001-app-managed-download-rules.md)과 [저장소 ADR](../adr/0005-local-sqlite-app-state.md), 근거와 선택 배경은 웹 재설계 주제 문서의 [설정 화면의 구성](../brainstorm/web-redesign.md#설정-화면의-구성)에 있어요.
 
 ## 요구사항
 

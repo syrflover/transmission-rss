@@ -6,8 +6,8 @@
 Anissia의 한국어 자막 후보를 찾아 구독 제작자의 새 회차는 자동으로 받고, 그 밖의 후보는 사용자가 골라 받으며, 받은 묶음을 분석해 보관본과 영상 옆 적용본으로 나눠 두고, 기존 자막을 바꿀 때는 비교를 거쳐 사용자가 승인한 것만 반영해요.
 
 이 문서는 자막 후보 조회, 구독 제작자 자동 수신, 출처별 다운로드, 직접 찾기와 자막 올리기, 묶음 분석, 보관본·적용본, 폰트, 교체 비교와 승인, 영상 대기와 실제 재생 환경의 요구를 담당해요.
-작업의 진행·인증·중단 복구는 [작업과 인증 명세](jobs.md)를, 작품·회차 대응과 작품 상세의 자막 표시는 [라이브러리와 작품 명세](library.md)를, 보관 관계의 교환 필드는 [설정과 이전 명세](settings.md#보관-관계-필드)를 따라요.
-근거와 선택 배경은 [처음 주제 문서](../brainstorm/web-gui-subtitles.md)와 [웹 재설계 주제 문서](../brainstorm/web-redesign.md#자막-제작자-자동-수신)에 있어요.
+작업의 진행·인증·중단 복구는 [작업과 인증 명세](jobs.md)를, 작품·회차 대응과 작품 상세의 자막 표시는 [라이브러리와 작품 명세](library.md)를, 보관 관계의 교환 필드는 [설정과 이전 명세의 보관 관계 필드](settings.md#보관-관계-필드)를 따라요.
+근거와 선택 배경은 [처음 주제 문서](../brainstorm/web-gui-subtitles.md)와 [웹 재설계 주제 문서의 자막 제작자 자동 수신](../brainstorm/web-redesign.md#자막-제작자-자동-수신)에 있어요.
 
 ## 요구사항
 
@@ -170,17 +170,17 @@ WinPNG 이미지를 trss가 직접 해석하지 않는 것은, JMK를 SMI·ASS�
 
 | 필수 경로 | 해당 경로의 관찰 조건 |
 | --- | --- |
-| erulabo | 서버가 정상 다운로드를 시작하고 사용자가 필요한 CAPTCHA를 해결한 뒤 같은 서버 브라우저가 파일을 수신해요. 만료·오류 HTML을 자막으로 보관·적용하지 않아요. `erulabo.com/<번호>` 게시물의 카드 가운데 후보의 회차 카드 하나를 서버 브라우저가 가운데로 스크롤해 누르고 `인증`에서 기다려요. 사이트가 30초 뒤 확인을 거두면 작업 화면을 열 때 다시 눌러요. 확인 뒤 Drive·erulabo의 받기 주소가 파일 대신 문서로 답하면 그 분류로 실패하고 다시 요청하지 않아요([3-subtitle-candidates-and-receiving/0041], [작업과 인증 명세](jobs.md#작업-화면-안의-인증과-브라우저-수명)). 구현했어요. 사람이 확인을 풀고 서버 브라우저가 받는 것을 2026-10-03 개발 환경과 2026-10-07 실제 서버에서 봤어요([3-subtitle-candidates-and-receiving/0041], [5-deployed-verification/0083](../archive/tickets/5-deployed-verification/0083-deployed-end-to-end.md)). |
+| erulabo | 서버가 정상 다운로드를 시작하고 사용자가 필요한 CAPTCHA를 해결한 뒤 같은 서버 브라우저가 파일을 수신해요. 만료·오류 HTML을 자막으로 보관·적용하지 않아요. `erulabo.com/<번호>` 게시물의 카드 가운데 후보의 회차 카드 하나를 서버 브라우저가 가운데로 스크롤해 누르고 `인증`에서 기다려요. 사이트가 30초 뒤 확인을 거두면 작업 화면을 열 때 다시 눌러요. 확인 뒤 Drive·erulabo의 받기 주소가 파일 대신 문서로 답하면 그 분류로 실패하고 다시 요청하지 않아요([3-subtitle-candidates-and-receiving/0041], 작업과 인증 명세의 [작업 화면 안의 인증과 브라우저 수명](jobs.md#작업-화면-안의-인증과-브라우저-수명)). 구현했어요. 사람이 확인을 풀고 서버 브라우저가 받는 것을 2026-10-03 개발 환경과 2026-10-07 실제 서버에서 봤어요([3-subtitle-candidates-and-receiving/0041], [5-deployed-verification/0083](../archive/tickets/5-deployed-verification/0083-deployed-end-to-end.md)). |
 | Blogger·Google Drive 개별 자막 | 게시물에서 연결된 개별 파일을 수신하고 실제 자막 형식과 회차를 확인해 적용해요. `<블로그>.blogspot.com` 게시물의 본문(`.post-body`)에서 Drive 파일 링크와 그 글자를 읽어, 후보의 회차를 밝힌 링크와 글꼴 링크만 쿠키·Referer 없이 `drive.usercontent.google.com`에서 받아요(리디렉션도 Drive 호스트로만, 파일 하나 200MiB까지). 회차를 밝힌 링크가 없는 게시물은 하나뿐인 자막 링크를 받고, 고를 수 없으면 회차를 밝혀 `출처 구조 바뀜`이에요. Drive가 파일 대신 웹 페이지를 주면 분류된 실패이고 확인 페이지를 건너뛰지 않아요([3-subtitle-candidates-and-receiving/0042], [공통 수신 결과와 실패 분류](jobs.md#공통-수신-결과와-실패-분류)). 회차 확인과 적용까지 구현했고, 2026-10-05에 실제 게시물의 파일이 적용본까지 갔어요([4-store-apply-and-replace/0076](../archive/tickets/4-store-apply-and-replace/0076-eight-paths-end-to-end.md)). |
 | Blogger·Google Drive 회차 ZIP | 여러 회차를 복원하고 사용자가 선택한 범위만 적용해요. 개별 파일 수신 성공만으로 묶음 처리를 완료로 보지 않아요. 범위를 밝힌 링크(`1 ~ 12화`)는 후보의 회차가 범위 안이면 받고, 회차를 밝히지 않은 압축 파일은 받아요. 받은 ZIP은 작업 상세에 묶음으로 보여요. 복원과 범위 적용까지 구현했고([3-subtitle-candidates-and-receiving/0042], [4-store-apply-and-replace/0065](../archive/tickets/4-store-apply-and-replace/0065-archive-extraction.md)), 2026-10-06에 Drive의 실제 ZIP이 풀려 적용본까지 갔어요([4-store-apply-and-replace/0076](../archive/tickets/4-store-apply-and-replace/0076-eight-paths-end-to-end.md)). |
 | Tistory 일반 첨부 | 일반 첨부에서 파일을 수신하고 압축 내부 자막을 처리해요. 실제 구현에 필요한 URL 취득·재취득 경로를 확인해요. 게시물의 `.fileblock`마다 `*.kakaocdn.net`·`*.daumcdn.net`의 HTTPS 서명 URL을 얻어 쿠키·Referer 없이 받고(리디렉션도 이 CDN으로만, 파일 하나 200MiB까지), 거절되면 게시물을 한 번 다시 읽어 새 URL을 얻어요. 첨부가 없으면 본문 안만 봐요. 본문의 Google Drive 파일 링크는 Blogger와 같은 규칙으로 후보의 회차에 맞는 것을 받고([3-subtitle-candidates-and-receiving/0042]), Drive 폴더 링크만 있으면 `자막 대기`로 두고, WinPNG 이미지만 있으면 서버 브라우저가 있는 worker는 아래 Tistory WinPNG 방식으로 읽고 없는 worker는 `자막 대기`로 둬요([3-subtitle-candidates-and-receiving/0038], [3-subtitle-candidates-and-receiving/0043], [공통 수신 결과와 실패 분류](jobs.md#공통-수신-결과와-실패-분류)). 압축 내부 처리까지 구현했고, 2026-10-05에 실제 첨부 ZIP이 풀려 적용본까지 갔어요([4-store-apply-and-replace/0076](../archive/tickets/4-store-apply-and-replace/0076-eight-paths-end-to-end.md)). |
-| Tistory WinPNG | 게시물의 WinPNG 뷰어가 이미지에서 꺼낸 파일을 받아 개별 회차 파일 수신·적용으로 이어져요. 자막 파일은 그대로 받고, JMK(Jamaker 프로젝트)는 뷰어가 변환한 SMI·ASS를 둘 다 받아 한 묶음으로 다루며 JMK 자체는 보관하지 않아요(사용자 결정, 2026-10-02). PNG 다운로드나 뷰어 표시만으로 성공으로 보지 않고, 뷰어가 만든 파일이 실제로 내려받아져 형식 검증을 통과해야 해요. 파일은 뷰어가 보여 주는 하위 폴더와 이름을 그대로 두고 받아요. 본문의 `.png` 이미지가 뷰어가 읽을 수 있는 이미지가 아니면 `자막 없음`, 뷰어가 키를 물으면 `추가 입력 필요`로 실패해요(키를 넣는 방법은 아직 없어요). 구현했어요([3-subtitle-candidates-and-receiving/0043]). 읽는 단계와 실제 게시물 결과는 [jobs.md](jobs.md#출처별-단계)에 있어요. |
+| Tistory WinPNG | 게시물의 WinPNG 뷰어가 이미지에서 꺼낸 파일을 받아 개별 회차 파일 수신·적용으로 이어져요. 자막 파일은 그대로 받고, JMK(Jamaker 프로젝트)는 뷰어가 변환한 SMI·ASS를 둘 다 받아 한 묶음으로 다루며 JMK 자체는 보관하지 않아요(사용자 결정, 2026-10-02). PNG 다운로드나 뷰어 표시만으로 성공으로 보지 않고, 뷰어가 만든 파일이 실제로 내려받아져 형식 검증을 통과해야 해요. 파일은 뷰어가 보여 주는 하위 폴더와 이름을 그대로 두고 받아요. 본문의 `.png` 이미지가 뷰어가 읽을 수 있는 이미지가 아니면 `자막 없음`, 뷰어가 키를 물으면 `추가 입력 필요`로 실패해요(키를 넣는 방법은 아직 없어요). 구현했어요([3-subtitle-candidates-and-receiving/0043]). 읽는 단계와 실제 게시물 결과는 작업과 인증 명세의 [출처별 단계](jobs.md#출처별-단계)에 있어요. |
 | Naver 블로그 첨부 | 게시물(내부 프레임 포함)에서 유효한 첨부 경로를 얻어 실제 파일을 수신해요. 함께 올라온 글꼴은 폰트로 다뤄요. `blog.naver.com` 글의 내부 페이지(`PostView.naver`)를 읽어 `aPostFiles`의 첨부 가운데 후보의 회차에 맞는 파일과 글꼴 파일을 쿠키·Referer 없이 `download.blog.naver.com`에서 받아요(파일 하나 200MiB까지, 길이는 `attachFileSize`와 같아야 해요). 주소의 토큰이 거절되면 내부 페이지를 한 번 다시 읽어요. Naver가 악성·제한으로 표시한 첨부는 받지 않고 `원본 없음`이며, CAPTCHA처럼 글이 아닌 페이지는 첨부와 섞지 않고 분류된 실패예요([3-subtitle-candidates-and-receiving/0044], [공통 수신 결과와 실패 분류](jobs.md#공통-수신-결과와-실패-분류)). 회차 확인과 적용까지 구현했고, 2026-10-05에 실제 첨부 ZIP에서 고른 8화가 적용되고 1–7화는 보관됐어요([4-store-apply-and-replace/0076](../archive/tickets/4-store-apply-and-replace/0076-eight-paths-end-to-end.md)). |
 
 출처가 요구하지 않는 CAPTCHA·로그인을 추가하지 않아요.
 실제 다운로드 과정의 사용자 조작은 필요한 인증에 한정하며, 후보 선택·연결 확인·교체 승인은 별개의 의도적인 입력으로 유지해요.
-인증 화면과 서버 브라우저의 수명은 [작업과 인증 명세](jobs.md#작업-화면-안의-인증과-브라우저-수명)를 따라요.
-과거 수신 결과와 미검증 경로는 [출처 조사 기록](../brainstorm/web-gui-subtitles.md#공개-자막-경로-조사) 및 [erulabo 기록](../brainstorm/web-gui-subtitles.md#주요-출처-erulabo의-보안-확인)을 근거로 삼아요.
+인증 화면과 서버 브라우저의 수명은 작업과 인증 명세의 [작업 화면 안의 인증과 브라우저 수명](jobs.md#작업-화면-안의-인증과-브라우저-수명)을 따라요.
+과거 수신 결과와 미검증 경로는 처음 주제 문서의 [공개 자막 경로 조사](../brainstorm/web-gui-subtitles.md#공개-자막-경로-조사)와 [주요 출처 erulabo의 보안 확인](../brainstorm/web-gui-subtitles.md#주요-출처-erulabo의-보안-확인)을 근거로 삼아요.
 
 ### 직접 찾기와 자막 올리기
 
@@ -191,7 +191,7 @@ WinPNG 이미지를 trss가 직접 해석하지 않는 것은, JMK를 SMI·ASS�
 
 - 직접 찾기는 그 시즌에 연결한 Anissia 작품의 제작자 게시물을 서버 브라우저로 열어 [작업 상세](jobs.md#작업-상세)의 원격 화면에 보여줘요.
   사용자가 원격 화면에서 지난 게시물로 옮겨 다운로드를 누르면 같은 서버 브라우저가 받은 파일을 그 작업의 묶음으로 삼아요.
-  CAPTCHA가 나오면 사용자가 같은 화면에서 풀며, 브라우저 수명·프로필·접근 보호는 [작업과 인증 명세](jobs.md#작업-화면-안의-인증과-브라우저-수명)를 따라요.
+  CAPTCHA가 나오면 사용자가 같은 화면에서 풀며, 브라우저 수명·프로필·접근 보호는 작업과 인증 명세의 [작업 화면 안의 인증과 브라우저 수명](jobs.md#작업-화면-안의-인증과-브라우저-수명)을 따라요.
   받은 파일의 제작자는 연 게시물의 제작자예요.
 - 자막 올리기는 자막·폰트 파일을 낱개·여러 개·압축 파일·폴더로 올려요.
   자막(ASS·SRT·SMI와 보관만 하는 다른 자막 형식)과 폰트만 받고, 그 밖의 파일은 보관하지 않으며 올리기 전 목록과 분석 결과에 뺀 파일의 수와 이름을 보여줘요.
@@ -246,7 +246,7 @@ WinPNG 이미지를 trss가 직접 해석하지 않는 것은, JMK를 SMI·ASS�
   받는 중인 다운로드가 있으면 그 다운로드가 끝나 파일이 들어온 뒤에 끝내요(거절하지 않고 기다려요). 기다림은 서버 브라우저의 멈춤·크기 한도 안에서 끝나요. 받기가 끝나기 전까지 작업은 `finishing`이고 화면은 `끝내는 중`이라고 적어요.
   웹은 요청만 적고 작업은 늘 worker가 끝내요. worker가 다시 시작하느라 가려 담지 못한 다운로드는 worker만 볼 수 있어서예요. 서버 브라우저 실행이 묶여 있지 않은 작업(실행이 닫혔거나 이 서버에 서버 브라우저가 없는 작업)은 worker가 깨어나 원격 화면을 살필 때(몇 초 안에) 그런 다운로드를 먼저 가려 담고 끝내요. 서버 브라우저가 없는 worker도 이 일은 해요.
   남긴 파일이 있으면 `받은 파일: 자막 2개` 같은 메모와 함께 받기가 끝나고, 묶음 분석과 [배치 확인](#배치-확인)으로 이어져요. 남긴 파일이 없으면 `받음`이 아니라 `받은 파일 없음`으로 끝나요. 끝나면 서버 브라우저 실행을 닫아요.
-- 브라우저 수명은 [작업과 인증 명세](jobs.md#작업-화면-안의-인증과-브라우저-수명)를 그대로 따라요. 유휴로 실행이 닫혀도 받은 파일은 남고, 작업 화면을 다시 열면 새 실행이 같은 시작 게시물을 열어요. 이전 실행의 페이지 주소는 남기지 않아요.
+- 브라우저 수명은 작업과 인증 명세의 [작업 화면 안의 인증과 브라우저 수명](jobs.md#작업-화면-안의-인증과-브라우저-수명)을 그대로 따라요. 유휴로 실행이 닫혀도 받은 파일은 남고, 작업 화면을 다시 열면 새 실행이 같은 시작 게시물을 열어요. 이전 실행의 페이지 주소는 남기지 않아요.
 - 받기 주소·토큰·쿠키는 저장하거나 기록하거나 보여주지 않고, 기록에는 많아야 호스트를 적어요.
 
 | 입력·상태 | 필요한 결과 |
@@ -964,7 +964,7 @@ worker를 다시 시작하면 기다리는 작업을 한 번 다시 살펴보고
 
 | 요구 | 실제 사용에서 본 것 | 테스트로 확인한 것 | 확인하지 않은 것 |
 | --- | --- | --- | --- |
-| 별도 프로세스에서 풀고 메모리·시간 한도를 걺, 폭탄·해석기 오류·멈춤은 그 묶음의 실패, 다른 작업은 계속, `trss` 컨테이너 한도 384M | 2026-10-08 서버(일회용 컨테이너): worker와 같은 조건(256m, CPU 0.25개)에서 `trss-extract`가 정상 묶음 4개를 풀고 폭탄 표본 8개를 거절했어요 ([4-store-apply-and-replace/0065])<br>2026-10-22 서버(0.8.0): `docker stats`에서 `trss` 컨테이너의 메모리 한도가 384MiB였어요 ([lighter-structure/0162](../archive/tickets/lighter-structure/0162-deploy-lighter-structure.md#서버에서-본-것)) | (1)(3) `trss-jobs` `tests/extract_process.rs` `a_zip_is_unpacked_by_the_child`<br>(2) `trss-jobs` `tests/it/unpack.rs` `bombs_and_a_password_fail_alone_and_the_next_job_goes_on` | `trss`의 RSS 수집이 계속되는 것은 확인하지 않았어요. |
+| 별도 프로세스에서 풀고 메모리·시간 한도를 걺, 폭탄·해석기 오류·멈춤은 그 묶음의 실패, 다른 작업은 계속, `trss` 컨테이너 한도 384M | 2026-10-08 서버(일회용 컨테이너): worker와 같은 조건(256m, CPU 0.25개)에서 `trss-extract`가 정상 묶음 4개를 풀고 폭탄 표본 8개를 거절했어요 ([4-store-apply-and-replace/0065])<br>2026-10-22 서버(0.8.0): `docker stats`에서 `trss` 컨테이너의 메모리 한도가 384MiB였어요 ([lighter-structure/0162의 서버에서 본 것](../archive/tickets/lighter-structure/0162-deploy-lighter-structure.md#서버에서-본-것)) | (1)(3) `trss-jobs` `tests/extract_process.rs` `a_zip_is_unpacked_by_the_child`<br>(2) `trss-jobs` `tests/it/unpack.rs` `bombs_and_a_password_fail_alone_and_the_next_job_goes_on` | `trss`의 RSS 수집이 계속되는 것은 확인하지 않았어요. |
 | `trss-extract`: 푸는 위치, 멤버의 경로·크기·SHA-256 보고, worker의 멤버 검사, 멤버 안 ZIP 검사 512MiB, 나뉜 조각 모으기, 죽은 뒤 재시작 복구, 프로그램이 없으면 `자막 대기`, `oom_score_adj` 1000과 코어 덤프 없음 | 2026-10-08 서버(일회용 컨테이너): 네 형식이 풀리고 `oom_kill`이 0이었어요 ([4-store-apply-and-replace/0065]) | `trss-jobs` `tests/extract_process.rs` `what_the_child_prints_is_not_believed`<br>`trss-jobs` `tests/it/unpack.rs` `an_archive_waits_for_the_program_and_a_killed_unpacking_starts_anew` | 부모 종료 신호(`PR_SET_PDEATHSIG`)는 테스트가 없고, 512MiB는 1,500바이트 같은 작은 예산으로만 확인했어요. worker를 실제로 죽였다 살린 관찰은 없어요 ([결과 목표 4 기록]). |
 | 자식 프로세스도 `trss` 컨테이너의 memcg를 함께 씀, 풀어 쓰는 동안의 페이지 캐시를 서버에서 측정 | 2026-10-08 서버(일회용 컨테이너): 200MiB 묶음 네 형식을 풀 때 최대 `memory.current`가 232.6–256.0MiB였고 `oom_kill`은 0이었어요 ([4-store-apply-and-replace/0065])<br>2026-10-07 서버(일회용 컨테이너, `trss-probe`): 256M에서 300MiB를 쓰고 `fsync`해도 `oom_kill`은 0이었어요 ([4-store-apply-and-replace/0060]) | 없음 | 탐침은 한 프로세스가 차례로 쓰고 읽어서, 여러 곳이 함께 쓰는 경우에도 같을지는 알 수 없어요. 돌고 있는 `trss` 안에서 `trss`와 자식이 함께 쓴 경우의 `oom_kill`은 본 적이 없어요. |
 | 형식마다 순수 Rust 크레이트(xz만 C의 liblzma), 외부 실행 파일을 쓰지 않음, 크레이트와 형식의 대응, `.z01`은 풀지 않음 | 2026-10-08 서버(일회용 컨테이너): ZIP·7z·`tar.xz`·RAR 네 형식이 풀렸어요 ([4-store-apply-and-replace/0065]) | `trss-archive` `tests/it/formats.rs`(파일 전체)<br>`trss-jobs` `place/unpack.rs` `spanned_zips_and_cut_rars_are_not_unpacked` | 외부 실행 파일을 쓰지 않는 것은 구조라 테스트가 없어요. 서버 표본에 gzip·bzip2·나뉜 조각은 없었어요. WinRAR로 만든 RAR, CP949 멤버 이름, `.tar.001`·`.gz.001`, PPMd 7z, BCJ2, 4GiB가 넘는 ZIP64, deflate64는 시험하지 않았어요 ([4-store-apply-and-replace/0059], [결과 목표 4 기록]). |

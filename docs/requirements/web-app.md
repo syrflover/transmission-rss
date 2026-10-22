@@ -316,7 +316,7 @@ cargo types
   제품의 React 화면·API·자동 파일 처리는 시안이 아니라 [목표 1–5](../specs/2026-09-30-web-redesign/spec.md#결과-목표)의 티켓에서 확인했어요. 실제 휴대폰·태블릿의 주요 흐름은 사용자가 [5-deployed-verification/0085](../archive/tickets/5-deployed-verification/0085-phone-and-tablet-flows.md)에서 확인했어요(2026-10-07).
   원격 페이지에 가상 키보드로 입력하는 것과 스크린 리더를 포함한 전체 접근성은 검증하지 않았어요.
 - [처음 주제 문서의 사쿠라 시안](../brainstorm/web-gui-subtitles.md#채택한-시안과-검토-근거)은 대체된 디자인의 역사적 근거이며, 현재 화면 요구의 증거로 쓰지 않아요.
-- [출처 표본 기록](../brainstorm/web-gui-subtitles.md#공개-자막-경로-조사)은 Drive 개별·ZIP, Tistory 일반 첨부·WinPNG, Naver HTTP 첨부의 실제 바이트와 형식 확인 근거예요.
+- 처음 주제 문서의 [공개 자막 경로 조사](../brainstorm/web-gui-subtitles.md#공개-자막-경로-조사)는 Drive 개별·ZIP, Tistory 일반 첨부·WinPNG, Naver HTTP 첨부의 실제 바이트와 형식 확인 근거예요.
   출처별 수신 경로의 묶음이 trss에서 적용본까지 가는 것은 [4-store-apply-and-replace/0076](../archive/tickets/4-store-apply-and-replace/0076-eight-paths-end-to-end.md)이 여덟 경로로 개발 환경에서 확인했어요(2026-10-06). 링크 유효기간은 확인하지 않았어요.
 - [서버 브라우저 비교](../brainstorm/web-gui-subtitles.md#일반-chromium-직접-연결-비교)는 새 프로필의 일반 Chromium에서 사람이 CAPTCHA를 해결한 뒤 서버 파일 수신에 성공한 표본이에요.
   Selenium 구성 실패의 단일 원인, 지속 성공, LAN·VPN 배포, trss 내부 화면과 최종 배치의 증거는 아니에요.
