@@ -6,7 +6,7 @@
 //! the stores it uses, in its own context, made from this one:
 //!
 //! - `receive_once` and `receive_past`: [`ReceiveContext`];
-//! - `rule_archive`: [`ArchiveContext`];
+//! - `rule_archive` and `work_archive`: [`ArchiveContext`];
 //! - `episode_undo`: [`UndoContext`];
 //! - the video revisions: [`RevisionsContext`];
 //! - the episode offsets: [`OffsetsContext`];
@@ -80,8 +80,8 @@ pub struct CollectContext {
     pub transmission: TransmissionLink,
     pub http: reqwest::Client,
     pub rename: RenamePolicy,
-    /// How a work folder move waits for Transmission (the `rule_archive`
-    /// command; see [`crate::commands::rule_archive`]).
+    /// How a work folder move waits for Transmission (the `rule_archive` and
+    /// `work_archive` commands; see [`crate::commands::rule_archive`]).
     pub moves: MovePolicy,
     /// Knows secrets that do not come from channels, such as credentials in
     /// the Transmission URL.
@@ -109,7 +109,7 @@ impl CollectContext {
         }
     }
 
-    /// What `rule_archive` uses.
+    /// What `rule_archive` and `work_archive` use.
     pub fn archive(&self) -> ArchiveContext {
         ArchiveContext {
             channels: self.channels.clone(),

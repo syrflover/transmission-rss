@@ -1,5 +1,6 @@
 //! Archiving and restoring a rule with its work folder (the `rule_archive`
-//! command), end to end: the real commands and rules HTTP API, the real worker
+//! command), and moving a work from its detail (the `work_archive` command,
+//! ticket feedback-0.8.0/0002), end to end: the real commands and rules HTTP API, the real worker
 //! and Transmission client, a fake Transmission that moves torrent data on the
 //! real disk, and real temporary folders as the collect and archive folders.
 //! Ticket 2-work-discovery-and-subscriptions/0011's completion rows.
@@ -1475,4 +1476,183 @@ async fn a_batch_the_process_left_midway_goes_on_with_the_rest_after_a_restart()
         "Beta's torrent was moved by the first process, not asked again"
     );
     second.stop().await;
+}
+
+// --- 13. a work moved from its detail (work_archive, ticket feedback-0.8.0/0002) ---------------
+
+impl Scene {
+    /// The collect and archive folders registered as watch folders and read
+    /// once, as saving the settings leaves them; the ID of the work `name` in
+    /// the collect folder.
+    async fn library_work(&self, name: &str) -> String {
+        let library = trss_library::store::library::LibraryStore::new(self.h.db.clone());
+        for path in [&self.collect, &self.archive] {
+            let registered = library.folders().await.unwrap();
+            let scan = trss_library::discovery::scan(path).unwrap();
+            library
+                .add_folder(text(path), scan, 1, &registered)
+                .await
+                .unwrap();
+        }
+        library
+            .overview()
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|w| w.dir_name == name)
+            .unwrap()
+            .id
+    }
+
+    /// `보관 폴더로 옮기기` of the work `work` as the screen sends it, after
+    /// the confirmation showed `rules`.
+    async fn send_work(
+        &self,
+        id: &str,
+        work: &str,
+        rules: &[&trss_collect::store::channels::Rule],
+    ) -> (StatusCode, Value) {
+        let rules: Vec<Value> = rules
+            .iter()
+            .map(|r| json!({ "id": r.id, "version": r.version }))
+            .collect();
+        let (status, _, body) = self
+            .api
+            .call(
+                "POST",
+                &format!("/api/library/works/{work}/archive"),
+                Some(json!({ "id": id, "rules": rules })),
+            )
+            .await;
+        (status, body)
+    }
+
+    async fn work(&self, id: &str) -> Value {
+        let (status, text, body) = self
+            .api
+            .call("GET", &format!("/api/library/works/{id}"), None)
+            .await;
+        assert_eq!(status, StatusCode::OK, "{text}");
+        body
+    }
+}
+
+#[tokio::test]
+async fn a_work_moved_from_its_detail_loses_its_rules_at_once_and_the_worker_moves_its_folder() {
+    let s = Scene::new(true).await;
+    let c = s
+        .channel(
+            "feed-a",
+            &[
+                ("Clevatess", "Clevatess/Season 02"),
+                ("Other", "Other/Season 01"),
+            ],
+        )
+        .await;
+    s.seeding(
+        1,
+        "Clevatess S02E01.mkv",
+        &s.collect.join("Clevatess/Season 02"),
+    );
+    let work = s.library_work("Clevatess").await;
+
+    let (status, body) = s.send_work("work-move-01", &work, &[&c.rules[0]]).await;
+
+    assert_eq!(status, StatusCode::ACCEPTED, "{body}");
+    // The rule is gone at once; the folder moves when the worker runs it.
+    let (status, _, _) = s
+        .api
+        .call("GET", &format!("/api/rules/{}", c.rules[0].id), None)
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(s.rule(&c.rules[1].id).await["state"], "active");
+    assert!(s.collect.join("Clevatess").exists());
+    assert_eq!(
+        s.work(&work).await["archive"]["command"]["state"],
+        "pending"
+    );
+
+    assert_eq!(s.run().await, CommandsOutcome::Ran(1));
+
+    let command = s.command("work-move-01").await;
+    assert_eq!(command["kind"], "work_archive");
+    assert_eq!(command["state"], "done", "{command}");
+    assert_eq!(command["outcome"]["result"], "moved");
+    assert!(!s.collect.join("Clevatess").exists());
+    assert_eq!(
+        files(&s.archive),
+        ["Clevatess/Season 02/Clevatess S02E01.mkv"]
+    );
+    assert_eq!(
+        s.h.tr.torrent(&hash(1)).download_dir,
+        text(s.archive.join("Clevatess/Season 02"))
+    );
+    // The same work, now in the archive folder, offers no move.
+    let view = s.work(&work).await;
+    assert_eq!(view["watch_folder"]["path"], text(&s.archive));
+    assert_eq!(
+        view["archive"],
+        json!({ "available": false, "command": null })
+    );
+}
+
+#[tokio::test]
+async fn a_work_move_stopped_after_transmission_moved_finishes_the_rest_on_the_next_run() {
+    let s = Scene::new(true).await;
+    s.seeding(
+        1,
+        "Clevatess S02E01.mkv",
+        &s.collect.join("Clevatess/Season 02"),
+    );
+    write(&s.collect.join("Clevatess/Season 02/notes.txt"), "x");
+    write(&s.collect.join("Clevatess/.trss/subs/S02E01.ass"), "sub");
+    let work = s.library_work("Clevatess").await;
+
+    // Transmission moves the torrent's data, and the worker is stopped before
+    // it hears back.
+    let gate = s.h.tr.hold_answer("torrent-set-location");
+    let (status, body) = s.send_work("work-stop-01", &work, &[]).await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{body}");
+    let worker = s.worker();
+    let task = tokio::spawn(async move { worker.run_commands(&CancellationToken::new()).await });
+    gate.wait_arrived().await;
+    task.abort();
+    let _ = task.await;
+    gate.release_all();
+
+    let stored = CommandStore::new(s.h.db.clone())
+        .get("work-stop-01")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored.state, CommandState::Running);
+    // The screen shows the move as still going.
+    assert_eq!(
+        s.work(&work).await["archive"]["command"]["state"],
+        "running"
+    );
+    assert_eq!(
+        files(&s.archive),
+        ["Clevatess/Season 02/Clevatess S02E01.mkv"]
+    );
+
+    // The next run moves only what is left.
+    assert_eq!(s.run().await, CommandsOutcome::Ran(1));
+    let command = s.command("work-stop-01").await;
+    assert_eq!(command["state"], "done", "{command}");
+    assert_eq!(command["outcome"]["result"], "moved");
+    assert!(!s.collect.join("Clevatess").exists());
+    assert_eq!(
+        files(&s.archive),
+        [
+            "Clevatess/.trss/subs/S02E01.ass",
+            "Clevatess/Season 02/Clevatess S02E01.mkv",
+            "Clevatess/Season 02/notes.txt",
+        ]
+    );
+    assert_eq!(
+        s.h.tr.calls_of("torrent-set-location").len(),
+        1,
+        "the torrent already at the archive is not moved again"
+    );
 }

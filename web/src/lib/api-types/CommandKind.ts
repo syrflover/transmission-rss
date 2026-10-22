@@ -4,5 +4,8 @@
  * The kinds of command, as `POST /commands` names them. The screens send
  * them through [`CommandRequest`]; the web stores the kind as text, and the
  * tests of [`super::api_types`] keep this list and [`Request::read`] together.
+ * `work_archive` is the one kind the web accepts only through its own route
+ * (`POST /library/works/{id}/archive`, [`super::library_work_api`]); a screen
+ * reads it here like any other.
  */
-export type CommandKind = "receive_once" | "receive_past" | "rule_archive" | "watch_rescan" | "episode_undo" | "anissia_captions" | "rule_archive_batch";
+export type CommandKind = "receive_once" | "receive_past" | "rule_archive" | "watch_rescan" | "episode_undo" | "anissia_captions" | "rule_archive_batch" | "work_archive";

@@ -77,6 +77,72 @@ async fn the_same_id_with_the_same_content_returns_the_stored_command() {
 }
 
 #[tokio::test]
+async fn a_write_with_the_command_is_stored_with_it_or_not_at_all() {
+    let (_dir, db, commands) = store().await;
+    db.run(|c| {
+        c.execute_batch("CREATE TABLE marks (name TEXT NOT NULL)")
+            .map_err(DbError::Sqlite)
+    })
+    .await
+    .unwrap();
+    let mark = |name: &'static str, refuse: bool| {
+        move |tx: &rusqlite::Transaction<'_>| {
+            tx.execute("INSERT INTO marks (name) VALUES (?1)", [name])
+                .unwrap();
+            if refuse {
+                Err(name)
+            } else {
+                Ok(())
+            }
+        }
+    };
+    let marks = || async {
+        db.run(|c| {
+            let read = || -> rusqlite::Result<Vec<String>> {
+                let mut stmt = c.prepare("SELECT name FROM marks ORDER BY rowid")?;
+                let names = stmt.query_map([], |r| r.get(0))?;
+                names.collect()
+            };
+            read().map_err(DbError::Sqlite)
+        })
+        .await
+        .unwrap()
+    };
+
+    // A refusal rolls back what the write did and stores no command.
+    let refused = commands
+        .accept_with(new("cmd-1", "{}", Some("7")), 1_000, mark("refused", true))
+        .await
+        .unwrap();
+    assert_eq!(refused.unwrap_err(), "refused");
+    assert!(marks().await.is_empty());
+    assert_eq!(commands.get("cmd-1").await.unwrap(), None);
+
+    let created = commands
+        .accept_with(new("cmd-1", "{}", Some("7")), 1_000, mark("first", false))
+        .await
+        .unwrap();
+    assert!(matches!(created, Ok(Accepted::Created(_))), "{created:?}");
+    assert_eq!(marks().await, ["first"]);
+
+    // A known ID and an open command of the subject do not run the write.
+    for (id, payload) in [("cmd-1", "{}"), ("cmd-1", "{\"x\":1}"), ("cmd-2", "{}")] {
+        let accepted = commands
+            .accept_with(new(id, payload, Some("7")), 2_000, mark("again", true))
+            .await
+            .unwrap();
+        assert!(
+            matches!(
+                accepted,
+                Ok(Accepted::Existing(_) | Accepted::Mismatch(_) | Accepted::Busy(_))
+            ),
+            "{id} {payload}: {accepted:?}"
+        );
+    }
+    assert_eq!(marks().await, ["first"]);
+}
+
+#[tokio::test]
 async fn the_same_id_with_other_content_is_refused_and_changes_nothing() {
     let (_dir, _db, commands) = store().await;
     commands

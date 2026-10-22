@@ -35,6 +35,7 @@ mod tests;
 #[cfg(test)]
 mod title_tests;
 
+pub(crate) use delete_rule::delete_rules_in;
 pub use episode::EpisodeMark;
 pub use episode_undo::{
     EpisodeUndo, NewUndoFile, UndoBegun, UndoFile, UndoFileState, REVISION_UNDER_WAY,

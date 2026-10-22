@@ -51,6 +51,7 @@ use crate::{
             self, work_folder::MovePolicy, Direction, Finished as ArchiveFinished,
             Retry as ArchiveRetry,
         },
+        work_archive::{self, WorkArchive},
     },
     context::{CollectContext, TransmissionLink},
     cycle::{self, JobOutcome},
@@ -915,6 +916,66 @@ impl World {
     pub async fn archive_of(&self, rule: &Rule, direction: Direction) -> ArchiveFinished {
         let command = self.start_archive(rule, direction).await;
         self.run_archive(&command).await.expect("the command ended")
+    }
+
+    /// Accepts the `work_archive` command of the work folder `work` as the web
+    /// does, and claims it as the worker does. The command's ID is made of the
+    /// folder and the clock: [`World::advance`] between two of one folder.
+    pub async fn start_work_archive(&self, work: &str) -> Command {
+        let payload = WorkArchive {
+            work: work.to_owned(),
+        };
+        let id = format!("work-{work}-{}", self.now());
+        match self
+            .ctx
+            .commands
+            .accept(payload.command(id), self.now())
+            .await
+            .unwrap()
+        {
+            Accepted::Created(_) => {}
+            other => panic!("the command was not stored: {other:?}"),
+        }
+        self.claim().await
+    }
+
+    /// Runs the `work_archive` command `command` as the worker does and, when
+    /// it ends, writes the end. A [`ArchiveRetry`] leaves the command running,
+    /// to be started again.
+    pub async fn run_work_archive(
+        &self,
+        command: &Command,
+    ) -> Result<ArchiveFinished, ArchiveRetry> {
+        let clock = self.clock.clone();
+        let clock: Clock = Arc::new(move || clock.load(Ordering::SeqCst));
+        let finished = work_archive::run(
+            &self.ctx.archive(),
+            command,
+            Arc::new(()),
+            &clock,
+            &CancellationToken::new(),
+        )
+        .await?;
+        self.ctx
+            .commands
+            .finish(
+                &command.id,
+                finished.state,
+                finished.outcome.clone(),
+                self.now(),
+            )
+            .await
+            .unwrap();
+        Ok(finished)
+    }
+
+    /// The move of the work folder `work` as one command, run once: how it
+    /// ended.
+    pub async fn work_archive_of(&self, work: &str) -> ArchiveFinished {
+        let command = self.start_work_archive(work).await;
+        self.run_work_archive(&command)
+            .await
+            .expect("the command ended")
     }
 
     // --- items a rule picked and Transmission refused -------------------------------------

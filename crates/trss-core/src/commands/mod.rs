@@ -228,6 +228,33 @@ impl CommandStore {
         Ok(accepted)
     }
 
+    /// [`CommandStore::accept`] with `write`, a change the command is about,
+    /// made in the same write transaction: both are stored, or neither.
+    /// `write` runs only when the command is new (its ID is unknown and no
+    /// command of its kind and subject is open), just before it is stored;
+    /// its refusal (`Err`) rolls back what it wrote, stores no command and
+    /// comes back as the inner `Err`. It writes to this store's database,
+    /// which must be the one the changed rows are kept in.
+    pub async fn accept_with<E, W>(
+        &self,
+        command: NewCommand,
+        now: Millis,
+        write: W,
+    ) -> Result<Result<Accepted, E>, CommandError>
+    where
+        W: FnOnce(&rusqlite::Transaction<'_>) -> Result<(), E> + Send + 'static,
+        E: Send + 'static,
+    {
+        let accepted = self
+            .db
+            .run(move |c| repo::accept_with(c, &command, now, write))
+            .await?;
+        if let Ok(Accepted::Created(created)) = &accepted {
+            self.announce(&created.id);
+        }
+        Ok(accepted)
+    }
+
     pub async fn get(&self, id: &str) -> Result<Option<Command>, CommandError> {
         let id = id.to_owned();
         self.db.run(move |c| repo::get(c, &id)).await

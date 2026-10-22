@@ -107,6 +107,8 @@ fn roots(v: &mut impl TypeVisitor) {
     v.visit::<library_work_api::WorkDetailView>();
     v.visit::<library_work_api::Applying>();
     v.visit::<library_work_api::ApplyBody>();
+    v.visit::<library_work_api::archive::ArchiveBody>();
+    v.visit::<library_work_api::archive::ArchiveConflict>();
     v.visit::<library_work_api::OrderView>();
     v.visit::<library_work_api::OrderBody>();
     v.visit::<library_work_api::CleanBody>();
@@ -396,6 +398,16 @@ fn command_requests_are_the_ones_the_web_reads() {
             serde_json::to_value(listed_kind).unwrap()
         );
     }
+    // Read through its own route, never posted here.
+    assert_eq!(
+        serde_json::to_value(CommandKind::WorkArchive).unwrap(),
+        json!(trss_collect::commands::work_archive::KIND)
+    );
+    assert!(Request::read(
+        trss_collect::commands::work_archive::KIND,
+        json!({"work": "w"})
+    )
+    .is_err());
 }
 
 /// The enums that took the place of a `code()` string in a response send the

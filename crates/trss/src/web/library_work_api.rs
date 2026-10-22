@@ -39,8 +39,9 @@
 //!   "rules": [{
 //!     "id": "…", "channel": { "id": "…", "name": null, "host": "example.org" },
 //!     "match": "Lycoris", "directory": "Lycoris Recoil/Season 01",
-//!     "save_path": "/media/anime/Lycoris Recoil/Season 01", "state": "active"
+//!     "save_path": "/media/anime/Lycoris Recoil/Season 01", "state": "active", "version": 3
 //!   }],
+//!   "archive": { "available": true, "command": null },
 //!   "subtitles": {
 //!     "format_order": { "order": ["srt", "ass", "smi"], "own": true },
 //!     "creators": [{
@@ -233,11 +234,43 @@
 //!   video the app asks about whose `확인함` holds for it
 //!   ([`super::video_check_api`]).
 //! - `rules` are the rules whose save folder is in this work's folder: the
-//!   first part of the rule's `directory` below the collect folder is the work's
-//!   folder name, and the work is in the collect folder or the archive folder
-//!   (where `보관` moves it). Archived rules are listed with their `state`.
+//!   first part of the rule's `directory` below the collect folder, read by
+//!   its text (`Other/../X` is in `X`, as the move's check reads it), is the
+//!   work's folder name, and the work is in the collect folder or the archive
+//!   folder (where `보관` moves it). Archived rules are listed with their `state`.
 //!   Empty when the work is in some other watch folder or no collect folder is
-//!   set.
+//!   set. `version` is the one a deletion names.
+//! - `archive` is the work's `보관 폴더로 옮기기`. `available` is true while the
+//!   work is in the collect folder, its folder is there (not `missing`) and an
+//!   archive folder is set. `command` is the move ([`super::commands_api`]'s
+//!   command view, kind `work_archive`) while it is open; it is also the last
+//!   one when that ended `failed` or `kept` (with its reason), the work is still
+//!   in the collect folder and no rule saves into its folder, which is what a
+//!   move whose rules were deleted for it and that did not go through leaves.
+//!   `null` otherwise.
+//! - `POST /api/library/works/{id}/archive` with
+//!   `{ "id": <command ID>, "rules": [{ "id", "version" }] }` deletes the rules
+//!   the confirmation showed, which must be the ones saving into the work
+//!   folder now (`rules`, every state, every channel), and accepts the move
+//!   of the folder into the archive folder
+//!   ([`trss_collect::commands::work_archive`]), whose progress and outcome
+//!   the screen reads from `GET /api/commands/{id}`. The rules are deleted in
+//!   the transaction that stores the move, so both happen or neither, and
+//!   before the move runs, so no new episode arrives at the old place while it
+//!   moves; their collection history and received files stay.
+//!   The ID is the screen's, one per person's action: a repeat of it answers
+//!   the stored command (`200`) without looking at anything else, so a lost
+//!   answer is asked again with the same ID, and `다시 옮기기` is a new ID with
+//!   `rules` empty. `202` with the command when accepted now; `400` for an
+//!   unreadable body or ID; `404` for a work that is not in the library; `409`
+//!   with why in `message` (no `current`) for a work outside the collect
+//!   folder, a folder that is not there, or no archive folder; `409` with
+//!   `current` `{ "rules": <the rules now>, "command": <command or null> }`
+//!   when the rules sent are not the ones saving into the folder now (nothing
+//!   was deleted), when a move of the work is open already (`command`), or
+//!   when the ID was used for another request (`command`). A rule saved
+//!   between that check and the move keeps the folder in place if it is
+//!   active, which the move's outcome says.
 //! - `cover_url` is where the work's cover is served while it has an image
 //!   reference, `null` otherwise; the cover view reads the rest from
 //!   [`super::artwork_api`]. `cover_pending` is true while the worker still has
@@ -268,7 +301,7 @@ use super::{
     ApiError, AppState,
 };
 use trss_collect::{
-    commands::rule_archive::{work_folder, WorkFolder},
+    commands::rule_archive::{lexical_work_folder, WorkFolder},
     revision,
     rss::save_path,
     store::{
@@ -295,12 +328,14 @@ use trss_library::store::{
     library::{EpisodeDetail, FileRecord, LibraryError, WorkDetail},
 };
 
+pub(super) mod archive;
 #[cfg(test)]
 mod tests;
 
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/library/works/{id}", get(show))
+        .route("/library/works/{id}/archive", post(archive::archive))
         .route(
             "/library/works/{id}/stored/{stored_id}/apply",
             post(apply_stored),
@@ -520,6 +555,8 @@ struct RuleRef {
     directory: String,
     save_path: String,
     state: RuleState,
+    /// The version a deletion names ([`archive`]).
+    version: i64,
 }
 
 /// A subscription rule connected to a season of the work.
@@ -555,6 +592,8 @@ pub(super) struct WorkDetailView {
     seasons: Vec<SeasonView>,
     unrecognized: Vec<UnrecognizedView>,
     rules: Vec<RuleRef>,
+    /// `보관 폴더로 옮기기` ([`archive`]).
+    archive: archive::ArchiveView,
     cover_url: Option<String>,
     cover_pending: bool,
     storage: StorageView,
@@ -814,7 +853,8 @@ fn rules_of(
     let mut rules = Vec::new();
     for cwr in channels {
         for rule in &cwr.rules {
-            if work_folder(collect, &rule.directory) != WorkFolder::Named(work.dir_name.clone()) {
+            let landing = lexical_work_folder(collect, &rule.directory);
+            if landing != WorkFolder::Named(work.dir_name.clone()) {
                 continue;
             }
             rules.push(RuleRef {
@@ -830,6 +870,7 @@ fn rules_of(
                     .to_string_lossy()
                     .into_owned(),
                 state: rule.state,
+                version: rule.version,
             });
         }
     }
@@ -1009,12 +1050,12 @@ async fn show(
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
     let channels = state.channels.list_channels_with_rules().await?;
-    let rules = rules_of(
-        &work,
+    let (collect, archive_folder) = (
         settings.as_ref().map(|s| s.folder.as_str()),
         settings.as_ref().and_then(|s| s.archive_folder.as_deref()),
-        &channels,
     );
+    let rules = rules_of(&work, collect, archive_folder, &channels);
+    let archive = archive::archive_view(&state, &work, &rules, collect, archive_folder).await?;
 
     let (cover_url, cover_pending) = match state.artwork.store.selection(&work.id).await {
         Ok(selection) => (
@@ -1197,6 +1238,7 @@ async fn show(
             })
             .collect(),
         rules,
+        archive,
         cover_url,
         cover_pending,
         storage: StorageView::from(files),

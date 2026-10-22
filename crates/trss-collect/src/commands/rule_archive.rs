@@ -112,7 +112,7 @@ use work_folder::{
     move_work_folder, Disk, Hold, MoveError, MovePolicy, Moved, RealDisk, Request, Side,
 };
 
-/// What `rule_archive` uses (made from
+/// What `rule_archive` and `work_archive` use (made from
 /// [`CollectContext::archive`](crate::context::CollectContext::archive)).
 /// Cheap to clone.
 #[derive(Clone)]
@@ -229,7 +229,7 @@ impl Retry {
     }
 }
 
-fn done(result: &str, reason: Option<String>) -> Finished {
+pub(super) fn done(result: &str, reason: Option<String>) -> Finished {
     Finished {
         state: CommandState::Done,
         outcome: Outcome {
@@ -239,7 +239,7 @@ fn done(result: &str, reason: Option<String>) -> Finished {
     }
 }
 
-fn failed(reason: impl Into<String>) -> Finished {
+pub(super) fn failed(reason: impl Into<String>) -> Finished {
     Finished {
         state: CommandState::Failed,
         outcome: Outcome {
@@ -275,8 +275,10 @@ pub fn work_folder(collect: &Path, directory: &str) -> WorkFolder {
 }
 
 /// [`work_folder`] with `..` resolved by text: where a rule would land if no
-/// link were involved.
-fn lexical_work_folder(collect: &Path, directory: &str) -> WorkFolder {
+/// link were involved. What says which rules save into a work folder, to list
+/// them, delete them with it, or keep it in place for them; never what says
+/// which folder to move.
+pub fn lexical_work_folder(collect: &Path, directory: &str) -> WorkFolder {
     let collect = lexical(collect);
     let save = lexical(&collect.join(directory));
     let Ok(below) = save.strip_prefix(&collect) else {
@@ -311,7 +313,7 @@ fn holders<'a>(rules: &'a [Rule], rule: &Rule, collect: &Path, name: &str) -> Ve
 }
 
 /// The sentence for a work folder kept because other rules still save in it.
-fn held_reason(holders: &[&Rule]) -> String {
+pub(super) fn held_reason(holders: &[&Rule]) -> String {
     let first = &holders[0].directory;
     if holders[0].state == RuleState::Paused {
         // Every holder is paused: none of them collects now.
@@ -364,19 +366,19 @@ pub async fn section(ctx: &ArchiveContext, command: &Command) -> Result<Section,
 }
 
 /// One start of a command, and what its moves need.
-struct Start<'a> {
-    ctx: &'a ArchiveContext,
-    disk: Arc<dyn Disk>,
+pub(super) struct Start<'a> {
+    pub(super) ctx: &'a ArchiveContext,
+    pub(super) disk: Arc<dyn Disk>,
     /// Kept until the move's blocking work returns: the worker's turn at the
     /// folders and the torrent gate.
-    hold: Hold,
+    pub(super) hold: Hold,
     /// The last start the command gets: a move not finished yet ends it.
-    last: bool,
-    cancel: &'a CancellationToken,
+    pub(super) last: bool,
+    pub(super) cancel: &'a CancellationToken,
     /// Notes when a restored rule was turned back on.
-    clock: &'a Clock,
+    pub(super) clock: &'a Clock,
     /// When the command was accepted: a `영상 받기` pressed then is on from then.
-    requested_at: Millis,
+    pub(super) requested_at: Millis,
 }
 
 /// Runs a `rule_archive` command to its end, with its turn ([`section`]) taken.
@@ -433,7 +435,7 @@ pub async fn run_on(
 /// Why a rule's work folder is not moved at all (the command then ends with
 /// that reason, `kept`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum NoMove {
+pub(super) enum NoMove {
     NoCollectFolder,
     NoArchiveFolder,
     CollectItself,
@@ -442,7 +444,7 @@ enum NoMove {
 
 impl NoMove {
     /// The sentence a command ends with.
-    fn reason(self) -> String {
+    pub(super) fn reason(self) -> String {
         match self {
             NoMove::NoCollectFolder => "수집 폴더를 정하지 않아서 폴더는 옮기지 않았어요.",
             NoMove::NoArchiveFolder => "보관 폴더를 정하지 않아서 폴더는 옮기지 않았어요.",
@@ -753,7 +755,9 @@ pub async fn move_before_receiving(
     Ok(Receiving::MoveFirst { work, asked })
 }
 
-async fn settings(ctx: &ArchiveContext) -> Result<Option<(String, Option<String>)>, Retry> {
+pub(super) async fn settings(
+    ctx: &ArchiveContext,
+) -> Result<Option<(String, Option<String>)>, Retry> {
     Ok(ctx
         .settings
         .collection()
@@ -763,7 +767,7 @@ async fn settings(ctx: &ArchiveContext) -> Result<Option<(String, Option<String>
 }
 
 /// Moves the work folder of `request`, as the outcome of the command.
-async fn move_folder(
+pub(super) async fn move_folder(
     start: &Start<'_>,
     request: &Request,
 ) -> Result<Result<Finished, Finished>, Retry> {

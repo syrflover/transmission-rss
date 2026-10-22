@@ -36,7 +36,8 @@
 //! ([`trss_core::folder_locks::Section::rule`]: the first item a rule receives
 //! decides the offset, so those receives go in the order they were accepted),
 //! `rule_archive` writes the rule's work
-//! folder in the collect and the archive folder, `episode_undo` writes the
+//! folder in the collect and the archive folder, as `work_archive` writes its
+//! work folder there, `episode_undo` writes the
 //! rule's work folder, and `watch_rescan` reads its watch folder as every
 //! reading does. The command waits for its turn and runs; the command modules
 //! take no turn themselves (a task never waits for a second one). So two
@@ -116,6 +117,11 @@
 //! as the web does after `영상 받기` for a rule that needs no move: a rule the
 //! command turned on receives what its creator posted while it was off.
 //!
+//! A `work_archive` command (`보관 폴더로 옮기기` of a work, whose rules the web
+//! deleted first) moves a work folder from the collect folder into the archive
+//! folder the same way, with the same turns and the same carrying on after a
+//! start cut short ([`work_archive`]).
+//!
 //! A `watch_rescan` command (`다시 확인` of a watch folder) reads the folder
 //! again, like the cycles do, and only reads ([`watch_rescan`]); it runs
 //! beside a move in another folder.
@@ -163,6 +169,7 @@ use trss_core::{
 use trss_collect::commands::{
     anissia_captions, episode_undo, receive_once, receive_past,
     rule_archive::{self, work_folder::Hold},
+    work_archive,
 };
 use trss_library::watch_rescan;
 
@@ -207,6 +214,7 @@ enum Kind {
     ReceiveOnce,
     ReceivePast,
     RuleArchive,
+    WorkArchive,
     WatchRescan,
     EpisodeUndo,
     AnissiaCaptions,
@@ -219,6 +227,7 @@ impl Kind {
             receive_once::KIND => Kind::ReceiveOnce,
             receive_past::KIND => Kind::ReceivePast,
             rule_archive::KIND => Kind::RuleArchive,
+            work_archive::KIND => Kind::WorkArchive,
             watch_rescan::KIND => Kind::WatchRescan,
             episode_undo::KIND => Kind::EpisodeUndo,
             anissia_captions::KIND => Kind::AnissiaCaptions,
@@ -494,6 +503,9 @@ impl Worker {
             Kind::RuleArchive => rule_archive::section(&self.ctx.archive(), command)
                 .await
                 .map_err(|e| text(&e)),
+            Kind::WorkArchive => work_archive::section(&self.ctx.archive(), command)
+                .await
+                .map_err(|e| text(&e)),
             Kind::EpisodeUndo => episode_undo::section(&self.ctx.undo(), command)
                 .await
                 .map_err(|e| text(&e)),
@@ -608,6 +620,20 @@ impl Worker {
                 let ctx = self.ctx.archive();
                 task.spawn(async move {
                     match rule_archive::run(&ctx, &owned, keep, &clock, &cancel).await {
+                        Ok(finished) => Ran::Ended {
+                            state: finished.state,
+                            outcome: finished.outcome,
+                            add_unconfirmed: false,
+                        },
+                        Err(err) => Ran::NotNow(err.to_string()),
+                    }
+                });
+            }
+            Kind::WorkArchive => {
+                // Kept by the move's blocking renames until they return.
+                let ctx = self.ctx.archive();
+                task.spawn(async move {
+                    match work_archive::run(&ctx, &owned, keep, &clock, &cancel).await {
                         Ok(finished) => Ran::Ended {
                             state: finished.state,
                             outcome: finished.outcome,

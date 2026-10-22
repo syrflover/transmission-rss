@@ -37,8 +37,10 @@ import type {
   SubtitleFormat,
   SubtitleOrderBody,
   VersionBody,
+  WorkArchiveBody,
   WorkDetail,
 } from "@/lib/api-types";
+import type { Command } from "@/lib/commands";
 
 import { forgetWeek } from "../schedule/api";
 import type { AnissiaTarget } from "./detail/movie.ts";
@@ -97,6 +99,9 @@ export type {
   SubtitleCreatorCopies,
   SubtitleFormat,
   UnrecognizedFile,
+  WorkArchive,
+  WorkArchiveConflict,
+  WorkArchiveRule,
   WorkDetail,
   WorkEpisode,
   WorkFile,
@@ -185,6 +190,17 @@ export function applyStored(
     method: "POST",
     body,
   });
+}
+
+/**
+ * `보관 폴더로 옮기기`: deletes `rules`, the rules the confirmation showed with their versions, and accepts the move of the
+ * work folder into the archive folder under the command ID `commandId` (`202`). The same ID again answers the command
+ * stored for it (`200`). A `409` is a refusal whose message is the sentence to show; its `current`, when there is one,
+ * is a `WorkArchiveConflict`: the rules saving into the folder now and the command it is about.
+ */
+export function sendWorkArchive(id: string, commandId: string, rules: WorkArchiveBody["rules"]): Promise<Command> {
+  const body: WorkArchiveBody = { id: commandId, rules };
+  return api<Command>(`/library/works/${encodeURIComponent(id)}/archive`, { method: "POST", body });
 }
 
 const orderPath = (id: string) => `/library/works/${encodeURIComponent(id)}/subtitle-order`;

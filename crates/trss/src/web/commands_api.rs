@@ -176,6 +176,9 @@ struct CreateBody {
 /// The kinds of command, as `POST /commands` names them. The screens send
 /// them through [`CommandRequest`]; the web stores the kind as text, and the
 /// tests of [`super::api_types`] keep this list and [`Request::read`] together.
+/// `work_archive` is the one kind the web accepts only through its own route
+/// (`POST /library/works/{id}/archive`, [`super::library_work_api`]); a screen
+/// reads it here like any other.
 #[cfg(test)]
 #[derive(Serialize, ts_rs::TS)]
 #[serde(rename_all = "snake_case")]
@@ -187,6 +190,7 @@ pub(super) enum CommandKind {
     EpisodeUndo,
     AnissiaCaptions,
     RuleArchiveBatch,
+    WorkArchive,
 }
 
 /// A request to `POST /commands` as a screen writes it: the ID, the kind and
@@ -230,7 +234,7 @@ const UNDO_BUSY: &str =
 /// The shortest and longest command ID.
 const ID_LEN: std::ops::RangeInclusive<usize> = 8..=64;
 
-fn valid_id(id: &str) -> bool {
+pub(super) fn valid_id(id: &str) -> bool {
     ID_LEN.contains(&id.len())
         && id
             .bytes()

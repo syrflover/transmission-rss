@@ -3,7 +3,9 @@
 
 use std::collections::HashMap;
 
-use rusqlite::{params, params_from_iter, Connection, OptionalExtension, Row, TransactionBehavior};
+use rusqlite::{
+    params, params_from_iter, Connection, OptionalExtension, Row, Transaction, TransactionBehavior,
+};
 
 use super::{Accepted, Command, CommandError, CommandState, NewCommand, Outcome, MAX_ATTEMPTS};
 use crate::Millis;
@@ -82,16 +84,28 @@ pub fn get_many(conn: &Connection, ids: &[String]) -> Result<HashMap<String, Com
 }
 
 pub fn accept(conn: &mut Connection, new: &NewCommand, now: Millis) -> Result<Accepted> {
+    let accepted = accept_with(conn, new, now, |_| Ok::<(), std::convert::Infallible>(()))?;
+    Ok(accepted.unwrap_or_else(|never| match never {}))
+}
+
+/// [`accept`] with `write` run in its transaction just before the insert, when
+/// the command is new: a refusal from `write` stores neither.
+pub fn accept_with<E>(
+    conn: &mut Connection,
+    new: &NewCommand,
+    now: Millis,
+    write: impl FnOnce(&Transaction<'_>) -> std::result::Result<(), E>,
+) -> Result<std::result::Result<Accepted, E>> {
     let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
 
     if let Some(existing) = get(&tx, &new.id)? {
-        return Ok(
+        return Ok(Ok(
             if existing.kind == new.kind && existing.payload == new.payload {
                 Accepted::Existing(existing)
             } else {
                 Accepted::Mismatch(existing)
             },
-        );
+        ));
     }
 
     if let Some(subject) = &new.subject {
@@ -105,10 +119,14 @@ pub fn accept(conn: &mut Connection, new: &NewCommand, now: Millis) -> Result<Ac
             params![new.kind, subject],
         )?;
         if let Some(open) = open {
-            return Ok(Accepted::Busy(open));
+            return Ok(Ok(Accepted::Busy(open)));
         }
     }
 
+    // Dropping the transaction rolls back what `write` did.
+    if let Err(refused) = write(&tx) {
+        return Ok(Err(refused));
+    }
     tx.prepare_cached(
         "INSERT INTO commands (id, kind, payload, subject, state, attempts, created_at, updated_at)
          VALUES (?1, ?2, ?3, ?4, 'pending', 0, ?5, ?5)",
@@ -116,7 +134,7 @@ pub fn accept(conn: &mut Connection, new: &NewCommand, now: Millis) -> Result<Ac
     .execute(params![new.id, new.kind, new.payload, new.subject, now])?;
     let created = get(&tx, &new.id)?.expect("the command was just inserted");
     tx.commit()?;
-    Ok(Accepted::Created(created))
+    Ok(Ok(Accepted::Created(created)))
 }
 
 pub fn open_for_subjects(

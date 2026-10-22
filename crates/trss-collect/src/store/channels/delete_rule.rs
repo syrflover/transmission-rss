@@ -1,4 +1,4 @@
-//! Deleting one rule.
+//! Deleting rules.
 //!
 //! Received files and the collection history are not owned by the rule: the
 //! history keeps the rule's ID as a plain value with no foreign key, so its
@@ -19,18 +19,44 @@ impl ChannelStore {
     ) -> Result<(), ChannelError> {
         let id = id.to_owned();
         self.db
-            .run(move |c| delete_rule(c, &id, expected_version))
+            .run(move |c| delete_rules(c, &[(id, expected_version)]))
             .await
+    }
+
+    /// Deletes the rules `rules`, each if it is still at the version given
+    /// with it, in one transaction: all of them, or none when one of them is
+    /// gone or at another version (the error is about the first such rule).
+    pub async fn delete_rules(&self, rules: Vec<(String, Version)>) -> Result<(), ChannelError> {
+        self.db.run(move |c| delete_rules(c, &rules)).await
     }
 }
 
-fn delete_rule(
-    conn: &mut Connection,
+fn delete_rules(conn: &mut Connection, rules: &[(String, Version)]) -> Result<(), ChannelError> {
+    // The write lock is taken before the version checks, like every mutation.
+    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    delete_rules_in(&tx, rules)?;
+    tx.commit()?;
+    Ok(())
+}
+
+/// [`ChannelStore::delete_rules`] inside the write transaction `tx`, for a
+/// write that goes with another (a command stored with it): an `Err` leaves
+/// `tx` to be rolled back.
+pub(crate) fn delete_rules_in(
+    tx: &rusqlite::Transaction<'_>,
+    rules: &[(String, Version)],
+) -> Result<(), ChannelError> {
+    for (id, expected_version) in rules {
+        delete_in(tx, id, *expected_version)?;
+    }
+    Ok(())
+}
+
+fn delete_in(
+    tx: &rusqlite::Transaction<'_>,
     id: &str,
     expected_version: Version,
 ) -> Result<(), ChannelError> {
-    // The write lock is taken before the version check, like every mutation.
-    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let version: Version = tx
         .prepare_cached("SELECT version FROM rules WHERE id = ?1")?
         .query_row([id], |r| r.get(0))
@@ -49,7 +75,6 @@ fn delete_rule(
     }
     tx.prepare_cached("DELETE FROM rules WHERE id = ?1")?
         .execute([id])?;
-    tx.commit()?;
     Ok(())
 }
 

@@ -37,6 +37,8 @@ import { SeasonTiles } from "./detail/SeasonTiles";
 import { HeadCreators } from "./detail/SubtitleCreators";
 import { useMovieLink } from "./detail/useMovieLink";
 import { CollectCard, FilesCard, InfoCard } from "./detail/SideCards";
+import { useWorkArchive } from "./detail/useWorkArchive";
+import { ArchiveAction, WorkArchiveNotice } from "./detail/WorkArchive";
 import { SubtitlesCard } from "./detail/SubtitlesCard";
 import { coverOf } from "./model";
 import { FILES_HASH } from "./storage.ts";
@@ -249,6 +251,7 @@ function Loaded({
   usePageTitle(title);
   const phone = useMediaQuery(PHONE_QUERY);
   const wide = useMediaQuery(WIDE_QUERY);
+  const archive = useWorkArchive(work, onRetried);
   const [order, setOrder] = useEpisodeOrder();
   const [params] = useSearchParams();
   const { key: locationKey, hash } = useLocation();
@@ -382,6 +385,14 @@ function Loaded({
         </p>
       )}
 
+      <WorkArchiveNotice
+        work={work}
+        phase={archive.phase}
+        onMoveAgain={() => archive.submit([])}
+        onResend={archive.resend}
+        onRecheck={archive.recheck}
+      />
+
       <div className={wide ? "grid grid-cols-[minmax(0,1fr)_380px] items-start gap-8" : "flex flex-col gap-7"}>
         <div className="flex min-w-0 flex-col gap-7">
           {work.seasons.length > 1 && season && (
@@ -478,7 +489,17 @@ function Loaded({
 
         <div className={wide ? (work.seasons.length > 1 ? "mt-[29px] flex flex-col gap-3" : "flex flex-col gap-3") : "flex flex-col gap-3"}>
           {season && <InfoCard info={season.info} collapsible={!wide} />}
-          <CollectCard work={work} collapsible={!wide} />
+          <CollectCard
+            work={work}
+            collapsible={!wide}
+            action={
+              <ArchiveAction
+                work={work}
+                busy={archive.busy}
+                onConfirm={(rules) => archive.submit(rules.map((rule) => ({ id: rule.id, version: rule.version })))}
+              />
+            }
+          />
           {season && work.subtitles && (
             <SubtitlesCard
               workId={work.id}

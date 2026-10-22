@@ -117,8 +117,11 @@ function RuleLink({ rule }: { rule: WorkRule }) {
   );
 }
 
-/** `수집`: the rules that save into this work's folder, each a link to the rule in the collect screen. */
-export function CollectCard({ work, collapsible }: { work: WorkDetail; collapsible: boolean }) {
+/**
+ * `수집`: the rules that save into this work's folder, each a link to the rule in the collect screen, and `action`
+ * after them (`보관 폴더로 옮기기`).
+ */
+export function CollectCard({ work, collapsible, action }: { work: WorkDetail; collapsible: boolean; action?: ReactNode }) {
   const count = work.rules.length;
   return (
     <Card title="수집" summary={count === 0 ? "받는 규칙 없음" : `규칙 ${count}개`} collapsible={collapsible}>
@@ -136,6 +139,7 @@ export function CollectCard({ work, collapsible }: { work: WorkDetail; collapsib
           </ul>
         </>
       )}
+      {action}
     </Card>
   );
 }

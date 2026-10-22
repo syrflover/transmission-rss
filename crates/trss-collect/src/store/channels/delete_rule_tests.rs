@@ -112,3 +112,49 @@ async fn a_missing_rule_is_not_found() {
         ChannelError::NotFound { kind: "rule", .. }
     ));
 }
+
+#[tokio::test]
+async fn several_rules_go_together_or_none_does() {
+    let store = store().await;
+    let created = channel_with_rules(&store, 3).await;
+    let (a, b, c) = (&created.rules[0], &created.rules[1], &created.rules[2]);
+    let ids = |store_rules: Vec<Rule>| store_rules.into_iter().map(|r| r.id).collect::<Vec<_>>();
+
+    // One of them was saved since: none goes.
+    let saved = store
+        .update_rule(&b.id, b.version, &created.channel.id, b.to_input())
+        .await
+        .unwrap();
+    let err = store
+        .delete_rules(vec![(a.id.clone(), a.version), (b.id.clone(), b.version)])
+        .await
+        .unwrap_err();
+    assert!(err.is_conflict());
+    assert_eq!(
+        ids(store.list_rules(&created.channel.id).await.unwrap()).len(),
+        3
+    );
+
+    // One of them is gone: none goes either.
+    let err = store
+        .delete_rules(vec![(a.id.clone(), a.version), ("nope".into(), 1)])
+        .await
+        .unwrap_err();
+    assert!(matches!(err, ChannelError::NotFound { kind: "rule", .. }));
+    assert_eq!(
+        ids(store.list_rules(&created.channel.id).await.unwrap()).len(),
+        3
+    );
+
+    store
+        .delete_rules(vec![
+            (a.id.clone(), a.version),
+            (b.id.clone(), saved.version),
+        ])
+        .await
+        .unwrap();
+    assert_eq!(
+        ids(store.list_rules(&created.channel.id).await.unwrap()),
+        [c.id.as_str()]
+    );
+}

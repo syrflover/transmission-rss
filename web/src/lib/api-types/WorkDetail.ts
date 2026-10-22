@@ -2,6 +2,7 @@
 import type { UnrecognizedFile } from "./UnrecognizedFile";
 import type { UploadLimits } from "./UploadLimits";
 import type { WatchFolderRef } from "./WatchFolderRef";
+import type { WorkArchive } from "./WorkArchive";
 import type { WorkRule } from "./WorkRule";
 import type { WorkSeason } from "./WorkSeason";
 import type { WorkStorage } from "./WorkStorage";
@@ -13,7 +14,11 @@ export type WorkDetail = { id: string, name: string, title: string,
  * The work is a movie and nothing else: no season folder, one video
  * directly in its folder, which is the episode 1 of season 0.
  */
-movie_only: boolean, missing: boolean, watch_folder: WatchFolderRef, folder_path: string, added_at: number | null, native_title: string | null, subscriptions: Array<WorkSubscription>, seasons: Array<WorkSeason>, unrecognized: Array<UnrecognizedFile>, rules: Array<WorkRule>, cover_url: string | null, cover_pending: boolean, storage: WorkStorage, subtitles: WorkSubtitles, 
+movie_only: boolean, missing: boolean, watch_folder: WatchFolderRef, folder_path: string, added_at: number | null, native_title: string | null, subscriptions: Array<WorkSubscription>, seasons: Array<WorkSeason>, unrecognized: Array<UnrecognizedFile>, rules: Array<WorkRule>, 
+/**
+ * `보관 폴더로 옮기기` ([`archive`]).
+ */
+archive: WorkArchive, cover_url: string | null, cover_pending: boolean, storage: WorkStorage, subtitles: WorkSubtitles, 
 /**
  * What an upload of subtitle files is held to, which the screen checks
  * before it sends the files.

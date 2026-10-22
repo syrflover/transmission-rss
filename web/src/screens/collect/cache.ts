@@ -86,6 +86,19 @@ export function ruleCountChanged(channelId: string, delta: number): void {
   }));
 }
 
+/**
+ * Rules were deleted by a screen that is not the rule list (a work moved into the archive folder from its page): the
+ * lists that show rules or count them, the subscriptions, the archive suggestions and the schedule (which says who
+ * follows each anime) read the server again.
+ */
+export function rulesDeleted(): void {
+  forgetWeek();
+  forget(KEYS.rules);
+  forget(KEYS.channels);
+  forget(KEYS.subscriptions);
+  forget(KEYS.archiveSuggestions);
+}
+
 /** The rule list as it is after the rule `ruleId` was deleted. */
 export function withoutRule(list: RuleList, ruleId: string): RuleList {
   const gone = list.rules.find((r) => r.id === ruleId);

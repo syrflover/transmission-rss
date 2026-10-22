@@ -9,4 +9,8 @@ export type WorkRule = { id: string, channel: RuleChannel, match: string | null,
 /**
  * Relative to the collect folder.
  */
-directory: string, save_path: string, state: RuleState, };
+directory: string, save_path: string, state: RuleState, 
+/**
+ * The version a deletion names ([`archive`]).
+ */
+version: number, };
