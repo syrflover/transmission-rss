@@ -108,24 +108,31 @@ opt-level = 3
 [profile.dev.package.sha2]
 opt-level = 3
 
-# Debug info for everyday builds and tests: dependencies keep only the line
-# tables, which panic backtraces read, and the rest stays in split files beside
-# the objects instead of being copied into every test binary. On 2026-10-06 a
-# workspace test run after an edit to trss-jobs went from 7.2 to 2.5 GB of test
-# binaries and from 5.2 to 3.0 GB written to disk. kache rewrites the paths to
-# the split files, so a debugger finds none of them: build with
-# `--profile debugger` to debug.
+# Debug info for everyday builds and tests: the workspace crates and the
+# dependencies keep only the line tables, which panic backtraces read, and
+# those stay in split files beside the objects instead of being copied into
+# every test binary. kache rewrites the paths to the split files, so gdb found
+# no variables in these builds even with full debug info: debug with
+# `--profile debugger`. On 2026-10-06 dependency line tables took a workspace
+# test run after an edit to trss-jobs from 7.2 to 2.5 GB of test binaries and
+# from 5.2 to 3.0 GB written to disk. On 2026-10-22 (ticket 0160) line tables
+# for the workspace crates too took the test build after an edit to trss-core
+# from 16.1 to 14.4 s (warm) and from 65.6 to 51.9 s (cold,
+# `dev/measure/core-edit-build.sh`).
 [profile.dev]
 split-debuginfo = "unpacked"
+debug = "line-tables-only"
 
 [profile.dev.package."*"]
 debug = "line-tables-only"
 
-# Full debug info inside the binaries, for gdb (`cargo build --profile
-# debugger`, `cargo test --profile debugger`), built into target/debugger.
+# Full debug info inside the binaries, for the workspace crates and the
+# dependencies alike, for gdb (`cargo build --profile debugger`,
+# `cargo test --profile debugger`), built into target/debugger.
 [profile.debugger]
 inherits = "dev"
 split-debuginfo = "off"
+debug = true
 
 [profile.debugger.package."*"]
 debug = true
