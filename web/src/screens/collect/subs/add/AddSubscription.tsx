@@ -55,6 +55,7 @@ export function AddSubscription() {
   const [draft, setDraft] = useState<Draft>(() => ({
     week: startWeek(params.get("week")),
     anime: null,
+    from: null,
     channel: null,
     work: null,
     waiting: false,
@@ -112,17 +113,23 @@ export function AddSubscription() {
             week={draft.week}
             selected={draft.anime}
             onWeek={(week) => change({ week })}
-            onPick={(anime) => {
+            onPick={(anime, from) => {
+              // Coming back to this step opens the weekday of an anime found by a search.
+              const week = "q" in from ? anime.week : draft.week;
               // The subtitle choices come from the anime's captions.
               if (anime.anime_no !== draft.anime?.anime_no) {
                 // A channel that already follows this anime cannot be kept.
                 const taken = anime.subscribed_rules.some((r) => r.channel_id === draft.channel?.id);
                 change({
                   anime,
+                  from,
+                  week,
                   subtitles: "undecided",
                   creator: null,
                   ...(taken ? { channel: null, work: null, waiting: false, directory: "" } : {}),
                 });
+              } else {
+                change({ from, week });
               }
               go(1);
             }}
@@ -174,8 +181,15 @@ export function AddSubscription() {
             onChange={(directory) => change({ directory })}
           />
         )}
-        {step === LAST && draft.anime && draft.channel && (draft.work || draft.waiting) && (
-          <Confirm draft={draft} anime={draft.anime} channel={draft.channel} work={draft.work} onCreated={() => setCreated(true)} />
+        {step === LAST && draft.anime && draft.from && draft.channel && (draft.work || draft.waiting) && (
+          <Confirm
+            draft={draft}
+            anime={draft.anime}
+            from={draft.from}
+            channel={draft.channel}
+            work={draft.work}
+            onCreated={() => setCreated(true)}
+          />
         )}
       </div>
 

@@ -1,10 +1,14 @@
 import type { Channel, ScheduleEntry, SubtitleMode, TitleGroup } from "@/lib/api-types";
 
+import type { PickedFrom } from "../api";
+
 /** What the subscribe flow has collected so far. */
 export interface Draft {
   /** The schedule tab being browsed, 0 (Sunday) to 8 (`신작`). */
   week: number;
   anime: ScheduleEntry | null;
+  /** Where `anime` was picked: the server finds it there again. */
+  from: PickedFrom | null;
   channel: Channel | null;
   work: TitleGroup | null;
   /** `아직 첫 화 전이에요`: subscribe with no release title, waiting for one. */

@@ -11,9 +11,13 @@ version: number,
  */
 anissia_anime_no: number, 
 /**
- * The schedule week the anime was picked from, to find its entry.
+ * The schedule week the anime was picked from, to find its entry...
  */
-week: number, 
+week?: number | null, 
+/**
+ * ...or the search it was picked from (`작품 찾기`), and its page.
+ */
+q?: string | null, page?: number | null, 
 /**
  * `follow`, `undecided` or `none`.
  */

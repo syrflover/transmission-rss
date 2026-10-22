@@ -5,15 +5,15 @@ import { ApiError } from "@/lib/api";
 import type { Rule, ScheduleEntry, SubtitleMode } from "@/lib/api-types";
 
 import { btnNeutral, btnPrimary } from "../channels/styles";
-import { linkToSchedule } from "../subs/api";
+import { linkToSchedule, type PickedFrom } from "../subs/api";
 import { PickAnime } from "../subs/add/PickAnime";
 import { PickSubtitles } from "../subs/add/PickSubtitles";
 import { todayWeek } from "../subs/format";
 
 /**
  * `편성표와 연결`: makes an existing rule a subscription. The anime comes from
- * Anissia's schedule and the subtitle choice from the same step the subscribe
- * flow has. The rule's match phrase, save folder and order are not touched.
+ * Anissia's schedule (a weekday, or `작품 찾기` in every week) and the subtitle
+ * choice from the same step the subscribe flow has. The rule's match phrase, save folder and order are not touched.
  * `onStale` gets the rule as the server has it when someone else changed it
  * first.
  */
@@ -30,21 +30,22 @@ export function LinkToSchedule({
 }) {
   const [week, setWeek] = useState(() => todayWeek());
   const [anime, setAnime] = useState<ScheduleEntry | null>(null);
+  const [from, setFrom] = useState<PickedFrom | null>(null);
   const [subtitles, setSubtitles] = useState<SubtitleMode>("undecided");
   const [creator, setCreator] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const ready = anime !== null && (subtitles !== "follow" || creator !== null);
+  const ready = anime !== null && from !== null && (subtitles !== "follow" || creator !== null);
 
   const link = async () => {
-    if (anime === null || !ready) return;
+    if (anime === null || from === null || !ready) return;
     setBusy(true);
     setError(null);
     try {
       const linked = await linkToSchedule(rule, {
         anissia_anime_no: anime.anime_no,
-        week: anime.week,
+        ...from,
         subtitles,
         // The creator is only stored with a followed one.
         creator: subtitles === "follow" ? creator : null,
@@ -76,9 +77,11 @@ export function LinkToSchedule({
         onWeek={(next) => {
           setWeek(next);
           setAnime(null);
+          setFrom(null);
         }}
-        onPick={(entry) => {
+        onPick={(entry, picked) => {
           setAnime(entry);
+          setFrom(picked);
           setSubtitles("undecided");
           setCreator(null);
         }}

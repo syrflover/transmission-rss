@@ -4,6 +4,7 @@
 //! | call                                         | success                                        |
 //! | -------------------------------------------- | ---------------------------------------------- |
 //! | `GET /anissia/schedule/{week}`               | `200 Schedule` (0 Sunday to 6 Saturday, 7 `기타`, 8 `신작`) |
+//! | `GET /anissia/search?q=&page=`               | `200 ScheduleSearch` (every week's anime that have not ended) |
 //! | `GET /anissia/anime/{no}/creators`           | `200 Creators`                                 |
 //! | `GET /subscriptions`                         | `200 { quarter, subscriptions: [SubscriptionItem] }` |
 //! | `GET /subscriptions/titles?channel_id=&q=`   | `200 Titles`                                   |
@@ -26,8 +27,14 @@
 //!
 //! Everything a subscription is made of is checked here against the stored
 //! data and Anissia, not trusted from the request: the release title must be
-//! one the channel's history holds, the anime one the schedule lists, and a
-//! subtitle creator one of the anime's captions names.
+//! one the channel's history holds, the anime one the list it was picked from
+//! lists (a week of the schedule, or a page of a search: [`anissia_lists`]),
+//! and a subtitle creator one of the anime's captions names.
+//!
+//! `GET /anissia/search` is the schedule's `작품 찾기`: a page of Anissia's
+//! full list for the text written (Anissia matches its Korean titles), without
+//! the anime that have ended ([`run_state`]), each with its week. A page can
+//! hold none of them and still have a next one.
 //!
 //! A subscription made without a `work` waits for its title (`제목 대기`): the
 //! rule has no match phrase and receives nothing. It needs a channel whose
@@ -49,7 +56,7 @@
 //! `PUT /rules/{id}/creator` (`{ version, creator }`, `creator` a name or
 //! `null` for `제작자 미정`) changes whom a subscription follows, for a
 //! subscription that receives subtitles; `POST /rules/{id}/subscription`
-//! (`{ version, anissia_anime_no, week, subtitles, creator }`) makes an existing
+//! (`{ version, anissia_anime_no, week | q and page, subtitles, creator }`) makes an existing
 //! rule a subscription and changes nothing else about it. A version that is not
 //! the stored one answers `409` with the rule's current view. The creator is
 //! one the anime's captions name: a line the app observed (the work detail's
@@ -69,11 +76,14 @@ use serde::{Deserialize, Serialize};
 use url::Url;
 
 use super::{
+    anissia_lists::{self, listed_anime, page_of, query_of, Listed, MAX_PAGE},
     jobs_api,
     rules_api::{self, RuleView},
     ApiError, AppState,
 };
-use trss_anissia::{Anime, AnissiaError, Fetched, LAST_WEEK, WEEK_OTHER, WEEK_UPCOMING};
+use trss_anissia::{
+    Anime, AnissiaError, Fetched, ScheduleEntry, LAST_WEEK, WEEK_OTHER, WEEK_UPCOMING,
+};
 use trss_collect::{
     schedule::state::{run_state, RunState},
     store::channels::{
@@ -90,6 +100,7 @@ use trss_core::{calendar::day_of, Millis};
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/anissia/schedule/{week}", get(schedule))
+        .route("/anissia/search", get(search))
         .route("/anissia/anime/{no}/creators", get(creators))
         .route("/subscriptions", get(list).post(subscribe))
         .route("/subscriptions/titles", get(titles))
@@ -235,6 +246,31 @@ pub(super) struct Schedule {
     cached: bool,
 }
 
+/// A page of the schedule's `작품 찾기`: the anime of every week that have not
+/// ended, in the order Anissia lists them.
+#[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub(super) struct ScheduleSearch {
+    /// The text searched for.
+    q: String,
+    entries: Vec<ScheduleEntryView>,
+    /// Counted from 1.
+    page: u32,
+    /// Whether Anissia has a next page; it may hold none that have not ended.
+    has_next: bool,
+    /// The last page a search answers; a page past it is refused.
+    max_page: u32,
+    /// When Anissia was asked (Unix ms).
+    fetched_at: Millis,
+    cached: bool,
+}
+
+#[derive(Deserialize)]
+struct SearchQuery {
+    q: Option<String>,
+    page: Option<u32>,
+}
+
 #[derive(Debug, Serialize)]
 #[cfg_attr(test, derive(ts_rs::TS), ts(rename = "Creator"))]
 struct CreatorView {
@@ -317,20 +353,7 @@ async fn schedule(
     let mut entries: Vec<ScheduleEntryView> = fetched
         .value
         .iter()
-        .map(|entry| ScheduleEntryView {
-            anime_no: entry.anime_no,
-            week: entry.week,
-            subject: entry.subject.clone(),
-            original_subject: entry.original_subject.clone(),
-            air_time: entry.air_time.clone(),
-            start_date: entry.start_date.clone(),
-            end_date: entry.end_date.clone(),
-            status: entry.status.clone(),
-            run: run_state(&entry.snapshot(fetched.fetched_at), false, today),
-            genres: entry.genres.clone(),
-            caption_count: entry.caption_count,
-            subscribed_rules: followed.remove(&entry.anime_no).unwrap_or_default(),
-        })
+        .map(|entry| entry_view(entry, fetched.fetched_at, today, &mut followed))
         .collect();
     if week == WEEK_OTHER || week == WEEK_UPCOMING {
         entries.sort_by(|a, b| {
@@ -354,6 +377,58 @@ async fn schedule(
         entries,
         fetched_at: fetched.fetched_at,
         cached: fetched.cached,
+    }))
+}
+
+/// An anime of a list Anissia gave at `fetched_at`, as the schedule shows it
+/// on the Seoul day `today`. Its rules are taken out of `followed`.
+fn entry_view(
+    entry: &ScheduleEntry,
+    fetched_at: Millis,
+    today: i64,
+    followed: &mut HashMap<i64, Vec<SubscribedRule>>,
+) -> ScheduleEntryView {
+    ScheduleEntryView {
+        anime_no: entry.anime_no,
+        week: entry.week,
+        subject: entry.subject.clone(),
+        original_subject: entry.original_subject.clone(),
+        air_time: entry.air_time.clone(),
+        start_date: entry.start_date.clone(),
+        end_date: entry.end_date.clone(),
+        status: entry.status.clone(),
+        run: run_state(&entry.snapshot(fetched_at), false, today),
+        genres: entry.genres.clone(),
+        caption_count: entry.caption_count,
+        subscribed_rules: followed.remove(&entry.anime_no).unwrap_or_default(),
+    }
+}
+
+async fn search(
+    State(state): State<AppState>,
+    parsed: Result<Query<SearchQuery>, QueryRejection>,
+) -> Result<Json<ScheduleSearch>, ApiError> {
+    let Query(asked) = parsed.map_err(|_| ApiError::invalid(BAD_BODY))?;
+    let page = page_of(asked.page)?;
+    let q = query_of(asked.q)?;
+    let found = anissia_lists::search(&state, &q, page).await?;
+    let mut followed = subscribed(&state).await?;
+    let today = day_of(state.anissia.now());
+    let entries = found
+        .page
+        .entries
+        .iter()
+        .map(|entry| entry_view(entry, found.fetched_at, today, &mut followed))
+        .filter(|entry| entry.run != Some(RunState::End))
+        .collect();
+    Ok(Json(ScheduleSearch {
+        q,
+        entries,
+        page,
+        has_next: !found.page.last,
+        max_page: MAX_PAGE,
+        fetched_at: found.fetched_at,
+        cached: found.cached,
     }))
 }
 
@@ -847,30 +922,6 @@ async fn name_title(
     }
 }
 
-/// The anime of the schedule's week `week` numbered `anime_no`, as the
-/// snapshot to keep: the request names an anime the schedule really lists.
-pub(super) async fn scheduled_anime(
-    state: &AppState,
-    week: u8,
-    anime_no: i64,
-) -> Result<Anime, ApiError> {
-    let listed = state
-        .anissia
-        .schedule(week, Some(USER_MAX_WAIT))
-        .await
-        .map_err(unavailable)?;
-    let entry = listed
-        .value
-        .iter()
-        .find(|e| e.anime_no == anime_no)
-        .ok_or_else(|| {
-            ApiError::invalid(
-                "편성표에서 이 작품을 찾지 못했어요. 편성표를 다시 불러와 골라 주세요.",
-            )
-        })?;
-    Ok(entry.snapshot(listed.fetched_at))
-}
-
 /// The creator a subscription stores for the subtitle mode asked: to follow
 /// one the anime's captions must name it, and only that mode takes one.
 async fn chosen_creator(
@@ -930,8 +981,17 @@ pub(super) struct SubscribeBody {
     channel_id: String,
     /// Anissia's `animeNo`.
     anissia_anime_no: i64,
-    /// The schedule week the anime was picked from, to find its entry.
-    week: u8,
+    /// The schedule week the anime was picked from, to find its entry...
+    #[serde(default)]
+    #[cfg_attr(test, ts(optional = nullable))]
+    week: Option<u8>,
+    /// ...or the search it was picked from (`작품 찾기`), and its page.
+    #[serde(default)]
+    #[cfg_attr(test, ts(optional = nullable))]
+    q: Option<String>,
+    #[serde(default)]
+    #[cfg_attr(test, ts(optional = nullable))]
+    page: Option<u32>,
     /// The work of a release title the channel's history holds (a
     /// [`TitleView::work`]): the rule's match phrase. Absent, the subscription
     /// waits for its title (`아직 첫 화 전이에요`).
@@ -1006,7 +1066,8 @@ async fn subscribe(
         None => None,
     };
 
-    let anime = scheduled_anime(&state, b.week, b.anissia_anime_no).await?;
+    let listed = Listed::of(b.week, b.q, b.page)?;
+    let anime = listed_anime(&state, &listed, b.anissia_anime_no).await?;
     let creator =
         chosen_creator(&state, subtitles, b.creator.as_deref(), b.anissia_anime_no).await?;
 
@@ -1175,8 +1236,17 @@ pub(super) struct LinkBody {
     version: i64,
     /// Anissia's `animeNo`.
     anissia_anime_no: i64,
-    /// The schedule week the anime was picked from, to find its entry.
-    week: u8,
+    /// The schedule week the anime was picked from, to find its entry...
+    #[serde(default)]
+    #[cfg_attr(test, ts(optional = nullable))]
+    week: Option<u8>,
+    /// ...or the search it was picked from (`작품 찾기`), and its page.
+    #[serde(default)]
+    #[cfg_attr(test, ts(optional = nullable))]
+    q: Option<String>,
+    #[serde(default)]
+    #[cfg_attr(test, ts(optional = nullable))]
+    page: Option<u32>,
     /// `follow`, `undecided` or `none`.
     subtitles: SubtitleMode,
     /// The creator to follow; only with `follow`, and one of the anime's.
@@ -1201,7 +1271,8 @@ async fn link_rule(
     // A subscription saves into a work folder below the collect folder, as
     // `subscribe` requires; a plain rule may save into the collect folder itself.
     rules_api::check_stored_work_folder(&rule)?;
-    let anime = scheduled_anime(&state, b.week, b.anissia_anime_no).await?;
+    let listed = Listed::of(b.week, b.q, b.page)?;
+    let anime = listed_anime(&state, &listed, b.anissia_anime_no).await?;
     let creator =
         chosen_creator(&state, subtitles, b.creator.as_deref(), b.anissia_anime_no).await?;
     let follows = creator.is_some();

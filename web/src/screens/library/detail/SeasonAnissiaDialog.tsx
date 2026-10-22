@@ -177,7 +177,7 @@ function Body({
           week={week}
           selected={picked?.entry ?? null}
           onWeek={setWeek}
-          onPick={(entry: ScheduleEntry) => setPicked({ anime_no: entry.anime_no, subject: entry.subject, source: { week }, entry })}
+          onPick={(entry: ScheduleEntry, from) => setPicked({ anime_no: entry.anime_no, subject: entry.subject, source: from, entry })}
         />
       </div>
 

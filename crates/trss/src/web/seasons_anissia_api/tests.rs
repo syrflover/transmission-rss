@@ -672,7 +672,8 @@ fn every_kind_of_search_failure_says_the_schedule_is_another_place_to_pick_from(
         AnissiaError::Status(500),
         AnissiaError::Unreachable("refused".into()),
     ] {
-        let ApiError::Unavailable(message) = super::search_unavailable(error) else {
+        let ApiError::Unavailable(message) = crate::web::anissia_lists::search_unavailable(error)
+        else {
             panic!("not unavailable");
         };
         assert!(
@@ -681,9 +682,11 @@ fn every_kind_of_search_failure_says_the_schedule_is_another_place_to_pick_from(
         );
     }
     // During a 429 wait only the weeks read already can be picked from.
-    let ApiError::Unavailable(message) = super::search_unavailable(AnissiaError::Busy {
-        retry_after: Duration::from_secs(30),
-    }) else {
+    let ApiError::Unavailable(message) =
+        crate::web::anissia_lists::search_unavailable(AnissiaError::Busy {
+            retry_after: Duration::from_secs(30),
+        })
+    else {
         panic!("not unavailable");
     };
     assert!(

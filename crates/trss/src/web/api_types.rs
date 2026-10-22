@@ -90,6 +90,7 @@ fn roots(v: &mut impl TypeVisitor) {
     v.visit::<setup_api::SkipBody>();
     v.visit::<status_api::Board>();
     v.visit::<subscriptions_api::Schedule>();
+    v.visit::<subscriptions_api::ScheduleSearch>();
     v.visit::<subscriptions_api::Creators>();
     v.visit::<subscriptions_api::SubscriptionList>();
     v.visit::<subscriptions_api::Titles>();

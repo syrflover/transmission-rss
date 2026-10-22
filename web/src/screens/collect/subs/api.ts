@@ -10,6 +10,7 @@ import type {
   RejectCandidateBody,
   Rule,
   Schedule,
+  ScheduleSearch,
   Subscribed,
   SubscriptionList,
   TitleCandidate,
@@ -27,6 +28,15 @@ import type {
 export function fetchSchedule(week: number, signal?: AbortSignal): Promise<Schedule> {
   return api<Schedule>(`/anissia/schedule/${week}`, { signal });
 }
+
+/** A page (from 1) of `작품 찾기`: Anissia's full list for `q`, every week's anime that have not ended. */
+export function searchSchedule(q: string, page: number, signal?: AbortSignal): Promise<ScheduleSearch> {
+  const params = new URLSearchParams({ q, page: String(page) });
+  return api<ScheduleSearch>(`/anissia/search?${params}`, { signal });
+}
+
+/** Where an anime was picked: a week of the schedule, or a page of `작품 찾기`. The server finds it there again. */
+export type PickedFrom = { week: number } | { q: string; page: number };
 
 export function fetchCreators(animeNo: number, signal?: AbortSignal): Promise<Creators> {
   return api<Creators>(`/anissia/anime/${animeNo}/creators`, { signal });

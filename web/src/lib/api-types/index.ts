@@ -279,6 +279,7 @@ export type { SaveMappingBody } from "./SaveMappingBody";
 export type { Schedule } from "./Schedule";
 export type { ScheduleDay } from "./ScheduleDay";
 export type { ScheduleEntry } from "./ScheduleEntry";
+export type { ScheduleSearch } from "./ScheduleSearch";
 export type { ScreenAsked } from "./ScreenAsked";
 export type { ScreenLimits } from "./ScreenLimits";
 export type { ScreenStateName } from "./ScreenStateName";

@@ -7,9 +7,13 @@ export type NewSubscription = { channel_id: string,
  */
 anissia_anime_no: number, 
 /**
- * The schedule week the anime was picked from, to find its entry.
+ * The schedule week the anime was picked from, to find its entry...
  */
-week: number, 
+week?: number | null, 
+/**
+ * ...or the search it was picked from (`작품 찾기`), and its page.
+ */
+q?: string | null, page?: number | null, 
 /**
  * The work of a release title the channel's history holds (a
  * [`TitleView::work`]): the rule's match phrase. Absent, the subscription

@@ -19,6 +19,7 @@ use tower_http::{
     set_header::SetResponseHeaderLayer,
 };
 
+pub mod anissia_lists;
 pub mod api;
 #[cfg(test)]
 mod api_types;

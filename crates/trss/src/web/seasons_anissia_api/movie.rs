@@ -57,13 +57,12 @@ use axum::{
 use serde::Serialize;
 
 use super::{
-    bad_body, creator_episodes, named_anime, page_of, query_of, reference_titles,
-    search_unavailable, CandidateObservation, CandidateView, CreatorEpisodes, LinkBody,
-    LinkedAnime, PickView, ReferenceTitle, SearchBody, SearchView, MAX_PAGE,
+    bad_body, creator_episodes, named_anime, reference_titles, CandidateObservation, CandidateView,
+    CreatorEpisodes, LinkBody, LinkedAnime, PickView, ReferenceTitle, SearchBody, SearchView,
 };
 use crate::web::{
+    anissia_lists::{self, page_of, query_of, MAX_PAGE},
     commands_api::{ask_anissia_captions, CommandView},
-    subscriptions_api::USER_MAX_WAIT,
     ApiError, AppState,
 };
 use trss_collect::store::channels::MovieAnimeError;
@@ -175,11 +174,7 @@ async fn search(
     // Only a movie of this work is searched for.
     stored(&state, &id, episode).await?;
     let q = query_of(body.q)?;
-    let found = state
-        .anissia
-        .search_anime(&q, page - 1, Some(USER_MAX_WAIT))
-        .await
-        .map_err(search_unavailable)?;
+    let found = anissia_lists::search(&state, &q, page).await?;
     Ok(Json(SearchView {
         q,
         items: found.page.entries.iter().map(CandidateView::from).collect(),

@@ -109,6 +109,36 @@ impl App {
         );
     }
 
+    /// The full list `작품 찾기` searches, four to a page: `안녕` finds anime of
+    /// Wednesday (3320, on air), Thursday (3005, `결방`) and `신작` (3008), one
+    /// Anissia ended (2969) and one whose end date has passed (3002).
+    fn catalogue(&self) {
+        let entry =
+            |week: u8, no: i64, time: &str, subject: &str, start: &str, end: &str, status: &str| {
+                let mut e = self.fake.entry(week, no, time, subject, "");
+                e["startDate"] = json!(start);
+                e["endDate"] = json!(end);
+                e["status"] = json!(status);
+                e
+            };
+        self.fake.set_catalogue(vec![
+            entry(3, 3320, "22:30", "안녕 수요일", "2026-07-01", "", "ON"),
+            self.fake.finished(1, 2969, "안녕, 라라", "Sayonara Lara"),
+            entry(
+                2,
+                3002,
+                "23:00",
+                "안녕 지난 분기",
+                "2026-07-02",
+                "2026-09-20",
+                "ON",
+            ),
+            entry(4, 3005, "01:00", "안녕 결방", "2026-07-03", "", "OFF"),
+            entry(8, 3008, "", "안녕 다음 분기", "2027-01", "", "ON"),
+        ]);
+        self.fake.state.lock().unwrap().page_size = 4;
+    }
+
     fn subscribe_body(&self, channel: &Channel) -> Value {
         json!({
             "channel_id": channel.id, "anissia_anime_no": 3320, "week": 3,
@@ -242,6 +272,149 @@ async fn when_anissia_does_not_answer_the_reason_is_told_and_nothing_is_kept() {
     let (status, body) = app.get("/api/anissia/schedule/3").await;
     assert_eq!(status, StatusCode::BAD_GATEWAY);
     assert!(body["message"].as_str().unwrap().contains("30초"), "{body}");
+}
+
+fn numbers(entries: &Value) -> Vec<i64> {
+    entries
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["anime_no"].as_i64().unwrap())
+        .collect()
+}
+
+#[tokio::test]
+async fn a_search_lists_the_anime_of_every_week_that_have_not_ended_with_their_week() {
+    let app = App::new().await;
+    app.catalogue();
+
+    let (status, first) = app.get("/api/anissia/search?q=%EC%95%88%EB%85%95").await;
+    assert_eq!(status, StatusCode::OK, "{first}");
+    assert_eq!(first["q"], "안녕");
+    // Anissia's order, without the anime that ended by Anissia's word or by their end date.
+    assert_eq!(numbers(&first["entries"]), [3320, 3005]);
+    let wednesday = &first["entries"][0];
+    assert_eq!(wednesday["week"], 3);
+    assert_eq!(wednesday["air_time"], "22:30");
+    assert_eq!(wednesday["start_date"], "2026-07-01");
+    assert_eq!(wednesday["run"], "on");
+    assert_eq!(wednesday["subscribed_rules"], json!([]));
+    assert_eq!(first["entries"][1]["week"], 4);
+    assert_eq!(first["entries"][1]["run"], "off");
+    assert_eq!(
+        (first["page"].as_u64(), first["has_next"].as_bool()),
+        (Some(1), Some(true))
+    );
+    assert_eq!(first["max_page"], 100);
+    assert_eq!(first["cached"], false);
+
+    let (_, next) = app
+        .get("/api/anissia/search?q=%EC%95%88%EB%85%95&page=2")
+        .await;
+    assert_eq!(numbers(&next["entries"]), [3008]);
+    assert_eq!(next["entries"][0]["week"], 8);
+    assert_eq!(next["entries"][0]["run"], "upcoming");
+    assert_eq!(
+        (next["page"].as_u64(), next["has_next"].as_bool()),
+        (Some(2), Some(false))
+    );
+    // The screen counts pages from 1 and Anissia from 0.
+    assert_eq!(app.fake.count("/anime/list/0?q=안녕"), 1);
+    assert_eq!(app.fake.count("/anime/list/1?q=안녕"), 1);
+
+    // A page of ended anime only is empty.
+    let (_, ended) = app.get("/api/anissia/search?q=%EB%9D%BC%EB%9D%BC").await;
+    assert_eq!(numbers(&ended["entries"]), Vec::<i64>::new());
+    assert_eq!(ended["has_next"], false);
+}
+
+#[tokio::test]
+async fn a_search_needs_its_text_and_a_page_in_range_and_its_failure_leaves_the_weeks() {
+    let app = App::new().await;
+    app.catalogue();
+    app.schedule_of_wednesday();
+    for uri in [
+        "/api/anissia/search",
+        "/api/anissia/search?q=%20%20",
+        "/api/anissia/search?q=a&page=0",
+        "/api/anissia/search?q=a&page=101",
+        "/api/anissia/search?q=a&page=two",
+    ] {
+        let (status, body) = app.get(uri).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{uri}: {body}");
+    }
+    assert_eq!(app.fake.count("/anime/"), 0);
+
+    app.fake.state.lock().unwrap().failing = 1;
+    let (status, body) = app.get("/api/anissia/search?q=a").await;
+    assert_eq!(status, StatusCode::BAD_GATEWAY, "{body}");
+    assert_eq!(body["error"], "unavailable");
+    let message = body["message"].as_str().unwrap();
+    assert!(message.contains("HTTP 500"), "{message}");
+    assert!(
+        message.ends_with("편성표에서는 고를 수 있어요."),
+        "{message}"
+    );
+    let (status, _) = app.get("/api/anissia/schedule/3").await;
+    assert_eq!(status, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn subscribing_to_an_anime_found_by_a_search_checks_it_against_that_page() {
+    let app = App::new().await;
+    // Wednesday's schedule names 3320 `작품`; the search names it `안녕 수요일`.
+    app.schedule_of_wednesday();
+    app.catalogue();
+    let channel = app.channel("feed.test").await;
+    app.record(&channel, 1000, &[WORK_1]).await;
+    let mut found = app.subscribe_body(&channel);
+    found.as_object_mut().unwrap().remove("week");
+    found["q"] = json!("안녕");
+    found["page"] = json!(1);
+    let with = |key: &str, value: Value| {
+        let mut body = found.clone();
+        body[key] = value;
+        body
+    };
+
+    for (body, message) in [
+        (
+            with("anissia_anime_no", json!(3008)),
+            "검색 결과에서 이 작품을 찾지 못했어요",
+        ),
+        (
+            with("page", json!(2)),
+            "검색 결과에서 이 작품을 찾지 못했어요",
+        ),
+        (with("week", json!(3)), "편성표나 검색 결과에서 골라"),
+        (with("q", Value::Null), "편성표나 검색 결과에서 골라"),
+        (with("q", json!(" ")), "검색어를 입력해"),
+    ] {
+        let (status, error) = app
+            .call(Method::POST, "/api/subscriptions", Some(body.clone()))
+            .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}: {error}");
+        assert!(
+            error["message"].as_str().unwrap().contains(message),
+            "{body}: {error}"
+        );
+    }
+    assert_eq!(app.rules(&channel).await, 0);
+
+    let (status, body) = app
+        .call(Method::POST, "/api/subscriptions", Some(found))
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    // The snapshot is the one the search gave.
+    let anime = &body["rule"]["subscription"]["anime"];
+    assert_eq!(anime["subject"], "안녕 수요일");
+    assert_eq!(anime["week"], 3);
+    assert_eq!(anime["start_date"], "2026-07-01");
+    let (_, again) = app.get("/api/anissia/search?q=%EC%95%88%EB%85%95").await;
+    assert_eq!(
+        again["entries"][0]["subscribed_rules"][0]["channel_id"],
+        channel.id
+    );
 }
 
 #[tokio::test]
@@ -985,6 +1158,39 @@ mod rule_detail {
         .await;
         assert_eq!(status, StatusCode::OK, "{undecided}");
         assert_eq!(undecided["subscription"]["subtitles"], "undecided");
+    }
+
+    #[tokio::test]
+    async fn a_rule_is_linked_to_an_anime_found_by_a_search_checked_against_that_page() {
+        let app = App::new().await;
+        app.catalogue();
+        let channel = app.channel("feed.test").await;
+        let rule = app.plain(&channel, "Off Show").await;
+        let post = |body: Value| {
+            app.call(
+                Method::POST,
+                format!("/api/rules/{}/subscription", rule.id).leak(),
+                Some(body),
+            )
+        };
+        let link = |no: i64, page: u32| {
+            json!({
+                "version": rule.version, "anissia_anime_no": no, "q": "안녕", "page": page,
+                "subtitles": "undecided",
+            })
+        };
+
+        let (status, refused) = post(link(3005, 2)).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+        assert!(refused["message"].as_str().unwrap().contains("검색 결과"));
+        assert!(app.fresh(&rule).await.subscription.is_none());
+
+        let (status, linked) = post(link(3005, 1)).await;
+        assert_eq!(status, StatusCode::OK, "{linked}");
+        assert_eq!(linked["subscription"]["anime"]["subject"], "안녕 결방");
+        assert_eq!(linked["subscription"]["anime"]["week"], 4);
+        assert_eq!(linked["match"], "Off Show");
+        assert_eq!(linked["directory"], "Off Show/Season 02");
     }
 
     #[tokio::test]

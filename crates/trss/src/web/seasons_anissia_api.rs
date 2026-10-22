@@ -147,12 +147,12 @@ use axum::{
 use serde::{Deserialize, Serialize};
 
 use super::{
+    anissia_lists::{self, listed_anime, page_of, query_of, Listed, MAX_PAGE},
     commands_api::{ask_anissia_captions, CommandView},
     mapping_api::{MappingView, SourceFacts},
-    subscriptions_api::{scheduled_anime, unavailable, USER_MAX_WAIT},
     ApiError, AppState,
 };
-use trss_anissia::{Anime, AnissiaError, ScheduleEntry};
+use trss_anissia::{Anime, ScheduleEntry};
 use trss_collect::store::{
     anissia::{mark_attributed, Attributed},
     channels::{season_holders, Rule, SeasonAnimeError},
@@ -189,8 +189,6 @@ pub fn anime_url(anime_no: i64) -> String {
 }
 
 const SEASON_NOT_FOUND: &str = "이 작품의 이 시즌을 찾지 못했어요.";
-/// The most pages of one search the screen can ask for.
-const MAX_PAGE: u32 = 100;
 
 /// The Anissia anime a season is linked to, as Anissia last listed it.
 #[derive(Debug, Serialize)]
@@ -457,56 +455,6 @@ pub(super) struct SearchView {
     max_page: u32,
 }
 
-/// The sentence for a search Anissia did not answer, whatever the failure. The
-/// full list is an endpoint Anissia does not document, so an answer that cannot
-/// be read says so; every kind of failure says that the schedule is another
-/// place to pick from (during a `429` wait only the weeks read already).
-fn search_unavailable(error: AnissiaError) -> ApiError {
-    const HINT: &str = " 편성표에서는 고를 수 있어요.";
-    const HINT_WAITING: &str = " 이미 불러온 편성표에서는 고를 수 있어요.";
-    match error {
-        AnissiaError::Invalid(detail) => {
-            eprintln!("trss: Anissia's full list: {detail}");
-            ApiError::Unavailable(format!(
-                "Anissia 전체 목록의 응답을 읽지 못해 검색하지 못했어요.{HINT}"
-            ))
-        }
-        other => match unavailable(other) {
-            ApiError::Unavailable(message) => {
-                let waiting = message.contains("요청이 몰려");
-                ApiError::Unavailable(format!(
-                    "{message}{}",
-                    if waiting { HINT_WAITING } else { HINT }
-                ))
-            }
-            other => other,
-        },
-    }
-}
-
-/// The text to search for: what the user wrote. The server picks none itself:
-/// Anissia's list matches Korean titles, which no title the app holds
-/// reliably is, so the user reads the reference titles and writes the query.
-fn query_of(q: Option<String>) -> Result<String, ApiError> {
-    let q = q.map(|q| q.trim().to_owned()).unwrap_or_default();
-    if q.is_empty() {
-        return Err(ApiError::invalid("검색어를 입력해 주세요."));
-    }
-    if q.chars().count() > 200 {
-        return Err(ApiError::invalid("검색어는 200자까지 쓸 수 있어요."));
-    }
-    Ok(q)
-}
-
-fn page_of(page: Option<u32>) -> Result<u32, ApiError> {
-    let page = page.unwrap_or(1);
-    if (1..=MAX_PAGE).contains(&page) {
-        Ok(page)
-    } else {
-        Err(ApiError::invalid("검색 결과 쪽 번호가 범위를 벗어났어요."))
-    }
-}
-
 async fn search(
     State(state): State<AppState>,
     Path((id, season)): Path<(String, u32)>,
@@ -522,11 +470,7 @@ async fn search(
         .await
         .map_err(refused_store)?;
     let q = query_of(body.q)?;
-    let found = state
-        .anissia
-        .search_anime(&q, page - 1, Some(USER_MAX_WAIT))
-        .await
-        .map_err(search_unavailable)?;
+    let found = anissia_lists::search(&state, &q, page).await?;
     Ok(Json(SearchView {
         q,
         items: found.page.entries.iter().map(CandidateView::from).collect(),
@@ -556,32 +500,8 @@ pub(super) struct LinkBody {
 /// The anime `body` names, as the snapshot to keep: one Anissia just listed in
 /// the place the request says.
 async fn named_anime(state: &AppState, body: &LinkBody, anime_no: i64) -> Result<Anime, ApiError> {
-    match (body.week, body.q.as_deref()) {
-        (Some(week), None) => scheduled_anime(state, week, anime_no).await,
-        (None, Some(_)) => {
-            let page = page_of(body.page)?;
-            let q = query_of(body.q.clone())?;
-            let found = state
-                .anissia
-                .search_anime(&q, page - 1, Some(USER_MAX_WAIT))
-                .await
-                .map_err(search_unavailable)?;
-            let entry = found
-                .page
-                .entries
-                .iter()
-                .find(|e| e.anime_no == anime_no)
-                .ok_or_else(|| {
-                    ApiError::invalid(
-                        "검색 결과에서 이 작품을 찾지 못했어요. 다시 검색해서 골라 주세요.",
-                    )
-                })?;
-            Ok(entry.snapshot(found.fetched_at))
-        }
-        _ => Err(ApiError::invalid(
-            "작품을 편성표나 검색 결과에서 골라 주세요.",
-        )),
-    }
+    let listed = Listed::of(body.week, body.q.clone(), body.page)?;
+    listed_anime(state, &listed, anime_no).await
 }
 
 /// What a subscription holding the season says to a change from the work detail.

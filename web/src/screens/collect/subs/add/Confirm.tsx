@@ -13,7 +13,7 @@ import { ArchivedWorkNotice } from "../../rules/ArchivedWorkNotice";
 import { receivesPastItemsNow } from "../../rules/archivedWork";
 import { useArchivedWork } from "../../rules/useArchivedWork";
 import { usePreview } from "../../rules/usePreview";
-import { subscribe } from "../api";
+import { subscribe, type PickedFrom } from "../api";
 import { subtitleChoice } from "../format";
 import type { Draft } from "./draft";
 import { listed, PastChecklist, ReceiveProgress, receivable, receiveOrder } from "./PastItems";
@@ -36,12 +36,15 @@ import { useReceive } from "./useReceive";
 export function Confirm({
   draft,
   anime,
+  from,
   channel,
   work,
   onCreated,
 }: {
   draft: Draft;
   anime: ScheduleEntry;
+  /** Where `anime` was picked, for the server to find it there again. */
+  from: PickedFrom;
   channel: Channel;
   /** The release title picked, or `null` for `아직 첫 화 전이에요`. */
   work: TitleGroup | null;
@@ -96,7 +99,7 @@ export function Confirm({
       const rule = await subscribe({
         channel_id: channel.id,
         anissia_anime_no: anime.anime_no,
-        week: anime.week,
+        ...from,
         work: work?.work ?? null,
         subtitles: draft.subtitles,
         // The creator is only stored with a followed one.
