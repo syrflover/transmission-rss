@@ -8,8 +8,8 @@ export type SubscriptionList = {
  */
 quarter: Quarter, 
 /**
- * Subscriptions that are not archived (paused ones too, with their
- * `state`), this quarter's and any begun in earlier quarters first, then
- * the ones of a coming quarter.
+ * Every subscription (paused ones too, with their `state`), this
+ * quarter's and any begun in earlier quarters first, then the ones of a
+ * coming quarter.
  */
 subscriptions: Array<SubscriptionItem>, };

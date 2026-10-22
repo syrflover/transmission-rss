@@ -51,9 +51,8 @@ function Switch({
 /**
  * `영상 받기` and, for a subscription, `자막 받기`: applied at once, with no
  * save row. `영상 받기` off pauses the rule (nothing is collected and the work
- * folder stays); `자막 받기` waits for it. An archived rule shows both off and
- * cannot switch: it is restored first. A switch answered with a conflict takes
- * the current rule and says so.
+ * folder stays); `자막 받기` waits for it. A switch answered with a conflict
+ * takes the current rule and says so.
  */
 export function SwitchRows({
   rule,
@@ -70,7 +69,6 @@ export function SwitchRows({
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
 
-  const archived = rule.state === "archived";
   const video = rule.state === "active";
   const subscription = rule.subscription;
   const subtitlesOn = video && subscription !== null && subscription.subtitles !== "none";
@@ -102,17 +100,15 @@ export function SwitchRows({
             영상 받기
           </p>
           <p className="text-xs leading-normal text-text-muted">
-            {archived
-              ? "보관한 규칙이에요. 복원하면 켜져요."
-              : video
-                ? "새 항목을 받아요. 끄면 멈추고, 작품 폴더는 그대로 둬요."
-                : "멈춰 있어요. 켜면 다음 RSS 확인부터 새 항목을 받아요."}
+            {video
+              ? "새 항목을 받아요. 끄면 멈추고, 작품 폴더는 그대로 둬요."
+              : "멈춰 있어요. 켜면 다음 RSS 확인부터 새 항목을 받아요."}
           </p>
         </div>
         <Switch
           label="영상 받기"
           checked={video}
-          disabled={locked || archived}
+          disabled={locked}
           onChange={(next) => run({ video: next })}
         />
       </div>

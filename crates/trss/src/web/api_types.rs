@@ -81,6 +81,8 @@ fn roots(v: &mut impl TypeVisitor) {
     v.visit::<rules_api::PreviewBody>();
     v.visit::<rules_api::Preview>();
     v.visit::<rules_api::episode::EpisodeBody>();
+    v.visit::<rules_api::archive::ArchiveBody>();
+    v.visit::<rules_api::archive::ArchivedView>();
     v.visit::<save_folder_api::WorksAnswer>();
     v.visit::<save_folder_api::SuggestionAnswer>();
     v.visit::<schedule_api::Answer>();
@@ -303,8 +305,7 @@ fn command_requests_are_the_ones_the_web_reads() {
         anissia_captions::{self, AnissiaCaptions},
         episode_undo::{self, EpisodeUndo},
         receive_once::{self, ReceiveOnce},
-        receive_past,
-        rule_archive::{self, Direction, RuleArchive},
+        receive_past, rule_archive, work_archive,
     };
     use trss_library::watch_rescan::{self, WatchRescan};
 
@@ -318,7 +319,6 @@ fn command_requests_are_the_ones_the_web_reads() {
         match request {
             Request::ReceiveOnce(_) => CommandKind::ReceiveOnce,
             Request::ReceivePast(_) => CommandKind::ReceivePast,
-            Request::RuleArchive(_) => CommandKind::RuleArchive,
             Request::WatchRescan(_) => CommandKind::WatchRescan,
             Request::EpisodeUndo(_) => CommandKind::EpisodeUndo,
             Request::AnissiaCaptions(_) => CommandKind::AnissiaCaptions,
@@ -339,15 +339,6 @@ fn command_requests_are_the_ones_the_web_reads() {
                 rule_id: "r".into(),
                 search_id: "s".into(),
                 key: "k".into(),
-            }),
-        ),
-        (
-            rule_archive::KIND,
-            CommandKind::RuleArchive,
-            CommandPayload::RuleArchive(RuleArchive {
-                rule_id: "r".into(),
-                direction: Direction::Archive,
-                receive: Vec::new(),
             }),
         ),
         (
@@ -398,16 +389,22 @@ fn command_requests_are_the_ones_the_web_reads() {
             serde_json::to_value(listed_kind).unwrap()
         );
     }
-    // Read through its own route, never posted here.
-    assert_eq!(
-        serde_json::to_value(CommandKind::WorkArchive).unwrap(),
-        json!(trss_collect::commands::work_archive::KIND)
-    );
-    assert!(Request::read(
-        trss_collect::commands::work_archive::KIND,
-        json!({"work": "w"})
-    )
-    .is_err());
+    // The web's own: read through other routes, never posted here.
+    for (kind, listed_kind, payload) in [
+        (
+            work_archive::KIND,
+            CommandKind::WorkArchive,
+            json!({"work": "w"}),
+        ),
+        (
+            rule_archive::KIND,
+            CommandKind::RuleArchive,
+            json!({"rule_id": "r", "direction": "resume"}),
+        ),
+    ] {
+        assert_eq!(serde_json::to_value(listed_kind).unwrap(), json!(kind));
+        assert!(Request::read(kind, payload).is_err(), "{kind}");
+    }
 }
 
 /// The enums that took the place of a `code()` string in a response send the
@@ -462,10 +459,7 @@ fn enums_serialize_as_their_codes() {
         ],
         State::code,
     );
-    same(
-        &[RuleState::Active, RuleState::Paused, RuleState::Archived],
-        RuleState::as_str,
-    );
+    same(&[RuleState::Active, RuleState::Paused], RuleState::as_str);
     same(
         &[
             SubtitleMode::Follow,
@@ -474,15 +468,7 @@ fn enums_serialize_as_their_codes() {
         ],
         SubtitleMode::as_str,
     );
-    same(
-        &[
-            Direction::Archive,
-            Direction::Restore,
-            Direction::Start,
-            Direction::Resume,
-        ],
-        Direction::code,
-    );
+    same(&[Direction::Start, Direction::Resume], Direction::code);
     same(
         &[
             CommandState::Pending,

@@ -174,15 +174,14 @@ impl AnissiaStore {
             .await
     }
 
-    /// The anime a collecting or paused rule subscribes to whose snapshot is a day old (or
-    /// missing) and not held back, oldest first.
+    /// The anime a subscription follows, collecting or paused, whose snapshot
+    /// is a day old (or missing) and not held back, oldest first.
     pub async fn due(&self, now: Millis) -> Result<Vec<Due>> {
         self.db
             .run(move |c| {
                 let mut stmt = c.prepare_cached(
                     "SELECT s.anissia_anime_no, a.week
                        FROM rule_subscriptions s
-                       JOIN rules r ON r.id = s.rule_id AND r.state IN ('active', 'paused')
                        LEFT JOIN anissia_anime a ON a.anime_no = s.anissia_anime_no
                       WHERE a.anime_no IS NULL
                          OR (a.fetched_at <= ?1 - ?2

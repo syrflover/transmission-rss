@@ -297,16 +297,11 @@ fn the_next_quiet_deadline_is_the_first_moment_a_rule_is_quiet_by_the_clock() {
     let mut world = World::with(vec![
         rule("r1", Some("Work")),
         rule("r2", Some("Other")),
-        // These have no deadline: archived, or waiting for its title.
-        Rule {
-            state: RuleState::Archived,
-            ..rule("r3", Some("Gone"))
-        },
+        // This has no deadline: it waits for its title.
         rule("r4", None),
     ])
     .received("r1", NOW - 3 * WEEK)
     .received("r2", NOW - 2 * WEEK)
-    .received("r3", NOW - 1)
     .received("r4", NOW - 1);
     // The feed is read every day, so a week from now it has the 28 days after r1's moment.
     world
@@ -398,11 +393,11 @@ fn an_item_an_earlier_rule_took_still_counts_for_a_later_rule_it_matches() {
 }
 
 #[test]
-fn an_item_matching_an_archived_rule_ahead_still_reaches_the_rules_after_it() {
-    let mut archived = rule("old", Some("Work"));
-    archived.state = RuleState::Archived;
+fn an_item_matching_a_paused_rule_ahead_still_reaches_the_rules_after_it() {
+    let mut paused = rule("old", Some("Work"));
+    paused.state = RuleState::Paused;
     let world =
-        World::with(vec![archived, rule("r1", Some("Work - 05"))]).received("r1", NOW - 6 * WEEK);
+        World::with(vec![paused, rule("r1", Some("Work - 05"))]).received("r1", NOW - 6 * WEEK);
     assert_eq!(world.quiet_rules(&[WORK_5]), Vec::<String>::new());
 }
 
@@ -417,11 +412,9 @@ fn a_paused_rule_is_suggested_on_the_same_ground() {
 }
 
 #[test]
-fn an_archived_rule_and_a_subscription_waiting_for_its_title_are_never_suggested() {
-    let mut archived = rule("archived", Some("Old"));
-    archived.state = RuleState::Archived;
+fn a_subscription_waiting_for_its_title_is_never_suggested() {
     let waiting = subscribed(rule("waiting", None), 9, NOW - 60 * DAY_MS);
-    let mut world = World::with(vec![archived, waiting]);
+    let mut world = World::with(vec![waiting]);
     world.animes.insert(9, anime(9, Some("2020-01-01")));
     world.unlisted.insert(9);
     assert_eq!(world.suggest(&[]), []);

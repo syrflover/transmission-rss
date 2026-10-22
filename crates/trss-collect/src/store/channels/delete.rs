@@ -11,7 +11,7 @@ use crate::store::channels::{ChannelError, ChannelStore, Version};
 impl ChannelStore {
     /// Deletes a channel and all its rules in one transaction, if the channel
     /// is still at `expected_version` and still has exactly `expected_rules`
-    /// rules (archived ones included). Returns how many rules went with it.
+    /// rules (paused ones included). Returns how many rules went with it.
     ///
     /// `expected_rules` is the number the caller showed the user when asking
     /// for confirmation. A rule added since then changes the count, and the

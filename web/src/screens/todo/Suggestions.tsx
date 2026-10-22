@@ -76,7 +76,8 @@ export function fromArchive(s: ArchiveSuggestion): Suggestion {
     id: `archive:${s.rule_id}`,
     kind: "archive",
     title: suggestionTitle(s),
-    detail: s.grounds.length > 0 ? groundShort(s.grounds[0]) : (s.channel_name ?? s.channel_host),
+    // `보관` is on the rule detail the row leads to; the row says what it will do there.
+    detail: `${s.grounds.length > 0 ? groundShort(s.grounds[0]) : (s.channel_name ?? s.channel_host)} · 보관하면 규칙을 지우고 작품 폴더를 옮겨요`,
     // The suggestion has no moment of its own; the list is ordered by the ground it stands on.
     at: null,
     order: times.length > 0 ? Math.max(...times) : (s.last_received_at ?? 0),

@@ -419,9 +419,9 @@ struct SubscriptionItem {
 pub(super) struct SubscriptionList {
     /// The current quarter in Asia/Seoul.
     quarter: QuarterView,
-    /// Subscriptions that are not archived (paused ones too, with their
-    /// `state`), this quarter's and any begun in earlier quarters first, then
-    /// the ones of a coming quarter.
+    /// Every subscription (paused ones too, with their `state`), this
+    /// quarter's and any begun in earlier quarters first, then the ones of a
+    /// coming quarter.
     subscriptions: Vec<SubscriptionItem>,
 }
 
@@ -460,9 +460,6 @@ async fn list(State(state): State<AppState>) -> Result<Json<SubscriptionList>, A
             let Some(subscription) = &rule.subscription else {
                 continue;
             };
-            if rule.state == RuleState::Archived {
-                continue;
-            }
             let anime = animes.get(&subscription.anissia_anime_no);
             let quarter = Quarter::of_anime(anime, subscription.subscribed_at);
             items.push(SubscriptionItem {
@@ -600,7 +597,8 @@ fn recorded_work(
 /// now. A candidate is read off the rules and the history each time (see
 /// [`trss_collect::subscriptions::candidates`]), so it goes the moment its conditions
 /// fail: the work gets a rule, the last subscription waiting for a title is
-/// paused, archived, given a title or deleted, or the user rejects the work.
+/// paused, given a title or deleted (archiving deletes it), or the user
+/// rejects the work.
 ///
 /// This is what the 할 일 list reads for its `제목 후보` suggestions. A
 /// suggestion is not something that needs doing, so nothing counts these in a

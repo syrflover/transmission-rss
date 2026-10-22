@@ -397,17 +397,17 @@ async fn a_subscription_needs_a_snapshot_of_its_anime() {
 }
 
 #[tokio::test]
-async fn only_the_snapshots_a_day_old_of_active_rules_are_due_and_held_ones_wait() {
+async fn only_the_snapshots_a_day_old_of_subscriptions_are_due_and_held_ones_wait() {
     let env = Env::new().await;
     let now = 10 * DAY;
     // Fetched a day ago exactly, a day and a half ago, and an hour ago.
     let old = env.subscribe("Old", 1, now - DAY).await;
     env.subscribe("Older", 2, now - DAY - DAY / 2).await;
     env.subscribe("Fresh", 3, now - 60 * 60 * 1000).await;
-    // An archived rule's anime is not refreshed.
-    let archived = env.subscribe("Archived", 4, now - 3 * DAY).await;
+    // A deleted subscription's anime is not refreshed (`보관` deletes it too).
+    let gone = env.subscribe("Gone", 4, now - 3 * DAY).await;
     env.channels
-        .set_rule_state(&archived.id, RuleState::Archived, 0)
+        .delete_rule(&gone.id, gone.version)
         .await
         .unwrap();
 
@@ -525,43 +525,25 @@ async fn turning_video_receiving_off_pauses_the_rule_and_on_collects_again() {
 }
 
 #[tokio::test]
-async fn an_archived_rule_is_restored_not_switched() {
+async fn a_rule_turned_back_on_notes_when() {
     let env = Env::new().await;
     let rule = env.subscribe("Work", 7, 1_000).await;
-    let archived = env
+    let paused = env
         .channels
-        .set_rule_state(&rule.id, RuleState::Archived, 0)
+        .set_rule_state(&rule.id, RuleState::Paused, 3_000)
         .await
         .unwrap()
         .unwrap();
+    assert_eq!(paused.resumed_at, None);
 
-    let refused = env
-        .channels
-        .set_video_receiving(&rule.id, archived.version, true, 0)
-        .await;
-    assert!(matches!(refused, Err(ChannelError::Invalid(_))));
-}
-
-#[tokio::test]
-async fn a_restored_rule_notes_when_it_was_turned_back_on() {
-    let env = Env::new().await;
-    let rule = env.subscribe("Work", 7, 1_000).await;
-    let archived = env
-        .channels
-        .set_rule_state(&rule.id, RuleState::Archived, 3_000)
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(archived.resumed_at, None);
-
-    let restored = env
+    let resumed = env
         .channels
         .set_rule_state(&rule.id, RuleState::Active, 4_000)
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(restored.state, RuleState::Active);
-    assert_eq!(restored.resumed_at, Some(4_000));
+    assert_eq!(resumed.state, RuleState::Active);
+    assert_eq!(resumed.resumed_at, Some(4_000));
 
     // Setting the state it has already changes nothing.
     let same = env
@@ -570,7 +552,7 @@ async fn a_restored_rule_notes_when_it_was_turned_back_on() {
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(same, restored);
+    assert_eq!(same, resumed);
 }
 
 #[tokio::test]
@@ -866,16 +848,16 @@ fn a_season_id_round_trips_and_a_malformed_one_is_refused() {
 }
 
 #[tokio::test]
-async fn a_paused_rule_keeps_its_anime_snapshot_refreshed_and_an_archived_one_does_not() {
+async fn a_paused_rule_keeps_its_anime_snapshot_refreshed_and_a_deleted_one_does_not() {
     let env = Env::new().await;
     let paused = env.subscribe("Paused", 7, 1_000).await;
-    let archived = env.subscribe("Archived", 8, 1_000).await;
+    let gone = env.subscribe("Gone", 8, 1_000).await;
     env.channels
         .set_video_receiving(&paused.id, paused.version, false, 0)
         .await
         .unwrap();
     env.channels
-        .set_rule_state(&archived.id, RuleState::Archived, 0)
+        .delete_rule(&gone.id, gone.version)
         .await
         .unwrap();
     env.db

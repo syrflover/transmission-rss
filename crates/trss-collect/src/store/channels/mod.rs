@@ -219,7 +219,7 @@ impl ChannelStore {
         self.db.run(move |c| repo::get_rule(c, &id)).await
     }
 
-    /// The channel's rules in order, archived ones included.
+    /// The channel's rules in order, paused ones included.
     pub async fn list_rules(&self, channel_id: &str) -> Result<Vec<Rule>, ChannelError> {
         let channel_id = channel_id.to_owned();
         self.db.run(move |c| repo::list_rules(c, &channel_id)).await
@@ -330,9 +330,9 @@ impl ChannelStore {
         self.db.run(|c| suggestion::kept_archive_grounds(c)).await
     }
 
-    /// Archives or restores a rule, whatever version it is at: only the worker
-    /// does this, in the order its archive and restore need (see
-    /// `commands::rule_archive`). The version goes up when the state
+    /// Sets a rule's state, whatever version it is at: only the worker does
+    /// this, in the order a move of its work folder into the collect folder
+    /// needs (see `commands::rule_archive`). The version goes up when the state
     /// changes. A rule that becomes `active` is noted as resumed at `at`
     /// ([`Rule::resumed_at`]). `None` when the rule is gone.
     pub async fn set_rule_state(
@@ -357,8 +357,7 @@ impl ChannelStore {
 
     /// `영상 받기`: turns a rule's collecting on or off (`active`/`paused`) if
     /// it is still at `expected_version`; on, it is noted as resumed at `at`
-    /// ([`Rule::resumed_at`]). An archived rule is refused: it is restored
-    /// through the worker.
+    /// ([`Rule::resumed_at`]).
     pub async fn set_video_receiving(
         &self,
         id: &str,
@@ -455,7 +454,7 @@ impl ChannelStore {
     }
 
     /// Sets the order of a channel's rules. `order` must list every rule of the
-    /// channel once (archived included), each with the version the caller saw.
+    /// channel once (paused included), each with the version the caller saw.
     /// Rules that move get a new version. All or nothing.
     pub async fn reorder_rules(
         &self,

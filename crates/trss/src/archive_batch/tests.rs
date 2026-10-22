@@ -1,11 +1,13 @@
-//! The batch's own rules: the order, the stop, the refusal, the restart and the
-//! wait. A fake commands' loop (`Loop`) stands in for the worker: it takes the
-//! `rule_archive` commands the batch stores and ends them as the test says.
-//! What archiving one rule does with its folder is tested where it lives
-//! (`trss-collect` `rule_archive/run_tests.rs`), and the batch with the real
-//! worker in `tests/it/archive_move.rs`.
+//! The batch's own rules: the order, the stop, the refusal, the skip, the
+//! restart and the wait. A fake commands' loop (`Loop`) stands in for the
+//! worker: it takes the `work_archive` commands the batch stores with each
+//! rule's deletion and ends them as the test says. What archiving one rule
+//! does (the deletion with the stored move, which rule keeps the folder) is
+//! tested where it lives (`trss-collect` `work_archive/tests.rs`), and the
+//! batch with the real worker in `tests/it/archive_move.rs`.
 
 use std::{
+    collections::BTreeSet,
     sync::{Arc, Mutex},
     time::Duration,
 };
@@ -16,8 +18,10 @@ use tokio::task::JoinHandle;
 use trss_collect::store::channels::{ChannelInput, ChannelStore, Rule, RuleInput};
 use trss_core::{
     changes::{Change, Changes},
+    commands::{Accepted, NewCommand},
     Db,
 };
+use trss_library::discovery::{Scan, ScannedWork, WorkRead};
 
 use super::*;
 
@@ -25,11 +29,14 @@ use super::*;
 /// enough that one which depends on an event does not pass by the fallback.
 const FALLBACK: Duration = Duration::from_millis(25);
 const NOW: i64 = 1_000;
+const COLLECT: &str = "/media/current";
 
 struct Scene {
     db: Db,
     commands: CommandStore,
     channels: ChannelStore,
+    settings: SettingsStore,
+    library: LibraryStore,
     wakes: Wakes,
     clock: Clock,
     listener: tokio::sync::broadcast::Receiver<Change>,
@@ -38,23 +45,50 @@ struct Scene {
 }
 
 impl Scene {
-    /// `rules` rules on one channel; their IDs are `rule_ids`.
+    /// `rules` rules on one channel saving into `Work {n}/Season 01`, whose
+    /// work folders the library knows below the collect folder.
     async fn new(rules: usize) -> Scene {
+        let directories: Vec<String> = (0..rules).map(|n| format!("Work {n}/Season 01")).collect();
+        Scene::with(&directories.iter().map(String::as_str).collect::<Vec<_>>()).await
+    }
+
+    /// A rule `Work {n}` saving into each of `directories`.
+    async fn with(directories: &[&str]) -> Scene {
         let db = Db::open_blocking(":memory:").unwrap();
         let changes = Changes::default();
         let channels = ChannelStore::new(db.clone());
+        let settings = SettingsStore::new(db.clone());
+        settings
+            .put_collection(0, COLLECT.into(), Some("/media/archive".into()))
+            .await
+            .unwrap();
+        let library = LibraryStore::new(db.clone());
+        let works = (0..directories.len())
+            .map(|n| {
+                WorkRead::Read(ScannedWork {
+                    dir_name: format!("Work {n}"),
+                    seasons: BTreeSet::from([1]),
+                    files: Vec::new(),
+                    unrecognized: Vec::new(),
+                })
+            })
+            .collect();
+        library
+            .add_folder(COLLECT.into(), Scan { works }, NOW, &[])
+            .await
+            .unwrap();
         let channel = channels
             .create_channel(ChannelInput::new("https://feed.example/rss"))
             .await
             .unwrap();
         let mut made = Vec::new();
-        for n in 0..rules {
+        for (n, directory) in directories.iter().enumerate() {
             let rule = channels
                 .create_rule(
                     &channel.id,
                     RuleInput {
                         r#match: Some(format!("Work {n}")),
-                        directory: format!("Work {n}/Season 01"),
+                        directory: (*directory).to_owned(),
                         ..RuleInput::default()
                     },
                 )
@@ -69,6 +103,8 @@ impl Scene {
             rule_ids: made.iter().map(|rule| rule.id.clone()).collect(),
             rules: made,
             channels,
+            settings,
+            library,
             wakes: Wakes::default(),
             clock: Arc::new(|| NOW),
         }
@@ -78,10 +114,34 @@ impl Scene {
         Ctx {
             commands: &self.commands,
             channels: &self.channels,
+            settings: &self.settings,
             wakes: &self.wakes,
             clock: &self.clock,
             reread_every: FALLBACK,
         }
+    }
+
+    /// The work folders of the first `n` rules.
+    fn works(&self, n: std::ops::Range<usize>) -> Vec<String> {
+        n.map(|n| format!("Work {n}")).collect()
+    }
+
+    /// Whether the `n`th rule is still there.
+    async fn has_rule(&self, n: usize) -> bool {
+        self.channels
+            .get_rule(&self.rule_ids[n])
+            .await
+            .unwrap()
+            .is_some()
+    }
+
+    /// The library's work of the `n`th rule's work folder.
+    async fn work_id(&self, n: usize) -> String {
+        self.library
+            .work_in_folder(COLLECT, &format!("Work {n}"))
+            .await
+            .unwrap()
+            .unwrap()
     }
 
     /// The batch of the first `n` rules, stored as the web would.
@@ -133,9 +193,10 @@ impl Scene {
         batch: &Command,
         cancel: &CancellationToken,
     ) -> JoinHandle<Result<Finished, Retry>> {
-        let (commands, channels, wakes, clock) = (
+        let (commands, channels, settings, wakes, clock) = (
             self.commands.clone(),
             self.channels.clone(),
+            self.settings.clone(),
             self.wakes.clone(),
             self.clock.clone(),
         );
@@ -144,6 +205,7 @@ impl Scene {
             let ctx = Ctx {
                 commands: &commands,
                 channels: &channels,
+                settings: &settings,
                 wakes: &wakes,
                 clock: &clock,
                 reread_every: FALLBACK,
@@ -152,27 +214,25 @@ impl Scene {
         })
     }
 
-    /// The command an earlier run of `batch` stored for its `n`th rule, in the
-    /// state `end` says (still open when `None`).
+    /// What an earlier run of `batch` did with its `n`th rule: deleted it with
+    /// the move of its work folder, in the state `end` says (still open when
+    /// `None`).
     async fn store_child(&self, batch: &Command, n: usize, end: Option<(CommandState, Outcome)>) {
-        let payload = RuleArchive {
-            rule_id: self.rule_ids[n].clone(),
-            direction: Direction::Archive,
-            receive: Vec::new(),
-        };
         let id = child_id(&batch.id, n);
-        self.commands
-            .accept(
-                NewCommand {
-                    id: id.clone(),
-                    kind: rule_archive::KIND.to_owned(),
-                    payload: payload.canonical(),
-                    subject: Some(payload.subject()),
-                },
-                NOW - 10,
-            )
-            .await
-            .unwrap();
+        let archived = work_archive::archive_rule(
+            &self.channels,
+            &self.commands,
+            Some(COLLECT),
+            &self.rules[n],
+            id.clone(),
+            NOW - 10,
+        )
+        .await
+        .unwrap();
+        assert!(
+            matches!(archived, Ok(RuleArchived::Moving(_))),
+            "{archived:?}"
+        );
         if let Some((state, outcome)) = end {
             self.commands
                 .claim_next_excluding(NOW - 5, vec![batch.id.clone()])
@@ -188,7 +248,13 @@ impl Scene {
     /// What the stored batch looks like to the screen.
     async fn view(&self, id: &str) -> BatchView {
         let batch = self.commands.get(id).await.unwrap().unwrap();
-        view(&self.commands, &batch).await.unwrap()
+        let stores = Stores {
+            commands: &self.commands,
+            channels: &self.channels,
+            settings: &self.settings,
+            library: &self.library,
+        };
+        view(&stores, &batch).await.unwrap()
     }
 
     /// The change announcements about `id` heard so far.
@@ -203,7 +269,7 @@ impl Scene {
     }
 }
 
-/// What the fake loop does with the archive of a rule.
+/// What the fake loop does with the move of a work folder.
 type Decide = Arc<dyn Fn(&str) -> (CommandState, Outcome) + Send + Sync>;
 
 fn archived(result: &str) -> (CommandState, Outcome) {
@@ -227,12 +293,13 @@ fn failed(reason: &str) -> (CommandState, Outcome) {
 }
 
 /// A stand-in for the commands' loop: starts when the batch rings, takes each
-/// open command except the batch itself, in the order they were stored, and
-/// ends it as `decide` says. `store` is the store it ends them through; one
-/// that is not the batch's has no channel in common with it.
+/// open command except the ones in `exclude`, in the order they were stored,
+/// and ends it as `decide` says of its work folder. `store` is the store it
+/// ends them through; one that is not the batch's has no channel in common
+/// with it.
 struct Loop {
     task: JoinHandle<()>,
-    /// The rules whose archive it ran, in the order it ran them.
+    /// The work folders it moved, in the order it moved them.
     ran: Arc<Mutex<Vec<String>>>,
 }
 
@@ -250,9 +317,9 @@ impl Loop {
                         .await
                         .unwrap()
                     {
-                        let rule: RuleArchive = serde_json::from_str(&command.payload).unwrap();
-                        ran.lock().unwrap().push(rule.rule_id.clone());
-                        let (state, outcome) = decide(&rule.rule_id);
+                        let moved: WorkArchive = serde_json::from_str(&command.payload).unwrap();
+                        ran.lock().unwrap().push(moved.work.clone());
+                        let (state, outcome) = decide(&moved.work);
                         store
                             .finish(&command.id, state, outcome, NOW)
                             .await
@@ -335,7 +402,7 @@ fn a_payload_with_a_field_it_does_not_know_is_not_read() {
 }
 
 #[test]
-fn the_children_have_ids_made_of_the_batch_and_the_place() {
+fn the_moves_have_ids_made_of_the_batch_and_the_place() {
     assert_eq!(child_id("0123456789abcdef", 0), "0123456789abcdef-0");
     assert_eq!(child_id("0123456789abcdef", 12), "0123456789abcdef-12");
 }
@@ -343,7 +410,7 @@ fn the_children_have_ids_made_of_the_batch_and_the_place() {
 // --- running ---------------------------------------------------------------------------
 
 #[tokio::test]
-async fn the_rules_are_archived_in_the_order_given_each_by_a_command_of_its_own() {
+async fn the_rules_are_deleted_in_the_order_given_each_with_the_move_of_its_work_folder() {
     let scene = Scene::new(3).await;
     let batch = scene.batch("batch-order-1", 3).await;
     let fake = Loop::start(&scene, scene.commands.clone(), &[&batch.id], all_archived());
@@ -352,52 +419,51 @@ async fn the_rules_are_archived_in_the_order_given_each_by_a_command_of_its_own(
 
     assert_eq!(finished.state, CommandState::Done);
     assert_eq!(finished.outcome.result, ARCHIVED);
-    assert_eq!(fake.ran(), scene.rule_ids);
-    for (n, rule_id) in scene.rule_ids.iter().enumerate() {
+    assert_eq!(fake.ran(), scene.works(0..3));
+    for n in 0..3 {
         let child = scene
             .commands
             .get(&child_id(&batch.id, n))
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(child.kind, rule_archive::KIND);
-        assert_eq!(child.subject.as_deref(), Some(rule_id.as_str()));
-        let payload: RuleArchive = serde_json::from_str(&child.payload).unwrap();
-        assert_eq!(payload.direction, Direction::Archive);
-        assert!(payload.receive.is_empty());
+        assert_eq!(child.kind, work_archive::KIND);
+        assert_eq!(child.subject, Some(format!("Work {n}")));
         assert_eq!(child.state, CommandState::Done);
+        assert!(!scene.has_rule(n).await);
     }
 }
 
 #[tokio::test]
-async fn a_rule_is_not_started_before_the_one_before_it_has_ended() {
+async fn a_rule_is_not_archived_before_the_move_before_it_has_ended() {
     let scene = Scene::new(2).await;
     let batch = scene.batch("batch-seq-001", 2).await;
     let cancel = CancellationToken::new();
-    // No loop: the first child stays pending.
+    // No loop: the first move stays pending.
     let running = scene.spawn_run(&batch, &cancel);
     tokio::time::sleep(FALLBACK * 6).await;
 
     let first = scene.commands.get(&child_id(&batch.id, 0)).await;
     assert!(first.unwrap().is_some());
+    assert!(!scene.has_rule(0).await);
     let second = scene.commands.get(&child_id(&batch.id, 1)).await;
     assert!(second.unwrap().is_none());
+    assert!(scene.has_rule(1).await);
     assert!(!running.is_finished());
     cancel.cancel();
     running.await.unwrap().unwrap_err();
 }
 
 #[tokio::test]
-async fn the_batch_stops_at_the_first_rule_whose_archive_failed_and_archives_no_later_rule() {
+async fn the_batch_stops_at_the_first_move_that_failed_and_archives_no_later_rule() {
     let scene = Scene::new(4).await;
     let batch = scene.batch("batch-fail-01", 4).await;
-    let broken = scene.rule_ids[1].clone();
     let fake = Loop::start(
         &scene,
         scene.commands.clone(),
         &[&batch.id],
-        Arc::new(move |rule_id| {
-            if rule_id == broken {
+        Arc::new(|work| {
+            if work == "Work 1" {
                 failed("Transmission이 폴더를 옮기지 못했어요.")
             } else {
                 archived("moved")
@@ -413,32 +479,29 @@ async fn the_batch_stops_at_the_first_rule_whose_archive_failed_and_archives_no_
         finished.outcome.reason.as_deref(),
         Some("Transmission이 폴더를 옮기지 못했어요.")
     );
-    assert_eq!(fake.ran(), scene.rule_ids[..2]);
+    assert_eq!(fake.ran(), scene.works(0..2));
+    // The rule whose move failed is deleted; the later ones are untouched.
+    assert!(!scene.has_rule(1).await);
     for later in 2..4 {
         let child = scene.commands.get(&child_id(&batch.id, later)).await;
-        assert_eq!(child.unwrap(), None, "no command for rule {later}");
+        assert_eq!(child.unwrap(), None, "no move for rule {later}");
+        assert!(scene.has_rule(later).await, "rule {later} is kept");
     }
 }
 
 #[tokio::test]
-async fn a_rule_with_another_archive_command_open_stops_the_batch_as_refused() {
+async fn a_rule_whose_work_folder_is_moving_already_stops_the_batch_as_refused_and_stays() {
     let scene = Scene::new(3).await;
     let batch = scene.batch("batch-busy-01", 3).await;
-    // Another tab restores the second rule, and its command is still open.
-    let other = RuleArchive {
-        rule_id: scene.rule_ids[1].clone(),
-        direction: Direction::Restore,
-        receive: Vec::new(),
-    };
+    // The work detail moves the second rule's work folder, and its move is
+    // still open.
     scene
         .commands
         .accept(
-            NewCommand {
-                id: "restore-from-tab".to_owned(),
-                kind: rule_archive::KIND.to_owned(),
-                payload: other.canonical(),
-                subject: Some(other.subject()),
-            },
+            WorkArchive {
+                work: "Work 1".into(),
+            }
+            .command("move-from-detail".into()),
             NOW,
         )
         .await
@@ -446,7 +509,7 @@ async fn a_rule_with_another_archive_command_open_stops_the_batch_as_refused() {
     let fake = Loop::start(
         &scene,
         scene.commands.clone(),
-        &[&batch.id, "restore-from-tab"],
+        &[&batch.id, "move-from-detail"],
         all_archived(),
     );
 
@@ -457,19 +520,30 @@ async fn a_rule_with_another_archive_command_open_stops_the_batch_as_refused() {
 
     assert_eq!(finished.state, CommandState::Failed);
     assert_eq!(finished.outcome.result, stopped_at(REFUSED, 1));
-    assert_eq!(finished.outcome.reason.as_deref(), Some(RULE_BUSY));
-    assert_eq!(fake.ran(), scene.rule_ids[..1]);
+    assert_eq!(finished.outcome.reason.as_deref(), Some(WORK_BUSY));
+    assert_eq!(fake.ran(), scene.works(0..1));
+    assert!(scene.has_rule(1).await, "the refused rule is kept");
     let third = scene.commands.get(&child_id(&batch.id, 2)).await.unwrap();
     assert_eq!(
         third, None,
-        "the rule after the refused one was not started"
+        "the rule after the refused one was not archived"
     );
+    assert!(scene.has_rule(2).await);
 }
 
 #[tokio::test]
-async fn a_rule_that_is_gone_stops_the_batch_as_refused_with_the_rules_own_sentence() {
-    let scene = Scene::new(2).await;
-    let batch = scene.batch("batch-gone-01", 2).await;
+async fn a_rule_that_is_gone_is_skipped_and_one_with_no_work_folder_is_only_deleted() {
+    let mut scene = Scene::with(&[
+        "Work 0/Season 01",
+        "Work 1/Season 01",
+        // The collect folder itself: no work folder to move.
+        "",
+        "Work 3/Season 01",
+    ])
+    .await;
+    let batch = scene.batch("batch-skip-01", 4).await;
+    scene.announced(&batch.id);
+    // The second rule was deleted before its turn.
     scene
         .channels
         .delete_rule(&scene.rule_ids[1], scene.rules[1].version)
@@ -479,13 +553,17 @@ async fn a_rule_that_is_gone_stops_the_batch_as_refused_with_the_rules_own_sente
 
     let finished = scene.run(&batch).await.unwrap();
 
-    assert_eq!(finished.state, CommandState::Failed);
-    assert_eq!(finished.outcome.result, stopped_at(REFUSED, 1));
-    assert_eq!(
-        finished.outcome.reason.as_deref(),
-        Some("규칙을 찾지 못했어요. 삭제됐을 수 있어요.")
-    );
-    assert_eq!(fake.ran(), scene.rule_ids[..1]);
+    assert_eq!(finished.state, CommandState::Done, "{finished:?}");
+    assert_eq!(fake.ran(), ["Work 0", "Work 3"]);
+    for n in 0..4 {
+        assert!(!scene.has_rule(n).await, "rule {n} is gone");
+    }
+    for skipped in [1, 2] {
+        let child = scene.commands.get(&child_id(&batch.id, skipped)).await;
+        assert_eq!(child.unwrap(), None, "no move for rule {skipped}");
+    }
+    // Every rule counts as progress, the skipped ones too.
+    assert_eq!(scene.announced(&batch.id), 4);
 }
 
 #[tokio::test]
@@ -502,11 +580,11 @@ async fn progress_is_announced_for_the_batch_after_each_finished_rule() {
 }
 
 #[tokio::test]
-async fn a_batch_run_again_skips_the_finished_rules_and_follows_the_open_one() {
+async fn a_batch_run_again_skips_the_finished_rules_and_follows_the_open_move() {
     let scene = Scene::new(3).await;
     let batch = scene.batch("batch-again-1", 3).await;
-    // An earlier run archived the first rule and stored the second's command,
-    // then the process stopped.
+    // An earlier run archived the first rule and the second, whose move is
+    // still open, then the process stopped.
     scene.store_child(&batch, 0, Some(archived("moved"))).await;
     scene.store_child(&batch, 1, None).await;
     let before = scene
@@ -524,16 +602,16 @@ async fn a_batch_run_again_skips_the_finished_rules_and_follows_the_open_one() {
     assert_eq!(finished.state, CommandState::Done);
     assert_eq!(
         fake.ran(),
-        scene.rule_ids[1..],
+        scene.works(1..3),
         "the finished rule is not archived again"
     );
     let after = scene.commands.get(&before.id).await.unwrap().unwrap();
-    assert_eq!(after, before, "its command was left as it was");
+    assert_eq!(after, before, "its move was left as it was");
     assert_eq!(after.attempts, 1);
 }
 
 #[tokio::test]
-async fn a_batch_run_again_after_a_rule_failed_stops_at_that_rule_without_archiving_the_rest() {
+async fn a_batch_run_again_after_a_move_failed_stops_at_that_rule_without_archiving_the_rest() {
     let scene = Scene::new(3).await;
     let batch = scene.batch("batch-again-2", 3).await;
     scene
@@ -550,25 +628,21 @@ async fn a_batch_run_again_after_a_rule_failed_stops_at_that_rule_without_archiv
         scene.commands.get(&child_id(&batch.id, 1)).await.unwrap(),
         None
     );
+    assert!(scene.has_rule(1).await);
 }
 
 #[tokio::test]
-async fn a_child_stored_under_the_id_with_other_content_stops_the_batch() {
+async fn a_command_of_another_kind_stored_under_the_id_stops_the_batch() {
     let scene = Scene::new(2).await;
     let batch = scene.batch("batch-clash-01", 2).await;
-    let other = RuleArchive {
-        rule_id: scene.rule_ids[0].clone(),
-        direction: Direction::Restore,
-        receive: Vec::new(),
-    };
     scene
         .commands
         .accept(
             NewCommand {
                 id: child_id(&batch.id, 0),
-                kind: rule_archive::KIND.to_owned(),
-                payload: other.canonical(),
-                subject: Some(other.subject()),
+                kind: "watch_rescan".to_owned(),
+                payload: json!({ "folder_id": "f" }).to_string(),
+                subject: Some("f".to_owned()),
             },
             NOW,
         )
@@ -579,15 +653,69 @@ async fn a_child_stored_under_the_id_with_other_content_stops_the_batch() {
 
     assert_eq!(finished.state, CommandState::Failed);
     assert_eq!(finished.outcome.result, stopped_at(RULE_FAILED, 0));
+    assert!(scene.has_rule(0).await);
+}
+
+#[tokio::test]
+async fn a_batch_an_earlier_version_left_skips_its_finished_archive_and_stops_at_an_open_one() {
+    let scene = Scene::new(3).await;
+    let batch = scene.batch("batch-before-1", 3).await;
+    // That version's `보관` kept the rule as archived, under the child ID; the
+    // upgrade deleted the rule it had archived.
+    let old = |n: usize| NewCommand {
+        id: child_id(&batch.id, n),
+        kind: rule_archive::KIND.to_owned(),
+        payload: json!({ "rule_id": scene.rule_ids[n], "direction": "archive" }).to_string(),
+        subject: Some(scene.rule_ids[n].clone()),
+    };
+    scene.commands.accept(old(0), NOW - 10).await.unwrap();
+    scene
+        .commands
+        .claim_next_excluding(NOW - 5, vec![batch.id.clone()])
+        .await
+        .unwrap();
+    let (state, outcome) = archived("moved");
+    scene
+        .commands
+        .finish(&child_id(&batch.id, 0), state, outcome, NOW - 5)
+        .await
+        .unwrap();
+    let first = &scene.rules[0];
+    scene
+        .channels
+        .delete_rule(&first.id, first.version)
+        .await
+        .unwrap();
+    scene.commands.accept(old(1), NOW - 5).await.unwrap();
+    // The worker fails that one by itself; this loop moves only what the batch stores.
+    let open = child_id(&batch.id, 1);
+    let fake = Loop::start(
+        &scene,
+        scene.commands.clone(),
+        &[&batch.id, &open],
+        all_archived(),
+    );
+
+    let finished = scene.run(&batch).await.unwrap();
+
+    assert_eq!(finished.state, CommandState::Failed);
+    assert_eq!(finished.outcome.result, stopped_at(REFUSED, 1));
+    assert_eq!(finished.outcome.reason.as_deref(), Some(FROM_BEFORE));
+    assert!(fake.ran().is_empty());
+    assert!(scene.has_rule(1).await);
+    assert!(scene.has_rule(2).await);
+    assert_eq!(
+        scene.commands.get(&child_id(&batch.id, 2)).await.unwrap(),
+        None
+    );
 }
 
 #[tokio::test]
 async fn the_wait_ends_by_its_fallback_when_no_event_reaches_it() {
     let scene = Scene::new(2).await;
     let batch = scene.batch("batch-quiet-1", 2).await;
-    // The loop ends the commands through a store of its own on the same
-    // database: what it announces goes to a channel nobody on the batch's side
-    // listens to.
+    // The loop ends the moves through a store of its own on the same database:
+    // what it announces goes to a channel nobody on the batch's side listens to.
     let quiet = CommandStore::new(scene.db.clone());
     let _fake = Loop::start(&scene, quiet, &[&batch.id], all_archived());
 
@@ -600,7 +728,7 @@ async fn the_wait_ends_by_its_fallback_when_no_event_reaches_it() {
 }
 
 #[tokio::test]
-async fn a_change_of_the_child_ends_the_wait_before_the_fallback() {
+async fn a_change_of_the_move_ends_the_wait_before_the_fallback() {
     let scene = Scene::new(1).await;
     let batch = scene.batch("batch-quick-1", 1).await;
     let slow = Ctx {
@@ -621,7 +749,7 @@ async fn a_change_of_the_child_ends_the_wait_before_the_fallback() {
 }
 
 #[tokio::test]
-async fn a_batch_rings_the_commands_loop_when_it_stores_a_rule() {
+async fn a_batch_rings_the_commands_loop_when_it_stores_a_move() {
     let scene = Scene::new(1).await;
     let batch = scene.batch("batch-ring-01", 1).await;
     let cancel = CancellationToken::new();
@@ -647,17 +775,20 @@ async fn a_shutdown_during_the_wait_leaves_the_batch_to_run_again() {
     let outcome = running.await.unwrap();
 
     assert!(matches!(outcome, Err(Retry::Stopped)), "{outcome:?}");
-    // Nothing ended: the first child is still open and the second was not stored.
+    // Nothing ended: the first move is still open and the second rule was not
+    // archived.
     let first = scene.commands.get(&child_id(&batch.id, 0)).await;
     assert!(first.unwrap().unwrap().state.is_open());
     let second = scene.commands.get(&child_id(&batch.id, 1)).await;
     assert_eq!(second.unwrap(), None);
+    assert!(scene.has_rule(1).await);
 }
 
 // --- the view --------------------------------------------------------------------------
 
 #[tokio::test]
-async fn the_view_counts_the_leading_rules_that_are_done_and_names_the_one_in_turn() {
+async fn the_view_counts_the_leading_rules_that_are_archived_with_their_moves_and_names_the_one_in_turn(
+) {
     let scene = Scene::new(3).await;
     let batch = scene.batch("batch-view-01", 3).await;
 
@@ -666,6 +797,7 @@ async fn the_view_counts_the_leading_rules_that_are_done_and_names_the_one_in_tu
         (view.state, view.total, view.finished),
         (CommandState::Running, 3, 0)
     );
+    assert!(view.results.is_empty());
     let current = view.current.unwrap();
     assert_eq!(
         (current.rule_id.as_str(), current.name.as_str()),
@@ -673,16 +805,45 @@ async fn the_view_counts_the_leading_rules_that_are_done_and_names_the_one_in_tu
     );
     assert_eq!(view.failure, None);
 
-    // The first rule done, the second open.
-    scene.store_child(&batch, 0, Some(archived("moved"))).await;
+    // The first rule done, the second's move open.
+    scene.store_child(&batch, 0, Some(archived("kept"))).await;
     scene.store_child(&batch, 1, None).await;
     let view = scene.view(&batch.id).await;
     assert_eq!(view.finished, 1);
+    let [result] = view.results.as_slice() else {
+        panic!("one result: {:?}", view.results);
+    };
+    assert_eq!(
+        (result.rule_id.as_str(), result.name.as_str()),
+        (scene.rule_ids[0].as_str(), "작품 0")
+    );
+    let command = result.command.as_ref().unwrap();
+    assert_eq!(command.id, child_id(&batch.id, 0));
+    assert_eq!(command.outcome.as_ref().unwrap().result, "kept");
+    assert_eq!(result.work_id, Some(scene.work_id(0).await));
     let current = view.current.unwrap();
     assert_eq!(
         (current.rule_id.as_str(), current.name.as_str()),
         (scene.rule_ids[1].as_str(), "작품 1")
     );
+}
+
+#[tokio::test]
+async fn the_view_counts_a_rule_gone_with_no_move_as_archived() {
+    let scene = Scene::new(2).await;
+    let batch = scene.batch("batch-view-04", 2).await;
+    scene
+        .channels
+        .delete_rule(&scene.rule_ids[0], scene.rules[0].version)
+        .await
+        .unwrap();
+
+    let view = scene.view(&batch.id).await;
+
+    assert_eq!(view.finished, 1);
+    assert_eq!(view.results[0].command, None);
+    assert_eq!(view.results[0].work_id, None);
+    assert_eq!(view.current.unwrap().rule_id, scene.rule_ids[1]);
 }
 
 #[tokio::test]
@@ -703,11 +864,13 @@ async fn the_view_of_a_batch_that_ended_has_no_current_rule() {
         (view.state, view.total, view.finished),
         (CommandState::Done, 2, 2)
     );
+    assert_eq!(view.results.len(), 2);
+    assert_eq!(view.results[1].work_id, Some(scene.work_id(1).await));
     assert_eq!((view.current, view.failure), (None, None));
 }
 
 #[tokio::test]
-async fn the_view_of_a_failed_batch_names_the_rule_it_stopped_at_and_why() {
+async fn the_view_of_a_failed_batch_names_the_rule_it_stopped_at_why_and_the_work_to_move_again() {
     let scene = Scene::new(3).await;
     let batch = scene.batch("batch-view-03", 3).await;
     scene.store_child(&batch, 0, Some(archived("kept"))).await;
@@ -741,12 +904,34 @@ async fn the_view_of_a_failed_batch_names_the_rule_it_stopped_at_and_why() {
             name: "작품 1".to_owned(),
             reason: "옮기지 못했어요.".to_owned(),
             kind: FailureKind::ArchiveFailed,
+            work_id: Some(scene.work_id(1).await),
         })
+    );
+
+    // A refused rule is still there, with no move to show.
+    let batch = scene.batch("batch-view-05", 3).await;
+    scene
+        .commands
+        .finish(
+            &batch.id,
+            CommandState::Failed,
+            Outcome {
+                result: stopped_at(REFUSED, 2),
+                reason: Some(WORK_BUSY.to_owned()),
+            },
+            NOW,
+        )
+        .await
+        .unwrap();
+    let failure = scene.view(&batch.id).await.failure.unwrap();
+    assert_eq!(
+        (failure.kind, failure.work_id, failure.rule_id),
+        (FailureKind::Refused, None, scene.rule_ids[2].clone())
     );
 }
 
 #[tokio::test]
-async fn a_batch_the_claim_gave_up_names_no_rule_though_its_open_child_ends_after_it() {
+async fn a_batch_the_claim_gave_up_names_no_rule_though_its_open_move_ends_after_it() {
     use trss_core::commands::MAX_ATTEMPTS;
 
     let scene = Scene::new(3).await;
@@ -760,11 +945,11 @@ async fn a_batch_the_claim_gave_up_names_no_rule_though_its_open_child_ends_afte
             .unwrap()
             .unwrap();
     }
-    // The first rule is archived and the second's command is open.
+    // The first rule is archived and the second's move is open.
     scene.store_child(&batch, 0, Some(archived("moved"))).await;
     scene.store_child(&batch, 1, None).await;
 
-    // The next claim gives the batch up (it is the older) and hands out the child.
+    // The next claim gives the batch up (it is the older) and hands out the move.
     let claimed = scene
         .commands
         .claim_next_excluding(NOW, Vec::new())
@@ -775,7 +960,7 @@ async fn a_batch_the_claim_gave_up_names_no_rule_though_its_open_child_ends_afte
     let stored = scene.commands.get(&batch.id).await.unwrap().unwrap();
     assert_eq!(stored.state, CommandState::Failed);
 
-    // The child still ends `done` afterwards.
+    // The move still ends `done` afterwards.
     scene
         .commands
         .finish(&claimed.id, CommandState::Done, archived("moved").1, NOW)
@@ -787,7 +972,7 @@ async fn a_batch_the_claim_gave_up_names_no_rule_though_its_open_child_ends_afte
     assert_eq!(view.finished, 2);
     assert_eq!(
         view.failure, None,
-        "the third rule was never started: it is not the one the batch stopped at"
+        "the third rule was never archived: it is not the one the batch stopped at"
     );
     assert_eq!(view.current, None);
 }

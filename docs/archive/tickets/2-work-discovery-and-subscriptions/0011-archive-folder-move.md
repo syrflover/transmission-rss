@@ -1,7 +1,7 @@
 # 0011 규칙을 보관·복원할 때 작품 폴더를 옮겨요
 
 - 상태: 완료
-- 출처: [보관과 복원의 폴더 이동](../../../requirements/collection.md#보관과-복원의-폴더-이동), [규칙 보관](../../../requirements/collection.md#규칙-보관)
+- 출처: [보관과 복원의 폴더 이동](../../../requirements/collection.md#보관과-수집-시작의-폴더-이동), [규칙 보관](../../../requirements/collection.md#규칙-보관)
 - 막는 티켓: [0010](0010-app-collect-folder.md)
 
 ## 작업

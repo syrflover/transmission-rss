@@ -8,9 +8,9 @@
 //! the user chose to keep collecting on). A rule is suggested when it has at
 //! least one **ground** that the user has not kept collecting on:
 //!
-//! - The rule is not archived and has a match phrase. A paused rule is
-//!   suggested on the same grounds; an archived one, and a subscription that
-//!   still waits for its title (no phrase), are not.
+//! - The rule has a match phrase. A paused rule is suggested on the same
+//!   grounds; a subscription that still waits for its title (no phrase) is
+//!   not.
 //! - [`Ground::Ended`]: the rule is a subscription and its anime's run is over
 //!   by the rule the weekly schedule drops its card by
 //!   ([`trss_anissia::slot::run_over`]): the end date Anissia gave has
@@ -35,8 +35,9 @@
 //!     collecting**: the latest of when the app first had the rule (stamped by
 //!     the database; a rule from before the stamp has the moment of the
 //!     upgrade), when it became a subscription, when its title was given, when
-//!     it was last turned back on, and when its channel was first read. Turning the rule back on, or restoring
-//!     it, starts the 4 weeks over, however long its last receive was ago.
+//!     it was last turned back on, and when its channel was first read.
+//!     Turning the rule back on starts the 4 weeks over, however long its
+//!     last receive was ago.
 //!   - Only time the feed was **read** counts. A week in which the channel's
 //!     address was dead, or the worker was off, is no quiet week: the worker
 //!     leaves the days a read of each channel worked
@@ -168,7 +169,7 @@ pub fn recent_matches(channel: &ChannelWithRules, titles: &[String], truncated: 
         };
     }
 
-    // Every rule is asked, whatever its state: an archived rule still stands
+    // Every rule is asked, whatever its state: a paused rule still stands
     // ahead of the others in the order.
     let mut open = channel.clone();
     for rule in &mut open.rules {
@@ -198,10 +199,10 @@ pub fn recent_matches(channel: &ChannelWithRules, titles: &[String], truncated: 
     Recent { matched, unknown }
 }
 
-/// Whether a rule can be suggested at all: not archived, and with a phrase
-/// (a subscription that waits for its title has none).
+/// Whether a rule can be suggested at all: with a phrase (a subscription that
+/// waits for its title has none).
 fn is_suggestible(rule: &Rule) -> bool {
-    rule.state != RuleState::Archived && rule.r#match.is_some()
+    rule.r#match.is_some()
 }
 
 /// Everything the suggestions are read off, gathered by the caller.

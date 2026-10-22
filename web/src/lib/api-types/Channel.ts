@@ -31,7 +31,7 @@ edit_url: string,
  */
 query: Array<QueryParam>, excludes: Array<string>, past_search: string | null, 
 /**
- * Rules of this channel, archived ones included. The delete confirmation
+ * Rules of this channel, paused ones included. The delete confirmation
  * names this number and the delete call must send it back.
  */
 rule_count: number, };

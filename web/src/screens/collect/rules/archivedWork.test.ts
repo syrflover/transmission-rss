@@ -29,7 +29,6 @@ test("the form of a stored rule sends the folder the rule has now", () => {
 test("only a rule that came back collecting receives past items at once", () => {
   assert.equal(receivesPastItemsNow("active"), true);
   assert.equal(receivesPastItemsNow("paused"), false);
-  assert.equal(receivesPastItemsNow("archived"), false);
 });
 
 test("the notice names the folder to move and where it goes", () => {

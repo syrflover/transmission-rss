@@ -8,10 +8,10 @@ import { isOpen } from "@/lib/commands";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import type { ChannelBrief, Rule } from "@/lib/api-types";
+import type { ChannelBrief, Rule, RuleArchived } from "@/lib/api-types";
 
 import { ArchiveBanner } from "../archive/ArchiveBanner";
-import { KEYS, subscriptionChanged, suggestionGone } from "../cache";
+import { KEYS, subscriptionChanged } from "../cache";
 import { changeCreator } from "../subs/api";
 import { useReceive } from "../subs/add/useReceive";
 import { CreatorPicker } from "../subs/CreatorPicker";
@@ -39,6 +39,7 @@ import { SwitchRows } from "./SwitchRows";
 import { WaitingBanner } from "./WaitingBanner";
 import { useArchiveMove } from "./useArchiveMove";
 import { useArchivedWork } from "./useArchivedWork";
+import { useRuleArchive } from "./useRuleArchive";
 import { usePreview } from "./usePreview";
 
 interface RuleDetailProps {
@@ -55,11 +56,13 @@ interface RuleDetailProps {
   /**
    * Called after a write that kept the rule (`saved` is the rule as stored, when
    * known), so the list can take it and be read again. A delete calls
-   * `onDeleted` instead.
+   * `onDeleted` instead, and `보관`, which deletes the rule too, `onArchived`
+   * with what became of its work folder.
    */
   onChanged: (saved?: Rule) => void;
   onCreated: (rule: Rule) => void;
   onDeleted: (rule: Rule) => void;
+  onArchived: (rule: Rule, result: RuleArchived) => void;
   /** Leaves the detail (the phone's way back to the list). */
   onBack: () => void;
   onDirtyChange: (dirty: boolean) => void;
@@ -87,6 +90,7 @@ export function RuleDetail({
   onChanged,
   onCreated,
   onDeleted,
+  onArchived,
   onBack,
   onDirtyChange,
 }: RuleDetailProps) {
@@ -122,12 +126,13 @@ export function RuleDetail({
   const [conflict, setConflict] = useState<Rule | null>(null);
   const [orderConflict, setOrderConflict] = useState<Rule[] | null>(null);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [confirmingArchive, setConfirmingArchive] = useState(false);
   const [creatorOpen, setCreatorOpen] = useState(false);
   const [linkOpen, setLinkOpen] = useState(false);
   const confirmRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    if (confirmingDelete) confirmRef.current?.focus();
-  }, [confirmingDelete]);
+    if (confirmingDelete || confirmingArchive) confirmRef.current?.focus();
+  }, [confirmingDelete, confirmingArchive]);
 
   const episodeValue = parseEpisode(draft.episode);
   const episodeOk = episodeValue !== null;
@@ -149,8 +154,8 @@ export function RuleDetail({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [storedVersion]);
 
-  // The state is the worker's to change (`보관`·`복원` below), never typed: the
-  // draft follows the rule's stored state however the rule was last read.
+  // The state is the switches' to change (`영상 받기`), never typed: the draft
+  // follows the rule's stored state however the rule was last read.
   const knownState = known?.state;
   useEffect(() => {
     if (knownState) setDraft((d) => (d.state === knownState ? d : { ...d, state: knownState }));
@@ -180,15 +185,13 @@ export function RuleDetail({
         onReceive: received.one,
         // The worker receives with the stored rule, so the row must be what is stored.
         blocked:
-          known.state === "archived"
-            ? "보관된 규칙이에요. 복원한 뒤에 받을 수 있어요."
-            : known.state === "paused"
-              ? bringingInStored
-                ? "작품 폴더를 옮기는 중이에요. 옮긴 뒤에 받을 수 있어요."
-                : "영상 받기를 켠 뒤에 받을 수 있어요."
-              : dirty
-                ? "저장하지 않은 변경이 있어요. 저장한 뒤에 받을 수 있어요."
-                : null,
+          known.state === "paused"
+            ? bringingInStored
+              ? "작품 폴더를 옮기는 중이에요. 옮긴 뒤에 받을 수 있어요."
+              : "영상 받기를 켠 뒤에 받을 수 있어요."
+            : dirty
+              ? "저장하지 않은 변경이 있어요. 저장한 뒤에 받을 수 있어요."
+              : null,
       }
     : undefined;
   const latest =
@@ -261,24 +264,28 @@ export function RuleDetail({
   };
 
   /**
-   * Archive or restore through the worker, leaving the other unsaved edits in
-   * place. The rule as the worker left it comes back when the command ends.
+   * The move that brings the work folder out of the archive folder before the
+   * rule collects, which the server stored with the rule. The rule as the
+   * worker left it (turned on) comes back when the command ends, leaving the
+   * other unsaved edits in place.
    */
   const move = useArchiveMove(known, (fresh) => {
     setKnown(fresh);
     setConflict(null);
     onChanged(fresh);
-    if (fresh.state === "archived") {
-      // An archived rule is no longer suggested, and the subscription cards no longer show it.
-      suggestionGone(fresh.id);
-      subscriptionChanged();
-    }
   });
-  const movingDirection =
-    move.phase.kind === "sending" || move.phase.kind === "waiting" || move.phase.kind === "unconfirmed"
-      ? move.phase.direction
-      : null;
-  const moving = movingDirection !== null;
+  const moving = move.phase.kind === "waiting" || move.phase.kind === "unconfirmed";
+  /**
+   * `보관`: the server deletes the rule and stores the move of its work folder,
+   * and the rule tab says what came of it. A rule that changed meanwhile is
+   * shown as it is now.
+   */
+  const archive = useRuleArchive(known, onArchived, (current) => {
+    setKnown(current);
+    setConflict(null);
+    onChanged(current);
+  });
+  const archiving = archive.phase.kind === "sending" || archive.phase.kind === "unconfirmed";
   // A rule made now, or a collecting rule saved into another work folder, whose
   // work folder is in the archive folder moves it first and waits meanwhile.
   const archivedWork = useArchivedWork(
@@ -287,7 +294,7 @@ export function RuleDetail({
     isNew ? null : (known?.directory ?? null),
   );
   // The work folder is coming into the collect folder before the rule collects.
-  const bringingIn = bringingInStored || movingDirection === "start" || movingDirection === "resume";
+  const bringingIn = bringingInStored || moving;
 
   /** A switch, the creator or `편성표와 연결` changed the rule: take it, the list and the other screens. */
   const taken = (fresh: Rule) => {
@@ -440,26 +447,9 @@ export function RuleDetail({
         </p>
       )}
 
-      {known?.state === "archived" && (
-        <p className="rounded-xl border border-hairline bg-surface-2 px-3.5 py-3 text-[13px] leading-normal text-text-secondary">
-          이 규칙은 보관했어요. 새 항목을 받지 않고, 수집 기록은 그대로예요. 복원하면 작품 폴더를 수집 폴더로 되돌린 뒤 다음 RSS 확인부터 새 항목을 받아요. 보관된 동안 올라온 항목은 지난 회차로 남아요.
-        </p>
-      )}
-      {known && known.state !== "archived" && (
-        <ArchiveBanner ruleId={known.id} busy={busy || moving} onArchive={() => move.submit("archive")} />
-      )}
-      {known && (
-        <ArchiveMoveNotice
-          rule={known}
-          phase={move.phase}
-          onMoveAgain={() => move.submit("archive")}
-          onResend={move.resend}
-          onRecheck={move.recheck}
-        />
-      )}
-      {known && known.state !== "archived" && known.match === null && known.subscription !== null && (
-        <WaitingBanner rule={known} />
-      )}
+      {known && <ArchiveBanner ruleId={known.id} busy={busy || moving || archiving} onArchive={archive.submit} />}
+      {known && <ArchiveMoveNotice rule={known} phase={move.phase} onRecheck={move.recheck} />}
+      {known && known.match === null && known.subscription !== null && <WaitingBanner rule={known} />}
       {known && known.state === "active" && known.match === null && known.subscription === null && (
         <p className="rounded-xl border border-hairline bg-surface-2 px-3.5 py-3 text-[13px] leading-normal text-text-secondary">
           일치 문구를 적기 전까지는 아무것도 받지 않아요.
@@ -651,7 +641,7 @@ export function RuleDetail({
         )}
       </form>
 
-      {known && known.state !== "archived" && (
+      {known && (
         <PastSearch
           ruleId={known.id}
           disabled={
@@ -679,7 +669,8 @@ export function RuleDetail({
                 이 규칙을 삭제할까요?
               </p>
               <p className="text-[13px] leading-normal text-text-secondary">
-                이미 받은 파일과 수집 기록은 지우지 않아요. 규칙은 되돌릴 수 없어요. 새 항목을 받지 않기만 원하면 보관을 써요.
+                이미 받은 파일과 수집 기록은 지우지 않아요. 규칙은 되돌릴 수 없어요. 새 항목을 받지 않기만 원하면 `영상
+                받기`를 끄세요.
               </p>
               <div className="flex flex-wrap gap-2">
                 <Button type="button" variant="ghost" className={btnDangerSolid} disabled={busy} onClick={remove}>
@@ -696,41 +687,82 @@ export function RuleDetail({
                 </Button>
               </div>
             </div>
+          ) : confirmingArchive ? (
+            <div
+              ref={confirmRef}
+              tabIndex={-1}
+              role="group"
+              aria-labelledby={`${uid}-arch`}
+              className="flex flex-col gap-2.5 rounded-xl border border-[color-mix(in_srgb,var(--accent-urgent)_50%,transparent)] p-3.5 outline-offset-2"
+            >
+              <p id={`${uid}-arch`} className="text-sm font-bold">
+                이 규칙을 보관할까요?
+              </p>
+              <p className="text-[13px] leading-normal text-text-secondary">
+                규칙을 지우고, 같은 작품 폴더에 받는 수집 중인 다른 규칙이 없으면 작품 폴더를 보관 폴더로 옮겨요. 이미 받은
+                파일과 수집 기록은 남아요. 지운 규칙은 되돌릴 수 없어요.
+                {dirty ? " 저장하지 않은 변경도 함께 사라져요." : ""}
+              </p>
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  className={btnDangerSolid}
+                  disabled={busy || moving || archiving}
+                  onClick={() => {
+                    setConfirmingArchive(false);
+                    archive.submit();
+                  }}
+                >
+                  규칙 지우고 보관
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  className={btnNeutral}
+                  onClick={() => setConfirmingArchive(false)}
+                >
+                  취소
+                </Button>
+              </div>
+            </div>
           ) : (
             <div className="flex flex-col gap-2">
-              {move.phase.kind === "idle" && move.phase.error !== null && (
+              {archive.phase.kind === "idle" && archive.phase.error !== null && (
                 <p role="alert" className="text-[13px] font-semibold text-urgent">
-                  {move.phase.error}
+                  {archive.phase.error}
                 </p>
+              )}
+              {archive.phase.kind === "unconfirmed" && (
+                <div role="status" className="flex flex-wrap items-center gap-2 text-[13px] text-text-secondary">
+                  <p className="min-w-0 flex-1 basis-56">
+                    보관이 접수됐는지 확인하지 못했어요. 같은 요청을 다시 보내도 두 번 지워지지 않아요.
+                  </p>
+                  <Button type="button" variant="ghost" className={btnNeutral} onClick={archive.resend}>
+                    같은 요청 다시 보내기
+                  </Button>
+                </div>
               )}
               <div className="flex flex-wrap items-center gap-2">
                 <Button
                   type="button"
                   variant="ghost"
                   className={btnNeutral}
-                  disabled={busy || moving}
-                  onClick={() => move.submit(known.state === "archived" ? "restore" : "archive")}
+                  disabled={busy || moving || archiving}
+                  onClick={() => setConfirmingArchive(true)}
                 >
-                  {movingDirection === "restore"
-                    ? "복원하는 중"
-                    : movingDirection === "archive"
-                      ? "보관하는 중"
-                      : bringingIn
-                        ? "폴더 옮기는 중"
-                        : known.state === "archived"
-                        ? "복원"
-                        : "보관"}
+                  {archiving ? "보관하는 중" : bringingIn ? "폴더 옮기는 중" : "보관"}
                 </Button>
-                {known.state !== "archived" && !moving && (
+                {!moving && !archiving && (
                   <span className="min-w-0 flex-1 basis-48 text-xs text-text-muted">
-                    보관하면 새 항목을 받지 않고, 보관 폴더를 정해 두었으면 작품 폴더를 그리로 옮겨요.
+                    보관하면 규칙을 지우고 작품 폴더를 보관 폴더로 옮겨요.
                   </span>
                 )}
                 <Button
                   type="button"
                   variant="ghost"
                   className={`${btnDanger} ml-auto`}
-                  disabled={busy || moving}
+                  disabled={busy || moving || archiving}
                   onClick={() => setConfirmingDelete(true)}
                 >
                   삭제

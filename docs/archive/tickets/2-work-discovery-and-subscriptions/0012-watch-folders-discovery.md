@@ -1,7 +1,7 @@
 # 0012 감시 폴더를 등록하고 작품·시즌·회차를 발견해요
 
 - 상태: 완료
-- 출처: [작품 발견과 감시 폴더](../../../requirements/library.md#작품-발견과-감시-폴더), [설정 화면](../../../requirements/settings.md#설정-화면), [보관과 복원의 폴더 이동](../../../requirements/collection.md#보관과-복원의-폴더-이동), [라이브러리 화면](../../../requirements/library.md#라이브러리-화면)의 추가 시각
+- 출처: [작품 발견과 감시 폴더](../../../requirements/library.md#작품-발견과-감시-폴더), [설정 화면](../../../requirements/settings.md#설정-화면), [보관과 복원의 폴더 이동](../../../requirements/collection.md#보관과-수집-시작의-폴더-이동), [라이브러리 화면](../../../requirements/library.md#라이브러리-화면)의 추가 시각
 - 막는 티켓: 없음(작품 폴더 따라가기는 [0011](0011-archive-folder-move.md)의 이동 명령에 붙여요)
 
 ## 작업

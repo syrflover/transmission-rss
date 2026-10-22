@@ -246,9 +246,6 @@ pub enum NotRetryable {
     NoRule,
     /// The rule that picked the item was deleted.
     RuleDeleted,
-    /// The rule that picked the item is archived. Its work folder may be in the
-    /// archive folder by now, so it is to be restored first.
-    RuleArchived,
     /// The rule that picked the item is paused (`영상 받기` is off): it collects
     /// nothing until turned on.
     RulePaused,
@@ -292,7 +289,6 @@ impl NotRetryable {
                 "규칙 없이 받으려다 실패한 항목이라 다시 받을 수 없어요. 이 항목으로 규칙을 만들어요."
             }
             NotRetryable::RuleDeleted => "이 항목을 고른 규칙이 지워져서 다시 받을 수 없어요.",
-            NotRetryable::RuleArchived => "규칙이 보관돼 있어요. 복원한 뒤 다시 받아요.",
             NotRetryable::RulePaused => "규칙이 멈춰 있어요. 영상 받기를 켠 뒤 다시 받아요.",
             NotRetryable::RuleMissing => "받으려는 규칙을 찾지 못했어요. 삭제됐을 수 있어요.",
             NotRetryable::WrongChannel => "이 규칙은 다른 채널의 규칙이라 이 항목을 받을 수 없어요.",
@@ -334,7 +330,6 @@ fn inactive(rule: &Rule) -> Result<(), NotRetryable> {
     match rule.state {
         RuleState::Active => Ok(()),
         RuleState::Paused => Err(NotRetryable::RulePaused),
-        RuleState::Archived => Err(NotRetryable::RuleArchived),
     }
 }
 
@@ -1283,12 +1278,8 @@ mod tests {
 
     #[test]
     fn a_rule_receives_an_item_it_would_pick_in_its_own_channel_only_while_active() {
-        let (channel, active, archived, paused) = (
-            channel(),
-            rule(RuleState::Active),
-            rule(RuleState::Archived),
-            rule(RuleState::Paused),
-        );
+        let (channel, active, paused) =
+            (channel(), rule(RuleState::Active), rule(RuleState::Paused));
         let missed = item(HistoryResult::NoMatch, None);
         assert_eq!(
             adoption_plan(&missed, Some(&channel), Some(&active))
@@ -1307,10 +1298,6 @@ mod tests {
         assert_eq!(
             why(&missed, None, Some(&active)),
             NotRetryable::ChannelDeleted
-        );
-        assert_eq!(
-            why(&missed, Some(&channel), Some(&archived)),
-            NotRetryable::RuleArchived
         );
         assert_eq!(
             why(&missed, Some(&channel), Some(&paused)),
@@ -1536,12 +1523,8 @@ mod tests {
 
     #[test]
     fn only_an_item_a_rule_picked_and_failed_to_add_with_an_active_rule_can_be_retried() {
-        let (channel, active, archived, paused) = (
-            channel(),
-            rule(RuleState::Active),
-            rule(RuleState::Archived),
-            rule(RuleState::Paused),
-        );
+        let (channel, active, paused) =
+            (channel(), rule(RuleState::Active), rule(RuleState::Paused));
         let failed = item(HistoryResult::AddFailed, Some("r1"));
         let plan = retry_plan(&failed, Some(&channel), Some(&active)).unwrap();
         assert_eq!(plan.rule.id, "r1");
@@ -1551,10 +1534,6 @@ mod tests {
             why(&failed, Some(&channel), None),
             NotRetryable::RuleDeleted,
             "the rule was deleted"
-        );
-        assert_eq!(
-            why(&failed, Some(&channel), Some(&archived)),
-            NotRetryable::RuleArchived
         );
         assert_eq!(
             why(&failed, Some(&channel), Some(&paused)),
@@ -1599,7 +1578,6 @@ mod tests {
             (ChannelDeleted, "채널이 삭제돼서"),
             (NoRule, "규칙 없이"),
             (RuleDeleted, "지워져서"),
-            (RuleArchived, "복원한 뒤"),
             (RulePaused, "영상 받기를 켠 뒤"),
             (RuleMissing, "받으려는 규칙을 찾지 못했어요"),
             (WrongChannel, "다른 채널의 규칙"),
@@ -1619,11 +1597,10 @@ mod tests {
         // Every variant is in the table: this match stops compiling when one is
         // added.
         let _ = |reason: NotRetryable| match reason {
-            Held | NotPicked | ChannelDeleted | NoRule | RuleDeleted | RuleArchived
-            | RulePaused | RuleMissing | WrongChannel | NotMatching | OtherRule | Overtaken
-            | FolderMoved | InPlace => (),
+            Held | NotPicked | ChannelDeleted | NoRule | RuleDeleted | RulePaused | RuleMissing
+            | WrongChannel | NotMatching | OtherRule | Overtaken | FolderMoved | InPlace => (),
         };
-        assert_eq!(seen.len(), 14);
+        assert_eq!(seen.len(), 13);
     }
 
     #[test]

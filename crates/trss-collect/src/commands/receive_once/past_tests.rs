@@ -9,10 +9,7 @@
 use trss_core::commands::CommandState;
 
 use super::fixtures::*;
-use crate::{
-    store::{channels::RuleState, history::HistoryResult},
-    test_world::World,
-};
+use crate::{store::history::HistoryResult, test_world::World};
 
 /// The title of the n-th release of the work the rules are about.
 fn liar_title(n: u32) -> String {
@@ -29,8 +26,6 @@ enum Made {
     PlainRule,
     /// The rule was off when the item came, and is on again.
     Resumed,
-    /// The rule was archived when the item came, and is restored.
-    Restored,
     /// A subscription that waited for its title when the item came, and is
     /// given one.
     Titled,
@@ -42,12 +37,11 @@ async fn a_cycle_leaves_the_past_to_the_user_and_the_user_receives_it_with_the_r
         Made::Subscription,
         Made::PlainRule,
         Made::Resumed,
-        Made::Restored,
         Made::Titled,
     ] {
         let (title25, title26) = (liar_title(25), liar_title(26));
         let s = World::with_rules(match made {
-            Made::Resumed | Made::Restored => vec![rule("LIAR GAME", LIAR_DIR)],
+            Made::Resumed => vec![rule("LIAR GAME", LIAR_DIR)],
             Made::Subscription | Made::PlainRule | Made::Titled => unrelated_rule(),
         })
         .await;
@@ -66,14 +60,6 @@ async fn a_cycle_leaves_the_past_to_the_user_and_the_user_receives_it_with_the_r
                 s.ctx
                     .channels
                     .set_video_receiving(&rule.id, rule.version, false, s.now())
-                    .await
-                    .unwrap();
-            }
-            Made::Restored => {
-                let rule = s.rule_of(0).await;
-                s.ctx
-                    .channels
-                    .set_rule_state(&rule.id, RuleState::Archived, s.now())
                     .await
                     .unwrap();
             }
@@ -110,19 +96,10 @@ async fn a_cycle_leaves_the_past_to_the_user_and_the_user_receives_it_with_the_r
                     .await
                     .unwrap()
             }
-            Made::Restored => {
-                let rule = s.rule_of(0).await;
-                s.ctx
-                    .channels
-                    .set_rule_state(&rule.id, RuleState::Active, s.now())
-                    .await
-                    .unwrap()
-                    .unwrap()
-            }
         };
         assert_eq!(
             rule.resumed_at.is_some(),
-            matches!(made, Made::Resumed | Made::Restored),
+            matches!(made, Made::Resumed),
             "{made:?}: turning a rule on notes the time"
         );
 

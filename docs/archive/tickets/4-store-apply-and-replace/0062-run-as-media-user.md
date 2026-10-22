@@ -14,7 +14,7 @@ trss가 미디어 디스크에 쓰는 보관본·적용본이 Transmission이 �
 - worker가 시작할 때 서버 브라우저의 다운로드 폴더(`browser-downloads`, 모드 1777)를 준비하는 동작이 root가 아니어도 되는지 확인해요. 폴더 주인이 아니면 모드를 바꾸지 못해요.
 - 시작할 때 앱 데이터 폴더와 DB에 쓸 수 있는지 확인해, 쓸 수 없으면 경로와 필요한 uid를 알리고 멈춰요. 이전 배포에서 root로 만든 파일 때문에 조용히 실패하지 않게 하려는 거예요.
 - 운영 안내(`readme.md`)에 전환 절차를 적어요. 앱 데이터 폴더의 소유를 옮기고(`chown -R 1000:1000`), 미디어 폴더의 권한을 확인하는 절차예요.
-- worker가 root로 돈다고 적은 현재형 문장을 고쳐요. [보관과 복원의 폴더 이동](../../../requirements/collection.md#보관과-복원의-폴더-이동)의 소유 설명이에요.
+- worker가 root로 돈다고 적은 현재형 문장을 고쳐요. [보관과 복원의 폴더 이동](../../../requirements/collection.md#보관과-수집-시작의-폴더-이동)의 소유 설명이에요.
 
 ## 완료 기준
 
@@ -32,7 +32,7 @@ trss가 미디어 디스크에 쓰는 보관본·적용본이 Transmission이 �
 - **시작할 때 쓰기 확인**: `trss-core`의 `access::check_app_data`를 두 바이너리가 DB를 열기 전에 불러요. trss가 쓰는 것만 봐요. 앱 데이터 폴더 자체, DB 이름에 붙는 바로 아래의 파일(`trss.db`와 `-wal`·`-shm`·`-journal`, 잠금 파일 여섯 개, 깨우기 소켓), `receive/`와 `artwork/`의 모든 하위 폴더에 이 프로세스가 쓸 수 있는지 봐요. 나머지(`lost+found`, 백업으로 떠 둔 `copy.db`, `browser-downloads/`)는 보지 않아요. 쓸 수 없으면 경로 다섯 개까지와 그 소유자·모드, 이 프로세스의 uid·gid, `chown -R` 안내를 적고 오류로 멈춰요. 두 폴더 안의 파일은 보지 않아요. 수신 영역은 브라우저 컨테이너가 받은 파일을 그 소유(uid 10001)로 옮겨 두기 때문이고, 폴더를 쓸 수 있으면 파일을 지우고 읽을 수 있어서예요.
 - **`browser-downloads` 준비**: `trss_browser::prepare_downloads_root`가 폴더를 만들고, 폴더의 주인이 이 프로세스(또는 root)가 아니면 모드와 상관없이 오류를 돌려줘요. 스티키 비트 아래에서는 주인만 브라우저가 만든 실행 폴더를 지울 수 있어서예요. 주인이 맞고 모드가 1777이 아니면 바꿔요. worker는 이 오류로 멈추지 않고 경로·주인·`sudo chown 1000:1000 browser-downloads && sudo chmod 1777 browser-downloads`를 적은 뒤 서버 브라우저 없이 돌아요. 브라우저 풀이 처음 쓸 때 다시 부르면 같은 오류를 돌려줘요.
 - **운영 안내**: `readme.md`에 `Running as 1000:1000` 절을 더했어요. root로 돌던 설치를 옮기는 절차(trss 멈춤, 앱 데이터 폴더 `chown -R 1000:1000`, 미디어 폴더 권한 확인, 새 릴리스로 시작, 로그 확인)와 앱 데이터 폴더를 미리 만들어야 하는 까닭(없는 경로는 Docker가 root 소유로 만들어요)을 적었어요. 개발 환경 안내와 백업 문장(컨테이너가 root로 돈다던 것)도 고쳤어요.
-- **명세**: [collection.md](../../../requirements/collection.md#보관과-복원의-폴더-이동)의 "worker는 root로 돌지만" 문장을 1000:1000에 맞게 고치고, 이름 바꾸기가 소유를 바꾸지 않는다는 설명은 그대로 뒀어요. [web-app.md](../../../requirements/web-app.md#구현-경계와-실행-순서)에 시작할 때 쓰기 확인을, [jobs.md](../../../requirements/jobs.md)에 `browser-downloads` 준비의 새 동작과 받은 파일의 소유를 적었어요.
+- **명세**: [collection.md](../../../requirements/collection.md#보관과-수집-시작의-폴더-이동)의 "worker는 root로 돌지만" 문장을 1000:1000에 맞게 고치고, 이름 바꾸기가 소유를 바꾸지 않는다는 설명은 그대로 뒀어요. [web-app.md](../../../requirements/web-app.md#구현-경계와-실행-순서)에 시작할 때 쓰기 확인을, [jobs.md](../../../requirements/jobs.md)에 `browser-downloads` 준비의 새 동작과 받은 파일의 소유를 적었어요.
 
 ### 검증한 것
 

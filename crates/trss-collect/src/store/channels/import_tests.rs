@@ -72,7 +72,7 @@ fn rules_match_on_phrase_regex_and_case_flags_only() {
         directory: directory.into(),
         episode: 9,
         episode_auto: true,
-        state: RuleState::Archived,
+        state: RuleState::Paused,
         subscription: None,
         resumed_at: None,
     };
@@ -280,7 +280,7 @@ async fn replacing_keeps_ids_of_matching_rules_and_reports_the_removed_ones() {
                     ..rule("", "waiting")
                 },
                 RuleInput {
-                    state: RuleState::Archived,
+                    state: RuleState::Paused,
                     ..rule("Gone2", "gone2")
                 },
             ],

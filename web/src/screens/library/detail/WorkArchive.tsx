@@ -80,7 +80,6 @@ export function WorkArchiveNotice({ work, phase, onMoveAgain, onResend, onRechec
 const STATE: Record<WorkRule["state"], string> = {
   active: "수집 중",
   paused: "멈춤",
-  archived: "보관됨",
 };
 
 interface ArchiveActionProps {

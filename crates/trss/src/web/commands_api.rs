@@ -10,7 +10,6 @@
 //! | kind           | on screen    | payload                                                        |
 //! | -------------- | ------------ | -------------------------------------------------------------- |
 //! | `receive_once` | `다시 받기`·`받기` | `{ "item_id": <history item>, "rule_id": <rule> }` (`rule_id` only to receive an item no rule has picked) |
-//! | `rule_archive` | `보관`·`복원`·`영상 받기` | `{ "rule_id": <rule>, "direction": "archive" \| "restore" }` (`"start"` and `"resume"` are the web's own, refused here) |
 //! | `receive_past` | `받기`       | `{ "rule_id": <rule>, "search_id": <past episode search>, "key": <result's key> }` |
 //! | `watch_rescan` | `다시 확인`  | `{ "folder_id": <watch folder> }`                              |
 //! | `episode_undo` | `되돌리기`   | `{ "rule_id": <rule>, "episode": <the automatic offset seen> }` |
@@ -47,18 +46,22 @@
 //! `refresh`.
 //!
 //! `rule_archive_batch` archives the chosen rules one after another on the
-//! server, each through a `rule_archive` command of its own, and stops at the
+//! server, deleting each with the move of its work folder, and stops at the
 //! first that does not end well ([`crate::archive_batch`]). Only one is open
-//! at a time. The screen reads its progress from
+//! at a time. A new batch is refused with `400` when a rule it names is still
+//! there and is not suggested now ([`super::archive_api`]): the screen's list
+//! may be old, and archiving deletes the rule. The screen reads its progress from
 //! `GET /archive-batches/{id}` ([`super::archive_batch_api`]).
 //!
-//! A rule is archived and restored only through `rule_archive`: the worker
-//! turns the rule off before its folder moves and on after it moved back.
-//! `start` (a new rule, subscription or edited save folder) and `resume`
-//! (`영상 받기` on) turn a paused rule on after its work folder came out of the
-//! archive folder into the collect folder. Only the web makes these, itself,
-//! when it saves a rule that starts collecting for a work in the archive folder
-//! ([`super::rules_api`]); a browser's `POST` of one is refused (`400`).
+//! Two kinds are the web's own, and a browser's `POST` of one is refused
+//! (`400`). A `rule_archive` command (`start` of a new rule, subscription or
+//! edited save folder, `resume` of `영상 받기` on) turns a paused rule on after
+//! its work folder came out of the archive folder into the collect folder; the
+//! web makes it when it saves a rule that starts collecting for a work in the
+//! archive folder ([`super::rules_api`]). A `work_archive` command moves a work
+//! folder into the archive folder; the web stores it with the deletion of the
+//! rules that save into the folder (`보관` of a rule, [`super::rules_api`], and
+//! `보관 폴더로 옮기기` of a work, [`super::library_work_api`]).
 //! The browser makes one ID per user action and sends it with the content.
 //!
 //! **Accepted is not done.** The answer to a `POST` says the command is stored
@@ -96,9 +99,10 @@ use serde_json::Value;
 use super::{in_place::Evidence, ApiError, AppState};
 use crate::archive_batch;
 use trss_collect::{
-    commands::{anissia_captions, episode_undo, receive_once, receive_past, rule_archive},
+    commands::{
+        anissia_captions, episode_undo, receive_once, receive_past, rule_archive, work_archive,
+    },
     past_search::service::Resolve,
-    store::channels::RuleState,
 };
 use trss_core::commands::{Accepted, Command, CommandState, NewCommand};
 use trss_library::watch_rescan;
@@ -210,7 +214,6 @@ pub(super) struct CommandRequest {
 pub(super) enum CommandPayload {
     ReceiveOnce(receive_once::ReceiveOnce),
     ReceivePast(PastRequest),
-    RuleArchive(rule_archive::RuleArchive),
     WatchRescan(watch_rescan::WatchRescan),
     EpisodeUndo(episode_undo::EpisodeUndo),
     AnissiaCaptions(anissia_captions::AnissiaCaptions),
@@ -222,7 +225,7 @@ const MISMATCH: &str =
     "이 명령 ID는 다른 내용으로 이미 접수됐어요. 화면을 새로고침한 뒤 다시 시도해 주세요.";
 const FOLDER_REFUSED: &str = "`다시 받기`는 그 항목을 고른 규칙의 저장 폴더에 받아서 폴더를 고를 수 없어요. 화면을 새로고침한 뒤 다시 시도해 주세요.";
 const BUSY: &str = "이 항목은 이미 추가하는 중이에요. 그 결과가 나올 때까지 기다려 주세요.";
-const RULE_BUSY: &str = archive_batch::RULE_BUSY;
+const WEB_OWN: &str = "보관과 폴더 이동은 규칙 상세의 `보관`이나 작품 상세의 `보관 폴더로 옮기기`로 해요. 화면을 새로고침한 뒤 다시 시도해 주세요.";
 const BATCH_BUSY: &str = "다른 일괄 보관이 진행 중이에요. 그 결과가 나올 때까지 기다려 주세요.";
 const FOLDER_BUSY: &str =
     "이 폴더는 이미 다시 확인하는 중이에요. 그 결과가 나올 때까지 기다려 주세요.";
@@ -252,7 +255,6 @@ pub(super) fn now_millis() -> i64 {
 pub(super) enum Request {
     ReceiveOnce(receive_once::ReceiveOnce),
     ReceivePast(PastRequest),
-    RuleArchive(rule_archive::RuleArchive),
     WatchRescan(watch_rescan::WatchRescan),
     EpisodeUndo(episode_undo::EpisodeUndo),
     AnissiaCaptions(anissia_captions::AnissiaCaptions),
@@ -282,11 +284,7 @@ impl Request {
                     serde_json::from_value(payload).map_err(|_| ApiError::invalid(BAD_BODY))?;
                 Ok(Request::ReceiveOnce(payload))
             }
-            rule_archive::KIND => {
-                let payload: rule_archive::RuleArchive =
-                    serde_json::from_value(payload).map_err(|_| ApiError::invalid(BAD_BODY))?;
-                Ok(Request::RuleArchive(payload))
-            }
+            rule_archive::KIND | work_archive::KIND => Err(ApiError::invalid(WEB_OWN)),
             watch_rescan::KIND => {
                 let payload: watch_rescan::WatchRescan =
                     serde_json::from_value(payload).map_err(|_| ApiError::invalid(BAD_BODY))?;
@@ -315,7 +313,6 @@ impl Request {
         match self {
             Request::ReceiveOnce(_) => receive_once::KIND,
             Request::ReceivePast(_) => receive_past::KIND,
-            Request::RuleArchive(_) => rule_archive::KIND,
             Request::WatchRescan(_) => watch_rescan::KIND,
             Request::EpisodeUndo(_) => episode_undo::KIND,
             Request::AnissiaCaptions(_) => anissia_captions::KIND,
@@ -327,7 +324,6 @@ impl Request {
     fn busy(&self) -> &'static str {
         match self {
             Request::ReceiveOnce(_) | Request::ReceivePast(_) => BUSY,
-            Request::RuleArchive(_) => RULE_BUSY,
             Request::WatchRescan(_) => FOLDER_BUSY,
             Request::EpisodeUndo(_) => UNDO_BUSY,
             Request::AnissiaCaptions(_) => CAPTIONS_BUSY,
@@ -351,10 +347,6 @@ impl Request {
                 &stored.payload,
             )
             .is_ok_and(|stored| stored.rule_id == payload.rule_id && stored.key == payload.key),
-            Request::RuleArchive(payload) => {
-                serde_json::from_str::<rule_archive::RuleArchive>(&stored.payload)
-                    .is_ok_and(|stored| stored == *payload)
-            }
             Request::WatchRescan(payload) => {
                 serde_json::from_str::<watch_rescan::WatchRescan>(&stored.payload)
                     .is_ok_and(|stored| stored == *payload)
@@ -388,7 +380,6 @@ impl Request {
             },
             Request::ReceiveOnce(_)
             | Request::ReceivePast(_)
-            | Request::RuleArchive(_)
             | Request::WatchRescan(_)
             | Request::EpisodeUndo(_)
             | Request::AnissiaCaptions(_) => Ok(()),
@@ -413,12 +404,6 @@ impl Request {
                     subject: Some(payload.subject()),
                 }
             }
-            Request::RuleArchive(payload) => NewCommand {
-                id,
-                kind: rule_archive::KIND.to_owned(),
-                payload: payload.canonical(),
-                subject: Some(payload.subject()),
-            },
             Request::WatchRescan(payload) => NewCommand {
                 id,
                 kind: watch_rescan::KIND.to_owned(),
@@ -454,9 +439,6 @@ impl Request {
                 check_receive_once(payload, state).await.map(|()| None)
             }
             Request::ReceivePast(payload) => check_receive_past(payload, state).await.map(Some),
-            Request::RuleArchive(payload) => {
-                check_rule_archive(payload, state).await.map(|()| None)
-            }
             Request::WatchRescan(payload) => {
                 check_watch_rescan(payload, state).await.map(|()| None)
             }
@@ -466,12 +448,33 @@ impl Request {
             Request::AnissiaCaptions(payload) => {
                 check_anissia_captions(payload, state).await.map(|()| None)
             }
-            // Checked when it is new (`refuse_if_not_new`); a rule that is gone
-            // when its turn comes ends the batch there, as a rule archived
-            // meanwhile would.
-            Request::RuleArchiveBatch(_) => Ok(None),
+            Request::RuleArchiveBatch(payload) => {
+                check_archive_batch(payload, state).await.map(|()| None)
+            }
         }
     }
+}
+
+/// Every rule of a new batch that is still there must be suggested now: the
+/// screen sends the suggestions it showed, which an item received since may
+/// have made old, and archiving deletes the rule for good. A rule that is gone
+/// is skipped when its turn comes, as one deleted while the batch runs is.
+async fn check_archive_batch(
+    payload: &archive_batch::ArchiveBatch,
+    state: &AppState,
+) -> Result<(), ApiError> {
+    let ids = payload.rules.iter().map(|rule| rule.rule_id.as_str());
+    let Some(id) = super::archive_api::first_unsuggested(state, ids).await? else {
+        return Ok(());
+    };
+    let name = payload
+        .rules
+        .iter()
+        .find(|rule| rule.rule_id == id)
+        .map_or("", |rule| rule.name.as_str());
+    Err(ApiError::invalid(format!(
+        "보관 제안이 바뀌었어요. ‘{name}’ 규칙은 이제 제안되지 않아요. 바뀐 제안을 확인한 뒤 다시 보관해 주세요."
+    )))
 }
 
 /// Only an anime some season is linked to is read: the command is not a way to
@@ -598,36 +601,6 @@ async fn check_watch_rescan(
         .ok_or_else(|| {
             ApiError::not_found("감시 폴더를 찾지 못했어요. 등록이 해제됐을 수 있어요.")
         })?;
-    Ok(())
-}
-
-/// The rule must exist and only an archived rule is restored. Archiving an
-/// archived rule is `다시 옮기기`: the folder is moved again if it can be. A
-/// `start` or `resume` is refused: the web makes them itself, after it saved
-/// the rule paused for the move, so a posted one could turn a rule on before its
-/// folder came over.
-async fn check_rule_archive(
-    payload: &rule_archive::RuleArchive,
-    state: &AppState,
-) -> Result<(), ApiError> {
-    if matches!(
-        payload.direction,
-        rule_archive::Direction::Start | rule_archive::Direction::Resume
-    ) {
-        return Err(ApiError::invalid(
-            "작품 폴더를 옮기고 규칙을 켜는 일은 규칙을 만들거나 영상 받기를 켤 때 서버가 해요. 화면을 새로고침해 주세요.",
-        ));
-    }
-    let rule = state
-        .channels
-        .get_rule(&payload.rule_id)
-        .await?
-        .ok_or_else(|| ApiError::not_found("규칙을 찾지 못했어요. 삭제됐을 수 있어요."))?;
-    if payload.direction == rule_archive::Direction::Restore && rule.state != RuleState::Archived {
-        return Err(ApiError::invalid(
-            "이 규칙은 보관돼 있지 않아요. 화면을 새로고침해 주세요.",
-        ));
-    }
     Ok(())
 }
 

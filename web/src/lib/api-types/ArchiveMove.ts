@@ -3,16 +3,16 @@ import type { ArchiveDirection } from "./ArchiveDirection";
 import type { Command } from "./Command";
 
 /**
- * An archive or restore of a rule and where it is.
+ * A move of a rule's work folder out of the archive folder and where it is.
  */
 export type ArchiveMove = { 
 /**
- * `archive` or `restore`; the web's own `start` and `resume` too, while
- * a rule waits for its work folder to come out of the archive folder.
+ * `start` (a new rule, subscription or save folder) or `resume`
+ * (`영상 받기` on), while the rule waits for its work folder.
  */
 direction: ArchiveDirection, 
 /**
- * The command; its outcome's `result` is `moved`, `kept` (the rule
- * changed state and the folder stayed, for the `reason`) or `failed`.
+ * The command; its outcome's `result` is `moved`, `kept` (the rule was
+ * turned on and the folder stayed, for the `reason`) or `failed`.
  */
 command: Command, };

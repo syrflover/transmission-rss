@@ -105,8 +105,8 @@
 //! `receive_once` of a result no feed showed: it records the result as a past
 //! item and receives it the same way ([`receive_past`]).
 //!
-//! A `rule_archive` command (보관·복원, and the `start` or `resume` of a rule
-//! whose work folder is in the archive folder) moves a work folder on disk. It
+//! A `rule_archive` command (the `start` or `resume` of a rule whose work
+//! folder is in the archive folder) moves a work folder on disk. It
 //! holds the folder's turn, so no cycle adds a torrent into the folder while it
 //! moves, and a start cut short leaves it `running`: the next start looks at
 //! the disk and Transmission again and moves what is left (see
@@ -117,8 +117,8 @@
 //! as the web does after `영상 받기` for a rule that needs no move: a rule the
 //! command turned on receives what its creator posted while it was off.
 //!
-//! A `work_archive` command (`보관 폴더로 옮기기` of a work, whose rules the web
-//! deleted first) moves a work folder from the collect folder into the archive
+//! A `work_archive` command (`보관` of a rule, or `보관 폴더로 옮기기` of a work,
+//! whose rules the web deleted first) moves a work folder from the collect folder into the archive
 //! folder the same way, with the same turns and the same carrying on after a
 //! start cut short ([`work_archive`]).
 //!
@@ -141,14 +141,14 @@
 //! works in no folder and touches no torrent, so it waits for no turn and no
 //! gate; it asks Anissia at the app's shared pace.
 //!
-//! A `rule_archive_batch` command (`모두 보관`·`N개 보관` of the archive
-//! suggestions) archives the chosen rules in order, each through a
-//! `rule_archive` command of its own that it accepts and waits for
+//! A `rule_archive_batch` command (`모두 보관`·`N개 보관`·`보관` of the archive
+//! suggestions) archives the chosen rules in order: it deletes each with the
+//! `work_archive` command of its work folder, which it stores and waits for
 //! ([`crate::archive_batch`]). It works in no folder and touches no torrent
-//! itself, so it takes no turn and no gate: its children do. It holds one of
+//! itself, so it takes no turn and no gate: its moves do. It holds one of
 //! the [`MAX_COMMANDS_AT_ONCE`] places while it waits, and only one batch is
 //! open at a time. A shutdown leaves it `running`, and the next start runs it
-//! again, which finds the children stored and carries on from them.
+//! again, which finds the moves stored and carries on from them.
 //!
 //! Each command kind has its own module below.
 
@@ -678,11 +678,12 @@ impl Worker {
             }
             Kind::RuleArchiveBatch => {
                 let (commands, channels) = (self.commands.clone(), self.ctx.channels.clone());
-                let wakes = self.wakes.clone();
+                let (settings, wakes) = (self.ctx.settings.clone(), self.wakes.clone());
                 task.spawn(async move {
                     let ctx = archive_batch::Ctx {
                         commands: &commands,
                         channels: &channels,
+                        settings: &settings,
                         wakes: &wakes,
                         clock: &clock,
                         reread_every: archive_batch::REREAD_EVERY,

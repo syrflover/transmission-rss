@@ -73,6 +73,7 @@ const view = (state: ArchiveBatchView["state"], finished: number): ArchiveBatchV
   finished,
   current: state === "running" ? { rule_id: `r${finished}`, name: `n${finished}` } : null,
   failure: null,
+  results: [],
 });
 
 function follower(reads: Array<ArchiveBatchView | Error>) {
@@ -252,14 +253,14 @@ test("a batch goes on being followed after the screen that sent it is gone, and 
   assert.deepEqual(t.log, ["gone r0", "gone r1", "cache archived", "screen archived", "screen reload"]);
   assert.equal(t.updates.length, before);
   assert.equal(t.tracker.active, false);
-  assert.deepEqual(t.tracker.run, { total: 2, finished: 2, current: null, error: null });
+  assert.deepEqual(t.tracker.run, { total: 2, finished: 2, current: null, error: null, results: [], errorWorkId: null });
 });
 
 test("a screen that opens during a batch is shown it, told when it ends, and finds the run it left", async () => {
   const t = tracking([view("running", 0), view("failed", 1)]);
   t.tracker.adopt(view("running", 0));
   const stop = t.tracker.subscribe((update) => void t.updates.push(update));
-  assert.deepEqual(t.tracker.run, { total: 2, finished: 0, current: "n0", error: null });
+  assert.deepEqual(t.tracker.run, { total: 2, finished: 0, current: "n0", error: null, results: [], errorWorkId: null });
   // A second batch is not started or adopted beside it.
   await t.tracker.start(t.entries, async () => assert.fail("a batch is active"));
   t.tracker.adopt(view("running", 1));
@@ -286,7 +287,14 @@ test("a request the server refused ends the run at once and reads the suggestion
   t.tracker.subscribe((update) => void t.updates.push(update));
   await t.tracker.start(t.entries, async () => ({ ok: false, message: "다른 일괄 보관이 진행 중이에요." }));
   assert.equal(t.tracker.active, false);
-  assert.deepEqual(t.tracker.run, { total: 2, finished: 0, current: null, error: "다른 일괄 보관이 진행 중이에요." });
+  assert.deepEqual(t.tracker.run, {
+    total: 2,
+    finished: 0,
+    current: null,
+    error: "다른 일괄 보관이 진행 중이에요.",
+    results: [],
+    errorWorkId: null,
+  });
   assert.deepEqual(t.log, ["screen reload"]);
   assert.deepEqual(t.updates.map((u) => u.ended), [false, true]);
 });

@@ -1,54 +1,58 @@
-//! `rule_archive_batch`, shown on the screen as `모두 보관` and `N개 보관` of
-//! the archive suggestions (`docs/requirements/collection.md`, 규칙 보관): the rules
-//! the person chose, archived one after another by the server.
+//! `rule_archive_batch`, shown on the screen as `모두 보관`, `N개 보관` and
+//! `보관` of the archive suggestions (`docs/requirements/collection.md`, 규칙
+//! 보관): the rules the person chose, archived one after another by the server.
 //!
-//! The screen used to send a `rule_archive` command per rule and wait for each
-//! to end before it sent the next, so a tab that stopped listening (a hidden
-//! tab closes its event stream) or a closed screen left the rest unsent. The
-//! screen now sends one `rule_archive_batch` command with the rules in order
-//! ([`ArchiveBatch`]), and [`run`] carries it out in the commands' loop.
+//! The screen sends one `rule_archive_batch` command with the rules in order
+//! ([`ArchiveBatch`]), and [`run`] carries it out in the commands' loop, so a
+//! tab that stops listening (a hidden tab closes its event stream) or a closed
+//! screen leaves nothing unsent.
 //!
-//! **A rule is archived by its own command.** The rule's detail shows the last
-//! move of its folder by reading the rule's latest `rule_archive` command, and
-//! a rule has at most one open `rule_archive` command, so the batch does not
-//! archive inline. For each rule, in order, it accepts an ordinary
-//! `rule_archive` command (direction `archive`) with the ID
-//! [`child_id`] (`{batch ID}-{index}`), rings the commands' loop so that it
-//! starts at once, and waits for it to end. Everything about archiving one
-//! rule (turning it off, moving the work folder, which is moved once, with
-//! the last rule that saves in it, the retries, the sentences) stays with that
-//! command ([`trss_collect::commands::rule_archive`]); the batch only keeps
-//! the order and stops at the first rule that does not end well.
+//! **A rule is archived as its detail's `보관` archives it**
+//! ([`work_archive::archive_rule`]): the rule is deleted and the move of its
+//! work folder is stored in one transaction, as a `work_archive` command with
+//! the ID [`child_id`] (`{batch ID}-{index}`); a rule with no work folder is
+//! only deleted. The batch rings the commands' loop so that the move starts at
+//! once, and waits for it to end. Everything about the folder (whether it moves,
+//! which it does with the last rule that collects into it, the retries, the
+//! sentences) stays with that command; the batch only keeps the order and
+//! stops at the first rule that does not end well. A rule edited between the
+//! batch's read and its deletion is read again and archived as it is then.
 //!
-//! **Waiting for a child** ([`wait_for_end`]) listens to the commands' changes
-//! from before the batch's first read, and reads the child again whenever it
-//! hears the child's ID, whenever it has lost changes by falling behind, and,
-//! as a fallback that needs no event at all, every [`REREAD_EVERY`]. So a
-//! missed event delays the batch by one interval at most and cannot hang it,
-//! and the wait ends on shutdown.
+//! **Waiting for a move** ([`wait_for_end`]) listens to the commands' changes
+//! from before the batch's first read, and reads the move again whenever it
+//! hears its ID, whenever it has lost changes by falling behind, and, as a
+//! fallback that needs no event at all, every [`REREAD_EVERY`]. So a missed
+//! event delays the batch by one interval at most and cannot hang it, and the
+//! wait ends on shutdown.
 //!
 //! **A restart runs the batch again** like any command (the commands' loop
-//! claims the open commands an earlier process left). The batch accepts the
-//! same child IDs, which answer with the commands they stored: a finished child
-//! is skipped, an open one is followed, and a failed one stops the batch as it
-//! did. No rule is archived twice.
+//! claims the open commands an earlier process left). A rule whose move is
+//! stored under its child ID is followed from that move: a finished one is
+//! skipped, an open one is followed, and a failed one stops the batch as it
+//! did. A rule that is gone with no move stored was deleted already (by the
+//! batch, having no work folder, or by the person) and is skipped. No rule is
+//! archived twice. A batch an earlier version left open may find that
+//! version's `rule_archive` command under a child ID: a finished one is
+//! skipped (the upgrade deleted the rules it archived), and an unfinished one
+//! stops the batch as refused ([`REFUSED`]), its rule not archived.
 //!
 //! **The batch ends** `done` after the last rule, and `failed` at the first
-//! rule that does not end well: its archive ended `failed`
-//! ([`RULE_FAILED`], with that command's reason), or it could not be
-//! started because another `rule_archive` command of the rule is open or the
-//! rule is gone ([`REFUSED`], with the sentence the rule's own refusal has).
-//! The rules after it are not archived. The batch records which rule it
-//! stopped at in the outcome's `result` ([`stopped_at`]); a batch that was
-//! failed by something else (the commands' claim giving it up after
+//! rule that does not end well: its move ended `failed` ([`RULE_FAILED`],
+//! with that command's reason; the rule is deleted by then), or it could not
+//! be archived because its work folder is moving already, or it kept changing
+//! ([`REFUSED`], with a sentence; the rule is still there). The rules after it
+//! are not archived. The batch records which rule it stopped at in the
+//! outcome's `result` ([`stopped_at`]); a batch that was failed by something
+//! else (the commands' claim giving it up after
 //! [`trss_core::commands::MAX_ATTEMPTS`] starts, a panic) records no rule,
-//! because its open child may still end after it.
+//! because its open move may still end after it.
 //!
 //! **The screen reads the batch** through [`view`]: how many rules are
-//! finished (the leading ones whose command ended `done`), the rule being
-//! archived now and, when it failed, which rule the batch recorded and why.
-//! It is computed from the batch and its children each time, so nothing else
-//! is stored.
+//! finished (the leading ones whose move ended `done`, or that are gone with
+//! no move), what became of each of them and the work to link to, the rule
+//! being archived now and, when it failed, which rule the batch recorded and
+//! why. It is computed from the batch, its moves and the rules each time, so
+//! nothing else is stored.
 
 use std::{collections::HashSet, time::Duration};
 
@@ -57,16 +61,21 @@ use tokio::{sync::broadcast::error::RecvError, time::sleep};
 use tokio_util::sync::CancellationToken;
 
 use trss_collect::{
-    commands::rule_archive::{self, Direction, RuleArchive},
+    commands::{
+        rule_archive,
+        work_archive::{self, NotArchived, RuleArchived, WorkArchive},
+    },
     store::channels::ChannelStore,
 };
 use trss_core::{
     changes::ChangeKind,
-    commands::{Accepted, Command, CommandError, CommandState, CommandStore, NewCommand, Outcome},
+    commands::{Command, CommandState, CommandStore, Outcome},
+    settings::SettingsStore,
     Clock,
 };
+use trss_library::store::library::LibraryStore;
 
-use crate::wake::Wakes;
+use crate::{wake::Wakes, web::commands_api::CommandView};
 
 #[cfg(test)]
 mod tests;
@@ -90,14 +99,18 @@ pub const REREAD_EVERY: Duration = Duration::from_secs(3);
 
 /// The outcome's `result` of a batch that archived every rule.
 pub const ARCHIVED: &str = "archived";
-/// The outcome's `result` of a batch that stopped because a rule's own
-/// archive ended `failed`; the reason is that command's. Followed by the
-/// rule's place ([`stopped_at`]).
+/// The outcome's `result` of a batch that stopped because the move of a
+/// rule's work folder ended `failed`; the reason is that command's. Followed
+/// by the rule's place ([`stopped_at`]).
 pub const RULE_FAILED: &str = "rule_failed";
 /// The outcome's `result` of a batch that stopped because a rule could not be
-/// started: another `rule_archive` command of it is open, or it is gone.
+/// archived: its work folder is moving already, or the rule kept changing.
 /// Followed by the rule's place ([`stopped_at`]).
 pub const REFUSED: &str = "refused";
+
+/// How many times a rule edited between the batch's read and its deletion is
+/// read again before the batch stops at it.
+const CHANGED_TRIES: usize = 3;
 
 /// The `result` of a batch that stopped at the `index`th rule for the reason
 /// `kind` ([`RULE_FAILED`] or [`REFUSED`]): `rule_failed:2`.
@@ -113,12 +126,16 @@ fn stop_of(result: &str) -> Option<(&str, usize)> {
     Some((kind, index.parse().ok()?))
 }
 
-/// What a second open command of a rule is told (the rule's own refusal).
-pub const RULE_BUSY: &str =
-    "이 규칙은 이미 보관하거나 복원하거나 작품 폴더를 옮기는 중이에요. 그 결과가 나올 때까지 기다려 주세요.";
-const RULE_GONE: &str = "규칙을 찾지 못했어요. 삭제됐을 수 있어요.";
+/// Why a rule whose work folder is moving already is not archived; the rule's
+/// detail says the same.
+pub const WORK_BUSY: &str =
+    "이 규칙의 작품 폴더를 이미 보관 폴더로 옮기는 중이라서 보관하지 않았어요. 그 결과가 나온 뒤 다시 보관해 주세요.";
+const RULE_CHANGING: &str =
+    "규칙이 계속 바뀌어서 보관하지 않았어요. 규칙 상세에서 확인한 뒤 다시 보관해 주세요.";
 const UNKNOWN_REASON: &str = "까닭은 알 수 없어요.";
-const ID_TAKEN: &str = "이 일괄 보관의 규칙 보관 명령 ID가 이미 다른 내용으로 쓰였어요.";
+const ID_TAKEN: &str = "이 일괄 보관의 작품 폴더 이동 명령 ID가 이미 다른 내용으로 쓰였어요.";
+const FROM_BEFORE: &str =
+    "업데이트 전에 시작한 일괄 보관이라 이 규칙부터는 보관하지 않았어요. 남은 규칙은 다시 보관해 주세요.";
 
 /// One rule of a batch: its ID, and the title the screen showed for it, which
 /// is used only to say in a sentence which rule a batch stopped at.
@@ -181,9 +198,9 @@ impl ArchiveBatch {
     }
 }
 
-/// The ID of the `rule_archive` command that archives the `index`th rule of
-/// the batch `batch_id`. The same for a batch run again, so a command stored
-/// before a restart is found, not stored twice.
+/// The ID of the `work_archive` command that moves the work folder of the
+/// `index`th rule of the batch `batch_id`. The same for a batch run again, so a
+/// command stored before a restart is found, not stored twice.
 pub fn child_id(batch_id: &str, index: usize) -> String {
     format!("{batch_id}-{index}")
 }
@@ -217,11 +234,13 @@ impl Retry {
 
 /// What a batch uses.
 pub struct Ctx<'a> {
-    /// Where the children are accepted and read.
+    /// Where the moves are accepted and read.
     pub commands: &'a CommandStore,
-    /// Tells whether a rule is still there before its command is accepted.
+    /// Where the rules are read and deleted.
     pub channels: &'a ChannelStore,
-    /// Rung when a child is stored, so the commands' loop starts it now.
+    /// The collect folder, which the rules' work folders are below.
+    pub settings: &'a SettingsStore,
+    /// Rung when a move is stored, so the commands' loop starts it now.
     pub wakes: &'a Wakes,
     pub clock: &'a Clock,
     /// See [`REREAD_EVERY`].
@@ -258,8 +277,12 @@ pub async fn run(
     for (index, rule) in batch.rules.iter().enumerate() {
         let id = child_id(&command.id, index);
         let child = match start_child(ctx, &id, index, &rule.rule_id).await? {
-            Ok(child) => child,
-            Err(stopped) => return Ok(stopped),
+            Turn::Moving(child) => child,
+            Turn::Deleted => {
+                ctx.commands.announce_progress(&command.id);
+                continue;
+            }
+            Turn::Stop(stopped) => return Ok(stopped),
         };
         let child = if child.state.is_open() {
             ctx.wakes.commands();
@@ -288,61 +311,69 @@ pub async fn run(
     Ok(finished(ARCHIVED, None, CommandState::Done))
 }
 
-/// The `rule_archive` command that archives `rule_id` for the child `id`: the
-/// one stored before when there is one (a batch run again), else a new one.
-/// `Err` is the end of the batch when the rule, the `index`th, cannot be started.
-async fn start_child(
-    ctx: &Ctx<'_>,
-    id: &str,
-    index: usize,
-    rule_id: &str,
-) -> Result<Result<Command, Finished>, Retry> {
-    let stored = ctx.commands.get(id).await.map_err(Retry::store)?;
-    if stored.is_none()
-        && ctx
-            .channels
-            .get_rule(rule_id)
-            .await
-            .map_err(Retry::store)?
-            .is_none()
-    {
-        return Ok(Err(finished(
-            &stopped_at(REFUSED, index),
-            Some(RULE_GONE.to_owned()),
+/// What archiving a rule of the batch came to.
+enum Turn {
+    /// The rule is deleted and this is the move of its work folder, stored now
+    /// or by an earlier run.
+    Moving(Command),
+    /// The rule is deleted with no move: it had no work folder, or it was gone
+    /// before its turn.
+    Deleted,
+    /// The batch ends here.
+    Stop(Finished),
+}
+
+/// Archives the `index`th rule, `rule_id`, with its move stored under `id`:
+/// the move stored before when there is one (a batch run again).
+async fn start_child(ctx: &Ctx<'_>, id: &str, index: usize, rule_id: &str) -> Result<Turn, Retry> {
+    let stop = |kind: &str, reason: &str| {
+        Turn::Stop(finished(
+            &stopped_at(kind, index),
+            Some(reason.to_owned()),
             CommandState::Failed,
-        )));
-    }
-    let payload = RuleArchive {
-        rule_id: rule_id.to_owned(),
-        direction: Direction::Archive,
-        receive: Vec::new(),
+        ))
     };
-    let accepted = ctx
-        .commands
-        .accept(
-            NewCommand {
-                id: id.to_owned(),
-                kind: rule_archive::KIND.to_owned(),
-                payload: payload.canonical(),
-                subject: Some(payload.subject()),
-            },
+    if let Some(stored) = ctx.commands.get(id).await.map_err(Retry::store)? {
+        return Ok(match stored.kind.as_str() {
+            work_archive::KIND => Turn::Moving(stored),
+            // Stored by a version whose `보관` kept the rule as archived: a
+            // finished one's rule was deleted with the archived rules by the
+            // upgrade, and an unfinished one never archived its rule.
+            rule_archive::KIND if stored.state == CommandState::Done => Turn::Deleted,
+            rule_archive::KIND => stop(REFUSED, FROM_BEFORE),
+            _ => stop(RULE_FAILED, ID_TAKEN),
+        });
+    }
+    let collect = ctx
+        .settings
+        .collection()
+        .await
+        .map_err(Retry::store)?
+        .map(|settings| settings.folder);
+    for _ in 0..CHANGED_TRIES {
+        let Some(rule) = ctx.channels.get_rule(rule_id).await.map_err(Retry::store)? else {
+            return Ok(Turn::Deleted);
+        };
+        let archived = work_archive::archive_rule(
+            ctx.channels,
+            ctx.commands,
+            collect.as_deref(),
+            &rule,
+            id.to_owned(),
             (ctx.clock)(),
         )
         .await
         .map_err(Retry::store)?;
-    Ok(match accepted {
-        Accepted::Created(child) | Accepted::Existing(child) => Ok(child),
-        Accepted::Busy(_) => Err(finished(
-            &stopped_at(REFUSED, index),
-            Some(RULE_BUSY.to_owned()),
-            CommandState::Failed,
-        )),
-        Accepted::Mismatch(_) => Err(finished(
-            &stopped_at(RULE_FAILED, index),
-            Some(ID_TAKEN.to_owned()),
-            CommandState::Failed,
-        )),
-    })
+        return Ok(match archived {
+            Ok(RuleArchived::Moving(child)) => Turn::Moving(*child),
+            Ok(RuleArchived::Deleted(_)) => Turn::Deleted,
+            // Edited or deleted since it was read: as it is now.
+            Err(NotArchived::Changed(_)) => continue,
+            Err(NotArchived::Busy(_)) => stop(REFUSED, WORK_BUSY),
+            Err(NotArchived::Mismatch(_)) => stop(RULE_FAILED, ID_TAKEN),
+        });
+    }
+    Ok(stop(REFUSED, RULE_CHANGING))
 }
 
 /// Reads the command `id` until it has ended, and returns it. It reads again
@@ -404,9 +435,11 @@ async fn change_of(
 #[cfg_attr(test, derive(ts_rs::TS), ts(rename = "ArchiveBatchFailureKind"))]
 #[serde(rename_all = "snake_case")]
 pub enum FailureKind {
-    /// The rule could not be started: another command of it is open, or it is gone.
+    /// The rule was not archived: its work folder is moving already, or it
+    /// kept changing. It is still there.
     Refused,
-    /// The rule's archive ended without archiving it.
+    /// The rule is deleted, and the move of its work folder ended without
+    /// moving it.
     ArchiveFailed,
 }
 
@@ -416,13 +449,31 @@ pub enum FailureKind {
 pub struct BatchFailure {
     pub rule_id: String,
     pub name: String,
-    /// A sentence: the refusal, or the reason the rule's archive failed.
+    /// A sentence: the refusal, or the reason the move failed.
     pub reason: String,
     pub kind: FailureKind,
+    /// `archive_failed`: the work in the library, whose detail moves it again.
+    pub work_id: Option<String>,
+}
+
+/// What became of a rule the batch archived.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(rename = "ArchiveBatchResult"))]
+pub struct BatchResult {
+    pub rule_id: String,
+    pub name: String,
+    /// The move of the rule's work folder as it ended: its outcome says
+    /// whether the folder moved, or stayed and why. None when the rule was
+    /// deleted with no move (it had no work folder, or it was gone before its
+    /// turn).
+    pub command: Option<CommandView>,
+    /// The work in the library, for a link to its detail; none when the rule
+    /// had no work folder or the library does not know the work.
+    pub work_id: Option<String>,
 }
 
 /// A batch as the screen sees it.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[cfg_attr(test, derive(ts_rs::TS), ts(rename = "ArchiveBatchView"))]
 pub struct BatchView {
     /// The batch command's ID, which the event stream names when it changes.
@@ -432,31 +483,90 @@ pub struct BatchView {
     pub total: usize,
     /// How many rules, from the first on, are archived.
     pub finished: usize,
+    /// What became of each of the `finished` rules, in order.
+    pub results: Vec<BatchResult>,
     /// The rule being archived now; none once the batch has ended.
     pub current: Option<BatchRule>,
     /// Set when the batch stopped at a rule.
     pub failure: Option<BatchFailure>,
 }
 
-/// The view of `batch`, read from the batch and its children.
-pub async fn view(commands: &CommandStore, batch: &Command) -> Result<BatchView, CommandError> {
+/// What [`view`] reads.
+pub struct Stores<'a> {
+    pub commands: &'a CommandStore,
+    pub channels: &'a ChannelStore,
+    pub settings: &'a SettingsStore,
+    pub library: &'a LibraryStore,
+}
+
+/// A store [`view`] could not read.
+#[derive(Debug, thiserror::Error)]
+#[error("cannot read the archive batch: {0}")]
+pub struct ViewError(String);
+
+fn view_error(err: impl std::fmt::Display) -> ViewError {
+    ViewError(err.to_string())
+}
+
+/// The library's work of the work folder `command` moves, wherever it is now.
+async fn work_of(stores: &Stores<'_>, command: &Command) -> Result<Option<String>, ViewError> {
+    let Ok(payload) = serde_json::from_str::<WorkArchive>(&command.payload) else {
+        return Ok(None);
+    };
+    let Some(settings) = stores.settings.collection().await.map_err(view_error)? else {
+        return Ok(None);
+    };
+    work_archive::work_in_library(
+        stores.library,
+        &settings.folder,
+        settings.archive_folder.as_deref(),
+        &payload.work,
+    )
+    .await
+    .map_err(view_error)
+}
+
+/// The view of `batch`, read from the batch, its moves and the rules.
+pub async fn view(stores: &Stores<'_>, batch: &Command) -> Result<BatchView, ViewError> {
     let rules = serde_json::from_str::<ArchiveBatch>(&batch.payload)
         .map(|payload| payload.rules)
         .unwrap_or_default();
-    let children = commands
+    let mut children = stores
+        .commands
         .get_many((0..rules.len()).map(|n| child_id(&batch.id, n)).collect())
-        .await?;
-    let finished = if batch.state == CommandState::Done {
-        rules.len()
-    } else {
-        (0..rules.len())
-            .take_while(|&n| {
-                children
-                    .get(&child_id(&batch.id, n))
-                    .is_some_and(|child| child.state == CommandState::Done)
-            })
-            .count()
-    };
+        .await
+        .map_err(view_error)?;
+    // A rule is finished when its move ended `done`, or when it is gone with
+    // no move; once the batch is `done`, every rule is.
+    let mut results = Vec::new();
+    for (n, rule) in rules.iter().enumerate() {
+        let child = children.remove(&child_id(&batch.id, n));
+        let finished = batch.state == CommandState::Done
+            || match &child {
+                Some(child) => child.state == CommandState::Done,
+                None => stores
+                    .channels
+                    .get_rule(&rule.rule_id)
+                    .await
+                    .map_err(view_error)?
+                    .is_none(),
+            };
+        if !finished {
+            children.extend(child.map(|child| (child.id.clone(), child)));
+            break;
+        }
+        let work_id = match &child {
+            Some(child) => work_of(stores, child).await?,
+            None => None,
+        };
+        results.push(BatchResult {
+            rule_id: rule.rule_id.clone(),
+            name: rule.name.clone(),
+            command: child.as_ref().map(CommandView::from),
+            work_id,
+        });
+    }
+    let finished = results.len();
 
     let current = batch
         .state
@@ -468,13 +578,26 @@ pub async fn view(commands: &CommandStore, batch: &Command) -> Result<BatchView,
         })
         .flatten();
     // The rule the batch itself recorded when it stopped. A batch failed by
-    // anything else names none: its open child may have ended after it, so
-    // the first rule not done is not a rule it stopped at.
-    let failure = (batch.state == CommandState::Failed)
+    // anything else names none: its open move may have ended after it, so the
+    // first rule not done is not a rule it stopped at.
+    let stop = (batch.state == CommandState::Failed)
         .then(|| {
             let outcome = batch.outcome.as_ref()?;
             let (kind, index) = stop_of(&outcome.result)?;
-            let rule = rules.get(index)?;
+            Some((outcome, kind, index, rules.get(index)?))
+        })
+        .flatten();
+    let failure = match stop {
+        None => None,
+        Some((outcome, kind, index, rule)) => {
+            let kind = match kind {
+                REFUSED => FailureKind::Refused,
+                _ => FailureKind::ArchiveFailed,
+            };
+            let work_id = match children.get(&child_id(&batch.id, index)) {
+                Some(child) if kind == FailureKind::ArchiveFailed => work_of(stores, child).await?,
+                _ => None,
+            };
             Some(BatchFailure {
                 rule_id: rule.rule_id.clone(),
                 name: rule.name.clone(),
@@ -482,18 +605,17 @@ pub async fn view(commands: &CommandStore, batch: &Command) -> Result<BatchView,
                     .reason
                     .clone()
                     .unwrap_or_else(|| UNKNOWN_REASON.to_owned()),
-                kind: match kind {
-                    REFUSED => FailureKind::Refused,
-                    _ => FailureKind::ArchiveFailed,
-                },
+                kind,
+                work_id,
             })
-        })
-        .flatten();
+        }
+    };
     Ok(BatchView {
         id: batch.id.clone(),
         state: batch.state,
         total: rules.len(),
         finished,
+        results,
         current,
         failure,
     })

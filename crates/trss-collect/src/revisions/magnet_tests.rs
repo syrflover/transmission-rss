@@ -59,6 +59,7 @@ impl World {
         std::fs::create_dir_all(&season).unwrap();
         let ctx = RevisionsContext {
             channels: ChannelStore::new(db.clone()),
+            settings: SettingsStore::new(db.clone()),
             history: HistoryStore::new(db.clone()),
             revisions: RevisionStore::new(db),
             transmission: TransmissionLink {

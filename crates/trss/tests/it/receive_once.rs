@@ -184,8 +184,8 @@ impl Scene {
         &self.channel.rules[n]
     }
 
-    /// Archives the `n`-th rule, so that cycles no longer pick what it matched.
-    async fn archive_rule(&self, n: usize) {
+    /// Pauses the `n`-th rule, so that cycles no longer pick what it matched.
+    async fn pause_rule(&self, n: usize) {
         let rule = self
             .h
             .channels
@@ -200,7 +200,7 @@ impl Scene {
                 rule.version,
                 &rule.channel_id,
                 RuleInput {
-                    state: RuleState::Archived,
+                    state: RuleState::Paused,
                     ..rule.to_input()
                 },
             )
@@ -722,10 +722,10 @@ async fn a_command_whose_adds_never_get_an_answer_ends_add_failed_and_holds_the_
     );
     assert_eq!(s.h.tr.torrents().len(), 1);
 
-    // The next cycle does not call it departed. (The rule is archived so that
+    // The next cycle does not call it departed. (The rule is paused so that
     // the cycle does not ask Transmission, whose answers are held, to add the
     // item again.)
-    s.archive_rule(0).await;
+    s.pause_rule(0).await;
     let report = s.cycle().await;
     assert_eq!(report.commands_unconfirmed, 1);
     assert!(report.removed.is_empty(), "{:?}", report.removed);

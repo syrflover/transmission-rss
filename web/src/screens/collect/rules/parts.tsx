@@ -141,7 +141,7 @@ export function RuleSummary({
 }
 
 function stateLabel(state: Rule["state"]): string {
-  return state === "archived" ? "보관됨" : state === "paused" ? "멈춤" : "수집 중";
+  return state === "paused" ? "멈춤" : "수집 중";
 }
 
 const CHANGED_FIELDS: { label: string; server: (r: Rule) => string; mine: (d: Draft) => string }[] = [

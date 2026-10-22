@@ -319,7 +319,7 @@ async fn lists_the_rules_that_save_into_the_work_folder() {
         .channels
         .create_channel_with_rules(
             ChannelInput::new("https://other.example.net/feed"),
-            vec![rule("Lycoris Recoil", RuleState::Archived)],
+            vec![rule("Lycoris Recoil", RuleState::Paused)],
         )
         .await
         .unwrap();
@@ -334,7 +334,7 @@ async fn lists_the_rules_that_save_into_the_work_folder() {
     assert_eq!(rules[0]["channel"]["name"], "SubsPlease");
     assert_eq!(rules[0]["channel"]["host"], "feeds.example.org");
     assert_eq!(rules[1]["directory"], "Lycoris Recoil");
-    assert_eq!(rules[1]["state"], "archived");
+    assert_eq!(rules[1]["state"], "paused");
     assert_eq!(rules[1]["channel"]["name"], Value::Null);
     assert_eq!(rules[1]["channel"]["host"], "other.example.net");
 }
@@ -453,7 +453,7 @@ async fn a_work_in_the_archive_folder_has_its_rules_and_one_elsewhere_has_none()
         .create_channel_with_rules(
             ChannelInput::new("https://feeds.example.org/rss"),
             vec![
-                rule("Lycoris Recoil", RuleState::Archived),
+                rule("Lycoris Recoil", RuleState::Paused),
                 rule("Other", RuleState::Active),
             ],
         )
@@ -466,7 +466,7 @@ async fn a_work_in_the_archive_folder_has_its_rules_and_one_elsewhere_has_none()
         match work.dir_name.as_str() {
             "Lycoris Recoil" => {
                 assert_eq!(rules.len(), 1);
-                assert_eq!(rules[0]["state"], "archived");
+                assert_eq!(rules[0]["state"], "paused");
             }
             _ => assert!(rules.is_empty(), "{body}"),
         }

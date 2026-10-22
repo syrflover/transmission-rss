@@ -147,12 +147,9 @@ impl fmt::Debug for Channel {
 pub enum RuleState {
     Active,
     /// `영상 받기` is off: the rule keeps its place and its work folder, and
-    /// collects nothing until it is turned on again. Archiving (which moves
-    /// the folder) is a different state.
+    /// collects nothing until it is turned on again. Archiving is no state: it
+    /// deletes the rule (`commands::work_archive::archive_rule`).
     Paused,
-    /// Kept in place but not collected; the work folder may be in the archive
-    /// folder.
-    Archived,
 }
 
 impl RuleState {
@@ -160,7 +157,6 @@ impl RuleState {
         match self {
             RuleState::Active => "active",
             RuleState::Paused => "paused",
-            RuleState::Archived => "archived",
         }
     }
 
@@ -168,7 +164,6 @@ impl RuleState {
         match s {
             "active" => Some(RuleState::Active),
             "paused" => Some(RuleState::Paused),
-            "archived" => Some(RuleState::Archived),
             _ => None,
         }
     }
@@ -318,7 +313,7 @@ impl SeasonRef {
 pub struct Rule {
     pub id: String,
     pub channel_id: String,
-    /// Order within the channel, ascending from 0; archived rules keep theirs.
+    /// Order within the channel, ascending from 0; paused rules keep theirs.
     pub position: i64,
     pub version: Version,
     pub r#match: Option<String>,
@@ -330,7 +325,7 @@ pub struct Rule {
     pub state: RuleState,
     /// Set when the rule follows an anime of Anissia's schedule.
     pub subscription: Option<Subscription>,
-    /// When the rule was last turned back on (`영상 받기` on, or restored), as
+    /// When the rule was last turned back on (`영상 받기` on), as
     /// Unix milliseconds; `None` while it never was. What history first saw
     /// before then is left to the user ([`crate::plan::ChannelPlan::is_past`]).
     pub resumed_at: Option<i64>,

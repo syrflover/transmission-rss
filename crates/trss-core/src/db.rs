@@ -205,6 +205,10 @@ const MIGRATIONS: &[Migration] = &[
     Migration::Remake(include_str!("../migrations/jobs/interrupted.sql")),
     // 66: a subtitle job records no file effect before it makes it, and a step cut short is done again
     Migration::Remake(include_str!("../migrations/jobs/no_effect_records.sql")),
+    // 67: `보관` deletes a rule: the rules archived before are deleted, as a person's delete takes them
+    Migration::Sql(include_str!("../migrations/channels/archived_deleted.sql")),
+    // 68: a rule is `active` or `paused`
+    Migration::Remake(include_str!("../migrations/channels/no_archived.sql")),
 ];
 
 #[derive(Debug, thiserror::Error)]
@@ -884,11 +888,13 @@ mod tests {
             conn.query_row(summary, [], |r| r.get(0)).unwrap()
         };
 
-        let db = Db::open(&path).await.unwrap();
+        // Up to its own migration: a later one deletes the archived rules.
+        let mut conn = Connection::open(&path).unwrap();
+        conn.pragma_update(None, "foreign_keys", true).unwrap();
+        migrate_until(&mut conn, 31).unwrap();
 
-        assert_eq!(version_of(&db).await, MIGRATIONS.len());
-        let (links, after, broken): (String, String, i64) = db
-            .run::<_, DbError, _>(move |c| {
+        let (links, after, broken): (String, String, i64) =
+            (|c: &Connection| -> Result<_, DbError> {
                 let links = c.query_row(
                     "SELECT ifnull(group_concat(work_id || ':' || season || '=' || anime_no
                                    || '@' || version, ','), '')
@@ -902,8 +908,7 @@ mod tests {
                         r.get(0)
                     })?;
                 Ok((links, after, broken))
-            })
-            .await
+            })(&conn)
             .unwrap();
         // Each subscribed season is linked to the subscription's anime, once: the
         // two subscriptions of one season give the anime of the first rule by ID
@@ -916,17 +921,15 @@ mod tests {
         assert_eq!(broken, 0);
 
         // The link goes with its work.
-        let left: i64 = db
-            .run::<_, DbError, _>(|c| {
-                c.execute("DELETE FROM works WHERE id = 'w1'", [])?;
-                Ok(c.query_row(
-                    "SELECT count(*) FROM season_anissia WHERE work_id = 'w1'",
-                    [],
-                    |r| r.get(0),
-                )?)
-            })
-            .await
-            .unwrap();
+        let left: i64 = (|c: &Connection| -> Result<_, DbError> {
+            c.execute("DELETE FROM works WHERE id = 'w1'", [])?;
+            Ok(c.query_row(
+                "SELECT count(*) FROM season_anissia WHERE work_id = 'w1'",
+                [],
+                |r| r.get(0),
+            )?)
+        })(&conn)
+        .unwrap();
         assert_eq!(left, 0);
     }
 
@@ -2072,12 +2075,14 @@ mod tests {
             .unwrap();
         }
 
-        // Foreign keys are on for a connection the app opens.
-        let db = Db::open(&path).await.unwrap();
+        // Up to its own migration, with foreign keys on as for a connection the
+        // app opens: a later one deletes the archived rules.
+        let mut conn = Connection::open(&path).unwrap();
+        conn.pragma_update(None, "foreign_keys", true).unwrap();
+        migrate_until(&mut conn, 16).unwrap();
 
-        assert_eq!(version_of(&db).await, MIGRATIONS.len());
-        let (rules, subscription, blocked, broken): (String, String, Option<String>, i64) = db
-            .run::<_, DbError, _>(|c| {
+        let (rules, subscription, blocked, broken): (String, String, Option<String>, i64) =
+            (|c: &Connection| -> Result<_, DbError> {
                 let rules = c.query_row(
                     "SELECT group_concat(id || ':' || state || ':' || version, ',')
                        FROM (SELECT * FROM rules ORDER BY position)",
@@ -2096,8 +2101,7 @@ mod tests {
                         r.get(0)
                     })?;
                 Ok((rules, subscription, blocked, broken))
-            })
-            .await
+            })(&conn)
             .unwrap();
         assert_eq!(rules, "r1:active:2,r2:archived:5");
         assert_eq!(subscription, "7|follow|SubKor|w1:2|99");
@@ -2105,17 +2109,15 @@ mod tests {
         assert_eq!(broken, 0);
 
         // A rule can now be paused, and the subscription still goes with its rule.
-        let left: i64 = db
-            .run::<_, DbError, _>(|c| {
-                c.execute("UPDATE rules SET state = 'paused' WHERE id = 'r1'", [])?;
-                assert!(c
-                    .execute("UPDATE rules SET state = 'stopped' WHERE id = 'r1'", [])
-                    .is_err());
-                c.execute("DELETE FROM rules WHERE id = 'r1'", [])?;
-                Ok(c.query_row("SELECT count(*) FROM rule_subscriptions", [], |r| r.get(0))?)
-            })
-            .await
-            .unwrap();
+        let left: i64 = (|c: &Connection| -> Result<_, DbError> {
+            c.execute("UPDATE rules SET state = 'paused' WHERE id = 'r1'", [])?;
+            assert!(c
+                .execute("UPDATE rules SET state = 'stopped' WHERE id = 'r1'", [])
+                .is_err());
+            c.execute("DELETE FROM rules WHERE id = 'r1'", [])?;
+            Ok(c.query_row("SELECT count(*) FROM rule_subscriptions", [], |r| r.get(0))?)
+        })(&conn)
+        .unwrap();
         assert_eq!(left, 0);
     }
 
@@ -3925,6 +3927,172 @@ mod tests {
         })
         .await
         .unwrap();
+    }
+
+    const BEFORE_ARCHIVED_DELETED: usize = 66;
+
+    // `보관` deletes a rule (docs/adr/0022): the archived rules go as a
+    // person's delete takes them, with what is theirs, and a rule is then
+    // `active` or `paused`. What is not the rule's stays: its history, the
+    // seasons' and movies' Anissia links and the episode mappings. An archived
+    // subscription with no season links its anime to no season.
+    #[tokio::test]
+    async fn the_archived_rules_go_with_their_subscriptions_and_leave_the_rest() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("app.db");
+        let objects = {
+            // A database as the build with 66 migrations left it: an active
+            // subscription on a season; an archived subscription on another
+            // season, linked to its anime; an archived subscription that never
+            // got a season; an archived plain rule with a `수집 유지`; a paused
+            // rule. Each archived rule received an item.
+            let conn = database_at(&path, BEFORE_ARCHIVED_DELETED);
+            conn.execute_batch(
+                "INSERT INTO watch_folders (id, path, created_at) VALUES ('f1', '/media', 1);
+                 INSERT INTO works (id, watch_folder_id, dir_name)
+                     VALUES ('w1', 'f1', 'Clevatess'), ('w2', 'f1', 'Seihantai'),
+                            ('w3', 'f1', 'Movie');
+                 INSERT INTO seasons (work_id, number) VALUES ('w1', 2), ('w2', 1);
+                 INSERT INTO channels (id, position, url, excludes, secret_query, version)
+                     VALUES ('c1', 0, 'http://x/feed', '[]', '[]', 1);
+                 INSERT INTO rules (id, channel_id, position, match_text, regex,
+                         case_insensitive, directory, episode, episode_auto, state, version)
+                     VALUES ('r1', 'c1', 0, 'Clevatess', 0, 1, 'Clevatess/Season 02', 1, 0,
+                                'active', 2),
+                            ('r2', 'c1', 1, 'Seihantai', 0, 1, 'Seihantai/Season 01', 1, 0,
+                                'archived', 3),
+                            ('r3', 'c1', 2, 'Seihantai 2', 0, 1, 'Seihantai/Season 02', 1, 0,
+                                'archived', 4),
+                            ('r4', 'c1', 3, 'Old', 0, 0, 'Old', 0, 0, 'archived', 5),
+                            ('r5', 'c1', 4, 'Resting', 0, 0, 'Resting', 0, 0, 'paused', 6);
+                 INSERT INTO anissia_anime (anime_no, subject, week, status, fetched_at)
+                     VALUES (7, '클레바테스', 1, 'ON', 10), (8, '정반대의 너와 나', 2, 'OFF', 10),
+                            (9, '정반대의 너와 나 2기', 3, 'ON', 10), (10, '극장판', 8, 'OFF', 10);
+                 INSERT INTO rule_subscriptions (rule_id, anissia_anime_no, subtitles, creator,
+                         season_id, subscribed_at)
+                     VALUES ('r1', 7, 'follow', 'SubKor', 'w1:2', 99),
+                            ('r2', 8, 'none', NULL, 'w2:1', 98),
+                            ('r3', 9, 'follow', 'SubKor', NULL, 97);
+                 INSERT INTO season_anissia (work_id, season, anime_no, version)
+                     VALUES ('w1', 2, 7, 1), ('w2', 1, 8, 2);
+                 INSERT INTO movie_anissia (work_id, episode, anime_no, version)
+                     VALUES ('w3', 1, 10, 1);
+                 INSERT INTO subtitle_sources (id, anime_no, creator_name, created_at)
+                     VALUES ('s1', 8, 'SubKor', 1);
+                 INSERT INTO subtitle_episode_mappings (work_id, season, source_id, kind,
+                         episode_offset, evidence, decided_at)
+                     VALUES ('w2', 1, 's1', 'user', 0, 'person', 5);
+                 INSERT INTO archive_suggestion_kept (rule_id, ground, kept_at)
+                     VALUES ('r4', 'ended', 7), ('r5', 'quiet', 8);
+                 INSERT INTO history_items (channel_id, channel_label, identity_key, title, link,
+                         first_seen_at, last_seen_at, result, result_at, rule_id)
+                     VALUES ('c1', 'x', 'k2', 'Seihantai - 01', 'l', 1, 1, 'added', 1, 'r2'),
+                            ('c1', 'x', 'k3', 'Seihantai 2 - 01', 'l', 2, 2, 'added', 2, 'r3'),
+                            ('c1', 'x', 'k4', 'Old - 01', 'l', 3, 3, 'added', 3, 'r4');",
+            )
+            .unwrap();
+            schema_objects(&conn)
+        };
+
+        let db = Db::open(&path).await.unwrap();
+
+        assert_eq!(version_of(&db).await, MIGRATIONS.len());
+        let read = |sql: &'static str| {
+            db.run::<_, DbError, _>(move |c| {
+                let mut stmt = c.prepare(sql)?;
+                let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+                Ok(rows.collect::<Result<Vec<_>, _>>()?)
+            })
+        };
+        assert_eq!(
+            read("SELECT id || ':' || state || ':' || version FROM rules ORDER BY position")
+                .await
+                .unwrap(),
+            ["r1:active:2", "r5:paused:6"]
+        );
+        assert_eq!(
+            read("SELECT rule_id || ':' || ifnull(season_id, '') FROM rule_subscriptions")
+                .await
+                .unwrap(),
+            ["r1:w1:2"]
+        );
+        assert_eq!(
+            read("SELECT rule_id FROM rule_started ORDER BY rule_id")
+                .await
+                .unwrap(),
+            ["r1", "r5"]
+        );
+        assert_eq!(
+            read("SELECT rule_id FROM archive_suggestion_kept")
+                .await
+                .unwrap(),
+            ["r5"]
+        );
+        // The rest is not the rules': the season of the archived subscription
+        // keeps its anime, and the one that had no season gets none.
+        assert_eq!(
+            read("SELECT rule_id FROM history_items ORDER BY id")
+                .await
+                .unwrap(),
+            ["r2", "r3", "r4"]
+        );
+        assert_eq!(
+            read(
+                "SELECT work_id || ':' || season || '=' || anime_no || '@' || version
+                   FROM season_anissia ORDER BY work_id"
+            )
+            .await
+            .unwrap(),
+            ["w1:2=7@1", "w2:1=8@2"]
+        );
+        assert_eq!(
+            read("SELECT work_id || '=' || anime_no FROM movie_anissia")
+                .await
+                .unwrap(),
+            ["w3=10"]
+        );
+        assert_eq!(
+            read(
+                "SELECT work_id || ':' || season || ':' || source_id
+                   FROM subtitle_episode_mappings"
+            )
+            .await
+            .unwrap(),
+            ["w2:1:s1"]
+        );
+        assert_eq!(
+            read("SELECT count(*) || '' FROM pragma_foreign_key_check")
+                .await
+                .unwrap(),
+            ["0"]
+        );
+        let after = db
+            .run::<_, DbError, _>(|c| Ok(schema_objects(c)))
+            .await
+            .unwrap();
+        assert_eq!(
+            after, objects,
+            "the remake makes the index and triggers again"
+        );
+
+        // A rule is `active` or `paused`, and deleting one still takes what is its.
+        db.run::<_, DbError, _>(|c| {
+            assert!(c
+                .execute("UPDATE rules SET state = 'archived' WHERE id = 'r1'", [])
+                .is_err());
+            c.execute("DELETE FROM rules WHERE id = 'r1'", [])?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+        assert!(read("SELECT rule_id FROM rule_subscriptions")
+            .await
+            .unwrap()
+            .is_empty());
+        assert_eq!(
+            read("SELECT rule_id FROM rule_started").await.unwrap(),
+            ["r5"]
+        );
     }
 
     #[tokio::test]

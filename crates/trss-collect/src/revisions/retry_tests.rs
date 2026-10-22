@@ -514,20 +514,22 @@ async fn a_replacement_ended_with_no_video_left_is_received_again_with_retry() {
     assert!(s.failures().await.is_empty());
 }
 
-/// The rule of a replacement that ended with no video under the episode name
-/// is archived for ten days: the failure and its `다시 받기` are there once
-/// the rule is restored, and `다시 받기` receives it again.
+/// The work folder of a replacement that ended with no video under the
+/// episode name is in the archive folder for ten days: the failure and its
+/// `다시 받기` are there once the folder is back, and `다시 받기` receives it
+/// again.
 #[tokio::test]
-async fn an_ended_replacement_of_a_rule_archived_for_ten_days_is_retried_after_its_restore() {
+async fn an_ended_replacement_whose_work_folder_is_in_the_archive_folder_for_ten_days_is_retried_once_it_is_back(
+) {
     let s = World::new().await;
     s.v2_ended_with_no_video().await;
 
-    let archived = s.archive().await;
+    let archived = s.archive(false).await;
     s.cycle().await;
     s.advance(10 * 24 * 60 * 60 * 1000);
     s.cycle().await;
 
-    s.restore(&archived).await;
+    s.bring_back(&archived);
     s.cycle().await;
     let row = s.row_of(&v2()).await;
     assert_eq!(row.state.code(), "abandoned", "{row:?}");

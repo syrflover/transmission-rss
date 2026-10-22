@@ -66,16 +66,16 @@ async fn deleting_removes_the_channel_and_all_its_rules_only() {
 }
 
 #[tokio::test]
-async fn archived_rules_go_with_the_channel() {
+async fn paused_rules_go_with_the_channel() {
     let f = fixture().await;
     let created = channel_with_rules(&f, "https://example.com/a", 2).await;
-    let archived = RuleInput {
-        state: RuleState::Archived,
+    let paused = RuleInput {
+        state: RuleState::Paused,
         ..created.rules[0].to_input()
     };
     let rule0 = &created.rules[0];
     f.store
-        .update_rule(&rule0.id, rule0.version, &created.channel.id, archived)
+        .update_rule(&rule0.id, rule0.version, &created.channel.id, paused)
         .await
         .unwrap();
 

@@ -9,8 +9,8 @@ import type {
 
 /**
  * Web commands (`src/web/commands_api.rs`): actions the web accepts and the
- * worker carries out. The screens that send them (`다시 받기`, a rule's
- * `보관`·`복원`) share these.
+ * worker carries out. The screens that send or follow them (`다시 받기`, the
+ * move of a work folder) share these.
  */
 
 export type { Command, CommandKind, CommandOutcome, CommandState };

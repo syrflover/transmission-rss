@@ -1,6 +1,8 @@
-//! Archiving and restoring a rule with its work folder (the `rule_archive`
-//! command), and moving a work from its detail (the `work_archive` command,
-//! ticket feedback-0.8.0/0002), end to end: the real commands and rules HTTP API, the real worker
+//! Archiving a rule, which deletes it with the move of its work folder (the
+//! `work_archive` command, ticket feedback-0.8.0/0003), moving a work from its
+//! detail (the same command, ticket feedback-0.8.0/0002), and bringing a work
+//! folder back for a rule that starts collecting (the `rule_archive`
+//! command), end to end: the real commands and rules HTTP API, the real worker
 //! and Transmission client, a fake Transmission that moves torrent data on the
 //! real disk, and real temporary folders as the collect and archive folders.
 //! Ticket 2-work-discovery-and-subscriptions/0011's completion rows.
@@ -12,7 +14,7 @@
 //! which torrents move, the waits for Transmission, the ends of the command)
 //! and of the cycle meeting an archived work folder are tested in trss-collect
 //! (`rule_archive/work_folder/tests.rs`, `rule_archive/run_tests.rs`,
-//! `cycle/tests.rs`).
+//! `work_archive/tests.rs`, `cycle/tests.rs`).
 //!
 //! The worker in these tests runs as the test's own user, so every folder has
 //! one owner: a test cannot make Transmission's user differ from the worker's
@@ -23,6 +25,7 @@ use crate::common;
 use std::{
     fs,
     path::{Path, PathBuf},
+    sync::{atomic::Ordering, Arc},
     time::Duration,
 };
 
@@ -35,11 +38,15 @@ use trss::{
     web::AppState,
     worker::{CommandsOutcome, TickOutcome, Worker},
 };
-use trss_anissia::Anime;
+use trss_anissia::{Anime, Anissia, AnissiaConfig};
 use trss_collect::{
     commands::rule_archive::{self, work_folder::MovePolicy, Direction},
-    store::channels::{
-        ChannelInput, ChannelWithRules, NewSubscription, RuleInput, RuleState, SubtitleMode,
+    store::{
+        channels::{
+            ChannelInput, ChannelWithRules, NewSubscription, RuleInput, RuleState, SubtitleMode,
+        },
+        history::{HistoryResult, Observation},
+        status::{read_day, ChannelReadResult, StatusStore},
     },
 };
 use trss_core::{
@@ -163,21 +170,28 @@ impl Scene {
         })
     }
 
-    /// Sends `보관` (`archive`) or `복원` (`restore`) of the rule as the screen does.
-    async fn send(&self, id: &str, rule_id: &str, direction: &str) -> (StatusCode, Value) {
+    /// Sends `보관` of the rule as its detail does, with the version it shows;
+    /// `id` is the move's.
+    async fn archive(&self, id: &str, rule_id: &str) -> (StatusCode, Value) {
+        let version = self.rule(rule_id).await["version"].clone();
         let (status, _, body) = self
             .api
             .call(
                 "POST",
-                "/api/commands",
-                Some(json!({
-                    "id": id,
-                    "kind": "rule_archive",
-                    "payload": { "rule_id": rule_id, "direction": direction },
-                })),
+                &format!("/api/rules/{rule_id}/archive"),
+                Some(json!({ "id": id, "version": version })),
             )
             .await;
         (status, body)
+    }
+
+    /// Whether the rule is gone, as the screen reads it.
+    async fn gone(&self, id: &str) -> bool {
+        let (status, _, _) = self
+            .api
+            .call("GET", &format!("/api/rules/{id}"), None)
+            .await;
+        status == StatusCode::NOT_FOUND
     }
 
     async fn run(&self) -> CommandsOutcome {
@@ -218,11 +232,11 @@ impl Scene {
 
 // --- 1. the simple move ----------------------------------------------------------------
 
-/// The web accepts `보관`, the worker runs it and the rule shows it. What the
-/// move does with the folder and the torrents is tested in trss-collect
-/// (`work_folder/tests.rs`, `run_tests.rs`).
+/// The web deletes the rule with `보관` and stores the move, and the worker
+/// moves the folder. What the move does with the folder and the torrents is
+/// tested in trss-collect (`work_folder/tests.rs`, `work_archive/tests.rs`).
 #[tokio::test]
-async fn archiving_turns_the_rule_off_and_moves_the_work_folder_with_its_torrents() {
+async fn archiving_deletes_the_rule_and_the_worker_moves_the_work_folder_with_its_torrents() {
     let s = Scene::new(true).await;
     let c = s
         .channel("feed-a", &[("Clevatess", "Clevatess/Season 02")])
@@ -231,11 +245,12 @@ async fn archiving_turns_the_rule_off_and_moves_the_work_folder_with_its_torrent
     let season = s.collect.join("Clevatess/Season 02");
     s.seeding(1, "Clevatess S02E01.mkv", &season);
 
-    let (status, body) = s.send("archive-simple-1", &rule.id, "archive").await;
+    let (status, body) = s.archive("archive-simple-1", &rule.id).await;
     assert_eq!(status, StatusCode::ACCEPTED, "{body}");
-    assert_eq!(body["state"], "pending");
-    // Accepted is not done: nothing changed yet.
-    assert_eq!(s.rule(&rule.id).await["state"], "active");
+    assert_eq!(body["command"]["kind"], "work_archive");
+    assert_eq!(body["command"]["state"], "pending");
+    // The rule is gone at once; the folder waits for the worker.
+    assert!(s.gone(&rule.id).await);
     assert!(season.exists());
 
     assert_eq!(s.run().await, CommandsOutcome::Ran(1));
@@ -243,11 +258,6 @@ async fn archiving_turns_the_rule_off_and_moves_the_work_folder_with_its_torrent
     let command = s.command("archive-simple-1").await;
     assert_eq!(command["state"], "done", "{command}");
     assert_eq!(command["outcome"]["result"], "moved");
-    let view = s.rule(&rule.id).await;
-    assert_eq!(view["state"], "archived");
-    assert!(view["version"].as_i64().unwrap() > rule.version);
-    assert_eq!(view["archive_move"]["direction"], "archive");
-    assert_eq!(view["archive_move"]["command"]["id"], "archive-simple-1");
     // The worker's Transmission client moved the torrent, and the worker the
     // folder.
     assert!(!s.collect.join("Clevatess").exists());
@@ -281,7 +291,7 @@ async fn a_worker_stopped_after_transmission_moved_finishes_the_rest_on_the_next
     // Transmission moves the torrent's data, and the worker is stopped before
     // it hears back.
     let gate = s.h.tr.hold_answer("torrent-set-location");
-    s.send("archive-stop-01", &rule.id, "archive").await;
+    s.archive("archive-stop-01", &rule.id).await;
     let worker = s.worker();
     let task = tokio::spawn(async move { worker.run_commands(&CancellationToken::new()).await });
     gate.wait_arrived().await;
@@ -295,7 +305,7 @@ async fn a_worker_stopped_after_transmission_moved_finishes_the_rest_on_the_next
         .unwrap()
         .unwrap();
     assert_eq!(stored.state, CommandState::Running);
-    assert_eq!(s.rule(&rule.id).await["state"], "archived");
+    assert!(s.gone(&rule.id).await);
     // Split for now: the torrent's file moved, the rest did not.
     assert_eq!(
         files(&s.archive),
@@ -309,7 +319,7 @@ async fn a_worker_stopped_after_transmission_moved_finishes_the_rest_on_the_next
         ]
     );
 
-    // A restarted worker runs a cycle first: the archived rule adds nothing to
+    // A restarted worker runs a cycle first: the deleted rule adds nothing to
     // the folder left behind.
     s.h.feeds
         .set_xml("feed-a", &feed_xml(&[(2, "Clevatess S02E02.mkv")]));
@@ -373,9 +383,9 @@ async fn the_same_workers_cycle_adds_beside_a_move_and_skips_the_rule_archived_m
     });
     feed.wait_arrived().await;
 
-    // Meanwhile `보관` turns the first rule off and starts moving its folder.
+    // Meanwhile `보관` deletes the first rule, and its folder starts moving.
     let gate = s.h.tr.hold("torrent-set-location");
-    s.send("archive-beside-1", &c.rules[0].id, "archive").await;
+    s.archive("archive-beside-1", &c.rules[0].id).await;
     let commands = tokio::spawn({
         let worker = worker.clone();
         async move { worker.run_commands(&CancellationToken::new()).await }
@@ -400,8 +410,8 @@ async fn the_same_workers_cycle_adds_beside_a_move_and_skips_the_rule_archived_m
     );
     assert!(!cycle.is_finished());
 
-    // The move ends; the waiting item's rule is archived now, so it is not
-    // added into the folder that left.
+    // The move ends; the waiting item's rule is gone, so it is not added into
+    // the folder that left.
     gate.release_all();
     assert_eq!(commands.await.unwrap().unwrap(), CommandsOutcome::Ran(1));
     assert_eq!(
@@ -451,7 +461,7 @@ async fn a_rescan_of_another_watch_folder_runs_while_a_folder_moves() {
     let worker = s.worker();
 
     let gate = s.h.tr.hold("torrent-set-location");
-    s.send("archive-rescan-1", &c.rules[0].id, "archive").await;
+    s.archive("archive-rescan-1", &c.rules[0].id).await;
     let moving = tokio::spawn({
         let worker = worker.clone();
         async move { worker.run_commands(&CancellationToken::new()).await }
@@ -495,7 +505,8 @@ async fn a_rescan_of_another_watch_folder_runs_while_a_folder_moves() {
 }
 
 #[tokio::test]
-async fn a_move_accepted_after_a_retry_into_its_work_folder_waits_for_it_and_takes_its_torrent() {
+async fn a_retry_accepted_before_its_rule_is_archived_receives_nothing_and_the_move_takes_the_folder(
+) {
     let s = Scene::new(true).await;
     let c = s
         .channel("feed-a", &[("Clevatess", "Clevatess/Season 02")])
@@ -517,13 +528,8 @@ async fn a_move_accepted_after_a_retry_into_its_work_folder_waits_for_it_and_tak
     s.h.tr.reject_adds(None);
     s.h.tr.clear_calls();
     let item = s.h.item("Clevatess S02E02").await;
-    // The retried torrent's file is written where Transmission puts it.
-    s.h.tr.on_disk(s.h.dir.path());
-    s.h.tr.content_on_add(&hash(2), b"video");
-    s.h.tr.seeding_on_add(&hash(2));
 
-    // `다시 받기` first, then `보관` of the same rule: one work folder.
-    let add = s.h.tr.hold("torrent-add");
+    // `다시 받기` first, then `보관` of the same rule, which deletes it.
     let (status, _, body) = s
         .api
         .call(
@@ -537,46 +543,30 @@ async fn a_move_accepted_after_a_retry_into_its_work_folder_waits_for_it_and_tak
         )
         .await;
     assert_eq!(status, StatusCode::ACCEPTED, "{body}");
-    s.send("archive-turns-01", &rule.id, "archive").await;
-    let look = tokio::spawn({
-        let worker = s.worker();
-        async move { worker.run_commands(&CancellationToken::new()).await }
-    });
-    add.wait_arrived().await;
+    let (status, body) = s.archive("archive-turns-01", &rule.id).await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{body}");
+    assert_eq!(s.run().await, CommandsOutcome::Ran(2));
 
-    // Both are claimed; the move waits for the retry's add.
-    let commands = CommandStore::new(s.h.db.clone());
-    for _ in 0..1000 {
-        let archive = commands.get("archive-turns-01").await.unwrap().unwrap();
-        if archive.state == CommandState::Running {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
-    tokio::time::sleep(Duration::from_millis(300)).await;
-    assert_eq!(s.command("archive-turns-01").await["state"], "running");
-    assert_eq!(s.rule(&rule.id).await["state"], "active");
-    assert!(s.h.tr.calls_of("torrent-set-location").is_empty());
-
-    add.release_all();
-    assert_eq!(look.await.unwrap().unwrap(), CommandsOutcome::Ran(2));
-
-    // In the order they were accepted: the retry's torrent went into the work
-    // folder, and the move took it along with the rest.
+    // The retry found its rule gone and added nothing; the move took the
+    // folder with the torrent it had.
     let retry = s.command("retry-turns-0001").await;
-    assert_eq!(retry["outcome"]["result"], "received", "{retry}");
+    assert_eq!(retry["state"], "failed", "{retry}");
+    assert!(
+        retry["outcome"]["reason"]
+            .as_str()
+            .unwrap()
+            .contains("규칙이 지워져서"),
+        "{retry}"
+    );
+    assert!(s.h.tr.calls_of("torrent-add").is_empty());
     let archive = s.command("archive-turns-01").await;
     assert_eq!(archive["outcome"]["result"], "moved", "{archive}");
     let season = text(s.archive.join("Clevatess/Season 02"));
     assert_eq!(s.h.tr.torrent(&hash(1)).download_dir, season);
-    assert_eq!(s.h.tr.torrent(&hash(2)).download_dir, season);
     assert!(!s.collect.join("Clevatess").exists());
     assert_eq!(
         files(&s.archive),
-        [
-            "Clevatess/Season 02/Clevatess S02E01.mkv",
-            "Clevatess/Season 02/Clevatess S02E02.mkv"
-        ]
+        ["Clevatess/Season 02/Clevatess S02E01.mkv"]
     );
 }
 
@@ -612,7 +602,7 @@ async fn a_retry_accepted_while_a_move_waits_for_transmission_and_a_cycle_ends_s
 
     // A move waits for Transmission, holding the torrent gate.
     let gate = s.h.tr.hold("torrent-set-location");
-    s.send("archive-gate-001", &c.rules[0].id, "archive").await;
+    s.archive("archive-gate-001", &c.rules[0].id).await;
     let moving = tokio::spawn({
         let worker = worker.clone();
         async move { worker.run_commands(&CancellationToken::new()).await }
@@ -725,7 +715,7 @@ async fn a_retry_passes_a_rescan_of_the_collect_folder_queued_behind_a_move_of_a
 
     // A move of the first rule waits for Transmission.
     let gate = s.h.tr.hold("torrent-set-location");
-    s.send("archive-pass-001", &c.rules[0].id, "archive").await;
+    s.archive("archive-pass-001", &c.rules[0].id).await;
     let moving = tokio::spawn({
         let worker = worker.clone();
         async move { worker.run_commands(&CancellationToken::new()).await }
@@ -1287,7 +1277,18 @@ struct Process {
 
 impl Process {
     fn start(s: &Scene, wakes: &Wakes) -> Process {
-        let web = WebApi::with_state(AppState::new(s.h.db.clone()).with_wakes(wakes.clone()));
+        // The web reads the archive suggestions by the clock the worker runs by.
+        let clock = s.h.clock.clone();
+        let anissia = Anissia::new(
+            s.h.db.clone(),
+            AnissiaConfig::default(),
+            Arc::new(move || clock.load(Ordering::SeqCst)),
+        );
+        let web = WebApi::with_state(
+            AppState::new(s.h.db.clone())
+                .with_anissia(anissia)
+                .with_wakes(wakes.clone()),
+        );
         let worker = s
             .worker()
             .with_wakes(wakes.clone())
@@ -1309,6 +1310,7 @@ impl Process {
         self.running.await.unwrap();
     }
 
+    /// Sends a batch of `rules`, which must be suggested for archiving ([`Scene::quiet`]).
     async fn send_batch(&self, id: &str, rules: &[(&str, &str)]) {
         let rules: Vec<Value> = rules
             .iter()
@@ -1350,6 +1352,67 @@ impl Process {
     }
 }
 
+impl Scene {
+    /// Makes the rules of `channel` suggested for archiving on `새 항목 없음` by
+    /// the harness's clock, which the worker and the web of [`Process`] run
+    /// by: they started collecting 8 weeks ago, the channel has been seen since
+    /// a year ago and read every day, and nothing came for them. The clock
+    /// moves 400 days on first, so those times are after its start. A batch is
+    /// accepted only for rules that are suggested (ticket feedback-0.8.0/0003).
+    async fn quiet(&self, channel: &ChannelWithRules) {
+        const DAY: i64 = 24 * 60 * 60 * 1000;
+        self.h.advance(400 * DAY);
+        let now = self.h.now();
+        let ids: Vec<String> = channel.rules.iter().map(|rule| rule.id.clone()).collect();
+        self.h
+            .db
+            .run::<_, trss_core::DbError, _>(move |c| {
+                for id in &ids {
+                    c.execute(
+                        "UPDATE rule_started SET started_at = ?2 WHERE rule_id = ?1",
+                        rusqlite::params![id, now - 56 * DAY],
+                    )?;
+                }
+                Ok(())
+            })
+            .await
+            .unwrap();
+        let channel_id = channel.channel.id.clone();
+        self.h
+            .history
+            .record(
+                now - 365 * DAY,
+                vec![Observation {
+                    channel_id: channel_id.clone(),
+                    channel_label: "feed".into(),
+                    identity_key: "title:[Other] Old - 01".into(),
+                    title: "[Other] Old - 01".into(),
+                    link: "https://feed.test/old".into(),
+                    result: HistoryResult::NoMatch,
+                    rule_id: None,
+                    torrent_hash: None,
+                    reason: None,
+                }],
+            )
+            .await
+            .unwrap();
+        let status = StatusStore::new(self.h.db.clone());
+        for day in read_day(now) - 60..=read_day(now) {
+            status
+                .record_reads(
+                    day * DAY,
+                    vec![ChannelReadResult {
+                        channel_id: channel_id.clone(),
+                        ok: true,
+                    }],
+                    vec![channel_id.clone()],
+                )
+                .await
+                .unwrap();
+        }
+    }
+}
+
 #[tokio::test]
 async fn a_batch_of_two_rules_in_one_work_folder_moves_the_folder_once_with_the_last() {
     let s = Scene::new(true).await;
@@ -1372,6 +1435,7 @@ async fn a_batch_of_two_rules_in_one_work_folder_moves_the_folder_once_with_the_
         "Clevatess S03E01.mkv",
         &s.collect.join("Clevatess/Season 03"),
     );
+    s.quiet(&c).await;
     let process = Process::start(&s, &Wakes::default());
 
     process
@@ -1390,14 +1454,14 @@ async fn a_batch_of_two_rules_in_one_work_folder_moves_the_folder_once_with_the_
         (view["total"].as_i64(), view["finished"].as_i64()),
         (Some(2), Some(2))
     );
-    // The first rule was archived while the second still saved in the folder:
-    // it stayed. The second moved it, with both seasons.
+    // The first rule was archived while the second still collected into the
+    // folder: it stayed. The second moved it, with both seasons.
     let first = s.command("batch-one-folder-0").await;
     assert_eq!(first["outcome"]["result"], "kept", "{first}");
     let second = s.command("batch-one-folder-1").await;
     assert_eq!(second["outcome"]["result"], "moved", "{second}");
-    assert_eq!(s.rule(&c.rules[0].id).await["state"], "archived");
-    assert_eq!(s.rule(&c.rules[1].id).await["state"], "archived");
+    assert!(s.gone(&c.rules[0].id).await);
+    assert!(s.gone(&c.rules[1].id).await);
     assert!(!s.collect.join("Clevatess").exists());
     assert_eq!(
         files(&s.archive),
@@ -1422,6 +1486,7 @@ async fn a_batch_the_process_left_midway_goes_on_with_the_rest_after_a_restart()
         .await;
     write(&s.collect.join("Alpha/Season 01/Alpha S01E01.mkv"), "video");
     s.seeding(1, "Beta S01E01.mkv", &s.collect.join("Beta/Season 01"));
+    s.quiet(&c).await;
     let wakes = Wakes::default();
 
     // Transmission moves Beta's data and the process stops before it hears
@@ -1458,11 +1523,11 @@ async fn a_batch_the_process_left_midway_goes_on_with_the_rest_after_a_restart()
     assert_eq!(
         store.get("batch-restart-01-0").await.unwrap().unwrap(),
         alpha,
-        "the archived rule's command was not run again"
+        "the first rule's move was not run again"
     );
     let beta = store.get("batch-restart-01-1").await.unwrap().unwrap();
     assert_eq!((beta.state, beta.attempts), (CommandState::Done, 2));
-    assert_eq!(s.rule(&c.rules[1].id).await["state"], "archived");
+    assert!(s.gone(&c.rules[1].id).await);
     assert_eq!(
         files(&s.archive),
         [

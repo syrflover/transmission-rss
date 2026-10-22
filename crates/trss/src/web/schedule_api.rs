@@ -25,8 +25,6 @@
 //! snapshot in Asia/Seoul ([`trss_anissia::slot`]); the web neither asks
 //! Anissia nor Transmission. A subscription has no card when
 //!
-//! - its rule is archived (a subscription that is no longer followed; the spec
-//!   names the active and the paused ones, so the archived ones are left out);
 //! - its snapshot puts no airing in the week (before its start, after its end,
 //!   `기타`, or a `신작` that starts in another week): an anime with an end
 //!   date leaves once the date has passed;
@@ -349,7 +347,7 @@ async fn build_week(state: &AppState, now: Millis) -> Result<(WeekView, Option<M
     let rules: Vec<&Rule> = all
         .iter()
         .flat_map(|c| &c.rules)
-        .filter(|r| r.state != RuleState::Archived && r.subscription.is_some())
+        .filter(|r| r.subscription.is_some())
         .collect();
     let nos: Vec<i64> = rules
         .iter()

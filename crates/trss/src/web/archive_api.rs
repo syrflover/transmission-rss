@@ -15,11 +15,12 @@
 //!
 //! Archiving is not done here. The screen sends the chosen rules as one
 //! `rule_archive_batch` command (`/api/commands`), which the server carries out
-//! rule after rule through each rule's own `rule_archive` command
-//! ([`crate::archive_batch`]), so the work folder moves as that command's own
-//! rules say (the folder shared by several of the rules moves once, with the
-//! last of them); every view carries `after`, the sentence for what archiving
-//! that rule would do with its folder now.
+//! rule after rule: each rule is deleted with the move of its work folder, as
+//! the rule detail's `보관` does ([`crate::archive_batch`]), so the work folder
+//! moves as that move's own rules say (the folder shared by several of the
+//! rules moves with the last of them that collects); every view carries
+//! `after`, the sentence for what archiving that rule would do now
+//! ([`work_archive::forecast`]).
 //!
 //! `POST /archive-suggestions/keep` (`{ rule_id, grounds }`, the `key`s of the
 //! grounds the user saw) remembers `수집 유지` for those grounds of the rule:
@@ -42,7 +43,7 @@ use trss_collect::{
     archive_suggestions::{
         recent_matches, ArchiveSuggestion, Facts, Ground, Recent, WINDOW_TITLES,
     },
-    commands::rule_archive,
+    commands::work_archive,
     store::channels::{ChannelWithRules, Rule, RuleState},
 };
 use trss_core::Millis;
@@ -111,7 +112,7 @@ async fn read_inputs(state: &AppState, now: Millis) -> Result<Inputs, ApiError> 
     let rule_ids: Vec<String> = all
         .iter()
         .flat_map(|c| &c.rules)
-        .filter(|r| r.state != RuleState::Archived && r.r#match.is_some())
+        .filter(|r| r.r#match.is_some())
         .map(|r| r.id.clone())
         .collect();
     if rule_ids.is_empty() {
@@ -257,6 +258,30 @@ pub async fn archive_suggestions(state: &AppState) -> Result<Vec<ArchiveSuggesti
     Ok(gather(state).await?.suggestions)
 }
 
+/// The first of `rule_ids` that names a rule that is still there and is not
+/// suggested now, which a `rule_archive_batch` is refused for
+/// ([`super::commands_api`]). A rule that is gone is none: the batch skips it
+/// when its turn comes.
+pub(super) async fn first_unsuggested<'a>(
+    state: &AppState,
+    rule_ids: impl IntoIterator<Item = &'a str>,
+) -> Result<Option<&'a str>, ApiError> {
+    let gathered = gather(state).await?;
+    let suggested: HashSet<&str> = gathered
+        .suggestions
+        .iter()
+        .map(|s| s.rule_id.as_str())
+        .collect();
+    let existing: HashSet<&str> = gathered
+        .all
+        .iter()
+        .flat_map(|c| c.rules.iter().map(|r| r.id.as_str()))
+        .collect();
+    Ok(rule_ids
+        .into_iter()
+        .find(|id| existing.contains(id) && !suggested.contains(id)))
+}
+
 /// Why a rule is suggested: `ended` (the anime's end date has passed),
 /// `unlisted` (it has none and Anissia no longer lists the anime) or `quiet`
 /// (no new item for 4 weeks).
@@ -379,7 +404,7 @@ async fn list(State(state): State<AppState>) -> Result<Json<SuggestionList>, Api
                     .map(AnimeView::from),
                 last_received_at: gathered.last_received.get(&rule.id).copied(),
                 grounds: suggestion.grounds.iter().map(GroundView::from).collect(),
-                after: rule_archive::forecast_archive(settings.clone(), &rules, rule),
+                after: work_archive::forecast(settings.clone(), &rules, rule),
             })
         })
         .collect();

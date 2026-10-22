@@ -127,7 +127,7 @@ async fn channels_sharing_one_folder_make_it_the_collect_folder_and_rules_are_un
         channel(&conn, "b", 1, "/downloads/Shows (current)");
         rule(&conn, "r1", "a", 0, "Clevatess/Season 02", "active");
         rule(&conn, "r2", "a", 1, "", "active");
-        rule(&conn, "r3", "b", 0, "Slime/Season 04", "archived");
+        rule(&conn, "r3", "b", 0, "Slime/Season 04", "active");
         save_paths_before(&conn)
     };
 
@@ -168,7 +168,7 @@ async fn channels_in_different_folders_share_their_common_parent_with_the_rest_i
         // A rule that saves into the channel folder itself: its path ends in `/`.
         rule(&conn, "a2", "a", 1, "", "active");
         rule(&conn, "b1", "b", 0, "Dune", "active");
-        rule(&conn, "b2", "b", 1, "", "archived");
+        rule(&conn, "b2", "b", 1, "", "active");
         rule(&conn, "c1", "c", 0, "Other", "active");
         rule(&conn, "c2", "c", 1, "", "active");
         save_paths_before(&conn)
@@ -197,7 +197,7 @@ async fn channels_in_different_folders_share_their_common_parent_with_the_rest_i
             ("c2".to_owned(), "Shows (current)/".to_owned(), 5),
         ]
     );
-    // Every rule, archived ones and the empty directory included, saves to the
+    // Every rule, the empty directory included, saves to the
     // same text as before.
     assert_eq!(save_paths_after(&db, &settings.folder).await, before);
     assert_eq!(before.len(), 6);

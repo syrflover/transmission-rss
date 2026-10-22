@@ -6,6 +6,10 @@ import type { ArchiveBatchFailureKind } from "./ArchiveBatchFailureKind";
  */
 export type ArchiveBatchFailure = { rule_id: string, name: string, 
 /**
- * A sentence: the refusal, or the reason the rule's archive failed.
+ * A sentence: the refusal, or the reason the move failed.
  */
-reason: string, kind: ArchiveBatchFailureKind, };
+reason: string, kind: ArchiveBatchFailureKind, 
+/**
+ * `archive_failed`: the work in the library, whose detail moves it again.
+ */
+work_id: string | null, };

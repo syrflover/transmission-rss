@@ -14,15 +14,16 @@ import { groundText } from "./ground";
 
 interface ArchiveBannerProps {
   ruleId: string;
-  /** The rule is being archived or restored now: the buttons wait. */
+  /** The rule is being saved, archived, or its work folder moved now: the buttons wait. */
   busy: boolean;
-  /** `보관`: send the rule's own `rule_archive` command, as the rule detail's archive button does. */
+  /** `보관`: deletes the rule and moves its work folder, as the rule detail's own `보관` does. */
   onArchive: () => void;
 }
 
 /**
  * The archive suggestion on a rule's detail: `이 규칙을 보관할까요?`, why, what
- * archiving would do with the folder, and `보관` · `수집 유지`. `수집 유지`
+ * archiving would do (the rule is deleted; the work folder moves or stays, and
+ * why), and `보관` · `수집 유지`. `수집 유지`
  * keeps the rule as it is and remembers the grounds it saw, so the same
  * grounds do not suggest it again. Renders nothing for a rule that is not
  * suggested.

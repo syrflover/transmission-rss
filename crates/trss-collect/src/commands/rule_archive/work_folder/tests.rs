@@ -51,7 +51,7 @@ fn archive_request(f: &Folders, name: &str) -> Request {
     }
 }
 
-fn restore_request(f: &Folders, name: &str) -> Request {
+fn into_collect_request(f: &Folders, name: &str) -> Request {
     Request {
         from_root: f.archive.clone(),
         from: Side::Archive,
@@ -427,7 +427,7 @@ fn a_torrent_transmission_still_writes_or_reports_an_error_for_refuses_the_move(
     let err = plan_torrents(&request, &[place("b", "e01.mkv", &dir), unfinished]).unwrap_err();
     assert!(err.contains("`e02.mkv`"), "{err}");
     assert!(err.contains("지운 뒤 `다시 옮기기`"), "{err}");
-    // A restore says to restore again instead.
+    // A move into the collect folder says to turn `영상 받기` on again instead.
     let back = Request {
         from_root: f.archive.clone(),
         from: Side::Archive,
@@ -441,7 +441,7 @@ fn a_torrent_transmission_still_writes_or_reports_an_error_for_refuses_the_move(
     };
     let err = plan_torrents(&back, &[stuck]).unwrap_err();
     assert!(err.contains("`e07.mkv`"), "{err}");
-    assert!(err.contains("다시 `복원`해"), "{err}");
+    assert!(err.contains("`영상 받기`를 다시 켜"), "{err}");
 
     let broken = TorrentPlace {
         local_error: Some("No data found!".into()),
@@ -538,20 +538,21 @@ fn a_torrent_split_between_the_two_folders_is_named_without_asking_to_clear_a_si
     assert!(!err.contains("정리"), "{err}");
     assert!(!err.contains("`S/e05.mkv`"), "{err}");
 
-    // Toward the collect folder, the retry is `복원`.
+    // Toward the collect folder, the retry is turning `영상 받기` on again.
     let f = folders();
     let (from, to) = (f.archive.join("X/S"), f.collect.join("X/S"));
     write(&from.join("e04.mkv"), "still");
     write(&to.join("e05.mkv"), "moved");
     let split = two_files("a", "Pack", &from, ["e04.mkv", "e05.mkv"]);
-    let err = plan_torrents(&restore_request(&f, "X"), std::slice::from_ref(&split)).unwrap_err();
+    let err =
+        plan_torrents(&into_collect_request(&f, "X"), std::slice::from_ref(&split)).unwrap_err();
     assert!(err.contains("보관 폴더와 수집 폴더에 나뉘어"), "{err}");
-    assert!(err.contains("다시 `복원`해"), "{err}");
+    assert!(err.contains("`영상 받기`를 다시 켜"), "{err}");
 
     // A file at the destination that is not the torrent's size is another
     // file: named as a conflict, with the split torrent beside it.
     write(&to.join("e05.mkv"), "a different file");
-    let err = plan_torrents(&restore_request(&f, "X"), &[split]).unwrap_err();
+    let err = plan_torrents(&into_collect_request(&f, "X"), &[split]).unwrap_err();
     assert!(err.contains("`S/e05.mkv`"), "{err}");
     assert!(!err.contains("나뉘어"), "{err}");
 
@@ -561,7 +562,7 @@ fn a_torrent_split_between_the_two_folders_is_named_without_asking_to_clear_a_si
     let other = place("b", "e07.mkv", &from);
     write(&from.join("e07.mkv"), "mine!");
     let split = two_files("a", "Pack", &from, ["e04.mkv", "e05.mkv"]);
-    let err = plan_torrents(&restore_request(&f, "X"), &[split, other]).unwrap_err();
+    let err = plan_torrents(&into_collect_request(&f, "X"), &[split, other]).unwrap_err();
     assert!(err.contains("`S/e07.mkv`"), "{err}");
     assert!(err.contains("`Pack`"), "{err}");
     assert!(err.contains("나뉘어"), "{err}");

@@ -138,6 +138,7 @@ impl CollectContext {
     pub fn revision_work(&self) -> RevisionsContext {
         RevisionsContext {
             channels: self.channels.clone(),
+            settings: self.settings.clone(),
             history: self.history.clone(),
             revisions: self.revisions.clone(),
             transmission: self.transmission.clone(),
@@ -172,6 +173,7 @@ impl ReceiveContext {
     pub fn revision_work(&self) -> RevisionsContext {
         RevisionsContext {
             channels: self.channels.clone(),
+            settings: self.settings.clone(),
             history: self.history.clone(),
             revisions: self.revisions.clone(),
             transmission: self.transmission.clone(),

@@ -104,14 +104,17 @@ use tokio_util::sync::CancellationToken;
 use transmission_rpc::types::Id;
 
 use crate::{
-    commands::receive_once::derived_name,
+    commands::{
+        receive_once::derived_name,
+        rule_archive::{work_folder, WorkFolder},
+    },
     context::{TransmissionLink, MAX_REASON_CHARS},
 };
 use crate::{
     release_name::{has_extension, ReleaseName},
     revision::{crc_text, file_crc32_identified, rename_video, FileIdentity},
     store::{
-        channels::{ChannelStore, RuleState},
+        channels::ChannelStore,
         history::{HistoryItem, HistoryResult, HistoryStore},
         revisions::{
             Claim, NewRevision, OldVideo, Replacement, Revision, RevisionState, RevisionStore,
@@ -119,7 +122,9 @@ use crate::{
         },
     },
 };
-use trss_core::{file_id::FileId, files::occupied, folder_locks::FolderLocks, Millis};
+use trss_core::{
+    file_id::FileId, files::occupied, folder_locks::FolderLocks, settings::SettingsStore, Millis,
+};
 use trss_library::discovery::VIDEO_EXTENSIONS;
 use trss_transmission::{get_torrent, torrent_places, Redactor, TorrentPlace};
 
@@ -129,6 +134,9 @@ use trss_transmission::{get_torrent, torrent_places, Redactor, TorrentPlace};
 #[derive(Clone)]
 pub struct RevisionsContext {
     pub channels: ChannelStore,
+    /// Where the collect and archive folders are read from: a work folder in
+    /// the archive folder was moved there on purpose.
+    pub settings: SettingsStore,
     pub history: HistoryStore,
     /// The replacements under way.
     pub revisions: RevisionStore,
@@ -1178,18 +1186,19 @@ async fn another_naming(ctx: &RevisionsContext, row: &Revision) -> Result<bool, 
 /// folder is not waited for any more: a failure, or a replacement that
 /// ended with no video, is no failure any more, and a replacement under way
 /// (which still holds its torrent) says so ([`Step::FolderGone`]) until the
-/// folder is back. Nothing is removed. A folder away while the row's rule is
-/// archived is no run. `Some` is what to do instead of the row's step.
+/// folder is back. Nothing is removed. A folder away while its work folder is
+/// in the archive folder is no run. `Some` is what to do instead of the row's
+/// step.
 async fn folder_watch(ctx: &RevisionsContext, row: &mut Revision, at: Millis) -> Option<Next> {
-    // An archived rule's work folder is in the archive folder on purpose
-    // (`rule_archive`), not a mount that went away: no run is kept while the
-    // rule is archived, and the row is looked at as before once it is
-    // restored.
+    // A work folder in the archive folder was moved there on purpose (`보관`,
+    // `work_archive`), not a mount that went away: no run is kept while it is
+    // there, whether or not a rule still saves into it, and the row is looked
+    // at as before once the folder is back in the collect folder.
     let watched = match folder_there(row) {
         Ok(()) => false,
-        Err(_) => match ctx.channels.get_rule(&row.rule_id).await {
-            Ok(rule) => rule.is_none_or(|rule| rule.state != RuleState::Archived),
-            Err(err) => return Some(Next::Later(err.to_string())),
+        Err(_) => match in_archive_folder(ctx, &row.folder).await {
+            Ok(archived) => !archived,
+            Err(err) => return Some(Next::Later(err)),
         },
     };
     if !watched {
@@ -1222,6 +1231,22 @@ async fn folder_watch(ctx: &RevisionsContext, row: &mut Revision, at: Millis) ->
         }
         _ => None,
     }
+}
+
+/// Whether the work folder of `folder`, a rule's folder below the collect
+/// folder, is in the archive folder now. `false` when either folder is not
+/// set or `folder` has no work folder.
+async fn in_archive_folder(ctx: &RevisionsContext, folder: &str) -> Result<bool, String> {
+    let Some(settings) = ctx.settings.collection().await.map_err(|e| e.to_string())? else {
+        return Ok(false);
+    };
+    let Some(archive) = settings.archive_folder else {
+        return Ok(false);
+    };
+    let WorkFolder::Named(name) = work_folder(Path::new(&settings.folder), folder) else {
+        return Ok(false);
+    };
+    Ok(Path::new(&archive).join(name).is_dir())
 }
 
 /// The rule's folder of `row` is there. One that is not is a mount that is

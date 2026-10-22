@@ -5,7 +5,7 @@
 //! # Which subscriptions
 //!
 //! A subscription takes part while its rule is `active` (`영상 받기` on; a
-//! paused or archived rule does nothing), it gets subtitles (`follow` or
+//! paused rule does nothing), it gets subtitles (`follow` or
 //! `undecided`; `none` does nothing), and its season (`season_id`) is linked
 //! to the subscription's Anissia anime. A `follow` subscription's creator is
 //! found among the anime's sources by Anissia's name

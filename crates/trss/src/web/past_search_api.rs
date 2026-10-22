@@ -142,9 +142,6 @@ fn blocked(rule: &Rule, collect: Option<&str>) -> Option<String> {
                 "규칙이 멈춰 있어요. 영상 받기를 켠 뒤에 지난 회차를 검색해 주세요.".to_owned(),
             )
         }
-        RuleState::Archived => {
-            return Some("규칙이 보관돼 있어요. 복원한 뒤에 지난 회차를 검색해 주세요.".to_owned())
-        }
     }
     if collect.is_none() {
         return Some(

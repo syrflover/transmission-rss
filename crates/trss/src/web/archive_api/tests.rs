@@ -443,7 +443,10 @@ async fn the_view_says_what_archiving_would_do_with_the_work_folder() {
             .unwrap()
             .to_owned()
     };
-    assert_eq!(after(&alone.id), "작품 폴더(`Alone`)를 보관 폴더로 옮겨요.");
+    assert_eq!(
+        after(&alone.id),
+        "규칙을 지우고 작품 폴더(`Alone`)를 보관 폴더로 옮겨요."
+    );
     let held = after(&one.id);
     assert!(
         held.contains(

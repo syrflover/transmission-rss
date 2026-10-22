@@ -513,8 +513,9 @@ pub async fn process_job(
     if cancel.is_cancelled() {
         return (JobOutcome::NotStarted, false);
     }
-    // Such a command may have changed the rule while the item waited: an
-    // archived rule receives nothing, and an undone offset names nothing.
+    // The rule may have changed while the item waited (`보관` deletes it, an
+    // undo changes its offset): a deleted rule receives nothing, and an undone
+    // offset names nothing.
     if let Some(rule_id) = &job.observation.rule_id {
         let found = ctx.channels.get_rule(rule_id).await;
         let unchanged = match &found {

@@ -436,20 +436,20 @@ async fn the_subscription_lists_under_this_quarter_with_its_stored_schedule() {
     assert_eq!(item["run"], "upcoming");
     assert_eq!(item["channel_host"], "feed.test");
 
-    // An archived rule is not listed.
+    // A paused rule is listed with its state; an archived one is deleted.
     let id = item["rule_id"].as_str().unwrap();
-    let rule = app.state.channels.get_rule(id).await.unwrap().unwrap();
+    let paused = app
+        .state
+        .channels
+        .set_rule_state(id, RuleState::Paused, 0)
+        .await
+        .unwrap()
+        .unwrap();
+    let (_, list) = app.get("/api/subscriptions").await;
+    assert_eq!(list["subscriptions"][0]["state"], "paused");
     app.state
         .channels
-        .update_rule(
-            id,
-            rule.version,
-            &rule.channel_id,
-            RuleInput {
-                state: RuleState::Archived,
-                ..rule.to_input()
-            },
-        )
+        .delete_rule(id, paused.version)
         .await
         .unwrap();
     let (_, list) = app.get("/api/subscriptions").await;
@@ -858,22 +858,6 @@ mod rule_detail {
         assert_eq!(status, StatusCode::OK, "{body}");
         assert_eq!(body["state"], "paused");
         assert_eq!(body["subscription"], Value::Null);
-
-        // An archived rule is restored, not switched.
-        let archived = app
-            .state
-            .channels
-            .set_rule_state(&rule.id, RuleState::Archived, 0)
-            .await
-            .unwrap()
-            .unwrap();
-        let (status, body) = app.put(&archived, "switch", json!({ "video": true })).await;
-        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
-        let (status, _) = app
-            .put(&archived, "switch", json!({ "subtitles": true }))
-            .await;
-        assert_eq!(status, StatusCode::BAD_REQUEST);
-        assert_eq!(app.fresh(&rule).await.state, RuleState::Archived);
 
         // A rule that is not there.
         let mut gone = rule.clone();

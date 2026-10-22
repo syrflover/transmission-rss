@@ -33,6 +33,7 @@
 - 드러나는 모습: 일괄 보관이 끝까지 가지 않고 멈추거나, 다시 보인 탭이 끝난 규칙 수를 틀리게 보여요.
 - 결과가 바꿀 것: `trss` 크레이트의 `archive_batch` 실행을 고쳐요.
 - 출처: [0163의 개발 환경에서 확인](archive/tickets/lighter-structure/0163-batch-archive-on-server.md#개발-환경에서-확인). 2026-10-21에 개발 환경의 Transmission에서만 봤어요.
+- 2026-10-23 일괄 보관이 규칙마다 규칙을 지우고 작품 폴더의 이동이 끝나기를 기다리게 바뀌었어요. [feedback-0.8.0/0003의 개발 환경 확인](specs/2026-10-23-feedback-0.8.0/0003-archive-deletes-the-rule.md#개발-환경-확인)에서 개발 환경의 Transmission으로 제안 하나만 보관해, 규칙이 지워지고 폴더가 옮겨진 것을 봤어요. 여러 규칙과 탭 숨기기는 다시 보지 않았어요.
 
 ## reverse proxy를 거친 이벤트
 

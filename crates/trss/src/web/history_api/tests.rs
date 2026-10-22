@@ -265,8 +265,8 @@ async fn the_row_says_whether_a_failed_item_can_be_retried_and_why_not() {
         .create_rule(&channel.id, rule(RuleState::Active, "Show/Season 01"))
         .await
         .unwrap();
-    let archived = rules
-        .create_rule(&channel.id, rule(RuleState::Archived, "Show/Season 02"))
+    let paused = rules
+        .create_rule(&channel.id, rule(RuleState::Paused, "Show/Season 02"))
         .await
         .unwrap();
     let deleted = rules
@@ -280,7 +280,7 @@ async fn the_row_says_whether_a_failed_item_can_be_retried_and_why_not() {
 
     app.record(&channel, 1, HistoryResult::AddFailed, Some(&active.id))
         .await;
-    app.record(&channel, 2, HistoryResult::AddFailed, Some(&archived.id))
+    app.record(&channel, 2, HistoryResult::AddFailed, Some(&paused.id))
         .await;
     app.record(&channel, 3, HistoryResult::AddFailed, Some(&deleted.id))
         .await;
@@ -299,7 +299,10 @@ async fn the_row_says_whether_a_failed_item_can_be_retried_and_why_not() {
     assert_eq!(summary(1), (Value::Bool(true), Value::Null));
     assert_eq!(row(1)["rule_label"], "Show");
     assert_eq!(summary(2).0, false);
-    assert_eq!(summary(2).1, "규칙이 보관돼 있어요. 복원한 뒤 다시 받아요.");
+    assert_eq!(
+        summary(2).1,
+        "규칙이 멈춰 있어요. 영상 받기를 켠 뒤 다시 받아요."
+    );
     assert_eq!(summary(3).0, false);
     assert_eq!(
         summary(3).1,

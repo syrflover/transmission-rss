@@ -93,7 +93,7 @@ pub enum PastCause {
     /// The item was recorded before the subscription, which had waited for its
     /// title, was given one.
     Titled,
-    /// The item was first seen while the rule was paused or archived.
+    /// The item was first seen while the rule was paused.
     Resumed,
     /// The item was already in the feed when the channel was first read, which
     /// is before any history of it existed.
@@ -124,7 +124,7 @@ pub fn past_since(rule: &Rule) -> Option<PastSince> {
 }
 
 impl ChannelPlan {
-    /// Paused and archived rules are left out (they collect nothing); the
+    /// Paused rules are left out (they collect nothing); the
     /// remaining rules keep their stored order,
     /// which is their priority. A rule without a match phrase (waiting for its
     /// title) is passed on as `pattern: None`, which matches nothing.
@@ -184,7 +184,7 @@ impl ChannelPlan {
 
     /// Whether `rule_id` is an active rule of this plan that holds back past
     /// items (see [`ChannelPlan::is_past`]): a subscription, or a rule that was
-    /// turned back on after being paused or archived.
+    /// turned back on after being paused.
     pub fn holds_past(&self, rule_id: &str) -> bool {
         self.past_since.contains_key(rule_id)
     }
@@ -214,7 +214,7 @@ impl ChannelPlan {
     /// Whether `rule_id` must leave an item alone because the item is past:
     /// history recorded it, without any rule taking it, before the rule became
     /// a subscription, before a subscription that waited for its title was
-    /// given one, or while the rule was paused or archived (before it was last
+    /// given one, or while the rule was paused (before it was last
     /// turned back on). Only the user receives those, after looking at them
     /// (`docs/requirements/collection.md`, 방영작 구독 and `영상 받기`). So is what the
     /// feed already held when the channel was first read, whenever the
@@ -450,13 +450,13 @@ mod tests {
     #[test]
     fn evaluation_numbers_map_back_to_stored_rule_ids() {
         let p = plan(vec![
-            rule("archived-first", 0, Some("Show"), RuleState::Archived),
+            rule("paused-first", 0, Some("Show"), RuleState::Paused),
             rule("waiting", 1, None, RuleState::Active),
             rule("second", 2, Some("Show"), RuleState::Active),
             rule("third", 3, Some("Show"), RuleState::Active),
         ]);
 
-        // Archived rules are skipped, so evaluation number 1 is "second".
+        // Paused rules are skipped, so evaluation number 1 is "second".
         let Judgement::Selected {
             rule_id,
             save_path,
@@ -474,7 +474,7 @@ mod tests {
     fn evaluation_lists_the_later_active_rules_that_also_match_by_id() {
         let p = plan(vec![
             rule("first", 0, Some("Show"), RuleState::Active),
-            rule("archived", 1, Some("Show"), RuleState::Archived),
+            rule("paused", 1, Some("Show"), RuleState::Paused),
             rule("waiting", 2, None, RuleState::Active),
             rule("other", 3, Some("Other"), RuleState::Active),
             rule("last", 4, Some("Sho"), RuleState::Active),
@@ -682,12 +682,6 @@ mod tests {
             ordinary.judge("Show - 01"),
             Judgement::Selected { ref rule_id, .. } if rule_id == "sub"
         ));
-    }
-
-    #[test]
-    fn archived_rules_never_apply() {
-        let p = plan(vec![rule("old", 0, Some("Show"), RuleState::Archived)]);
-        assert_eq!(p.judge("Show - 01"), Judgement::NoMatch);
     }
 
     #[test]

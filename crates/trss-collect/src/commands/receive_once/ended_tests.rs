@@ -22,8 +22,6 @@ use crate::{
 enum Cause {
     /// The rule that picked the item was deleted.
     RuleDeleted,
-    /// The rule was archived.
-    RuleArchived,
     /// The rule was edited so that it no longer picks the item, and a cycle
     /// judged the item again.
     NoRuleAnyMore,
@@ -38,8 +36,9 @@ enum Cause {
     /// The item was never picked and its channel is gone, with an earlier
     /// start's torrent under the command's label.
     NotPickedAndChannelGone,
-    /// The rule asked to receive a past item was archived after the request.
-    RuleArchivedAfterAskedForAPastItem,
+    /// The rule asked to receive a past item was deleted (or archived, which
+    /// deletes it) after the request.
+    RuleDeletedAfterAskedForAPastItem,
 }
 
 /// A command made ready to run, the item as it was, and the sentence the
@@ -56,20 +55,13 @@ struct Arranged {
 impl Cause {
     async fn arrange(self) -> Arranged {
         match self {
-            Cause::RuleDeleted
-            | Cause::RuleArchived
-            | Cause::NoRuleAnyMore
-            | Cause::NoCollectFolder => {
+            Cause::RuleDeleted | Cause::NoRuleAnyMore | Cause::NoCollectFolder => {
                 let (s, item) = World::liar_failed().await;
                 let command = s.start_retry(item.id, CMD).await;
                 let says = match self {
                     Cause::RuleDeleted => {
                         s.delete_rule(0).await;
                         "지워져서"
-                    }
-                    Cause::RuleArchived => {
-                        s.archive_rule(0).await;
-                        "복원한 뒤"
                     }
                     Cause::NoRuleAnyMore => {
                         let rule = s.rule_of(0).await;
@@ -185,7 +177,7 @@ impl Cause {
                     left_a_torrent: true,
                 }
             }
-            Cause::RuleArchivedAfterAskedForAPastItem => {
+            Cause::RuleDeletedAfterAskedForAPastItem => {
                 let s = World::with_rules(unrelated_rule()).await;
                 s.feed(&[(&hash(26), LIAR)]);
                 s.cycle().await;
@@ -193,12 +185,12 @@ impl Cause {
                 let sub = s.subscribe("LIAR GAME", LIAR_DIR, 3320, 1).await;
                 let before = s.item(LIAR).await;
                 let command = s.start_receive_for(before.id, &sub.id, CMD).await;
-                s.archive_rule(1).await;
+                s.delete_rule(1).await;
                 Arranged {
                     s,
                     command,
                     before,
-                    says: "복원한 뒤",
+                    says: "받으려는 규칙을 찾지 못했어요",
                     left_a_torrent: false,
                 }
             }
@@ -210,13 +202,12 @@ impl Cause {
 async fn an_accepted_retry_found_ineligible_ends_at_once_and_leaves_the_item_as_it_was() {
     for cause in [
         Cause::RuleDeleted,
-        Cause::RuleArchived,
         Cause::NoRuleAnyMore,
         Cause::NoCollectFolder,
         Cause::NoRuleRecorded,
         Cause::LegacyFolder,
         Cause::NotPickedAndChannelGone,
-        Cause::RuleArchivedAfterAskedForAPastItem,
+        Cause::RuleDeletedAfterAskedForAPastItem,
     ] {
         let Arranged {
             s,

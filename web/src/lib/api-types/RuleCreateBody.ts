@@ -11,7 +11,7 @@ match?: string | null, regex: boolean, case_insensitive: boolean,
  */
 directory: string, episode: number, 
 /**
- * `active` (the default), `paused` or `archived`; a save sends the stored
- * one (see the module docs).
+ * `active` (the default) or `paused`; a save sends the stored one (see
+ * the module docs).
  */
 state?: RuleState | null, };

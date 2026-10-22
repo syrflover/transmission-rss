@@ -336,18 +336,17 @@ fn a_rule_not_saved_yet_previews_as_the_last_rule_and_an_off_one_as_collecting()
     };
     assert_eq!(rows(&run(&cwr, new_rule(&waiting), &items)), []);
 
-    // Archived or paused, a rule is judged as if turned on after everything
-    // recorded: what history holds that it has not taken came while it was
-    // off, so it would leave that to the user.
-    for state in [RuleState::Archived, RuleState::Paused] {
+    // Paused, a rule is judged as if turned on after everything recorded: what
+    // history holds that it has not taken came while it was off, so it would
+    // leave that to the user.
+    {
         let mut off = rule("first", 0, Some("Show"));
-        off.state = state;
+        off.state = RuleState::Paused;
         let edited = off.to_input();
         let p = run(&channel_with(vec![off]), edit_of("first", &edited), &items);
         assert_eq!(
             rows(&p),
-            [row("Show - 01", Kind::Past, Some(PastCause::Resumed))],
-            "{state:?}"
+            [row("Show - 01", Kind::Past, Some(PastCause::Resumed))]
         );
         assert_eq!(p.counts.past, 1);
     }
@@ -654,7 +653,7 @@ fn a_rule_saving_straight_under_the_collect_folder_keeps_its_trailing_slash_in_t
 fn the_preview_agrees_with_the_plan_for_every_recorded_title() {
     // The preview and the worker judge through `ChannelPlan`. This pins that the
     // preview's per-item answer is that plan's answer for the same items and
-    // settings, including archived rules, regexes and excludes.
+    // settings, including paused rules, regexes and excludes.
     let rule_of = |id: &str, position: i64, input: RuleInput| Rule {
         r#match: input.r#match,
         regex: input.regex,
@@ -687,12 +686,12 @@ fn the_preview_agrees_with_the_plan_for_every_recorded_title() {
             },
         ),
         rule_of(
-            "archived",
+            "paused",
             2,
             RuleInput {
-                r#match: Some("Archived Show".into()),
-                directory: "Archived".into(),
-                state: RuleState::Archived,
+                r#match: Some("Paused Show".into()),
+                directory: "Paused".into(),
+                state: RuleState::Paused,
                 ..RuleInput::default()
             },
         ),
@@ -725,7 +724,7 @@ fn the_preview_agrees_with_the_plan_for_every_recorded_title() {
         "[SubsPlease] Slime - 62 (1080p)",
         "[SubsPlease] Lara - 03 (720p)",
         "[SubsPlease] Sono Bisque Doll - 01~12 [Batch]",
-        "[SubsPlease] Archived Show - 01",
+        "[SubsPlease] Paused Show - 01",
         "[Erai-raws] Unrelated - 05",
         "Slime - 62",
         "",

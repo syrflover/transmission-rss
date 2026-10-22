@@ -1,5 +1,5 @@
 //! A rule's folder that is away decides nothing: a mount that is not there,
-//! a rule archived on purpose, and the week after which an away folder ends
+//! a work folder in the archive folder on purpose, and the week after which an away folder ends
 //! a failure ([`advance`]; `docs/requirements/collection.md`, 영상 수정본의 대체;
 //! ticket 3-subtitle-candidates-and-receiving/0033). The cases run through [`World::cycle`] against the fake
 //! Transmission, which acts on the media folder the way Transmission does.
@@ -175,39 +175,49 @@ async fn an_ended_replacement_whose_folder_is_away_for_a_week_is_cleared() {
     assert!(s.failures().await.is_empty());
 }
 
-/// The rule of a failure that keeps both files is archived for ten days:
-/// its work folder is in the archive folder on purpose, not a mount that
-/// went away, so the failure is not cleared, and it is there as before once
-/// the rule is restored.
+/// The work folder of a failure that keeps both files is in the archive
+/// folder for ten days: it was moved there on purpose (`보관`), not a mount
+/// that went away, so the failure is not cleared, and it is there as before
+/// once the folder is back. Whether the rule was deleted with the move or
+/// stayed does not count: the folder's place says it.
 #[tokio::test]
-async fn a_failure_of_a_rule_archived_for_ten_days_is_there_after_its_restore() {
-    let s = World::new().await;
-    s.received_v1().await;
-    s.feed(&[(NEW_HASH, &v2()), (OLD_HASH, &v1())]);
-    s.tr.content_on_add(NEW_HASH, b"not what the name says");
-    s.cycle().await;
-    s.complete(NEW_HASH);
-    s.cycle().await;
-    assert_eq!(s.state_of(&v2()).await, RevisionState::Failed);
+async fn a_failure_whose_work_folder_is_in_the_archive_folder_for_ten_days_is_there_once_it_is_back(
+) {
+    for delete_rule in [false, true] {
+        let s = World::new().await;
+        s.received_v1().await;
+        s.feed(&[(NEW_HASH, &v2()), (OLD_HASH, &v1())]);
+        s.tr.content_on_add(NEW_HASH, b"not what the name says");
+        s.cycle().await;
+        s.complete(NEW_HASH);
+        s.cycle().await;
+        assert_eq!(s.state_of(&v2()).await, RevisionState::Failed);
 
-    let archived = s.archive().await;
-    s.cycle().await;
-    s.advance(10 * DAY);
-    s.cycle().await;
-    assert_eq!(s.state_of(&v2()).await, RevisionState::Failed);
+        let archived = s.archive(delete_rule).await;
+        s.cycle().await;
+        s.advance(10 * DAY);
+        s.cycle().await;
+        let row = s.row_of(&v2()).await;
+        assert_eq!(row.state, RevisionState::Failed, "{delete_rule}: {row:?}");
+        assert_eq!(row.folder_away_since, None, "{delete_rule}");
 
-    s.restore(&archived).await;
-    s.cycle().await;
-    let row = s.row_of(&v2()).await;
-    assert_eq!(row.state, RevisionState::Failed, "{row:?}");
-    assert_eq!(row.folder_away_since, None);
-    assert_eq!(s.failures().await.len(), 1);
-    // The week starts with the first look that finds the folder away after
-    // the restore.
-    let elsewhere = s.folder_away();
-    s.cycle().await;
-    s.advance(7 * DAY - 1);
-    s.cycle().await;
-    assert_eq!(s.state_of(&v2()).await, RevisionState::Failed);
-    s.folder_back(&elsewhere);
+        s.bring_back(&archived);
+        s.cycle().await;
+        let row = s.row_of(&v2()).await;
+        assert_eq!(row.state, RevisionState::Failed, "{delete_rule}: {row:?}");
+        assert_eq!(row.folder_away_since, None, "{delete_rule}");
+        assert_eq!(s.failures().await.len(), 1, "{delete_rule}");
+        // The week starts with the first look that finds the folder away
+        // outside the archive folder.
+        let elsewhere = s.folder_away();
+        s.cycle().await;
+        s.advance(7 * DAY - 1);
+        s.cycle().await;
+        assert_eq!(
+            s.state_of(&v2()).await,
+            RevisionState::Failed,
+            "{delete_rule}"
+        );
+        s.folder_back(&elsewhere);
+    }
 }

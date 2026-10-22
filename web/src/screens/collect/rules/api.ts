@@ -1,7 +1,6 @@
 import { api, timedRead } from "@/lib/api";
 import { sendCommand, type Command } from "@/lib/commands";
 import type {
-  ArchiveDirection,
   ArchivedWorkAnswer,
   ChannelBrief,
   Preview,
@@ -14,6 +13,8 @@ import type {
   RuleOrderBody,
   RuleOrderEntry,
   RulePreviewBody,
+  RuleArchiveBody,
+  RuleArchived,
   RuleRemoved,
   RuleState,
   RuleSwitchBody,
@@ -85,12 +86,13 @@ export function getRule(id: string): Promise<Rule> {
 }
 
 /**
- * Asks the worker to archive or restore the rule. The rule's state is not
- * saved with the other fields: the worker turns it off before the folder moves
- * and on after it moved back.
+ * `보관` of the rule: the server deletes it, if it is still at the version the screen saw, and stores the move of its
+ * work folder into the archive folder under `id`, one per user action. The same request again answers with the stored
+ * move.
  */
-export function sendArchive(id: string, ruleId: string, direction: ArchiveDirection): Promise<Command> {
-  return sendCommand(id, "rule_archive", { rule_id: ruleId, direction });
+export function archiveRule(id: string, rule: Pick<Rule, "id" | "version">): Promise<RuleArchived> {
+  const sent: RuleArchiveBody = { id, version: rule.version };
+  return api<RuleArchived>(`/rules/${encodeURIComponent(rule.id)}/archive`, { method: "POST", body: sent });
 }
 
 /** `되돌리기` of the app's offset `episode`, as the screen showed it. */

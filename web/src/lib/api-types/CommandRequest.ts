@@ -4,11 +4,10 @@ import type { ArchiveBatch } from "./ArchiveBatch";
 import type { EpisodeUndoRequest } from "./EpisodeUndoRequest";
 import type { ReceiveOnce } from "./ReceiveOnce";
 import type { ReceivePastRequest } from "./ReceivePastRequest";
-import type { RuleArchive } from "./RuleArchive";
 import type { WatchRescan } from "./WatchRescan";
 
 /**
  * A request to `POST /commands` as a screen writes it: the ID, the kind and
  * the kind's own payload.
  */
-export type CommandRequest = { id: string, } & ({ "kind": "receive_once", "payload": ReceiveOnce } | { "kind": "receive_past", "payload": ReceivePastRequest } | { "kind": "rule_archive", "payload": RuleArchive } | { "kind": "watch_rescan", "payload": WatchRescan } | { "kind": "episode_undo", "payload": EpisodeUndoRequest } | { "kind": "anissia_captions", "payload": AnissiaCaptions } | { "kind": "rule_archive_batch", "payload": ArchiveBatch });
+export type CommandRequest = { id: string, } & ({ "kind": "receive_once", "payload": ReceiveOnce } | { "kind": "receive_past", "payload": ReceivePastRequest } | { "kind": "watch_rescan", "payload": WatchRescan } | { "kind": "episode_undo", "payload": EpisodeUndoRequest } | { "kind": "anissia_captions", "payload": AnissiaCaptions } | { "kind": "rule_archive_batch", "payload": ArchiveBatch });

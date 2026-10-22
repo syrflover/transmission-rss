@@ -1,49 +1,26 @@
-//! `rule_archive`, shown on the screen as `보관` and `복원` of a rule: turns a
-//! rule off or on and moves its work folder between the collect folder and
-//! the archive folder (`docs/requirements/collection.md`, 규칙 보관 and 보관과 복원의
-//! 폴더 이동).
+//! `rule_archive`: a rule that starts collecting while its work folder is in
+//! the archive folder (`docs/requirements/collection.md`, 보관과 수집 시작의 폴더 이동)
+//! waits for the folder to come into the collect folder first.
 //!
-//! The web accepts the command with a [`RuleArchive`] payload (the rule and a
-//! [`Direction`]); the worker runs it with [`run`], holding the turn of the
-//! work folder in the collect folder and in the archive folder ([`section`]):
-//! a cycle's add into the work folder waits for the move and then finds the
-//! rule archived, and no reading of the watch folders reads the folder while
-//! it moves. The web never changes a rule's state itself: the order below is
-//! the worker's.
-//!
-//! **Archive** turns the rule off first, so nothing new arrives at the old
-//! place while it moves, and then moves the work folder (the first part of the
-//! rule's save folder, `Clevatess` of `Clevatess/Season 02`) into the archive
-//! folder, unless:
-//!
-//! - no archive folder is set, or no collect folder: the rule is only
-//!   archived;
-//! - the rule saves into the collect folder itself (or outside it): there is no
-//!   work folder;
-//! - another active rule, of any channel, saves into the same work folder:
-//!   the folder stays, and the outcome names that rule. It moves when the last
-//!   of them is archived.
-//!
-//! A move that fails leaves the rule archived, and the command ends `failed`
-//! with the reason; archiving again (`다시 옮기기`) tries again. The checks
-//! refuse before anything moves; a failure after Transmission began moving
-//! leaves what moved where it is, says so, and the next try moves the rest.
-//!
-//! **Restore** moves the work folder back into the collect folder first and
-//! then turns the rule on, so a new episode never makes a second work folder
-//! in the collect folder that the move back would run into. A move that fails
-//! leaves the rule archived, with the reason. When the work folder is in the
-//! collect folder already, or in neither, the rule is just turned on.
+//! The web stores the command itself ([`ask_start`]) with a [`RuleArchive`]
+//! payload (the rule and a [`Direction`]); the worker runs it with [`run`],
+//! holding the turn of the work folder in the collect folder and in the
+//! archive folder ([`section`]), so no reading of the watch folders reads the
+//! folder while it moves. `보관` is no direction of it any more: it deletes
+//! the rule and moves the work folder into the archive folder through
+//! [`super::work_archive`] ([`super::work_archive::archive_rule`]). The kind
+//! keeps its name for the commands stored before.
 //!
 //! **Start** and **Resume** are a new rule or subscription beginning to
 //! collect and `영상 받기` turning on, for a rule whose work folder is in the
-//! archive folder: the same ordering as a restore. The web leaves such a rule
-//! `paused` (it collects nothing, so no cycle can make a work folder in the
-//! collect folder first) and stores the command; the worker moves the work
-//! folder from the archive folder into the collect folder (merging into one
-//! that is there) and only then turns the rule on. A move that fails leaves the
-//! rule paused, with the reason; turning `영상 받기` on again tries again. The
-//! web decides whether this is needed ([`plan_start`]) and the command decides
+//! archive folder. The web leaves such a rule `paused` (it collects nothing,
+//! so no cycle can make a work folder in the collect folder first) and stores
+//! the command; the worker moves the work folder from the archive folder into
+//! the collect folder (merging into one that is there) and only then turns the
+//! rule on, so a new episode never makes a second work folder in the collect
+//! folder that the move would run into. A move that fails leaves the rule
+//! paused, with the reason; turning `영상 받기` on again tries again. The web
+//! decides whether this is needed ([`plan_start`]) and the command decides
 //! again from the disk when it runs: a work folder found in no archive folder
 //! just turns the rule on. The time the rule waited does not cost it the items
 //! that came meanwhile: a new rule is never noted as resumed, and a `영상 받기`
@@ -149,10 +126,6 @@ pub const FAILED: &str = "failed";
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(rename = "ArchiveDirection"))]
 #[serde(rename_all = "snake_case")]
 pub enum Direction {
-    /// `보관`: off, then into the archive folder.
-    Archive,
-    /// `복원`: back into the collect folder, then on.
-    Restore,
     /// A new rule or subscription: into the collect folder when its work
     /// folder is in the archive folder, then on. The web made the rule paused
     /// for the time between, which counts as if it had collected all along: the
@@ -167,8 +140,6 @@ pub enum Direction {
 impl Direction {
     pub fn code(self) -> &'static str {
         match self {
-            Direction::Archive => "archive",
-            Direction::Restore => "restore",
             Direction::Start => "start",
             Direction::Resume => "resume",
         }
@@ -294,37 +265,10 @@ pub fn lexical_work_folder(collect: &Path, directory: &str) -> WorkFolder {
     }
 }
 
-/// The rules other than `rule` that still use the work folder `name`: the ones
-/// that collect, and the paused ones, which collect again when turned on (a
-/// work folder moved away under them would split the work in two). A save
-/// folder with `..` counts when its text lands there: the folder then stays
-/// rather than leave a rule saving into a moved work folder.
-fn holders<'a>(rules: &'a [Rule], rule: &Rule, collect: &Path, name: &str) -> Vec<&'a Rule> {
-    let mut holding: Vec<&Rule> = rules
-        .iter()
-        .filter(|other| other.id != rule.id && other.state != RuleState::Archived)
-        .filter(|other| {
-            lexical_work_folder(collect, &other.directory) == WorkFolder::Named(name.to_owned())
-        })
-        .collect();
-    // The rules that collect now are the ones to name first.
-    holding.sort_by_key(|other| other.state != RuleState::Active);
-    holding
-}
-
-/// The sentence for a work folder kept because other rules still save in it.
+/// The sentence for a work folder kept because rules that collect still save
+/// in it, the first of them named.
 pub(super) fn held_reason(holders: &[&Rule]) -> String {
     let first = &holders[0].directory;
-    if holders[0].state == RuleState::Paused {
-        // Every holder is paused: none of them collects now.
-        return match holders.len() {
-            1 => format!("‘{first}’ 규칙이 멈춰 있지만 다시 켜면 이 작품 폴더에 받아서 옮기지 않았어요."),
-            n => format!(
-                "‘{first}’ 규칙 외 {}개가 멈춰 있지만 다시 켜면 이 작품 폴더에 받아서 옮기지 않았어요.",
-                n - 1
-            ),
-        };
-    }
     match holders.len() {
         1 => format!("‘{first}’ 규칙이 아직 이 작품 폴더에 받고 있어서 옮기지 않았어요."),
         n => format!(
@@ -375,7 +319,7 @@ pub(super) struct Start<'a> {
     /// The last start the command gets: a move not finished yet ends it.
     pub(super) last: bool,
     pub(super) cancel: &'a CancellationToken,
-    /// Notes when a restored rule was turned back on.
+    /// Notes when a rule the move turns on was turned back on.
     pub(super) clock: &'a Clock,
     /// When the command was accepted: a `영상 받기` pressed then is on from then.
     pub(super) requested_at: Millis,
@@ -424,18 +368,13 @@ pub async fn run_on(
         return Ok(failed(RULE_GONE));
     };
 
-    match payload.direction {
-        Direction::Archive => archive(&start, rule).await,
-        Direction::Restore | Direction::Start | Direction::Resume => {
-            bring_in(&start, rule, &command.id, &payload).await
-        }
-    }
+    bring_in(&start, rule, &command.id, &payload).await
 }
 
 /// Why a rule's work folder is not moved at all (the command then ends with
 /// that reason, `kept`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum NoMove {
+pub enum NoMove {
     NoCollectFolder,
     NoArchiveFolder,
     CollectItself,
@@ -444,7 +383,7 @@ pub(super) enum NoMove {
 
 impl NoMove {
     /// The sentence a command ends with.
-    pub(super) fn reason(self) -> String {
+    pub fn reason(self) -> String {
         match self {
             NoMove::NoCollectFolder => "수집 폴더를 정하지 않아서 폴더는 옮기지 않았어요.",
             NoMove::NoArchiveFolder => "보관 폴더를 정하지 않아서 폴더는 옮기지 않았어요.",
@@ -455,7 +394,7 @@ impl NoMove {
     }
 
     /// The same, said before the rule is archived.
-    fn forecast(self) -> &'static str {
+    pub(super) fn forecast(self) -> &'static str {
         match self {
             NoMove::NoCollectFolder => "수집 폴더를 정하지 않아서 폴더는 옮기지 않아요.",
             NoMove::NoArchiveFolder => "보관 폴더를 정하지 않아서 폴더는 옮기지 않아요.",
@@ -465,12 +404,12 @@ impl NoMove {
     }
 }
 
-/// What the move of a rule's work folder would be, or why there is none (the
-/// command then ends with that reason, `kept`).
-fn plan_move(
+/// The move of a rule's work folder from the archive folder into the collect
+/// folder, or why there is none (the command then ends with that reason,
+/// `kept`).
+fn plan_bring_in(
     settings: Option<(String, Option<String>)>,
     rule: &Rule,
-    direction: Direction,
 ) -> Result<Request, NoMove> {
     let Some((collect, archive)) = settings else {
         return Err(NoMove::NoCollectFolder);
@@ -483,58 +422,13 @@ fn plan_move(
         WorkFolder::CollectItself => return Err(NoMove::CollectItself),
         WorkFolder::Outside => return Err(NoMove::Outside),
     };
-    let (collect, archive) = (PathBuf::from(collect), PathBuf::from(archive));
-    Ok(match direction {
-        Direction::Archive => Request {
-            from_root: collect,
-            from: Side::Collect,
-            to_root: archive,
-            to: Side::Archive,
-            name,
-        },
-        Direction::Restore | Direction::Start | Direction::Resume => Request {
-            from_root: archive,
-            from: Side::Archive,
-            to_root: collect,
-            to: Side::Collect,
-            name,
-        },
+    Ok(Request {
+        from_root: PathBuf::from(archive),
+        from: Side::Archive,
+        to_root: PathBuf::from(collect),
+        to: Side::Collect,
+        name,
     })
-}
-
-/// What archiving `rule` would do with its work folder as of now, in a
-/// sentence for the screen to say before the user archives: the folder moves,
-/// or stays and why. It asks what the command asks (where the folders are,
-/// which other rules still use the work folder), but the command decides again
-/// when it runs. `rules` are the rules of every channel; `settings` the collect
-/// folder and the archive folder.
-pub fn forecast_archive(
-    settings: Option<(String, Option<String>)>,
-    rules: &[Rule],
-    rule: &Rule,
-) -> String {
-    let request = match plan_move(settings, rule, Direction::Archive) {
-        Ok(request) => request,
-        Err(no_move) => return no_move.forecast().to_owned(),
-    };
-    let holding = holders(rules, rule, &request.from_root, &request.name);
-    if holding.is_empty() {
-        return format!(
-            "작품 폴더(`{}`)를 {}로 옮겨요.",
-            request.name,
-            request.to.name()
-        );
-    }
-    let first = &holding[0].directory;
-    let who = match holding.len() {
-        1 => format!("‘{first}’ 규칙이"),
-        n => format!("‘{first}’ 규칙 외 {}개가", n - 1),
-    };
-    if holding[0].state == RuleState::Paused {
-        format!("{who} 멈춰 있지만 다시 켜면 이 작품 폴더에 받아서 폴더는 옮기지 않아요. 남은 규칙까지 보관할 때 옮겨요.")
-    } else {
-        format!("{who} 아직 이 작품 폴더에 받고 있어서 폴더는 옮기지 않아요. 남은 규칙까지 보관할 때 옮겨요.")
-    }
 }
 
 /// What a rule that is about to collect needs first ([`plan_start`]).
@@ -832,45 +726,9 @@ pub(super) async fn move_folder(
     }
 }
 
-async fn archive(start: &Start<'_>, rule: Rule) -> Result<Finished, Retry> {
-    let ctx = start.ctx;
-    // Off first: no new episode arrives at the old place while it moves.
-    let Some(rule) = ctx
-        .channels
-        .set_rule_state(&rule.id, RuleState::Archived, (start.clock)())
-        .await
-        .map_err(Retry::store)?
-    else {
-        return Ok(failed(RULE_GONE));
-    };
-
-    let settings = settings(ctx).await?;
-    let request = match plan_move(settings.clone(), &rule, Direction::Archive) {
-        Ok(request) => request,
-        Err(no_move) => return Ok(done(KEPT, Some(no_move.reason()))),
-    };
-
-    let rules: Vec<Rule> = ctx
-        .channels
-        .list_channels_with_rules()
-        .await
-        .map_err(Retry::store)?
-        .into_iter()
-        .flat_map(|cwr| cwr.rules)
-        .collect();
-    let holding = holders(&rules, &rule, &request.from_root, &request.name);
-    if !holding.is_empty() {
-        return Ok(done(KEPT, Some(held_reason(&holding))));
-    }
-
-    Ok(move_folder(start, &request)
-        .await?
-        .unwrap_or_else(|failed| failed))
-}
-
-/// A restore, a start or a resume: the work folder comes into the collect
-/// folder, and the rule is turned on once it has. A start then receives the
-/// items it carries ([`receive_ticked`]).
+/// A start or a resume: the work folder comes into the collect folder, and the
+/// rule is turned on once it has. A start then receives the items it carries
+/// ([`receive_ticked`]).
 async fn bring_in(
     start: &Start<'_>,
     rule: Rule,
@@ -880,11 +738,10 @@ async fn bring_in(
     let ctx = start.ctx;
     let direction = payload.direction;
     let settings = settings(ctx).await?;
-    let finished = match plan_move(settings, &rule, Direction::Restore) {
+    let finished = match plan_bring_in(settings, &rule) {
         Ok(request) => match move_folder(start, &request).await? {
             Ok(finished) => finished,
-            // The rule stays as it was (archived, or paused for a start): the
-            // folder is not in the collect folder.
+            // The rule stays paused: the folder is not in the collect folder.
             Err(failed) => return Ok(failed),
         },
         Err(no_move) => done(KEPT, Some(no_move.reason())),
@@ -894,15 +751,10 @@ async fn bring_in(
     let on = match direction {
         // The rule counts as collecting since it was made.
         Direction::Start => ctx.channels.begin_rule(&rule.id).await,
-        // A switch is on from when it was pressed, a restore from now.
+        // A switch is on from when it was pressed.
         Direction::Resume => {
             ctx.channels
                 .set_rule_state(&rule.id, RuleState::Active, start.requested_at)
-                .await
-        }
-        Direction::Restore | Direction::Archive => {
-            ctx.channels
-                .set_rule_state(&rule.id, RuleState::Active, (start.clock)())
                 .await
         }
     };
@@ -1008,17 +860,25 @@ mod tests {
     fn a_payload_is_the_rule_and_a_direction() {
         let payload = RuleArchive {
             rule_id: "r1".into(),
-            direction: Direction::Restore,
+            direction: Direction::Resume,
             receive: Vec::new(),
         };
         assert_eq!(
             payload.canonical(),
-            r#"{"rule_id":"r1","direction":"restore"}"#
+            r#"{"rule_id":"r1","direction":"resume"}"#
         );
         assert!(serde_json::from_str::<RuleArchive>(
-            r#"{"rule_id":"r1","direction":"archive","folder":"x"}"#
+            r#"{"rule_id":"r1","direction":"start","folder":"x"}"#
         )
         .is_err());
+        // `보관` and `복원` are no directions any more: a command stored with
+        // one before cannot be read, and ends saying so.
+        for gone in ["archive", "restore"] {
+            assert!(serde_json::from_str::<RuleArchive>(&format!(
+                r#"{{"rule_id":"r1","direction":"{gone}"}}"#
+            ))
+            .is_err());
+        }
         assert!(
             serde_json::from_str::<RuleArchive>(r#"{"rule_id":"r1","direction":"away"}"#).is_err()
         );
@@ -1050,95 +910,6 @@ mod tests {
         assert_eq!(
             held_reason(&[&one, &two]),
             "‘Clevatess/Season 03’ 규칙 외 1개가 아직 이 작품 폴더에 받고 있어서 옮기지 않았어요."
-        );
-
-        // A paused rule collects again when turned on: it still holds the folder,
-        // and is named after the ones that collect now.
-        let mut paused = rule("Clevatess/Season 06");
-        paused.state = RuleState::Paused;
-        assert_eq!(
-            held_reason(&[&paused]),
-            "‘Clevatess/Season 06’ 규칙이 멈춰 있지만 다시 켜면 이 작품 폴더에 받아서 옮기지 않았어요."
-        );
-        assert_eq!(
-            held_reason(&[&paused, &paused]),
-            "‘Clevatess/Season 06’ 규칙 외 1개가 멈춰 있지만 다시 켜면 이 작품 폴더에 받아서 옮기지 않았어요."
-        );
-
-        let archiving = rule("Clevatess/Season 02");
-        let mut archived = rule("Clevatess/Season 01");
-        archived.state = RuleState::Archived;
-        let other = rule("Other/Season 01");
-        let dotted = rule("Other/../Clevatess/Season 05");
-        let rules = [
-            archiving.clone(),
-            archived,
-            paused.clone(),
-            one.clone(),
-            other,
-            dotted.clone(),
-        ];
-        let found = holders(&rules, &archiving, Path::new("/c"), "Clevatess");
-        let ids: Vec<&str> = found.iter().map(|r| r.id.as_str()).collect();
-        assert_eq!(
-            ids,
-            [one.id.as_str(), dotted.id.as_str(), paused.id.as_str()]
-        );
-    }
-
-    #[test]
-    fn the_forecast_says_whether_the_folder_would_move_and_if_not_why() {
-        let rule = |directory: &str, state: RuleState| Rule {
-            id: directory.into(),
-            channel_id: "c".into(),
-            position: 0,
-            version: 1,
-            r#match: Some("x".into()),
-            regex: false,
-            case_insensitive: false,
-            directory: directory.into(),
-            episode: 1,
-            episode_auto: false,
-            state,
-            subscription: None,
-            resumed_at: None,
-        };
-        let both = Some(("/c".to_owned(), Some("/a".to_owned())));
-        let alone = rule("Alone/Season 01", RuleState::Active);
-        let shared = rule("Shared/Season 01", RuleState::Active);
-        let sibling = rule("Shared/Season 02", RuleState::Active);
-        let mut sleeping = rule("Shared/Season 03", RuleState::Paused);
-        let rules = [alone.clone(), shared.clone(), sibling.clone()];
-
-        assert_eq!(
-            forecast_archive(both.clone(), &rules, &alone),
-            "작품 폴더(`Alone`)를 보관 폴더로 옮겨요."
-        );
-        assert_eq!(
-            forecast_archive(both.clone(), &rules, &shared),
-            "‘Shared/Season 02’ 규칙이 아직 이 작품 폴더에 받고 있어서 폴더는 옮기지 않아요. 남은 규칙까지 보관할 때 옮겨요."
-        );
-        sleeping.id = "sleeping".into();
-        let paused_only = [shared.clone(), sleeping];
-        assert_eq!(
-            forecast_archive(both.clone(), &paused_only, &shared),
-            "‘Shared/Season 03’ 규칙이 멈춰 있지만 다시 켜면 이 작품 폴더에 받아서 폴더는 옮기지 않아요. 남은 규칙까지 보관할 때 옮겨요."
-        );
-        assert_eq!(
-            forecast_archive(Some(("/c".into(), None)), &rules, &alone),
-            "보관 폴더를 정하지 않아서 폴더는 옮기지 않아요."
-        );
-        assert_eq!(
-            forecast_archive(None, &rules, &alone),
-            "수집 폴더를 정하지 않아서 폴더는 옮기지 않아요."
-        );
-        assert_eq!(
-            forecast_archive(both.clone(), &[], &rule("", RuleState::Active)),
-            "저장 폴더가 수집 폴더 자체라서 옮길 작품 폴더가 없어요."
-        );
-        assert_eq!(
-            forecast_archive(both, &[], &rule("../Elsewhere", RuleState::Active)),
-            "저장 폴더가 수집 폴더 밖이라서 옮기지 않아요."
         );
     }
 }

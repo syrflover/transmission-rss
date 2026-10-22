@@ -170,15 +170,10 @@ fn a_work_another_rule_handles_is_not_a_candidate() {
     let matching = rule("other", Some("New Work"), None);
     assert!(found(vec![waiting(), matching], &items, &[]).is_empty());
 
-    // The matching rule is paused or archived: it is still that rule's work.
-    for state in [RuleState::Paused, RuleState::Archived] {
-        let mut off = rule("other", Some("New Work"), None);
-        off.state = state;
-        assert!(
-            found(vec![waiting(), off], &items, &[]).is_empty(),
-            "{state:?}"
-        );
-    }
+    // The matching rule is paused: it is still that rule's work.
+    let mut off = rule("other", Some("New Work"), None);
+    off.state = RuleState::Paused;
+    assert!(found(vec![waiting(), off], &items, &[]).is_empty());
 
     // A rule received an item of the work, and the rule is gone since.
     for result in [
@@ -204,13 +199,11 @@ fn a_title_naming_the_waiting_subscription_itself_ends_the_candidate() {
 }
 
 #[test]
-fn a_paused_or_archived_subscription_offers_nothing_and_a_resume_keeps_the_boundary() {
+fn a_paused_subscription_offers_nothing_and_a_resume_keeps_the_boundary() {
     let items = [unmatched(1, NEW_1, 3_000)];
-    for state in [RuleState::Paused, RuleState::Archived] {
-        let mut off = waiting();
-        off.state = state;
-        assert!(found(vec![off], &items, &[]).is_empty(), "{state:?}");
-    }
+    let mut off = waiting();
+    off.state = RuleState::Paused;
+    assert!(found(vec![off], &items, &[]).is_empty());
 
     // Pausing and turning the subscription back on does not move the boundary: a
     // work first seen while it waited stays a candidate across the pause.

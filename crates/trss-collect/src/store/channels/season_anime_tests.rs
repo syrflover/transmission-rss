@@ -10,11 +10,14 @@ use trss_library::{
     store::{library::LibraryStore, seasons::SeasonStore},
 };
 
-use crate::store::{
-    anissia::AnissiaStore,
-    channels::{
-        season_holders, ChannelInput, ChannelStore, MovieAnimeError, NewSubscription, Rule,
-        RuleInput, SeasonAnimeError, SeasonLinked, SubtitleMode,
+use crate::{
+    commands::work_archive::{archive_rule, RuleArchived},
+    store::{
+        anissia::AnissiaStore,
+        channels::{
+            season_holders, ChannelInput, ChannelStore, MovieAnimeError, NewSubscription, Rule,
+            RuleInput, SeasonAnimeError, SeasonLinked, SubtitleMode,
+        },
     },
 };
 
@@ -267,7 +270,7 @@ async fn a_subscribed_season_cannot_be_changed_or_cut_from_the_work_detail() {
         .await
         .unwrap();
 
-    // A paused or archived rule still holds its season.
+    // A paused rule still holds its season.
     let connected = env.channels.get_rule(&rule.id).await.unwrap().unwrap();
     env.channels
         .set_video_receiving(&rule.id, connected.version, false, 0)
@@ -301,6 +304,49 @@ async fn deleting_the_subscription_leaves_the_link_and_frees_the_season() {
         .await
         .unwrap();
     assert_eq!((cut.version, cut.anime_no), (2, None));
+}
+
+/// `보관` deletes a subscription as a person's delete does: the season of one
+/// keeps its link, and one with no season links no season to its anime.
+#[tokio::test]
+async fn archiving_subscriptions_keeps_the_season_links_and_makes_none() {
+    let env = Env::new().await;
+    let commands = trss_core::commands::CommandStore::new(env.db.clone());
+    let on_season = env.subscribe("Show", 7).await;
+    env.channels
+        .link_season(&on_season.id, &env.season(2))
+        .await
+        .unwrap();
+    let on_season = env.channels.get_rule(&on_season.id).await.unwrap().unwrap();
+    let no_season = env.subscribe("Other", 8).await;
+
+    for (rule, id) in [(&on_season, "a1"), (&no_season, "a2")] {
+        let archived = archive_rule(
+            &env.channels,
+            &commands,
+            Some("/shows"),
+            rule,
+            id.into(),
+            2_000,
+        )
+        .await
+        .unwrap();
+        assert!(
+            matches!(archived, Ok(RuleArchived::Moving(_))),
+            "{archived:?}"
+        );
+        assert!(env.channels.get_rule(&rule.id).await.unwrap().is_none());
+    }
+
+    assert_eq!(env.link(2).await, (1, Some(7)));
+    let rows: i64 = env
+        .db
+        .run::<_, trss_core::DbError, _>(|c| {
+            Ok(c.query_row("SELECT count(*) FROM season_anissia", [], |r| r.get(0))?)
+        })
+        .await
+        .unwrap();
+    assert_eq!(rows, 1);
 }
 
 #[tokio::test]

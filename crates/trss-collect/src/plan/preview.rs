@@ -15,8 +15,8 @@
 //!   subscription is asked with a plain new rule), so [`Kind::Past`] is never
 //!   shown for it, although the saved subscription would leave what was
 //!   recorded before it past.
-//! - A rule that waits for its title and is given one, or that is paused or
-//!   archived now, is previewed as if it were saved after everything recorded
+//! - A rule that waits for its title and is given one, or that is paused now,
+//!   is previewed as if it were saved after everything recorded
 //!   so far (`i64::MAX` stands for the save time), so what it has not taken is
 //!   past for it.
 //! - The items are the channel's history, up to what the caller read, not the
@@ -76,7 +76,7 @@ pub enum Kind {
     /// The edited rule matches, but a channel exclude keeps the item out.
     Excluded,
     /// The edited rule would take the item, but history recorded it before the
-    /// rule became a subscription or while it was paused or archived, so the
+    /// rule became a subscription or while it was paused, so the
     /// cycle leaves it alone until the user receives it
     /// ([`ChannelPlan::is_past`]).
     Past,
@@ -369,8 +369,8 @@ pub fn preview(
 
 /// The IDs of the rules some title is taken by an earlier rule although they
 /// match it too, as `plan` judges the titles: a rule is `overlap` when it is
-/// among the rules an item's judgement lists as also matching. Archived and
-/// paused rules are not in the plan, so they neither take items nor overlap.
+/// among the rules an item's judgement lists as also matching. Paused rules
+/// are not in the plan, so they neither take items nor overlap.
 pub fn overlapping_rules<'a>(
     plan: &ChannelPlan,
     titles: impl IntoIterator<Item = &'a str>,

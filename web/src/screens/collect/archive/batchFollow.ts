@@ -192,7 +192,7 @@ export class BatchTracker {
     if (this.busy || rules.length === 0) return;
     this.busy = true;
     const total = rules.length;
-    this.shown = { total, finished: 0, current: rules[0].name, error: null };
+    this.shown = { total, finished: 0, current: rules[0].name, error: null, results: [], errorWorkId: null };
     this.notify(false);
     let sent: Sent<string>;
     try {
@@ -201,7 +201,7 @@ export class BatchTracker {
       sent = { ok: false, message: e instanceof Error ? e.message : String(e) };
     }
     if (!sent.ok) {
-      this.shown = { total, finished: 0, current: null, error: sent.message };
+      this.shown = { total, finished: 0, current: null, error: sent.message, results: [], errorWorkId: null };
       this.busy = false;
       this.finish(0);
       return;

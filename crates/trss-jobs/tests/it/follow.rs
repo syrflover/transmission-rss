@@ -9,7 +9,7 @@ use crate::{
 
 use tokio_util::sync::CancellationToken;
 use trss_collect::store::channels::{
-    ChannelInput, ChannelStore, NewSubscription, Rule, RuleInput, RuleState, SubtitleMode,
+    ChannelInput, ChannelStore, NewSubscription, Rule, RuleInput, SubtitleMode,
 };
 use trss_core::{Db, DbError};
 use trss_jobs::{
@@ -785,28 +785,28 @@ async fn turning_subtitles_off_takes_the_work_out_of_the_suggestions_and_on_agai
 
 #[tokio::test]
 async fn a_paused_or_archived_rule_or_no_subtitles_receives_and_suggests_nothing() {
-    // `영상 받기` off, then archived.
-    for state in [RuleState::Paused, RuleState::Archived] {
+    // `영상 받기` off, then archived (which deletes the rule).
+    for archived in [false, true] {
         let w = World::new(Sub::default()).await;
         let rule = w.rule_now().await;
-        match state {
-            RuleState::Paused => {
-                w.channels
-                    .set_video_receiving(&rule.id, rule.version, false, NOW)
-                    .await
-                    .unwrap();
-            }
-            _ => {
-                w.channels
-                    .set_rule_state(&rule.id, RuleState::Archived, NOW)
-                    .await
-                    .unwrap();
-            }
+        if archived {
+            w.channels
+                .delete_rule(&rule.id, rule.version)
+                .await
+                .unwrap();
+        } else {
+            w.channels
+                .set_video_receiving(&rule.id, rule.version, false, NOW)
+                .await
+                .unwrap();
         }
         w.observe("에루샤", "5", "/ok/ep5", "2026-10-02T11:00:00")
             .await;
-        assert!(w.evaluate().await.is_empty(), "{state:?}");
-        assert!(w.follow.subscribed().await.unwrap().is_empty(), "{state:?}");
+        assert!(w.evaluate().await.is_empty(), "archived: {archived}");
+        assert!(
+            w.follow.subscribed().await.unwrap().is_empty(),
+            "archived: {archived}"
+        );
     }
 
     // Undecided but paused: no suggestion.

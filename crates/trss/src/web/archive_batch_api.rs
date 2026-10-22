@@ -11,8 +11,10 @@
 //! rule after rule ([`crate::archive_batch`]); this is the read of where it
 //! is. The ID is the batch command's, which the event stream names when the
 //! batch changes, and `current` is for a screen that opens while a batch runs
-//! and does not know its ID. The view is computed from the batch command and
-//! the `rule_archive` commands it stored for its rules each time it is read.
+//! and does not know its ID. The view is computed from the batch command, the
+//! `work_archive` commands it stored for its rules and the rules each time it
+//! is read; each finished rule comes with the move of its work folder and the
+//! work's ID for a link to its detail.
 
 use axum::{
     extract::{Path, State},
@@ -35,7 +37,13 @@ fn internal(e: impl std::fmt::Display) -> ApiError {
 }
 
 async fn view(state: &AppState, batch: &Command) -> Result<Json<BatchView>, ApiError> {
-    archive_batch::view(&state.commands, batch)
+    let stores = archive_batch::Stores {
+        commands: &state.commands,
+        channels: &state.channels,
+        settings: &state.settings,
+        library: &state.library,
+    };
+    archive_batch::view(&stores, batch)
         .await
         .map(Json)
         .map_err(internal)

@@ -11,6 +11,7 @@
 //! | `PUT /rules/order`                     | `200 { rules: [RuleView] }` (the channel's) |
 //! | `PUT /rules/{id}/switch`               | `200 RuleView`                            |
 //! | `PUT /rules/{id}/episode`              | `200 RuleView`                            |
+//! | `POST /rules/{id}/archive`             | `202 RuleArchived` with a move, `200 RuleArchived` without one or for a repeat |
 //! | `GET /rules/archived-work?directory=`  | `200 { archived: ArchivedWorkView \| null }` |
 //! | `POST /rules/preview`                  | `200 Preview`                             |
 //!
@@ -19,11 +20,25 @@
 //! (for `PUT /rules/order`: the channel's current rules). A regular expression
 //! that does not compile is refused with `400` and a sentence; nothing is saved.
 //!
-//! A rule's `state` is not edited by `PUT`, which refuses a `state` other than
-//! the stored one. Archiving and restoring go through the `rule_archive`
-//! command (`/api/commands`), because the worker has to turn the rule off
-//! before its folder moves to the archive folder and on only after it moved
-//! back. A rule's view carries the last such command as `archive_move`.
+//! A rule's `state` (`active` or `paused`) is not edited by `PUT`, which
+//! refuses a `state` other than the stored one: `영상 받기` switches it (below).
+//!
+//! `POST /rules/{id}/archive` (`{ id, version }`, `id` the move's command ID,
+//! one per person's action) is the rule detail's `보관`: it deletes the rule,
+//! if it is still at `version`, and stores the `work_archive` command that
+//! moves its work folder into the archive folder, in one transaction
+//! ([`work_archive::archive_rule`]). The worker moves the folder unless an
+//! active rule of any channel still saves into it, and the move's outcome says
+//! what became of the folder. The answer is `{ command, reason, work_id }`: the
+//! move, or `null` with the `reason` when the rule had no work folder (it saved
+//! into the collect folder itself, outside it, or no collect folder is set) and
+//! was only deleted; and the work's ID for a link to its detail. A version that
+//! is not the stored one answers `409` with the rule's current view; a work
+//! folder with a move open (`409`), or an ID used for another request (`409`,
+//! also when it archived another rule of the same work folder), has the
+//! command as `current`, and deletes nothing. The same request again, once its
+//! rule is gone, is answered with the stored move. Archive suggestions archive the same way, in
+//! a batch ([`crate::archive_batch`]).
 //!
 //! `GET /rules/archived-work?directory=...[&from=...]` tells a form, before it
 //! makes a rule saving to `directory` (the folder as typed: the server finds
@@ -56,12 +71,14 @@
 //! (`active` or, off, `paused`: the rule collects nothing and its folder stays
 //! where it is) and `subtitles` is `자막 받기` of a subscription (off is the
 //! subtitle mode `none`, which keeps the creator). Exactly one is sent. A
-//! switch is refused (`400`) for an archived rule, for `subtitles` while
-//! `영상 받기` is off, and for `subtitles` of a rule that is no subscription.
-//! A version that is not the stored one answers `409` with the current view.
-//! Turning `영상 받기` on notes the time on the rule (`resumed_at`), as does a
-//! restore: the items first seen before then are left to the user (see the
-//! preview below).
+//! switch is refused (`400`) for `subtitles` while `영상 받기` is off, for
+//! `subtitles` of a rule that is no subscription, and for `영상 받기` on while
+//! the rule's work folder moves into the archive folder (`보관` of another
+//! rule of the folder, or of the work), which would take the folder from
+//! under a rule that collects. A version that is not the
+//! stored one answers `409` with the current view. Turning `영상 받기` on notes
+//! the time on the rule (`resumed_at`): the items first seen before then are
+//! left to the user (see the preview below).
 //!
 //! `PUT /rules/{id}/episode` (`{ version, episode }`) is `적용` of the episode
 //! offset the rule detail suggests, and saves it as the user's own value (see
@@ -85,7 +102,8 @@
 //!   A folder stored before this rule keeps saving as it is;
 //! - belongs to a rule whose `rule_archive` command is still open: the move
 //!   decided on the old folder;
-//! - is inside a work folder that an open `rule_archive` command is moving.
+//! - is inside a work folder that an open `rule_archive` or `work_archive`
+//!   command is moving.
 //!
 //! # The preview is the worker's evaluation
 //!
@@ -111,8 +129,8 @@
 //! rule taking them, before the subscription began, before a subscription that
 //! waited for its title was given one (a save that fills the empty match phrase
 //! of one is previewed as if it were saved after everything recorded so far),
-//! and any rule leaves alone those it recorded while the rule was paused or
-//! archived (before it was last turned back on). A subscription also leaves
+//! and any rule leaves alone those it recorded while the rule was paused
+//! (before it was last turned back on). A subscription also leaves
 //! alone the items the feed already held when the channel was first read, even
 //! when it began before that read (the first read had no history to tell old
 //! items from new; the items it recorded are marked
@@ -127,7 +145,7 @@
 //!
 //! A rule is `overlap` when some recorded item is taken by an earlier rule
 //! although this rule matches it too. It is computed over the recorded items
-//! with the channel's active rules ([`preview::overlapping_rules`]); archived
+//! with the channel's active rules ([`preview::overlapping_rules`]); paused
 //! rules neither take items nor overlap.
 
 use std::collections::{HashMap, HashSet};
@@ -153,7 +171,10 @@ use super::{
 };
 use trss_anissia::Anime;
 use trss_collect::{
-    commands::rule_archive::{self, RuleArchive},
+    commands::{
+        rule_archive::{self, RuleArchive},
+        work_archive,
+    },
     plan::{preview, ChannelPlan, PastCause},
     rss::regex_error,
     store::{
@@ -168,6 +189,7 @@ use trss_collect::{
 };
 use trss_core::commands::{Accepted, Command, CommandState};
 
+pub(super) mod archive;
 pub(super) mod episode;
 #[cfg(test)]
 mod tests;
@@ -180,6 +202,7 @@ pub fn routes() -> Router<AppState> {
         .route("/rules/archived-work", get(archived_work))
         .route("/rules/{id}/switch", put(switch_rule))
         .route("/rules/{id}/episode", put(episode::put_episode))
+        .route("/rules/{id}/archive", post(archive::archive))
         .route(
             "/rules/{id}",
             get(read_rule).put(update_rule).delete(delete_rule),
@@ -238,8 +261,8 @@ pub struct RuleView {
     pub channel_id: String,
     /// Send back as `version` when saving, deleting or reordering.
     pub version: i64,
-    /// Place among the channel's rules, archived ones included, from 1. This
-    /// is the order the worker checks the rules in.
+    /// Place among the channel's rules, paused ones included, from 1. This is
+    /// the order the worker checks the rules in.
     pub order: usize,
     /// The match phrase; `null` while the rule waits for its title.
     pub r#match: Option<String>,
@@ -267,8 +290,9 @@ pub struct RuleView {
     pub error: Option<RegexProblem>,
     /// When the rule last got an item into Transmission (Unix ms), if ever.
     pub last_received_at: Option<i64>,
-    /// The last archive or restore of the rule (a `rule_archive` command),
-    /// open or ended; `null` when it never had one.
+    /// The last move of the rule's work folder out of the archive folder
+    /// before it collects (a `rule_archive` command), open or ended; `null`
+    /// when it never had one.
     pub archive_move: Option<ArchiveMoveView>,
     /// Set when the rule follows an anime of Anissia's schedule.
     pub subscription: Option<SubscriptionBrief>,
@@ -321,15 +345,15 @@ pub struct SeasonBlockedView {
     pub held_by: HeldBy,
 }
 
-/// An archive or restore of a rule and where it is.
+/// A move of a rule's work folder out of the archive folder and where it is.
 #[derive(Debug, Serialize)]
 #[cfg_attr(test, derive(ts_rs::TS), ts(rename = "ArchiveMove"))]
 pub struct ArchiveMoveView {
-    /// `archive` or `restore`; the web's own `start` and `resume` too, while
-    /// a rule waits for its work folder to come out of the archive folder.
+    /// `start` (a new rule, subscription or save folder) or `resume`
+    /// (`영상 받기` on), while the rule waits for its work folder.
     pub direction: rule_archive::Direction,
-    /// The command; its outcome's `result` is `moved`, `kept` (the rule
-    /// changed state and the folder stayed, for the `reason`) or `failed`.
+    /// The command; its outcome's `result` is `moved`, `kept` (the rule was
+    /// turned on and the folder stayed, for the `reason`) or `failed`.
     pub command: CommandView,
 }
 
@@ -553,9 +577,6 @@ pub(super) async fn check_directory(
         .iter()
         .filter(|rule| open.get(&rule.id).is_some_and(|c| c.state.is_open()))
         .collect();
-    if moving.is_empty() {
-        return Ok(());
-    }
     if let Some(stored) = stored {
         if moving.iter().any(|rule| rule.id == stored.id) {
             return Err(ApiError::invalid(
@@ -571,15 +592,43 @@ pub(super) async fn check_directory(
     else {
         return Ok(());
     };
-    if moving.iter().any(|rule| {
-        rule_archive::work_folder(collect, &rule.directory)
-            == rule_archive::WorkFolder::Named(name.clone())
-    }) {
+    if moving_to_archive(state, &name).await?
+        || moving.iter().any(|rule| {
+            rule_archive::work_folder(collect, &rule.directory)
+                == rule_archive::WorkFolder::Named(name.clone())
+        })
+    {
         return Err(ApiError::invalid(format!(
             "지금 옮기는 중인 작품 폴더 `{name}` 안으로는 규칙을 만들거나 옮길 수 없어요. 옮기기가 끝난 뒤 다시 시도해 주세요."
         )));
     }
     Ok(())
+}
+
+/// Whether the work folder `name` is moving into the archive folder now
+/// (`보관` of a rule or a work).
+async fn moving_to_archive(state: &AppState, name: &str) -> Result<bool, ApiError> {
+    Ok(state
+        .commands
+        .open_for_subjects(work_archive::KIND, vec![name.to_owned()])
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?
+        .contains_key(name))
+}
+
+/// Whether the work folder a rule saving into `directory` collects into is
+/// moving into the archive folder now.
+async fn work_folder_moving_to_archive(
+    state: &AppState,
+    directory: &str,
+) -> Result<bool, ApiError> {
+    let Some(collect) = collect_folder(state).await? else {
+        return Ok(false);
+    };
+    match rule_archive::work_folder(FsPath::new(&collect), directory) {
+        rule_archive::WorkFolder::Named(name) => moving_to_archive(state, &name).await,
+        _ => Ok(false),
+    }
 }
 
 /// The channel's recorded items, newest first, up to [`MAX_ITEMS_PER_CHANNEL`].
@@ -949,8 +998,8 @@ pub(super) struct RuleFields {
     #[serde(default)]
     directory: String,
     episode: i64,
-    /// `active` (the default), `paused` or `archived`; a save sends the stored
-    /// one (see the module docs).
+    /// `active` (the default) or `paused`; a save sends the stored one (see
+    /// the module docs).
     // Read as text, so an unknown state is refused where it always was: after
     // the rule and its version are checked.
     #[serde(default)]
@@ -1027,7 +1076,7 @@ pub(super) struct PreviewBody {
 
 const BAD_BODY: &str = "요청 내용을 읽지 못했어요. 화면을 새로고침한 뒤 다시 시도해 주세요.";
 const STATE_NOT_EDITED: &str =
-    "보관과 복원은 규칙 상세의 `보관`·`복원` 버튼으로 해요. 화면을 새로고침한 뒤 다시 시도해 주세요.";
+    "`영상 받기`는 규칙 상세의 스위치로 켜고 꺼요. 화면을 새로고침한 뒤 다시 시도해 주세요.";
 
 fn body<T>(parsed: Result<Json<T>, JsonRejection>) -> Result<T, ApiError> {
     parsed
@@ -1042,7 +1091,6 @@ impl RuleFields {
         let state = match self.state.as_deref() {
             None | Some("active") => RuleState::Active,
             Some("paused") => RuleState::Paused,
-            Some("archived") => RuleState::Archived,
             Some(_) => return Err(ApiError::invalid(BAD_BODY)),
         };
         // A blank phrase is a rule waiting for its title. Anything else is
@@ -1226,11 +1274,6 @@ async fn switch_rule(
     if stored.version != b.version {
         return Err(rule_conflict(&state, &id).await);
     }
-    if stored.state == RuleState::Archived {
-        return Err(ApiError::invalid(
-            "보관된 규칙은 스위치를 바꿀 수 없어요. 복원한 뒤 바꿔 주세요.",
-        ));
-    }
     // Exactly one switch is sent, whatever the rule is doing.
     if b.video.is_some() == b.subtitles.is_some() {
         return Err(ApiError::invalid(BAD_BODY));
@@ -1261,6 +1304,14 @@ async fn switch_rule(
         }
         if open && b.video == Some(true) {
             return Err(ApiError::invalid(MOVING));
+        }
+        // A rule turned on while its work folder moves into the archive folder
+        // would collect into a folder the move takes away, or leaves behind.
+        if b.video == Some(true) && work_folder_moving_to_archive(&state, &stored.directory).await?
+        {
+            return Err(ApiError::invalid(
+                "이 규칙의 작품 폴더를 보관 폴더로 옮기는 중이에요. 옮기기가 끝난 뒤 다시 켜 주세요.",
+            ));
         }
         if b.video == Some(true) {
             // A `start` that failed left a rule that never collected: its retry

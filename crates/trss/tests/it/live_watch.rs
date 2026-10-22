@@ -271,17 +271,14 @@ async fn an_archive_move_continues_the_work_under_the_archive_folder_and_moves_i
     assert_eq!(live.status(&a.collect_folder.id).unwrap().watches, 5);
     assert_eq!(live.status(&a.archive_folder.id).unwrap().watches, 3);
 
+    let solo = &a.channel.rules[1];
     let (status, _, body) = a
         .lib
         .api
         .call(
             "POST",
-            "/api/commands",
-            Some(json!({
-                "id": "archive-solo",
-                "kind": "rule_archive",
-                "payload": { "rule_id": a.channel.rules[1].id, "direction": "archive" },
-            })),
+            &format!("/api/rules/{}/archive", solo.id),
+            Some(json!({ "id": "archive-solo", "version": solo.version })),
         )
         .await;
     assert_eq!(status, StatusCode::ACCEPTED, "{body}");

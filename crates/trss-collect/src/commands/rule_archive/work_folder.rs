@@ -1,5 +1,5 @@
 //! Moving one work folder between the collect folder and the archive folder
-//! (`docs/requirements/collection.md`, 보관과 복원의 폴더 이동).
+//! (`docs/requirements/collection.md`, 보관과 수집 시작의 폴더 이동).
 //!
 //! Where a work folder is, is never stored: every run looks at the disk and at
 //! Transmission and does what is left. That is what lets a move cut short (the
@@ -315,7 +315,7 @@ fn listed(paths: &[PathBuf]) -> String {
 fn again(to: Side) -> &'static str {
     match to {
         Side::Archive => "`다시 옮기기`를 눌러",
-        Side::Collect => "다시 `복원`해",
+        Side::Collect => "`영상 받기`를 다시 켜",
     }
 }
 

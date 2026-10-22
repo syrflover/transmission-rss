@@ -367,34 +367,6 @@ async fn a_paused_subscription_keeps_its_card_and_one_without_subtitles_has_no_s
 }
 
 #[tokio::test]
-async fn an_archived_subscription_has_no_card() {
-    let app = App::new().await;
-    let archived = app
-        .subscribe(
-            anime(1, "보관", 4, Some("10:00"), Some("2026-07-02")),
-            rule("A"),
-            SubtitleMode::None,
-            None,
-        )
-        .await;
-    app.state
-        .channels
-        .set_rule_state(&archived.id, RuleState::Archived, NOW)
-        .await
-        .unwrap();
-    app.subscribe(
-        anime(3, "방영 중", 4, Some("10:00"), Some("2026-07-02")),
-        rule("L"),
-        SubtitleMode::None,
-        None,
-    )
-    .await;
-
-    let body = app.week().await;
-    assert_eq!(card_titles(&body["week"]["days"][3]), ["방영 중"]);
-}
-
-#[tokio::test]
 async fn an_anime_anissia_marks_off_has_a_card_with_no_episode_in_place_of_its_lines() {
     let app = App::new().await;
     let mut off = anime(1, "결방 작품", 4, Some("10:00"), Some("2026-07-02"));

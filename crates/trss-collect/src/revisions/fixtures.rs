@@ -10,7 +10,6 @@ use trss_core::commands::CommandState;
 use crate::{
     commands::receive_once::{self, Finished, NotRetryable, Retry},
     store::{
-        channels::RuleState,
         history::{HistoryItem, HistoryResult, Observation},
         revisions::{Revision, RevisionState},
     },
@@ -230,32 +229,40 @@ impl World {
         std::fs::rename(elsewhere, &self.season).unwrap();
     }
 
-    /// Archives the rule of `14` (`보관`): the rule is off and its work
-    /// folder is in the archive folder. Returns where the folder went.
-    pub async fn archive(&self) -> PathBuf {
-        let rule_id = self.row_of(&v2()).await.rule_id;
+    /// Moves the work folder of `14`'s rule into the archive folder, which it
+    /// sets, as `보관` does, deleting the rule when `delete_rule` (a rule can
+    /// stay: one paused, or one saving into another season of the work).
+    /// Returns where the folder went.
+    pub async fn archive(&self, delete_rule: bool) -> PathBuf {
+        if delete_rule {
+            let rule_id = self.row_of(&v2()).await.rule_id;
+            let rule = self.ctx.channels.get_rule(&rule_id).await.unwrap().unwrap();
+            self.ctx
+                .channels
+                .delete_rule(&rule.id, rule.version)
+                .await
+                .unwrap();
+        }
+        let settings = self.ctx.settings.collection().await.unwrap().unwrap();
+        std::fs::create_dir_all(&self.archive).unwrap();
         self.ctx
-            .channels
-            .set_rule_state(&rule_id, RuleState::Archived, self.now())
+            .settings
+            .put_collection(
+                settings.version,
+                settings.folder,
+                Some(self.archive.to_str().unwrap().to_owned()),
+            )
             .await
             .unwrap();
-        let work = self.season.parent().unwrap();
-        let archive = self.dir.path().join("archive");
-        std::fs::create_dir_all(&archive).unwrap();
-        let archived = archive.join("Show");
-        std::fs::rename(work, &archived).unwrap();
+        let archived = self.archive.join("Show");
+        std::fs::rename(self.season.parent().unwrap(), &archived).unwrap();
         archived
     }
 
-    /// Restores the rule archived with [`World::archive`] (`복원`).
-    pub async fn restore(&self, archived: &Path) {
+    /// Moves the work folder [`World::archive`] moved back into the collect
+    /// folder.
+    pub fn bring_back(&self, archived: &Path) {
         std::fs::rename(archived, self.season.parent().unwrap()).unwrap();
-        let rule_id = self.row_of(&v2()).await.rule_id;
-        self.ctx
-            .channels
-            .set_rule_state(&rule_id, RuleState::Active, self.now())
-            .await
-            .unwrap();
     }
 
     /// Why `다시 받기` of the item titled `title` is not offered or would be

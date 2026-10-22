@@ -571,7 +571,7 @@ async fn channel_with_rules(app: &App, n: usize) -> Value {
                 RuleInput {
                     r#match: Some(format!("show {i}")),
                     state: if i == 0 {
-                        RuleState::Archived
+                        RuleState::Paused
                     } else {
                         RuleState::Active
                     },

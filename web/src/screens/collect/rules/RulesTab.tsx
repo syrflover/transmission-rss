@@ -4,11 +4,12 @@ import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { peek, store, useCached } from "@/lib/cached";
 import { cn } from "@/lib/utils";
-import type { Rule, RuleList as Loaded } from "@/lib/api-types";
+import type { Rule, RuleArchived, RuleList as Loaded } from "@/lib/api-types";
 
-import { KEYS, ruleCountChanged, withoutRule } from "../cache";
+import { KEYS, ruleArchived, ruleCountChanged, subscriptionChanged, suggestionGone, withoutRule } from "../cache";
 import { btnNeutral } from "../channels/styles";
 import { listRules, ruleTitle } from "./api";
+import { ArchivedNotice } from "./ArchivedNotice";
 import { RuleDetail } from "./RuleDetail";
 import { RuleList, type SortKey } from "./RuleList";
 
@@ -59,6 +60,8 @@ export function RulesTab() {
     setSortState(next);
   };
   const [notice, setNotice] = useState<string | null>(null);
+  /** The last `보관` of a rule: what became of it, said once the detail has closed. */
+  const [archived, setArchived] = useState<{ name: string; result: RuleArchived } | null>(null);
   const dirty = useRef(false);
   const navigate = useNavigate();
   const { pathname } = useLocation();
@@ -100,6 +103,7 @@ export function RulesTab() {
   const open = (rule: Rule) => {
     if (rule.id === selectedId) return;
     setNotice(null);
+    setArchived(null);
     leave(() => {
       rememberListScroll();
       if (isNewRule) navigate(`/collect/rules?rule=${encodeURIComponent(rule.id)}`);
@@ -109,6 +113,7 @@ export function RulesTab() {
   const close = () => leave(() => navigate("/collect/rules"));
   const openNew = () => {
     setNotice(null);
+    setArchived(null);
     const first = rules.data?.channels[0]?.id;
     leave(() => {
       rememberListScroll();
@@ -146,6 +151,14 @@ export function RulesTab() {
       <p role="status" className="text-[13px] font-semibold text-text-secondary empty:hidden">
         {missing ? "그 규칙을 찾지 못했어요. 삭제됐을 수 있어요." : notice}
       </p>
+      {archived !== null && (
+        <ArchivedNotice
+          key={archived.result.command?.id ?? archived.name}
+          name={archived.name}
+          result={archived.result}
+          onClose={() => setArchived(null)}
+        />
+      )}
       <div className="grid min-w-0 grid-cols-[minmax(260px,360px)_minmax(0,1fr)] items-start gap-6 max-[720px]:grid-cols-1">
         <div className={cn(column, detailOpen && "max-[720px]:hidden")}>
           <RuleList
@@ -176,6 +189,21 @@ export function RulesTab() {
                 rules.reload();
                 dirty.current = false;
                 setNotice(`${ruleTitle(rule)} 규칙을 삭제했어요.`);
+                setArchived(null);
+                navigate("/collect/rules", { replace: true });
+              }}
+              onArchived={(rule, result) => {
+                // The rule is deleted with it: the cached list drops it at once, the read confirms it, and the
+                // other screens that show rules, their works and their suggestions read the server again.
+                rules.update((list) => withoutRule(list, rule.id));
+                ruleCountChanged(rule.channel_id, -1);
+                suggestionGone(rule.id);
+                ruleArchived();
+                subscriptionChanged();
+                rules.reload();
+                dirty.current = false;
+                setNotice(null);
+                setArchived({ name: ruleTitle(rule), result });
                 navigate("/collect/rules", { replace: true });
               }}
               onBack={close}
@@ -207,6 +235,7 @@ export function RulesTab() {
                 );
               }}
               onDeleted={() => undefined}
+              onArchived={() => undefined}
               onBack={close}
               onDirtyChange={onDirtyChange}
             />

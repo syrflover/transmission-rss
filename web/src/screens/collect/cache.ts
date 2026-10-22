@@ -153,16 +153,17 @@ export function suggestionGone(ruleId: string): void {
 }
 
 /**
- * A rule was archived: the lists that show it (its state, its folder, the work
- * pages, the previews) read the server again. The subscription list and the
- * title candidates are left to the caller: the 구독 tab shows them at this
- * very moment and reloads them in place, while the rule detail drops them with
- * {@link subscriptionChanged}.
+ * Rules were archived, which deletes them and moves their work folders: the
+ * lists that show or count rules, the works and their folders, the history
+ * rows (which name the rule) and the previews read the server again. The
+ * subscription list and the title candidates are left to the caller: the 구독
+ * tab shows them at this very moment and reloads them in place, while the
+ * rule tab drops them with {@link subscriptionChanged}.
  */
 export function ruleArchived(): void {
-  forgetWeek();
-  forgetPrefix(WORK_PREFIX);
+  forgetLibrary();
   forget(KEYS.rules);
+  forget(KEYS.channels);
   forgetPrefix(HISTORY_PREFIX);
   forgetPrefix(PREVIEW_PREFIX);
 }

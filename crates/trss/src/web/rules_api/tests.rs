@@ -941,7 +941,7 @@ async fn a_long_preview_lists_the_limit_and_says_it_is_cut_off() {
     assert_eq!(preview["truncated"], true);
 }
 
-// --- archive and restore --------------------------------------------------------
+// --- archive, and the move out of the archive folder -----------------------------
 
 #[tokio::test]
 async fn the_state_is_not_saved_by_an_edit_and_the_last_archive_move_is_shown() {
@@ -956,19 +956,24 @@ async fn the_state_is_not_saved_by_an_edit_and_the_last_archive_move_is_shown() 
     let id = rule["id"].as_str().unwrap().to_owned();
     assert_eq!(rule["archive_move"], Value::Null);
 
-    // An edit cannot archive: only the worker does, after the command.
-    let (status, text, body) = app
-        .call(
-            Method::PUT,
-            &format!("/api/rules/{id}"),
-            Some(rule_body(&a.channel, &rule, json!({ "state": "archived" }))),
-        )
-        .await;
-    assert_eq!(status, StatusCode::BAD_REQUEST, "{text}");
-    assert!(
-        body["message"].as_str().unwrap().contains("`보관`"),
-        "{text}"
-    );
+    // An edit cannot change the state: `영상 받기` does, and there is no
+    // archived state.
+    for state in ["paused", "archived"] {
+        let (status, text, body) = app
+            .call(
+                Method::PUT,
+                &format!("/api/rules/{id}"),
+                Some(rule_body(&a.channel, &rule, json!({ "state": state }))),
+            )
+            .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{text}");
+        if state == "paused" {
+            assert!(
+                body["message"].as_str().unwrap().contains("`영상 받기`"),
+                "{text}"
+            );
+        }
+    }
     let unchanged = app.list().await["rules"][0].clone();
     assert_eq!(unchanged["state"], "active");
     assert_eq!(unchanged["version"], rule["version"]);
@@ -983,10 +988,10 @@ async fn the_state_is_not_saved_by_an_edit_and_the_last_archive_move_is_shown() 
         .await;
     assert_eq!(status, StatusCode::OK, "{text}");
 
-    // The rule shows its last archive command, open or ended.
+    // The rule shows its last move out of the archive folder, open or ended.
     let payload = RuleArchive {
         rule_id: id.clone(),
-        direction: Direction::Archive,
+        direction: Direction::Resume,
         receive: Vec::new(),
     };
     let new = |cid: &str| NewCommand {
@@ -1023,7 +1028,7 @@ async fn the_state_is_not_saved_by_an_edit_and_the_last_archive_move_is_shown() 
         .call(Method::GET, &format!("/api/rules/{id}"), None)
         .await;
     assert_eq!(status, StatusCode::OK, "{text}");
-    assert_eq!(one["archive_move"]["direction"], "archive");
+    assert_eq!(one["archive_move"]["direction"], "resume");
     assert_eq!(one["archive_move"]["command"]["id"], "cmd-second");
     assert_eq!(one["archive_move"]["command"]["state"], "pending");
     assert_eq!(
@@ -1111,7 +1116,7 @@ async fn while_a_work_folder_moves_no_rule_changes_its_folder_into_or_out_of_it(
     let moving_id = moving["id"].as_str().unwrap().to_owned();
     let payload = RuleArchive {
         rule_id: moving_id.clone(),
-        direction: Direction::Archive,
+        direction: Direction::Resume,
         receive: Vec::new(),
     };
     app.state
@@ -1198,6 +1203,173 @@ async fn while_a_work_folder_moves_no_rule_changes_its_folder_into_or_out_of_it(
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{text}");
+
+    // A work folder moving into the archive folder (`보관` of a rule or a work)
+    // takes no rule either.
+    app.state
+        .commands
+        .accept(
+            trss_collect::commands::work_archive::WorkArchive {
+                work: "Other".into(),
+            }
+            .command("cmd-archiving-1".into()),
+            3,
+        )
+        .await
+        .unwrap();
+    let (status, text, error) = app
+        .call(
+            Method::POST,
+            "/api/rules",
+            Some(json!({
+                "channel_id": a.channel.id,
+                "match": "Other S3",
+                "directory": "Other/Season 03",
+                "episode": 0,
+            })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{text}");
+    assert!(
+        error["message"].as_str().unwrap().contains("`Other`"),
+        "{text}"
+    );
+}
+
+#[tokio::test]
+async fn archiving_a_rule_deletes_it_with_the_move_of_its_work_folder_or_changes_nothing() {
+    use trss_collect::commands::work_archive;
+    use trss_library::discovery::{Scan, ScannedWork, WorkRead};
+
+    let (app, tmp) = app_with_archive(&[]).await;
+    let collect = tmp.path().join("Shows (current)");
+    std::fs::create_dir_all(collect.join("Clevatess/Season 02")).unwrap();
+    let (work, _) = app
+        .state
+        .library
+        .add_folder(
+            collect.display().to_string(),
+            Scan {
+                works: vec![WorkRead::Read(ScannedWork {
+                    dir_name: "Clevatess".into(),
+                    seasons: Default::default(),
+                    files: Vec::new(),
+                    unrecognized: Vec::new(),
+                })],
+            },
+            100,
+            &app.state.library.folders().await.unwrap(),
+        )
+        .await
+        .unwrap();
+    let work_id = app.state.library.works(&work.id).await.unwrap()[0]
+        .id
+        .clone();
+    let a = app
+        .channel(
+            "a.test",
+            &[],
+            &[
+                ("Clevatess S2", "Clevatess/Season 02"),
+                ("Clevatess S3", "Clevatess/Season 03"),
+                ("Everything", ""),
+            ],
+        )
+        .await;
+    let [season2, season3, root] = [0, 1, 2].map(|n| a.rules[n].clone());
+    let archive = |rule: &Rule, id: &str, version: i64| {
+        let uri = format!("/api/rules/{}/archive", rule.id);
+        let body = json!({ "id": id, "version": version });
+        let app = &app;
+        async move { app.call(Method::POST, &uri, Some(body)).await }
+    };
+    let exists = |id: String| {
+        let app = &app;
+        async move { app.state.channels.get_rule(&id).await.unwrap().is_some() }
+    };
+
+    // A rule read before it changed: nothing is deleted or stored.
+    let (status, text, body) = archive(&season2, "archive-cmd-1", season2.version + 1).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{text}");
+    assert_eq!(body["current"]["id"], season2.id.as_str());
+    assert!(exists(season2.id.clone()).await);
+    assert!(app
+        .state
+        .commands
+        .get("archive-cmd-1")
+        .await
+        .unwrap()
+        .is_none());
+
+    // The rule goes with the stored move of its work folder.
+    let (status, text, body) = archive(&season2, "archive-cmd-1", season2.version).await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{text}");
+    assert_eq!(body["command"]["id"], "archive-cmd-1");
+    assert_eq!(body["command"]["kind"], "work_archive");
+    assert_eq!(body["command"]["state"], "pending");
+    assert_eq!(body["reason"], Value::Null);
+    assert_eq!(body["work_id"], work_id.as_str());
+    assert!(!exists(season2.id.clone()).await);
+    let stored = app
+        .state
+        .commands
+        .get("archive-cmd-1")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored.kind, work_archive::KIND);
+    assert_eq!(stored.subject.as_deref(), Some("Clevatess"));
+
+    // The same request again is answered with the stored move.
+    let (status, text, again) = archive(&season2, "archive-cmd-1", season2.version).await;
+    assert_eq!(status, StatusCode::OK, "{text}");
+    assert_eq!(again["command"]["id"], "archive-cmd-1");
+    assert_eq!(again["work_id"], work_id.as_str());
+
+    // The ID sent for another rule of the folder is another request: the rule
+    // stays.
+    let (status, text, body) = archive(&season3, "archive-cmd-1", season3.version).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{text}");
+    assert_eq!(body["current"]["id"], "archive-cmd-1");
+    assert!(exists(season3.id.clone()).await);
+
+    // Another rule of the folder waits for the open move, and stays.
+    let (status, text, body) = archive(&season3, "archive-cmd-2", season3.version).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{text}");
+    assert_eq!(body["current"]["id"], "archive-cmd-1");
+    assert!(exists(season3.id.clone()).await);
+    assert!(app
+        .state
+        .commands
+        .get("archive-cmd-2")
+        .await
+        .unwrap()
+        .is_none());
+
+    // A rule with no work folder is only deleted, with the reason.
+    let (status, text, body) = archive(&root, "archive-cmd-3", root.version).await;
+    assert_eq!(status, StatusCode::OK, "{text}");
+    assert_eq!(body["command"], Value::Null);
+    assert_eq!(
+        body["reason"],
+        "저장 폴더가 수집 폴더 자체라서 옮길 작품 폴더가 없어요."
+    );
+    assert_eq!(body["work_id"], Value::Null);
+    assert!(!exists(root.id.clone()).await);
+    assert!(app
+        .state
+        .commands
+        .get("archive-cmd-3")
+        .await
+        .unwrap()
+        .is_none());
+
+    // A rule that is gone, and an ID that is no command ID.
+    let (status, _, _) = archive(&root, "archive-cmd-4", root.version).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, _, _) = archive(&season3, "x", season3.version).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(exists(season3.id.clone()).await);
 }
 
 async fn put(
@@ -1445,6 +1617,75 @@ async fn turning_video_on_for_a_work_in_the_archive_folder_leaves_the_rule_pause
 }
 
 #[tokio::test]
+async fn turning_video_on_while_its_work_folder_moves_into_the_archive_folder_is_refused() {
+    use trss_collect::commands::work_archive::WorkArchive;
+    use trss_core::commands::{CommandState, Outcome};
+
+    let (app, tmp) = app_with_archive(&[]).await;
+    let a = app
+        .channel("a.test", &[], &[("Clevatess", "Clevatess/Season 02")])
+        .await;
+    let id = a.rules[0].id.clone();
+    app.state
+        .channels
+        .set_rule_state(&id, RuleState::Paused, 0)
+        .await
+        .unwrap();
+    let moving = WorkArchive {
+        work: "Clevatess".to_owned(),
+    };
+    app.state
+        .commands
+        .accept(moving.command("archive-work-1".to_owned()), 1)
+        .await
+        .unwrap();
+    let switch_on = || {
+        let (app, id) = (&app, id.clone());
+        async move {
+            let rule = app
+                .call(Method::GET, &format!("/api/rules/{id}"), None)
+                .await
+                .2;
+            app.call(
+                Method::PUT,
+                &format!("/api/rules/{id}/switch"),
+                Some(json!({ "version": rule["version"], "video": true })),
+            )
+            .await
+        }
+    };
+
+    let (status, text, refused) = switch_on().await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{text}");
+    assert_eq!(
+        refused["message"],
+        "이 규칙의 작품 폴더를 보관 폴더로 옮기는 중이에요. 옮기기가 끝난 뒤 다시 켜 주세요."
+    );
+    let stored = app.state.channels.get_rule(&id).await.unwrap().unwrap();
+    assert_eq!(stored.state, RuleState::Paused);
+
+    // Once the move has ended, the switch is taken.
+    app.state.commands.claim_next(2).await.unwrap();
+    app.state
+        .commands
+        .finish(
+            "archive-work-1",
+            CommandState::Done,
+            Outcome {
+                result: "kept".to_owned(),
+                reason: None,
+            },
+            3,
+        )
+        .await
+        .unwrap();
+    let (status, text, on) = switch_on().await;
+    assert_eq!(status, StatusCode::OK, "{text}");
+    assert_eq!(on["state"], "active");
+    drop(tmp);
+}
+
+#[tokio::test]
 async fn the_form_is_told_which_work_in_the_archive_folder_it_would_bring_over() {
     let (app, tmp) = app_with_archive(&["Clevatess"]).await;
     let (status, text, told) = app
@@ -1509,20 +1750,8 @@ async fn a_browser_cannot_post_a_start_or_a_resume() {
         assert_eq!(status, StatusCode::BAD_REQUEST, "{text}");
         assert_eq!(body["error"], "invalid");
     }
-    // Nothing was stored; archive and restore are the browser's.
+    // Nothing was stored.
     assert!(!app.state.commands.has_open().await.unwrap());
-    let (status, text, _) = app
-        .call(
-            Method::POST,
-            "/api/commands",
-            Some(json!({
-                "id": "archive-1",
-                "kind": "rule_archive",
-                "payload": { "rule_id": a.rules[0].id, "direction": "archive" },
-            })),
-        )
-        .await;
-    assert_eq!(status, StatusCode::ACCEPTED, "{text}");
     drop(tmp);
 }
 

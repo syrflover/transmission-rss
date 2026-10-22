@@ -1,12 +1,19 @@
 //! `work_archive`, shown on the work detail as `보관 폴더로 옮기기` and `다시
 //! 옮기기`: moves a work folder from the collect folder into the archive folder
 //! (`docs/requirements/library.md`, 작품 상세 화면, and
-//! `docs/requirements/collection.md`, 보관과 복원의 폴더 이동).
+//! `docs/requirements/collection.md`, 보관과 수집 시작의 폴더 이동).
 //!
 //! The command is about a work folder, not a rule: the web deletes the rules
 //! that save into the folder with it, in the transaction that stores it
 //! ([`accept_deleting`]), so no new episode arrives at the old place while it
-//! moves. Its payload is a [`WorkArchive`] (the folder's name). The worker runs it with [`run`], holding the turn of the
+//! moves. Its payload is a [`WorkArchive`] (the folder's name).
+//!
+//! `보관` of a rule (the rule detail's, and each rule of an archive
+//! suggestions' batch) is the same command for the rule's work folder, stored
+//! with the rule's deletion ([`archive_rule`]): the screens follow the folder's
+//! fate by it, and the work detail shows a move that did not go through. A
+//! rule whose save folder is no work folder below the collect folder is only
+//! deleted. The worker runs it with [`run`], holding the turn of the
 //! work folder in the collect folder and in the archive folder ([`section`]),
 //! and moves it as `rule_archive` moves a rule's work folder
 //! ([`super::rule_archive::work_folder`]): Transmission's torrents first, `.trss/`
@@ -46,11 +53,14 @@ use trss_core::{
 };
 
 use super::rule_archive::{
-    done, failed, held_reason, lexical_work_folder, move_folder, settings,
+    done, failed, held_reason, lexical_work_folder, move_folder, settings, work_folder,
     work_folder::{Disk, Hold, RealDisk, Request, Side},
     ArchiveContext, Finished, NoMove, Retry, Start, WorkFolder, KEPT,
 };
-use crate::store::channels::{delete_rules_in, ChannelError, Rule, RuleState, Version};
+use crate::store::channels::{
+    delete_rules_in, ChannelError, ChannelStore, Rule, RuleState, Version,
+};
+use trss_library::store::library::{LibraryError, LibraryStore};
 
 /// The `kind` of the command.
 pub const KIND: &str = "work_archive";
@@ -103,6 +113,163 @@ pub async fn accept_deleting(
     commands
         .accept_with(command, now, move |tx| delete_rules_in(tx, &rules))
         .await
+}
+
+/// The library's work of the work folder `work`, wherever it is now: below the
+/// collect folder `collect` or the archive folder `archive` (a work keeps its
+/// ID when it moves). `None` when the library has no such work.
+pub async fn work_in_library(
+    library: &LibraryStore,
+    collect: &str,
+    archive: Option<&str>,
+    work: &str,
+) -> Result<Option<String>, LibraryError> {
+    for folder in std::iter::once(collect).chain(archive) {
+        let folder = folder.trim_end_matches('/');
+        if let Some(id) = library.work_in_folder(folder, work).await? {
+            return Ok(Some(id));
+        }
+    }
+    Ok(None)
+}
+
+/// The move `보관` of `rule` stores with the rule's deletion: its work folder,
+/// the first part of its save folder below the collect folder `collect`.
+/// `Err` when it has none, and the rule is only deleted: no collect folder is
+/// set, or the rule saves into the collect folder itself or outside it (a save
+/// folder with `..` counts as outside, as [`work_folder`] never moves a folder
+/// its text cannot place). No archive folder is no `Err`: the move is stored
+/// and ends `kept` saying so, the record the screens read of the folder.
+pub fn rule_move(collect: Option<&str>, rule: &Rule) -> Result<WorkArchive, NoMove> {
+    let Some(collect) = collect else {
+        return Err(NoMove::NoCollectFolder);
+    };
+    match work_folder(Path::new(collect), &rule.directory) {
+        WorkFolder::Named(work) => Ok(WorkArchive { work }),
+        WorkFolder::CollectItself => Err(NoMove::CollectItself),
+        WorkFolder::Outside => Err(NoMove::Outside),
+    }
+}
+
+/// What `보관` of `rule` would do as of now, in a sentence for the screens to
+/// say before it is pressed: the rule is deleted, and its work folder moves or
+/// stays and why. It asks what the move asks (where the folders are, which
+/// other rules still collect into the work folder), but the move decides again
+/// when it runs. `rules` are the rules of every channel; `settings` the collect
+/// folder and the archive folder.
+pub fn forecast(settings: Option<(String, Option<String>)>, rules: &[Rule], rule: &Rule) -> String {
+    let collect = settings.as_ref().map(|(collect, _)| collect.as_str());
+    let name = match rule_move(collect, rule) {
+        Ok(WorkArchive { work }) => work,
+        Err(no_move) => return format!("규칙을 지워요. {}", no_move.forecast()),
+    };
+    if settings
+        .as_ref()
+        .is_some_and(|(_, archive)| archive.is_none())
+    {
+        return format!("규칙을 지워요. {}", NoMove::NoArchiveFolder.forecast());
+    }
+    let collect = Path::new(collect.expect("a work folder is below a collect folder"));
+    let named = WorkFolder::Named(name.clone());
+    let holding: Vec<&Rule> = rules
+        .iter()
+        .filter(|other| other.id != rule.id && other.state == RuleState::Active)
+        .filter(|other| lexical_work_folder(collect, &other.directory) == named)
+        .collect();
+    let Some(first) = holding.first() else {
+        return format!("규칙을 지우고 작품 폴더(`{name}`)를 보관 폴더로 옮겨요.");
+    };
+    let who = match holding.len() {
+        1 => format!("‘{}’ 규칙이", first.directory),
+        n => format!("‘{}’ 규칙 외 {}개가", first.directory, n - 1),
+    };
+    format!(
+        "규칙을 지워요. {who} 아직 이 작품 폴더에 받고 있어서 폴더는 옮기지 않아요. 남은 규칙까지 보관할 때 옮겨요."
+    )
+}
+
+/// How `보관` of a rule went ([`archive_rule`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RuleArchived {
+    /// The rule is deleted and the move of its work folder is stored (now, or
+    /// before under the same ID): its outcome says what became of the folder.
+    Moving(Box<Command>),
+    /// The rule is deleted; it had no work folder to move, for this reason.
+    Deleted(NoMove),
+}
+
+/// Why `보관` of a rule changed nothing ([`archive_rule`]).
+#[derive(Debug)]
+pub enum NotArchived {
+    /// The rule is gone ([`ChannelError::NotFound`]) or at another version
+    /// ([`ChannelError::is_conflict`]).
+    Changed(ChannelError),
+    /// A move of its work folder is open (from the work detail, or the archive
+    /// of another rule saving there).
+    Busy(Box<Command>),
+    /// The ID was used for another request: another kind or folder, or the
+    /// `보관` of another rule of the same work folder.
+    Mismatch(Box<Command>),
+}
+
+/// A store `보관` of a rule could not read or write.
+#[derive(Debug, thiserror::Error)]
+pub enum ArchiveError {
+    #[error(transparent)]
+    Channels(ChannelError),
+    #[error(transparent)]
+    Commands(#[from] CommandError),
+}
+
+/// `보관` of `rule`, as it was read: deletes it, if it is still at that
+/// version, and stores the move of its work folder ([`rule_move`]) under `id`,
+/// in one transaction; a rule with no work folder is only deleted. The worker
+/// moves the folder unless a rule that collects still saves into it.
+/// `collect` is the collect folder.
+pub async fn archive_rule(
+    channels: &ChannelStore,
+    commands: &CommandStore,
+    collect: Option<&str>,
+    rule: &Rule,
+    id: String,
+    now: Millis,
+) -> Result<Result<RuleArchived, NotArchived>, ArchiveError> {
+    let deleted = vec![(rule.id.clone(), rule.version)];
+    let refused = |e: ChannelError| {
+        if e.is_conflict() || matches!(e, ChannelError::NotFound { .. }) {
+            Ok(Err(NotArchived::Changed(e)))
+        } else {
+            Err(ArchiveError::Channels(e))
+        }
+    };
+    let payload = match rule_move(collect, rule) {
+        Ok(payload) => payload,
+        Err(no_move) => {
+            return match channels.delete_rule(&rule.id, rule.version).await {
+                Ok(()) => Ok(Ok(RuleArchived::Deleted(no_move))),
+                Err(e) => refused(e),
+            }
+        }
+    };
+    match accept_deleting(commands, payload.command(id), deleted, now).await? {
+        Ok(Accepted::Created(command)) => Ok(Ok(RuleArchived::Moving(Box::new(command)))),
+        // The move was stored with the deletion of the rule it archived, so a
+        // rule that is still there is another one, which only shares its work
+        // folder: the ID was used for another request.
+        Ok(Accepted::Existing(command)) => Ok(
+            match channels
+                .get_rule(&rule.id)
+                .await
+                .map_err(ArchiveError::Channels)?
+            {
+                Some(_) => Err(NotArchived::Mismatch(Box::new(command))),
+                None => Ok(RuleArchived::Moving(Box::new(command))),
+            },
+        ),
+        Ok(Accepted::Busy(open)) => Ok(Err(NotArchived::Busy(Box::new(open)))),
+        Ok(Accepted::Mismatch(stored)) => Ok(Err(NotArchived::Mismatch(Box::new(stored)))),
+        Err(e) => refused(e),
+    }
 }
 
 /// The payload of `command`, when it names one folder by a plain name: a name

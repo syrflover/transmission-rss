@@ -509,35 +509,52 @@ async fn a_legacy_command_sent_again_is_answered_with_the_stored_command() {
     assert_eq!(status, StatusCode::BAD_REQUEST);
 }
 
-// --- rule_archive (보관·복원) -------------------------------------------------------
-
-fn archive_body(id: &str, rule: &Rule, direction: &str) -> Value {
-    json!({
-        "id": id,
-        "kind": "rule_archive",
-        "payload": { "rule_id": rule.id, "direction": direction },
-    })
-}
+// --- the web's own folder moves ---------------------------------------------------
 
 #[tokio::test]
-async fn an_archive_is_accepted_for_its_rule_once_and_the_rule_is_not_changed_by_the_web() {
+async fn a_browser_cannot_post_a_folder_move_and_nothing_changes() {
     let app = App::new();
     let channel = app.channel().await;
-    let rule = app.rule(&channel, RuleState::Active).await;
+    let rule = app.rule(&channel, RuleState::Paused).await;
 
-    let (status, text, body) = app
-        .call(
-            Method::POST,
-            "/api/commands",
-            Some(archive_body(ID, &rule, "archive")),
-        )
-        .await;
-    assert_eq!(status, StatusCode::ACCEPTED, "{text}");
-    assert_eq!(body["kind"], "rule_archive");
-    assert_eq!(body["state"], "pending");
-    let stored = app.state.commands.get(ID).await.unwrap().unwrap();
-    assert_eq!(stored.subject.as_deref(), Some(rule.id.as_str()));
-    // Accepted is not done: the worker turns the rule off.
+    // `보관` of a rule and of a work have routes of their own, and a rule's
+    // `start` and `resume` are the web's to make when it saves the rule.
+    for (kind, payload) in [
+        (
+            "rule_archive",
+            json!({ "rule_id": rule.id, "direction": "archive" }),
+        ),
+        (
+            "rule_archive",
+            json!({ "rule_id": rule.id, "direction": "restore" }),
+        ),
+        (
+            "rule_archive",
+            json!({ "rule_id": rule.id, "direction": "resume" }),
+        ),
+        (
+            "rule_archive",
+            json!({ "rule_id": rule.id, "direction": "start" }),
+        ),
+        ("work_archive", json!({ "work": "Show" })),
+    ] {
+        let (status, text, body) = app
+            .call(
+                Method::POST,
+                "/api/commands",
+                Some(json!({ "id": ID, "kind": kind, "payload": payload })),
+            )
+            .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{kind}: {text}");
+        assert!(
+            body["message"]
+                .as_str()
+                .unwrap()
+                .contains("규칙 상세의 `보관`"),
+            "{text}"
+        );
+        assert!(app.state.commands.get(ID).await.unwrap().is_none());
+    }
     let now = app
         .state
         .channels
@@ -545,126 +562,7 @@ async fn an_archive_is_accepted_for_its_rule_once_and_the_rule_is_not_changed_by
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(now.state, RuleState::Active);
-    assert_eq!(now.version, rule.version);
-
-    // The same request again is the same command.
-    let (status, _, again) = app
-        .call(
-            Method::POST,
-            "/api/commands",
-            Some(archive_body(ID, &rule, "archive")),
-        )
-        .await;
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(again["id"], ID);
-
-    // The same ID for the other direction is another request.
-    let (status, _, _) = app
-        .call(
-            Method::POST,
-            "/api/commands",
-            Some(archive_body(ID, &rule, "restore")),
-        )
-        .await;
-    assert_eq!(status, StatusCode::CONFLICT);
-
-    // A second command for the rule while one is open, in either direction.
-    let (status, text, body) = app
-        .call(
-            Method::POST,
-            "/api/commands",
-            Some(archive_body("second-command-1", &rule, "archive")),
-        )
-        .await;
-    assert_eq!(status, StatusCode::CONFLICT, "{text}");
-    assert_eq!(body["current"]["id"], ID);
-    assert!(
-        body["message"].as_str().unwrap().contains("이 규칙은"),
-        "{text}"
-    );
-    assert!(app
-        .state
-        .commands
-        .get("second-command-1")
-        .await
-        .unwrap()
-        .is_none());
-}
-
-#[tokio::test]
-async fn a_restore_needs_an_archived_rule_and_a_missing_rule_is_not_found() {
-    let app = App::new();
-    let channel = app.channel().await;
-    let active = app.rule(&channel, RuleState::Active).await;
-    let archived = app.rule(&channel, RuleState::Archived).await;
-
-    let (status, text, _) = app
-        .call(
-            Method::POST,
-            "/api/commands",
-            Some(archive_body(ID, &active, "restore")),
-        )
-        .await;
-    assert_eq!(status, StatusCode::BAD_REQUEST, "{text}");
-    assert!(app.state.commands.get(ID).await.unwrap().is_none());
-
-    // A paused rule is switched on, not restored: its folder never moved.
-    let paused = app.rule(&channel, RuleState::Paused).await;
-    let (status, text, _) = app
-        .call(
-            Method::POST,
-            "/api/commands",
-            Some(archive_body(ID, &paused, "restore")),
-        )
-        .await;
-    assert_eq!(status, StatusCode::BAD_REQUEST, "{text}");
-    assert!(app.state.commands.get(ID).await.unwrap().is_none());
-
-    let (status, text, _) = app
-        .call(
-            Method::POST,
-            "/api/commands",
-            Some(archive_body(ID, &archived, "restore")),
-        )
-        .await;
-    assert_eq!(status, StatusCode::ACCEPTED, "{text}");
-
-    // Archiving an archived rule is `다시 옮기기`.
-    let (status, text, _) = app
-        .call(
-            Method::POST,
-            "/api/commands",
-            Some(archive_body("again-command-1", &active, "archive")),
-        )
-        .await;
-    assert_eq!(status, StatusCode::ACCEPTED, "{text}");
-
-    let mut gone = active.clone();
-    gone.id = "no-such-rule".into();
-    let (status, _, _) = app
-        .call(
-            Method::POST,
-            "/api/commands",
-            Some(archive_body("gone-command-1", &gone, "archive")),
-        )
-        .await;
-    assert_eq!(status, StatusCode::NOT_FOUND);
-
-    for payload in [
-        json!({ "rule_id": active.id, "direction": "away" }),
-        json!({ "rule_id": active.id }),
-        json!({ "rule_id": active.id, "direction": "archive", "folder": "/x" }),
-    ] {
-        let (status, text, _) = app
-            .call(
-                Method::POST,
-                "/api/commands",
-                Some(json!({ "id": "bad-command-1", "kind": "rule_archive", "payload": payload })),
-            )
-            .await;
-        assert_eq!(status, StatusCode::BAD_REQUEST, "{text}");
-    }
+    assert_eq!(now, rule);
 }
 
 // --- `되돌리기` of an automatic episode offset --------------------------------------

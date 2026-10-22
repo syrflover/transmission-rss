@@ -51,7 +51,7 @@ use crate::{
             self, work_folder::MovePolicy, Direction, Finished as ArchiveFinished,
             Retry as ArchiveRetry,
         },
-        work_archive::{self, WorkArchive},
+        work_archive::{self, NotArchived, RuleArchived, WorkArchive},
     },
     context::{CollectContext, TransmissionLink},
     cycle::{self, JobOutcome},
@@ -993,6 +993,29 @@ impl World {
         self.tr.clear_calls();
     }
 
+    /// `보관` of `rule` as the web does it ([`work_archive::archive_rule`]),
+    /// with an ID made of the rule and the clock: [`World::advance`] between
+    /// two of one rule. The move it stores waits to be claimed.
+    pub async fn archive_rule(&self, rule: &Rule) -> Result<RuleArchived, NotArchived> {
+        let collect = self
+            .ctx
+            .settings
+            .collection()
+            .await
+            .unwrap()
+            .map(|s| s.folder);
+        work_archive::archive_rule(
+            &self.ctx.channels,
+            &self.ctx.commands,
+            collect.as_deref(),
+            rule,
+            format!("rule-{}-{}", rule.id, self.now()),
+            self.now(),
+        )
+        .await
+        .unwrap()
+    }
+
     /// The channel's `n`-th rule as stored now.
     pub async fn rule_of(&self, n: usize) -> Rule {
         self.ctx
@@ -1001,25 +1024,6 @@ impl World {
             .await
             .unwrap()
             .remove(n)
-    }
-
-    /// Archives the channel's `n`-th rule, so that cycles no longer pick what
-    /// it matched.
-    pub async fn archive_rule(&self, n: usize) {
-        let rule = self.rule_of(n).await;
-        self.ctx
-            .channels
-            .update_rule(
-                &rule.id,
-                rule.version,
-                &rule.channel_id,
-                RuleInput {
-                    state: RuleState::Archived,
-                    ..rule.to_input()
-                },
-            )
-            .await
-            .unwrap();
     }
 
     /// Deletes the channel's `n`-th rule.

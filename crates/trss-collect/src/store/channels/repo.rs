@@ -575,8 +575,8 @@ pub fn rejected_titles(conn: &Connection) -> Result<HashSet<(String, String)>> {
     Ok(rows.collect::<rusqlite::Result<_>>()?)
 }
 
-/// Sets a rule's state without a version check (the worker's archive and
-/// restore; see `commands::rule_archive`). The version goes up only
+/// Sets a rule's state without a version check (the worker's move of a work
+/// folder into the collect folder; see `commands::rule_archive`). The version goes up only
 /// when the state changes, so an edit made meanwhile from a screen that saw
 /// the old state is answered with a conflict. A rule turned back on is noted as
 /// resumed at `at` (see [`Rule::resumed_at`]). `None` when the rule is gone.
@@ -631,9 +631,8 @@ fn bump_version(tx: &Transaction<'_>, id: &str) -> Result<()> {
 }
 
 /// `영상 받기`: turns the rule's collecting on (`active`) or off (`paused`) if
-/// it is still at `expected`. An archived rule is restored through the worker,
-/// which moves its folder back first, so this refuses it. Nothing changes (and
-/// the version stays) when the rule is in the wanted state already. Turning it
+/// it is still at `expected`. Nothing changes (and the version stays) when the
+/// rule is in the wanted state already. Turning it
 /// on notes the rule as resumed at `at` (see [`Rule::resumed_at`]).
 pub fn set_video_receiving(
     conn: &mut Connection,
@@ -644,11 +643,6 @@ pub fn set_video_receiving(
 ) -> Result<Rule> {
     let tx = begin(conn)?;
     let rule = require_rule(&tx, id, expected)?;
-    if rule.state == RuleState::Archived {
-        return Err(ChannelError::Invalid(
-            "an archived rule is restored, not switched",
-        ));
-    }
     let wanted = if on {
         RuleState::Active
     } else {
@@ -670,8 +664,8 @@ pub fn set_video_receiving(
 
 /// `자막 받기`: off keeps the creator and makes the subscription `none`; on
 /// goes back to following the kept creator, or to `undecided` when there was
-/// none. Only a subscription of a collecting rule has the switch: a paused or
-/// archived rule keeps its subtitle setting as it is.
+/// none. Only a subscription of a collecting rule has the switch: a paused
+/// rule keeps its subtitle setting as it is.
 pub fn set_subtitle_receiving(
     conn: &mut Connection,
     id: &str,

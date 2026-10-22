@@ -87,7 +87,7 @@ async fn two_channels_five_rules_survive_reopen_with_every_field() {
                 directory: "Frieren/S01".into(),
                 episode: -12,
                 episode_auto: true,
-                state: RuleState::Archived,
+                state: RuleState::Paused,
             },
         ),
         (
@@ -140,7 +140,7 @@ async fn two_channels_five_rules_survive_reopen_with_every_field() {
     }
     assert_eq!(rules_a[1].r#match, None);
     assert_eq!(rules_a[0].episode, -12);
-    assert_eq!(rules_a[0].state, RuleState::Archived);
+    assert_eq!(rules_a[0].state, RuleState::Paused);
     assert_eq!(
         reopened.get_rule(&created[3].id).await.unwrap(),
         Some(created[3].clone())

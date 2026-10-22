@@ -104,9 +104,6 @@ function RuleLink({ rule }: { rule: WorkRule }) {
     >
       <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
         <span className={cn("text-[13.5px] font-bold", rule.match === null && "text-text-secondary")}>{ruleTitle(rule)}</span>
-        {rule.state === "archived" && (
-          <span className="rounded-full border border-hairline px-1.5 py-px text-[11.5px] font-semibold text-text-secondary">보관</span>
-        )}
         {rule.state === "paused" && (
           <span className="rounded-full border border-hairline px-1.5 py-px text-[11.5px] font-semibold text-text-secondary">멈춤</span>
         )}

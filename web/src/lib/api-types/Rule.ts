@@ -17,8 +17,8 @@ export type Rule = { id: string, channel_id: string,
  */
 version: number, 
 /**
- * Place among the channel's rules, archived ones included, from 1. This
- * is the order the worker checks the rules in.
+ * Place among the channel's rules, paused ones included, from 1. This is
+ * the order the worker checks the rules in.
  */
 order: number, 
 /**
@@ -61,8 +61,9 @@ error: RegexProblem | null,
  */
 last_received_at: number | null, 
 /**
- * The last archive or restore of the rule (a `rule_archive` command),
- * open or ended; `null` when it never had one.
+ * The last move of the rule's work folder out of the archive folder
+ * before it collects (a `rule_archive` command), open or ended; `null`
+ * when it never had one.
  */
 archive_move: ArchiveMove | null, 
 /**

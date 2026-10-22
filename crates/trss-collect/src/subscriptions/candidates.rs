@@ -7,9 +7,9 @@
 //! of a channel is a candidate when all of these hold:
 //!
 //! - The channel has a collecting (`active`) subscription with no match phrase
-//!   yet. A paused or archived one offers nothing, and a candidate goes when
-//!   the last such subscription is paused, archived, given its title or
-//!   deleted.
+//!   yet. A paused one offers nothing, and a candidate goes when the last
+//!   such subscription is paused, given its title or deleted (`보관` deletes
+//!   it too).
 //! - History recorded the work first at or after the moment that subscription
 //!   began to wait: the later of when it was subscribed and when its phrase
 //!   was last given or cleared ([`began_waiting`]). Turning the subscription
