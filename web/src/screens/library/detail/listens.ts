@@ -13,6 +13,63 @@ import { aboutTarget, ofKinds } from "../../../lib/changeMatch.ts";
  */
 
 /**
+ * What the work page (`GET /api/library/works/{id}`) reads of the work itself:
+ * its folder, seasons, episodes and files (`library`), the season links and
+ * entries that give the title, the original title and the air days
+ * (`season_info`), the cover (`artwork`), the stored subtitles and their
+ * cleaning (`subtitle_store`) and the creators' mappings (`subtitle_mapping`).
+ */
+const OF_THE_WORK_PAGE: readonly ChangeKind[] = [
+  "library",
+  "season_info",
+  "artwork",
+  "subtitle_store",
+  "subtitle_mapping",
+];
+
+/**
+ * What the work page reads of other things, whose changes name no work, so any
+ * of them matches: the subscriptions and rules that land in the work's folder
+ * (`rules`), their Anissia anime and the titles (`anissia`), the episodes'
+ * received revisions (`history`), the jobs that made the stored copies
+ * (`subtitle_job`), the collect and archive folders and the common format
+ * order (`settings`), the folder move that archives the work (`command`), and
+ * how old the worker's list of Transmission's torrents is, which a failed
+ * revision's `다시 받기` offer depends on (`collect_status`).
+ */
+const AROUND_THE_WORK_PAGE: readonly ChangeKind[] = [
+  "rules",
+  "anissia",
+  "history",
+  "subtitle_job",
+  "settings",
+  "command",
+  "collect_status",
+];
+
+/** Whether `change` makes the page of the work `workId` read again. */
+export function workChanged(change: Change, workId: string): boolean {
+  if (ofKinds(change, OF_THE_WORK_PAGE)) return aboutTarget(change, workId);
+  return ofKinds(change, AROUND_THE_WORK_PAGE);
+}
+
+/**
+ * Whether `change` is about a movie's Anissia link of the work `workId` (`GET
+ * /api/library/works/{id}/movies/{n}/anissia`): the link (`season_info`, the
+ * work's) and the anime it names with its titles (`anissia`, any anime).
+ */
+export function movieLinkChanged(change: Change, workId: string): boolean {
+  switch (change.kind) {
+    case "season_info":
+      return aboutTarget(change, workId);
+    case "anissia":
+      return true;
+    default:
+      return false;
+  }
+}
+
+/**
  * What a season's candidates (`GET /api/library/works/{id}/seasons/{n}/anissia/candidates`)
  * read of the work: the season's Anissia link (`season_info`), the creators'
  * mappings (`subtitle_mapping`), the subtitle files with a creator and the
@@ -102,7 +159,10 @@ export function seasonInfoChanged(change: Change, workId: string): boolean {
   return change.kind === "season_info" && aboutTarget(change, workId);
 }
 
-/** How long to wait before reading the work's cover again after a read that failed, in milliseconds. */
+/** How long to wait before reading the work page again after a read that failed, in milliseconds. */
+export const WORK_RETRY_MS = 10_000;
+
+/** ...while its cover waits for trss to receive the image. */
 export const COVER_RETRY_MS = 3000;
 
 /** ...and the cover view. */

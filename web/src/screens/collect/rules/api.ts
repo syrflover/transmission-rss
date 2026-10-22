@@ -77,8 +77,8 @@ const body = (fields: RuleFields): RuleFieldsBody => ({
   state: fields.state,
 });
 
-export function listRules(): Promise<RuleList> {
-  return api<RuleList>("/rules");
+export function listRules(signal?: AbortSignal): Promise<RuleList> {
+  return api<RuleList>("/rules", { signal });
 }
 
 export function getRule(id: string): Promise<Rule> {

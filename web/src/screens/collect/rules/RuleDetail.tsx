@@ -382,7 +382,8 @@ export function RuleDetail({
 
       {known && creatorOpen && known.subscription && (
         <CreatorPicker
-          key={`${known.version}:${known.subscription.creator ?? ""}`}
+          // A new creator starts the choice over; a newer version alone (the worker moved `episode`) keeps it.
+          key={known.subscription.creator ?? ""}
           animeNo={known.subscription.anissia_anime_no}
           current={known.subscription.creator}
           onCancel={() => setCreatorOpen(false)}

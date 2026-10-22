@@ -6,8 +6,8 @@ export function channelTitle(channel: Pick<Channel, "name" | "host">): string {
   return channel.name ?? channel.host;
 }
 
-export function listChannels(): Promise<ChannelList> {
-  return api<ChannelList>("/channels");
+export function listChannels(signal?: AbortSignal): Promise<ChannelList> {
+  return api<ChannelList>("/channels", { signal });
 }
 
 export function createChannel(draft: ChannelDraft): Promise<Channel> {

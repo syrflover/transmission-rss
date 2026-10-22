@@ -4,10 +4,11 @@ import { Link } from "react-router-dom";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ApiError } from "@/lib/api";
-import { useCached } from "@/lib/cached";
+import { useRead } from "@/lib/useRead";
 import { dateTime } from "@/lib/time";
 import { hintClass, inputClass, labelClass } from "@/screens/collect/channels/styles";
 
+import { POLICY } from "../listens";
 import { BTN } from "../parts";
 import {
   FORMAT_LABEL,
@@ -28,7 +29,7 @@ const LOAD_FAILED = "공통 정책을 불러오지 못했어요.";
 
 /** `자막 형식·브라우저`: the common policy, saved as one version. */
 export function PolicyPanel() {
-  const policy = useCached<Policy>(POLICY_KEY, loadPolicy, LOAD_FAILED);
+  const policy = useRead<Policy>(POLICY_KEY, loadPolicy, POLICY, LOAD_FAILED);
   const data = policy.data;
 
   return (
@@ -47,7 +48,7 @@ export function PolicyPanel() {
           <p role="alert" className="text-[13px] font-semibold text-urgent">
             {policy.error}
           </p>
-          <button type="button" className={BTN.plain} onClick={policy.reload}>
+          <button type="button" className={BTN.plain} onClick={policy.reread}>
             재시도
           </button>
         </div>

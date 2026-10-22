@@ -2,11 +2,13 @@ import { useCallback, useLayoutEffect, useRef, useState } from "react";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 
 import { Button } from "@/components/ui/button";
-import { peek, store, useCached } from "@/lib/cached";
+import { peek, store } from "@/lib/cached";
+import { useRead } from "@/lib/useRead";
 import { cn } from "@/lib/utils";
 import type { Rule, RuleArchived, RuleList as Loaded } from "@/lib/api-types";
 
 import { KEYS, ruleArchived, ruleCountChanged, subscriptionChanged, suggestionGone, withoutRule } from "../cache";
+import { RULES_RETRY_MS, rulesChanged } from "../listens";
 import { btnNeutral } from "../channels/styles";
 import { listRules, ruleTitle } from "./api";
 import { ArchivedNotice } from "./ArchivedNotice";
@@ -53,7 +55,12 @@ function useListScroll(detailOpen: boolean): () => void {
  *   history item.
  */
 export function RulesTab() {
-  const rules = useCached<Loaded>(KEYS.rules, listRules, "규칙을 불러오지 못했어요.");
+  const rules = useRead<Loaded>(
+    KEYS.rules,
+    listRules,
+    { match: rulesChanged, retryMs: RULES_RETRY_MS },
+    "규칙을 불러오지 못했어요.",
+  );
   const [sort, setSortState] = useState<SortKey>(() => peek<SortKey>(KEYS.ruleSort) ?? "order");
   const setSort = (next: SortKey) => {
     store(KEYS.ruleSort, next);
@@ -90,7 +97,7 @@ export function RulesTab() {
         rules: list.rules.map((r) => (r.id === saved.id ? saved : r)),
       }));
     }
-    rules.reload();
+    rules.reread();
   };
 
   /** Runs `go` unless the user declines to drop unsaved changes. */
@@ -128,7 +135,7 @@ export function RulesTab() {
           <p role="alert" className="text-[13px] font-semibold text-urgent">
             {rules.error}
           </p>
-          <Button type="button" variant="ghost" className={btnNeutral} onClick={rules.reload}>
+          <Button type="button" variant="ghost" className={btnNeutral} onClick={rules.reread}>
             재시도
           </Button>
         </div>
@@ -186,7 +193,7 @@ export function RulesTab() {
                 // The cached list drops the rule at once; the read confirms it.
                 rules.update((list) => withoutRule(list, rule.id));
                 ruleCountChanged(rule.channel_id, -1);
-                rules.reload();
+                rules.reread();
                 dirty.current = false;
                 setNotice(`${ruleTitle(rule)} 규칙을 삭제했어요.`);
                 setArchived(null);
@@ -200,7 +207,7 @@ export function RulesTab() {
                 suggestionGone(rule.id);
                 ruleArchived();
                 subscriptionChanged();
-                rules.reload();
+                rules.reread();
                 dirty.current = false;
                 setNotice(null);
                 setArchived({ name: ruleTitle(rule), result });
@@ -229,7 +236,7 @@ export function RulesTab() {
                     navigate(`/collect/rules?rule=${encodeURIComponent(created.id)}`, { replace: true });
                   },
                   () => {
-                    rules.reload();
+                    rules.reread();
                     navigate("/collect/rules", { replace: true });
                   },
                 );

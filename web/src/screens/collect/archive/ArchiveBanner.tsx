@@ -2,7 +2,8 @@ import { useId, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { ApiError } from "@/lib/api";
-import { useCached } from "@/lib/cached";
+import { useRead } from "@/lib/useRead";
+import { suggestionsChanged, TODOS_RETRY_MS } from "@/screens/todo/listens";
 import { cn } from "@/lib/utils";
 import type { ArchiveSuggestion } from "@/lib/api-types";
 
@@ -30,9 +31,10 @@ interface ArchiveBannerProps {
  */
 export function ArchiveBanner({ ruleId, busy, onArchive }: ArchiveBannerProps) {
   const headingId = useId();
-  const list = useCached<ArchiveSuggestion[]>(
+  const list = useRead<ArchiveSuggestion[]>(
     KEYS.archiveSuggestions,
     fetchArchiveSuggestions,
+    { match: suggestionsChanged, retryMs: TODOS_RETRY_MS },
     "보관 제안을 불러오지 못했어요.",
   );
   const suggestion = list.data?.find((s) => s.rule_id === ruleId);
@@ -48,7 +50,7 @@ export function ArchiveBanner({ ruleId, busy, onArchive }: ArchiveBannerProps) {
       await keepCollecting(suggestion);
       suggestionGone(ruleId);
       // The server decides what is still suggested (a ground may have come up since).
-      list.reload();
+      list.reread();
     } catch (e) {
       setError(e instanceof ApiError ? e.message : "수집 유지를 저장하지 못했어요. 다시 시도해 주세요.");
     } finally {

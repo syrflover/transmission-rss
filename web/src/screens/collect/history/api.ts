@@ -28,7 +28,7 @@ export interface HistoryFilter {
 
 export function listHistory(
   filter: HistoryFilter,
-  options: { after?: string | null; limit?: number } = {},
+  options: { after?: string | null; limit?: number; signal?: AbortSignal } = {},
 ): Promise<HistoryPage> {
   const params = new URLSearchParams();
   if (filter.results.length > 0) params.set("result", filter.results.join(","));
@@ -36,7 +36,31 @@ export function listHistory(
   if (options.after) params.set("after", options.after);
   if (options.limit) params.set("limit", String(options.limit));
   const query = params.toString();
-  return api<HistoryPage>(`/history${query === "" ? "" : `?${query}`}`);
+  return api<HistoryPage>(`/history${query === "" ? "" : `?${query}`}`, { signal: options.signal });
+}
+
+/** The most items the server answers in one page (`src/web/history_api.rs`). */
+const MAX_PAGE = 200;
+
+/**
+ * The newest `count` items under `filter`, or all there are when they are fewer,
+ * read from the top in pages as large as the server allows, with the counts of
+ * the first: what the list shows, as it is now.
+ */
+export async function listHistoryFromTop(
+  filter: HistoryFilter,
+  count: number,
+  signal?: AbortSignal,
+): Promise<HistoryPage> {
+  const first = await listHistory(filter, { limit: Math.min(MAX_PAGE, count), signal });
+  let { items, next } = first;
+  while (items.length < count && next !== null) {
+    const page = await listHistory(filter, { after: next, limit: Math.min(MAX_PAGE, count - items.length), signal });
+    const seen = new Set(items.map((item) => item.id));
+    items = [...items, ...page.items.filter((item) => !seen.has(item.id))];
+    next = page.next;
+  }
+  return { items, next, counts: first.counts };
 }
 
 export function getHistoryItem(id: number): Promise<HistoryItem> {

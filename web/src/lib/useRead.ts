@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { ApiError, type ApiErrorCode } from "@/lib/api";
 import type { Change } from "@/lib/api-types";
-import { peek, store, useAfterDelay, useStored, versionOf } from "@/lib/cached";
+import { patch, peek, store, useAfterDelay, useStored, versionOf } from "@/lib/cached";
 
 import { createRereader, ReadTimedOut, type Rereader } from "./rereads";
 import { sharedEvents } from "./sharedEvents";
@@ -18,6 +18,12 @@ export interface Read<T> {
   slow: boolean;
   /** Reads now, or once more when a read is on its way (a screen that changed what it reads itself). */
   reread: () => void;
+  /**
+   * Sets the cached value, or changes it with a function, for what the screen
+   * itself just sent (`lib/cached.ts`): a read that was on its way meanwhile
+   * does not bring the old value back.
+   */
+  update: (next: T | ((value: T) => T)) => void;
 }
 
 /** When to read again. */
@@ -86,6 +92,9 @@ export function useRead<T>(
           const value = await loadRef.current(signal);
           if (signal.aborted) return;
           if (versionOf(key) === started || peek<T>(key) === undefined) store(key, value);
+          // What the screen wrote stays, and what else the dropped answer brought (the change it was read for) is
+          // read once more after it.
+          else rereader.request();
           setStatus({ key, error: null, code: null });
         } catch (e) {
           // A read that took too long fails like a lost connection; one the screen stopped says nothing.
@@ -119,6 +128,14 @@ export function useRead<T>(
     };
   }, [key]);
 
+  const update = useCallback(
+    (next: T | ((value: T) => T)) => {
+      if (typeof next === "function") patch(key, next as (value: T) => T);
+      else store(key, next);
+    },
+    [key],
+  );
+
   const mine = status.key === key;
   const error = mine ? status.error : null;
   return {
@@ -127,5 +144,6 @@ export function useRead<T>(
     code: mine ? status.code : null,
     slow: useAfterDelay(data === undefined && error === null),
     reread,
+    update,
   };
 }

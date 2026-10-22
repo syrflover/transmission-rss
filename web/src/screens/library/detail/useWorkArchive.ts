@@ -1,12 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { ApiError } from "@/lib/api";
-import { forgetPrefix } from "@/lib/cached";
 import { getCommand, isOpen, newCommandId, type Command } from "@/lib/commands";
 import { useCommandWatch } from "@/lib/useCommandWatch";
 
 import { rulesDeleted } from "../../collect/cache";
-import { LIST_PREFIX, sendWorkArchive, type WorkArchiveConflict, type WorkArchiveRule, type WorkDetail } from "../api";
+import { sendWorkArchive, type WorkArchiveConflict, type WorkArchiveRule, type WorkDetail } from "../api";
 import type { WorkArchivePhase } from "./archiveNotice";
 
 /** How long to wait before reading again a command whose last read failed, in milliseconds. */
@@ -72,8 +71,6 @@ export function useWorkArchive(work: WorkDetail, onRefresh: () => Promise<void>)
     attempt.current = null;
     watching.stop();
     setPhase({ kind: "ended", command });
-    // The work may have moved: the list shows its folder.
-    forgetPrefix(LIST_PREFIX);
     reread();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);

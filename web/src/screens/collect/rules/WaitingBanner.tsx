@@ -1,7 +1,8 @@
 import { Link } from "react-router-dom";
 
 import { Button } from "@/components/ui/button";
-import { useCached } from "@/lib/cached";
+import { useRead } from "@/lib/useRead";
+import { suggestionsChanged, TODOS_RETRY_MS } from "@/screens/todo/listens";
 import type { Rule, TitleCandidate } from "@/lib/api-types";
 
 import { KEYS } from "../cache";
@@ -20,7 +21,12 @@ const blue =
  * this subscription.
  */
 export function WaitingBanner({ rule }: { rule: Rule }) {
-  const list = useCached<TitleCandidate[]>(KEYS.candidates, fetchCandidates, "제목 후보를 불러오지 못했어요.");
+  const list = useRead<TitleCandidate[]>(
+    KEYS.candidates,
+    fetchCandidates,
+    { match: suggestionsChanged, retryMs: TODOS_RETRY_MS },
+    "제목 후보를 불러오지 못했어요.",
+  );
 
   if (rule.state === "paused") {
     return (

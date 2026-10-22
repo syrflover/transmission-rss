@@ -231,7 +231,8 @@ export function HeadCreators({
       )}
       {creatorOpen && subscription && (
         <CreatorPicker
-          key={`${subscription.rule_version}:${subscription.creator ?? ""}`}
+          // A new creator starts the choice over; a newer version alone (the worker moved `episode`) keeps it.
+          key={subscription.creator ?? ""}
           animeNo={subscription.anime_no}
           current={subscription.creator}
           onCancel={() => setCreatorOpen(false)}

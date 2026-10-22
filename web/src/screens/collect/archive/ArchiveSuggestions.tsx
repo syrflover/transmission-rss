@@ -2,7 +2,8 @@ import { useEffect, useId, useState } from "react";
 import { Link } from "react-router-dom";
 
 import { Button } from "@/components/ui/button";
-import { useCached } from "@/lib/cached";
+import { useRead } from "@/lib/useRead";
+import { suggestionsChanged, TODOS_RETRY_MS } from "@/screens/todo/listens";
 import { cn } from "@/lib/utils";
 import type { ArchiveSuggestion } from "@/lib/api-types";
 
@@ -38,9 +39,10 @@ export const btnArch =
  */
 export function ArchiveSuggestions({ className, onArchived }: { className?: string; onArchived: () => void }) {
   const headingId = useId();
-  const list = useCached<ArchiveSuggestion[]>(
+  const list = useRead<ArchiveSuggestion[]>(
     KEYS.archiveSuggestions,
     fetchArchiveSuggestions,
+    { match: suggestionsChanged, retryMs: TODOS_RETRY_MS },
     "보관 제안을 불러오지 못했어요.",
   );
   const suggestions = list.data ?? [];
@@ -49,7 +51,7 @@ export function ArchiveSuggestions({ className, onArchived }: { className?: stri
   const tracker = batches();
   const [run, setRun] = useState<Run | null>(tracker.run);
   // What the batch calls at its end, which may come after this screen is gone: the latest props, not a render's.
-  tracker.setHooks({ archived: onArchived, reload: list.reload });
+  tracker.setHooks({ archived: onArchived, reload: list.reread });
 
   // The tracker follows the batch whether or not this screen is shown; the screen only shows what it says.
   useEffect(() => {

@@ -1,11 +1,12 @@
 import { Link } from "react-router-dom";
 
-import { useCached } from "@/lib/cached";
+import { useRead } from "@/lib/useRead";
 import { sizeText } from "@/lib/size";
 
 import { STORAGE_KEY, workPath } from "../../library/api";
 import { cleanableText, filesPath, kindTexts, type StorageOverview, type StorageWork } from "../../library/storage.ts";
 import { findItem } from "../items";
+import { STORAGE } from "../listens";
 import { BTN, Facts, Tag } from "../parts";
 import { loadStorage } from "./api";
 
@@ -44,7 +45,7 @@ function WorkRow({ work }: { work: StorageWork }) {
  * clean is done one file at a time there (docs/requirements/library.md, 보관 파일의 정리).
  */
 export function StoragePanel() {
-  const storage = useCached<StorageOverview>(STORAGE_KEY, loadStorage, LOAD_FAILED);
+  const storage = useRead<StorageOverview>(STORAGE_KEY, loadStorage, STORAGE, LOAD_FAILED);
   const data = storage.data;
   return (
     <div className="flex flex-col gap-5 p-5 max-[720px]:p-4">
@@ -62,7 +63,7 @@ export function StoragePanel() {
           <p role="alert" className="text-[13px] font-semibold text-urgent">
             {storage.error}
           </p>
-          <button type="button" className={BTN.plain} onClick={storage.reload}>
+          <button type="button" className={BTN.plain} onClick={storage.reread}>
             재시도
           </button>
         </div>

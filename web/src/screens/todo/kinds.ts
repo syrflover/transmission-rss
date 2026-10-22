@@ -20,21 +20,3 @@ export interface TodoOf {
 export function todosOfWork<T extends TodoOf>(todos: readonly T[], workId: string): T[] {
   return todos.filter((todo) => todo.work?.id === workId);
 }
-
-/**
- * The works with their badges as `kinds` has them, a work with none having none. A work whose badges are the same
- * stays the same object, and so do the works when none changed, so the list draws again only what changed.
- */
-export function withKinds<W extends { id: string; todos: TodoKind[] }>(
-  works: W[],
-  kinds: ReadonlyMap<string, TodoKind[]>,
-): W[] {
-  let changed = false;
-  const next = works.map((work) => {
-    const todos = kinds.get(work.id) ?? [];
-    if (todos.length === work.todos.length && todos.every((kind, i) => kind === work.todos[i])) return work;
-    changed = true;
-    return { ...work, todos };
-  });
-  return changed ? next : works;
-}

@@ -3,16 +3,14 @@ import { Link, useLocation, useNavigate, useParams, useSearchParams } from "reac
 
 import { Button } from "@/components/ui/button";
 import { timedRead } from "@/lib/api";
-import { forget, forgetPrefix, store, useCached } from "@/lib/cached";
+import { forget, store } from "@/lib/cached";
 import { useMediaQuery, PHONE_QUERY } from "@/lib/media";
-import { createRereader } from "@/lib/rereads";
-import { sharedEvents } from "@/lib/sharedEvents";
+import { useRead } from "@/lib/useRead";
 
 import { EmptyState, ScreenFrame, usePageTitle } from "../ScreenFrame";
 import { btnNeutral } from "../collect/channels/styles";
 import { KEYS } from "../collect/cache";
 import {
-  LIST_PREFIX,
   loadWork,
   movieLinkKey,
   workKey,
@@ -25,7 +23,7 @@ import {
 import { CandidateSection } from "./detail/CandidateSection";
 import { useCandidates } from "./detail/candidates";
 import { CoverDialog } from "./detail/CoverDialog";
-import { COVER_RETRY_MS, workCoverChanged } from "./detail/listens";
+import { COVER_RETRY_MS, WORK_RETRY_MS, workChanged } from "./detail/listens";
 import { EpisodeList } from "./detail/EpisodeList";
 import { defaultSeason, rowId } from "./detail/model";
 import { MOVIE_EPISODE } from "./detail/movie.ts";
@@ -66,7 +64,18 @@ export function WorkDetailScreen() {
 function WorkPage({ workId }: { workId: string }) {
   const location = useLocation();
   const navigate = useNavigate();
-  const work = useCached<WorkDetail | null>(workKey(workId), (signal) => loadWork(workId, signal), LOAD_FAILED);
+  // The page is read again when the server says something it shows changed (`detail/listens.ts`): a cover that
+  // follows a season's link keeps its old image until trss has received the new one, even after the cover view or the
+  // link dialog is closed, and a season linked from another screen renames the work.
+  const work = useRead<WorkDetail | null>(
+    workKey(workId),
+    (signal) => loadWork(workId, signal),
+    {
+      match: (change) => workChanged(change, workId),
+      retryMs: (data) => (data?.cover_pending ? COVER_RETRY_MS : WORK_RETRY_MS),
+    },
+    LOAD_FAILED,
+  );
   const fromLibrary = (location.state as typeof FROM_LIBRARY | null)?.from === FROM_LIBRARY.from;
 
   const back = (event: MouseEvent<HTMLAnchorElement>) => {
@@ -85,45 +94,12 @@ function WorkPage({ workId }: { workId: string }) {
     </Link>
   );
 
-  // A new cover shows in the head at once; the list reads its pages again.
+  // A new cover shows in the head at once.
   const coverChanged = (coverUrl: string | null) => {
-    if (work.data && work.data.cover_url !== coverUrl) {
-      work.update((w) => (w ? { ...w, cover_url: coverUrl } : w));
-      forgetPrefix(LIST_PREFIX);
-    }
+    if (work.data && work.data.cover_url !== coverUrl) work.update((w) => (w ? { ...w, cover_url: coverUrl } : w));
   };
 
-  // A cover that follows a season's link keeps its old image until trss has received the new one, even after the
-  // cover view or the link dialog is closed: the work is read again when the server says the work's cover changed
-  // (`detail/listens.ts`). Listening starts before the first read, so a cover received meanwhile is not missed.
-  const coverPending = work.data?.cover_pending ?? false;
-  const coverUrl = useRef<string | null>(null);
-  coverUrl.current = work.data?.cover_url ?? null;
-  const updateWork = work.update;
-  useEffect(() => {
-    if (!coverPending) return;
-    const rereader = createRereader({
-      read: async (signal) => {
-        const fresh = await loadWork(workId, signal);
-        if (signal.aborted || !fresh) return;
-        if (fresh.cover_url !== coverUrl.current) forgetPrefix(LIST_PREFIX);
-        updateWork((w) => (w ? { ...w, cover_url: fresh.cover_url, cover_pending: fresh.cover_pending } : w));
-      },
-      retryMs: () => COVER_RETRY_MS,
-      hidden: () => document.hidden,
-    });
-    const stopListening = sharedEvents().subscribe({
-      match: (change) => workCoverChanged(change, workId),
-      reread: () => rereader.request(),
-    });
-    rereader.start();
-    return () => {
-      stopListening();
-      rereader.stop();
-    };
-  }, [workId, coverPending, updateWork]);
-
-  // A season's info after a change (or after the app linked it) shows at once; the list reads its pages again.
+  // A season's info after a change (or after the app linked it) shows at once.
   const infoChanged = (info: SeasonInfo) => {
     work.update((w) => {
       if (!w) return w;
@@ -132,13 +108,12 @@ function WorkPage({ workId }: { workId: string }) {
       const native = info.can_auto ? (info.entries[0]?.native ?? null) : w.native_title;
       return { ...w, seasons, native_title: native };
     });
-    forgetPrefix(LIST_PREFIX);
     // The episodes' air days follow the entries, so the page is read again behind what it shows.
-    work.reload();
+    work.reread();
   };
 
   // A season's Anissia link after a change shows at once. The work title follows the lowest linked season (a
-  // movie-only work's movie), so the page and the list are read again behind it. A movie's link is kept apart from
+  // movie-only work's movie), so the page is read again behind it. A movie's link is kept apart from
   // the seasons': the page's episode names its anime, and the link itself (version, titles) is in its own cache.
   const anissiaChanged = (link: AnissiaLink) => {
     const movie = link.movie;
@@ -160,8 +135,7 @@ function WorkPage({ workId }: { workId: string }) {
         return { ...w, seasons: w.seasons.map((s) => (s.number === link.season ? { ...s, anissia: link } : s)) };
       });
     }
-    forgetPrefix(LIST_PREFIX);
-    work.reload();
+    work.reread();
   };
 
   // A `다시 받기` of a failed replacement ended: the episode rows show what the worker did. The read is timed, as
@@ -180,12 +154,12 @@ function WorkPage({ workId }: { workId: string }) {
   const subscriptionEdited = () => {
     forget(KEYS.subscriptions);
     forget(KEYS.rules);
-    work.reload();
+    work.reread();
   };
 
   // Subtitle files got a creator: the page reads them again.
   const creatorsChanged = () => {
-    work.reload();
+    work.reread();
   };
 
   if (work.data) {
@@ -213,7 +187,7 @@ function WorkPage({ workId }: { workId: string }) {
             <p role="alert" className="text-[13px] font-semibold text-urgent">
               {work.error}
             </p>
-            <Button type="button" variant="ghost" className={btnNeutral} onClick={work.reload}>
+            <Button type="button" variant="ghost" className={btnNeutral} onClick={work.reread}>
               재시도
             </Button>
           </>
@@ -437,7 +411,7 @@ function Loaded({
                 onChanged={onAnissiaChanged}
               />
             ) : (
-              <MovieLinkPending error={movieLink.error} slow={movieLink.slow} onRetry={movieLink.reload} />
+              <MovieLinkPending error={movieLink.error} slow={movieLink.slow} onRetry={movieLink.reread} />
             ))}
           <WorkTodos workId={work.id} seasonCount={work.seasons.length} onRefresh={onRetried} />
           {season && (

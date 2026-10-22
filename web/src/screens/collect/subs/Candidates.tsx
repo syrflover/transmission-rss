@@ -3,7 +3,8 @@ import { Link } from "react-router-dom";
 
 import { Button } from "@/components/ui/button";
 import { ApiError } from "@/lib/api";
-import { useCached } from "@/lib/cached";
+import { useRead } from "@/lib/useRead";
+import { suggestionsChanged, TODOS_RETRY_MS } from "@/screens/todo/listens";
 import { dateTime } from "@/lib/time";
 import { cn } from "@/lib/utils";
 import type { TitleCandidate } from "@/lib/api-types";
@@ -29,7 +30,12 @@ const idOf = (c: TitleCandidate) => `${c.channel_id}\n${c.key}`;
  */
 export function Candidates({ className }: { className?: string }) {
   const headingId = useId();
-  const list = useCached<TitleCandidate[]>(KEYS.candidates, fetchCandidates, "제목 후보를 불러오지 못했어요.");
+  const list = useRead<TitleCandidate[]>(
+    KEYS.candidates,
+    fetchCandidates,
+    { match: suggestionsChanged, retryMs: TODOS_RETRY_MS },
+    "제목 후보를 불러오지 못했어요.",
+  );
   const candidates = list.data;
   const [rejecting, setRejecting] = useState<string | null>(null);
   const [error, setError] = useState<{ id: string; message: string } | null>(null);

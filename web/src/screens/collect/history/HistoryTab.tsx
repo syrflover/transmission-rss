@@ -2,14 +2,16 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "rea
 import { useNavigate, useSearchParams } from "react-router-dom";
 
 import { Button } from "@/components/ui/button";
-import { patch, useCached } from "@/lib/cached";
+import { patch } from "@/lib/cached";
+import { useRead } from "@/lib/useRead";
 import type { ChannelList, HistoryCounts, HistoryItem, HistoryPage } from "@/lib/api-types";
 
 import { EmptyState } from "../../ScreenFrame";
 import { KEYS } from "../cache";
 import { listChannels, channelTitle } from "../channels/api";
 import { btnNeutral, inputClass } from "../channels/styles";
-import { listHistory, type HistoryFilter } from "./api";
+import { CHANNELS_RETRY_MS, channelListChanged, HISTORY_RETRY_MS, historyChanged } from "../listens";
+import { listHistory, listHistoryFromTop, type HistoryFilter } from "./api";
 import {
   RESULT_CHIPS,
   chipCount,
@@ -61,7 +63,9 @@ const NO_COUNTS: HistoryCounts = {
  * The 기록 tab: what the worker did with every RSS item, newest first, with
  * filters by result and channel kept in the URL (`?result=add_failed,duplicate&channel=<id>`).
  * The list pages in by cursor as it is scrolled, so rows already shown keep
- * their place while more are added below.
+ * their place while more are added below. When the server says the history
+ * changed (`../listens.ts`), as many rows as are shown are read again from the
+ * top and replace the pages, so a row the worker added shows above them.
  */
 export function HistoryTab() {
   const [params] = useSearchParams();
@@ -70,12 +74,23 @@ export function HistoryTab() {
   const key = writeFilter(filter);
   const cacheKey = KEYS.history(key);
 
-  const first = useCached<HistoryPage>(
+  // How many rows the filter shows, for reading them all again from the top.
+  const shownRows = useRef({ key, count: 0 });
+  const first = useRead<HistoryPage>(
     cacheKey,
-    () => listHistory(filter, { limit: PAGE_SIZE }),
+    (signal) => {
+      const count = shownRows.current.key === key ? Math.max(PAGE_SIZE, shownRows.current.count) : PAGE_SIZE;
+      return listHistoryFromTop(filter, count, signal);
+    },
+    { match: historyChanged, retryMs: HISTORY_RETRY_MS },
     "기록을 불러오지 못했어요.",
   );
-  const channelList = useCached<ChannelList>(KEYS.channels, listChannels, "");
+  const channelList = useRead<ChannelList>(
+    KEYS.channels,
+    listChannels,
+    { match: channelListChanged, retryMs: CHANNELS_RETRY_MS },
+    "",
+  );
   // Without the list the channel filter only offers the chosen channel; the list itself still works.
   const channels = channelList.data?.channels ?? [];
   const [extra, setExtra] = useState<Extra | null>(null);
@@ -101,6 +116,7 @@ export function HistoryTab() {
   // While another filter loads, the list of the last one stays, dimmed.
   const lastView = useRef<View | null>(null);
   if (view) lastView.current = view;
+  if (view) shownRows.current = { key, count: view.items.length };
   const shown = view ?? lastView.current;
   const next = view ? view.next : null;
 
@@ -175,7 +191,7 @@ export function HistoryTab() {
         <p role="alert" className="text-[13px] font-semibold text-urgent">
           {first.error}
         </p>
-        <Button type="button" variant="ghost" className={btnNeutral} onClick={first.reload}>
+        <Button type="button" variant="ghost" className={btnNeutral} onClick={first.reread}>
           재시도
         </Button>
       </div>

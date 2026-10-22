@@ -3,12 +3,13 @@ import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ApiError } from "@/lib/api";
-import { useCached } from "@/lib/cached";
+import { useRead } from "@/lib/useRead";
 import { ago, dateTime } from "@/lib/time";
 import { KEYS } from "@/screens/collect/cache";
 import { forgetLibrary } from "@/screens/library/api";
 import { hintClass, inputClass, labelClass } from "@/screens/collect/channels/styles";
 
+import { WATCH_FOLDERS } from "../listens";
 import { Labeled, BTN, Facts } from "../parts";
 import {
   addWatchFolder,
@@ -27,12 +28,12 @@ const LOAD_FAILED = "감시 폴더를 불러오지 못했어요.";
  * `등록 해제` (asked in place; no file is touched).
  */
 export function FoldersPanel() {
-  const folders = useCached<WatchFolderList>(KEYS.watchFolders, loadWatchFolders, LOAD_FAILED);
+  const folders = useRead<WatchFolderList>(KEYS.watchFolders, loadWatchFolders, WATCH_FOLDERS, LOAD_FAILED);
   const data = folders.data;
   // The library list and the work pages carry what these folders hold: they are read again the next time they open.
   const reload = () => {
     forgetLibrary();
-    folders.reload();
+    folders.reread();
   };
 
   return (
@@ -53,7 +54,7 @@ export function FoldersPanel() {
           <p role="alert" className="text-[13px] font-semibold text-urgent">
             {folders.error}
           </p>
-          <button type="button" className={BTN.plain} onClick={folders.reload}>
+          <button type="button" className={BTN.plain} onClick={folders.reread}>
             재시도
           </button>
         </div>

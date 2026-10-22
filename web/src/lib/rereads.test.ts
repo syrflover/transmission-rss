@@ -2,15 +2,20 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { jobChanged, jobListChanged, suggestionsChanged, todosChanged } from "../screens/todo/listens.ts";
+import { channelListChanged, historyChanged, rulesChanged, subscriptionsChanged } from "../screens/collect/listens.ts";
 import { boardChanged } from "../screens/collect/status/listens.ts";
 import {
   applyChanged,
   candidatesChanged,
   cleanupChanged,
+  movieLinkChanged,
   seasonInfoChanged,
+  workChanged,
   workCoverChanged,
 } from "../screens/library/detail/listens.ts";
+import { libraryListChanged } from "../screens/library/listens.ts";
 import { scheduleChanged } from "../screens/schedule/listens.ts";
+import { COLLECTION, POLICY, STORAGE, WATCH_FOLDERS } from "../screens/settings/listens.ts";
 import type { Change } from "./api-types";
 import { createEvents, type EventSourceLike } from "./events.ts";
 import { createRereader, READ_TIMEOUT_MS, ReadTimedOut, type RereaderOptions } from "./rereads.ts";
@@ -507,6 +512,99 @@ test("the cover and the season info read again for their work, and for a change 
   assert.equal(seasonInfoChanged(change("season_info", null), "w1"), true);
   assert.equal(seasonInfoChanged(change("season_info", "w2"), "w1"), false);
   assert.equal(seasonInfoChanged(change("artwork", "w1"), "w1"), false);
+});
+
+test("the library list reads again for its works, their titles, covers and badges, not for a remote screen or a command", () => {
+  for (const kind of [
+    "library",
+    "season_info",
+    "anissia",
+    "artwork",
+    "settings",
+    // What the to-do badges are gathered from.
+    "subtitle_job",
+    "subtitle_store",
+    "subtitle_mapping",
+    "rules",
+    "history",
+  ] as const) {
+    assert.equal(libraryListChanged(change(kind, null)), true, kind);
+    assert.equal(libraryListChanged(change(kind, "x")), true, kind);
+  }
+  for (const kind of ["subtitle_screen", "command", "past_search", "collect_status"] as const) {
+    assert.equal(libraryListChanged(change(kind, null)), false, kind);
+  }
+});
+
+test("a work's page reads again for its own work and for what names no work, and its movie link for its link and anime", () => {
+  for (const kind of ["library", "season_info", "artwork", "subtitle_store", "subtitle_mapping"] as const) {
+    assert.equal(workChanged(change(kind, "w1"), "w1"), true, kind);
+    assert.equal(workChanged(change(kind, null), "w1"), true, kind);
+    assert.equal(workChanged(change(kind, "w2"), "w1"), false, kind);
+  }
+  // A subscription that lands in the work's folder, a received revision, the folder move: their IDs name no work.
+  for (const kind of ["rules", "anissia", "history", "subtitle_job", "settings", "command", "collect_status"] as const) {
+    assert.equal(workChanged(change(kind, "x"), "w1"), true, kind);
+  }
+  for (const kind of ["subtitle_screen", "past_search"] as const) {
+    assert.equal(workChanged(change(kind, null), "w1"), false, kind);
+  }
+
+  assert.equal(movieLinkChanged(change("season_info", "w1"), "w1"), true);
+  assert.equal(movieLinkChanged(change("season_info", "w2"), "w1"), false);
+  assert.equal(movieLinkChanged(change("anissia", "1234"), "w1"), true);
+  assert.equal(movieLinkChanged(change("library", "w1"), "w1"), false);
+});
+
+test("the collection tabs read again for what their lists are made of, the history only where it is shown", () => {
+  for (const kind of ["rules", "anissia", "collect_status"] as const) {
+    assert.equal(subscriptionsChanged(change(kind, "x")), true, kind);
+  }
+  // A collection cycle's history does not make the subscriptions read again.
+  for (const kind of ["history", "library", "artwork", "subtitle_job"] as const) {
+    assert.equal(subscriptionsChanged(change(kind, null)), false, kind);
+  }
+
+  for (const kind of ["rules", "anissia", "history", "settings", "command", "library", "season_info", "artwork"] as const) {
+    assert.equal(rulesChanged(change(kind, "x")), true, kind);
+  }
+  for (const kind of ["collect_status", "subtitle_job", "subtitle_store"] as const) {
+    assert.equal(rulesChanged(change(kind, null)), false, kind);
+  }
+
+  for (const kind of ["history", "rules", "anissia", "command", "settings", "collect_status"] as const) {
+    assert.equal(historyChanged(change(kind, "x")), true, kind);
+  }
+  for (const kind of ["library", "artwork", "subtitle_job", "season_info"] as const) {
+    assert.equal(historyChanged(change(kind, null)), false, kind);
+  }
+
+  assert.equal(channelListChanged(change("rules", null)), true);
+  assert.equal(channelListChanged(change("rules", "r1")), true);
+  for (const kind of ["history", "collect_status", "settings"] as const) {
+    assert.equal(channelListChanged(change(kind, null)), false, kind);
+  }
+});
+
+test("the settings read again for what each shows, the folders for the library, the policy and the storage for the titles", () => {
+  assert.equal(COLLECTION.match(change("settings", null)), true);
+  assert.equal(COLLECTION.match(change("library", null)), false);
+
+  assert.equal(WATCH_FOLDERS.match(change("library", "w1")), true);
+  assert.equal(WATCH_FOLDERS.match(change("library", null)), true);
+  assert.equal(WATCH_FOLDERS.match(change("settings", null)), false);
+
+  for (const kind of ["settings", "library", "season_info", "anissia"] as const) {
+    assert.equal(POLICY.match(change(kind, "x")), true, kind);
+  }
+  assert.equal(POLICY.match(change("subtitle_store", "w1")), false);
+
+  for (const kind of ["subtitle_store", "subtitle_job", "artwork", "library", "season_info", "anissia"] as const) {
+    assert.equal(STORAGE.match(change(kind, "x")), true, kind);
+  }
+  for (const kind of ["settings", "history", "rules"] as const) {
+    assert.equal(STORAGE.match(change(kind, null)), false, kind);
+  }
 });
 
 test("a collection cycle's burst reads the schedule and the board once more, and the server's deadline event reads them", async () => {

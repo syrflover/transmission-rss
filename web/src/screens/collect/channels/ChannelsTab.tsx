@@ -1,11 +1,12 @@
 import { useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
-import { useCached } from "@/lib/cached";
+import { useRead } from "@/lib/useRead";
 import type { Channel, ChannelList } from "@/lib/api-types";
 
 import { EmptyState } from "../../ScreenFrame";
 import { KEYS, channelsChanged } from "../cache";
+import { CHANNELS_RETRY_MS, channelListChanged } from "../listens";
 import { PlusIcon } from "../icons";
 import { channelTitle, listChannels } from "./api";
 import { ChannelCard } from "./ChannelCard";
@@ -15,7 +16,12 @@ import { btnAction, btnNeutral } from "./styles";
 
 /** The 채널 tab: RSS channels with their masked URLs, and adding, editing and deleting them. */
 export function ChannelsTab() {
-  const list = useCached<ChannelList>(KEYS.channels, listChannels, "채널을 불러오지 못했어요.");
+  const list = useRead<ChannelList>(
+    KEYS.channels,
+    listChannels,
+    { match: channelListChanged, retryMs: CHANNELS_RETRY_MS },
+    "채널을 불러오지 못했어요.",
+  );
   const [adding, setAdding] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const addButton = useRef<HTMLButtonElement>(null);
@@ -66,7 +72,7 @@ export function ChannelsTab() {
           <p role="alert" className="text-[13px] font-semibold text-urgent">
             {list.error}
           </p>
-          <Button type="button" variant="ghost" className={btnNeutral} onClick={list.reload}>
+          <Button type="button" variant="ghost" className={btnNeutral} onClick={list.reread}>
             재시도
           </Button>
         </div>

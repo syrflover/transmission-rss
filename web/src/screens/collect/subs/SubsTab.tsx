@@ -1,13 +1,14 @@
 import { Link, Route, Routes } from "react-router-dom";
 
 import { Button } from "@/components/ui/button";
-import { useCached } from "@/lib/cached";
+import { useRead } from "@/lib/useRead";
 import { quarterName } from "@/lib/quarter";
 import type { SubscriptionItem, SubscriptionList } from "@/lib/api-types";
 
 import { EmptyState } from "../../ScreenFrame";
 import { ArchiveSuggestions } from "../archive/ArchiveSuggestions";
 import { KEYS } from "../cache";
+import { SUBSCRIPTIONS_RETRY_MS, subscriptionsChanged } from "../listens";
 import { btnAction, btnNeutral } from "../channels/styles";
 import { PlusIcon } from "../icons";
 import { AddSubscription } from "./add/AddSubscription";
@@ -35,7 +36,12 @@ export function SubsTab() {
 }
 
 function SubscriptionsView() {
-  const list = useCached<SubscriptionList>(KEYS.subscriptions, listSubscriptions, "구독을 불러오지 못했어요.");
+  const list = useRead<SubscriptionList>(
+    KEYS.subscriptions,
+    listSubscriptions,
+    { match: subscriptionsChanged, retryMs: SUBSCRIPTIONS_RETRY_MS },
+    "구독을 불러오지 못했어요.",
+  );
   const data = list.data;
   const now: SubscriptionItem[] = data ? data.subscriptions.filter((s) => !s.upcoming) : [];
   const later: SubscriptionItem[] = data ? data.subscriptions.filter((s) => s.upcoming) : [];
@@ -57,7 +63,7 @@ function SubscriptionsView() {
       {/* Side by side on a wide screen, stacked on a phone; the wrapper vanishes while both are empty. */}
       <div className="flex flex-wrap items-start gap-3.5 empty:hidden">
         <Candidates className="min-w-0 flex-[1_1_320px]" />
-        <ArchiveSuggestions className="min-w-0 flex-[1_1_320px]" onArchived={list.reload} />
+        <ArchiveSuggestions className="min-w-0 flex-[1_1_320px]" onArchived={list.reread} />
       </div>
 
       {data === undefined && list.error === null && list.slow && (
@@ -69,7 +75,7 @@ function SubscriptionsView() {
           <p role="alert" className="text-[13px] font-semibold text-urgent">
             {list.error}
           </p>
-          <Button type="button" variant="ghost" className={btnNeutral} onClick={list.reload}>
+          <Button type="button" variant="ghost" className={btnNeutral} onClick={list.reread}>
             재시도
           </Button>
         </div>

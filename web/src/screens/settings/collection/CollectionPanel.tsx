@@ -4,7 +4,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ApiError } from "@/lib/api";
 import type { CollectionSettings } from "@/lib/api-types";
-import { useCached } from "@/lib/cached";
+import { useRead } from "@/lib/useRead";
 import { collectFolderChanged, KEYS } from "@/screens/collect/cache";
 import {
   hintClass,
@@ -12,6 +12,7 @@ import {
   labelClass,
 } from "@/screens/collect/channels/styles";
 
+import { COLLECTION } from "../listens";
 import { Banner, BTN } from "../parts";
 import { loadCollection, saveCollection } from "./api";
 
@@ -19,11 +20,7 @@ const LOAD_FAILED = "수집 폴더를 불러오지 못했어요.";
 
 /** `수집 폴더`: where the worker saves what it receives, and the optional folder finished works move to. */
 export function CollectionPanel() {
-  const collection = useCached<CollectionSettings>(
-    KEYS.collection,
-    loadCollection,
-    LOAD_FAILED,
-  );
+  const collection = useRead<CollectionSettings>(KEYS.collection, loadCollection, COLLECTION, LOAD_FAILED);
   const data = collection.data;
 
   return (
@@ -53,7 +50,7 @@ export function CollectionPanel() {
           <button
             type="button"
             className={BTN.plain}
-            onClick={collection.reload}
+            onClick={collection.reread}
           >
             재시도
           </button>
@@ -97,6 +94,16 @@ function CollectionForm({
   // Moving an existing collect folder changes where new files go; ask once before it is saved.
   const movesCollectFolder =
     known.folder !== null && folder.trim() !== known.folder;
+
+  // A newer answer (another tab saved) replaces what a form nobody has touched shows; typed folders stay.
+  const pristine = useRef(false);
+  pristine.current = unchanged && !busy && conflict === null && !confirming;
+  useEffect(() => {
+    if (!pristine.current || stored.version <= known.version) return;
+    setKnown(stored);
+    setFolder(stored.folder ?? "");
+    setArchive(stored.archive_folder ?? "");
+  }, [stored, known.version]);
 
   const submit = (event: FormEvent) => {
     event.preventDefault();

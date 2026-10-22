@@ -2,7 +2,7 @@ import { Fragment } from "react";
 import { Link } from "react-router-dom";
 
 import type { CollectionSettings } from "@/lib/api-types";
-import { useCached } from "@/lib/cached";
+import { useRead } from "@/lib/useRead";
 import { THEME_LABEL, useThemePreference } from "@/lib/theme";
 import { cn } from "@/lib/utils";
 import { KEYS } from "@/screens/collect/cache";
@@ -16,12 +16,13 @@ import { SETTINGS_ITEMS, type SettingsItem, type SettingsItemId } from "./items"
 import { Facts, Tag } from "./parts";
 import { loadPolicy, policySummary, POLICY_KEY, type Policy } from "./policy/api";
 import { loadStorage } from "./storage/api";
+import { COLLECTION, POLICY, STORAGE, WATCH_FOLDERS } from "./listens";
 import type { ImportFlow } from "./import/useImportFlow";
 
 /** The collect folder row: the two folders' names, or that none is chosen yet. */
 function CollectionFacts() {
   // Shared with the panel: a save there updates this row at once.
-  const { data } = useCached<CollectionSettings>(KEYS.collection, loadCollection, "");
+  const { data } = useRead<CollectionSettings>(KEYS.collection, loadCollection, COLLECTION, "");
   const summary = data ? collectionSummary(data) : null;
   return (
     <Facts>
@@ -39,7 +40,7 @@ function CollectionFacts() {
 /** The watch folders row: how many folders are registered, or that none is. */
 function FoldersFacts() {
   // Shared with the panel: adding or unregistering a folder there updates this row at once.
-  const { data } = useCached<WatchFolderList>(KEYS.watchFolders, loadWatchFolders, "");
+  const { data } = useRead<WatchFolderList>(KEYS.watchFolders, loadWatchFolders, WATCH_FOLDERS, "");
   const summary = data ? foldersSummary(data) : null;
   return (
     <Facts>
@@ -57,7 +58,7 @@ function FoldersFacts() {
 /** The common policy row: the format order, the idle time and the concurrent jobs. */
 function PolicyFacts() {
   // Shared with the panel: a save there updates this row at once.
-  const { data } = useCached<Policy>(POLICY_KEY, loadPolicy, "");
+  const { data } = useRead<Policy>(POLICY_KEY, loadPolicy, POLICY, "");
   return (
     <Facts>
       {data === undefined ? (
@@ -72,7 +73,7 @@ function PolicyFacts() {
 /** The file sizes row: how many works hold stored files and their size, and how many files can be cleaned. */
 function StorageFacts() {
   // Shared with the panel, and dropped when a clean changes the sizes.
-  const { data } = useCached<StorageOverview>(STORAGE_KEY, loadStorage, "");
+  const { data } = useRead<StorageOverview>(STORAGE_KEY, loadStorage, STORAGE, "");
   const summary = data ? storageSummary(data) : null;
   const cleanable = data ? cleanableText(cleanableCount(data)) : null;
   return (
