@@ -10,6 +10,7 @@
 - 드러나는 모습: 시작 로그의 `Subtitle jobs: N left running by an earlier process are interrupted` 줄, 할 일 화면 `자막 작업`의 `중단됨` 배지, `commands` 표의 `attempts`예요.
 - 결과가 바꿀 것: `중단됨`이 자주 생겨 사람이 다시 시작하는 일이 짐이 되면 [끊긴 작업 ADR](adr/0020-interrupted-jobs-wait-for-a-restart.md)의 결정을 다시 봐요. 다시 실행한 명령이 틀린 일을 하면 명령을 다시 실행하는 규칙을 고쳐요.
 - 출처: [구조 가볍게 하기 명세의 명령](archive/tickets/lighter-structure/lighter-structure.md#명령)과 [끊긴 자막 작업](archive/tickets/lighter-structure/lighter-structure.md#끊긴-자막-작업). 테스트는 끊긴 상태를 DB에 만들어 확인했고, 0.8.0으로 올리기 20분쯤 전의 서버 DB 사본에는 끝나지 않은 명령과 실행 중인 작업이 없었어요(2026-10-22).
+- 2026-10-23 [feedback-0.8.0/0011의 배포](archive/specs/2026-10-23-feedback-0.8.0/0011-deploy-and-check-on-server.md#배포)로 0.9.0을 올릴 때 끊긴 자막 작업은 없었어요. 새 컨테이너의 시작 로그 처음 20줄에 `Subtitle jobs: … interrupted` 줄이 없었고, 올리기 전 15:44에 받은 서버 DB 사본의 명령 66개와 자막 작업 27개도 모두 `done`이었어요. 명령은 시작 로그에 남지 않아서, 사본을 받은 뒤 올릴 때까지 생긴 명령이 있었는지는 보지 않았어요.
 
 ## 수집 주기 하나가 보내는 바뀜의 수
 
