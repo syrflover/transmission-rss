@@ -447,7 +447,7 @@ A season's air dates, episode count, studios, genres, original title and synopsi
 
 ### Anissia schedule
 
-The 구독 tab's `편성표에서 추가` reads the airing schedule (weekdays, `기타`, `신작`) and an anime's subtitle creators from Anissia. trss needs outbound HTTPS access to `api.anissia.net`; no account or key is involved. Times are Asia/Seoul.
+The 구독 tab's `편성표에서 추가` reads from Anissia the airing schedule (weekdays, `기타`, `신작`), the full anime list searched by title (its `작품 찾기`, as in a rule's `Anissia 연결`) and an anime's subtitle creators. trss needs outbound HTTPS access to `api.anissia.net`; no account or key is involved. Times are Asia/Seoul.
 
 - The web asks Anissia when someone looks and keeps each answer for 5 minutes. If Anissia is slow, down or answers something unreadable, the schedule shows the reason with a retry; subscriptions already made keep showing the weekday and time stored with them.
 - Every Anissia request, from the web and the worker together, is spaced at least 2 seconds apart through the database, waits as long as Anissia asks after a `429`, reads at most 2 MiB and follows no redirects.
