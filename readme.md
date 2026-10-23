@@ -41,7 +41,7 @@ MEDIA_DIR=/path/to/media
 WATCH_DIR=/path/to/watch
 
 # trss (required)
-TRSS_VERSION=0.8.0            # release tag of ghcr.io/syrflover/transmission-rss
+TRSS_VERSION=0.9.0            # release tag of ghcr.io/syrflover/transmission-rss
 TRSS_WEB_HOST_IP=192.168.0.10 # this host's LAN address; the web listens only there
 TRSS_BROWSER_TOKEN=<random>   # what trss and the browser container share, e.g. from `openssl rand -hex 32`
 

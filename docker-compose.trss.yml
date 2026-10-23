@@ -62,7 +62,7 @@ name: trss-app
 
 services:
   trss:
-    image: ghcr.io/syrflover/transmission-rss:${TRSS_VERSION:?Set TRSS_VERSION in .env to a release tag, e.g. 0.8.0}
+    image: ghcr.io/syrflover/transmission-rss:${TRSS_VERSION:?Set TRSS_VERSION in .env to a release tag, e.g. 0.9.0}
     container_name: trss
     restart: unless-stopped
     # The user Transmission writes the media as (`PUID`/`PGID` in
@@ -145,7 +145,7 @@ services:
           memory: 384M
 
   trss-browser:
-    image: ghcr.io/syrflover/trss-browser:${TRSS_VERSION:?Set TRSS_VERSION in .env to a release tag, e.g. 0.8.0}
+    image: ghcr.io/syrflover/trss-browser:${TRSS_VERSION:?Set TRSS_VERSION in .env to a release tag, e.g. 0.9.0}
     container_name: trss-browser
     restart: unless-stopped
     environment:
