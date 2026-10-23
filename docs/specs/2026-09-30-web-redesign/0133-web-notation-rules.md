@@ -11,11 +11,13 @@
 
 - **상대 시각**: 명세는 `2시간 전` 같은 상대 표기를 쓰지 않는다고 해요.
   `web/src/lib/time.ts`의 `ago()`가 `방금`, `n분 전` 꼴을 만들고, 구독 추가(`PickTitle.tsx`, `PickAnime.tsx`), 규칙 상세(`parts.tsx`, `ArchiveMoveNotice.tsx`), 작품 상세의 자막 후보(`CandidateSection.tsx`), 설정의 폴더(`FoldersPanel.tsx`)가 써요.
+  2026-10-23 [feedback-0.8.0/0002](../../archive/specs/2026-10-23-feedback-0.8.0/0002-archive-a-work-from-its-detail.md)의 작품 상세 `보관 폴더로 옮기기` 결과 줄(`web/src/screens/library/detail/WorkArchive.tsx`)도 쓰고, 이 티켓에서 함께 고쳐요(사용자 결정, 2026-10-23).
 - **` · `로 잇기**: 명세는 여러 정보를 ` · `로 한 줄에 잇지 않고 정보 종류마다 모양을 달리해 간격으로 나눈다고 해요.
   2026-10-10에 `web/src`의 37개 파일에 ` · `가 든 줄이 있었어요(주석 포함). [refactoring-between-5-and-6/0113](../../archive/tickets/refactoring-between-5-and-6/0113-remaining-area-tests.md)의 조사는 수집 상태(`StatusBoard.tsx`)와 구독 추가(`PickTitle.tsx`)만 짚었지만, 할 일·작품 상세·수집 이력·설정 목록에도 있어요.
   먼저 화면에 보이는 곳을 모두 꼽고, 그 수가 이 결정을 내릴 때 본 것보다 훨씬 많으니 고치기 전에 범위를 사용자에게 다시 보여줘요.
 - **`더 보기` 버튼**: 명세는 모든 목록이 `더 보기` 대신 무한 스크롤을 쓴다고 해요.
   작품 상세의 Anissia 연결(`SeasonAnissiaDialog.tsx`), 시즌 정보 연결(`SeasonLinksDialog.tsx`), 표지 고르기(`CoverDialog.tsx`)에 `결과 더 보기`가, 할 일의 변경 목록(`todo/Changes.tsx`)에 `n줄 더 보기`가 있어요.
+  2026-10-23 [feedback-0.8.0/0006](../../archive/specs/2026-10-23-feedback-0.8.0/0006-schedule-search-every-weekday.md)이 구독 화면과 규칙의 `Anissia 연결`이 함께 쓰는 `작품 찾기`(`web/src/screens/collect/subs/add/AnissiaSearch.tsx`)에도 `결과 더 보기`를 두었고, 이것도 이 티켓에서 무한 스크롤로 바꿔요(사용자 결정, 2026-10-23). 서버가 종영작을 쪽마다 빼서 한 쪽이 빌 수 있고, 지금 화면은 그때 `결과 더 보기`로 더 찾으라고 알려요. 무한 스크롤에서 빈 쪽을 어떻게 다룰지 이 티켓에서 정해요.
 - **빨간 배지**: 명세는 빨간색을 실패, 수집·적용을 막는 오류, 되돌리기 어려운 동작에만 쓴다고 해요.
   메뉴의 할 일 개수 배지(`web/src/app/NavBadge.tsx`)가 `accent-urgent`(다크 `#ff6a4d`, 라이트 `#b83816`)로 칠해져요. [1-app-owned-collection/0003](../../archive/tickets/1-app-owned-collection/0003-web-shell.md)이 할 일 개수를 채우는 티켓에서 색을 다시 정하라고 남겼는데, 그 뒤 정하지 않았어요.
 - **Transmission 관리 화면 링크**: 명세는 Transmission의 상태와 기존 관리 화면으로 가는 링크를 둔다고 해요.
