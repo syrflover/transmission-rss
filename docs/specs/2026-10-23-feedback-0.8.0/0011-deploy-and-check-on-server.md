@@ -1,6 +1,6 @@
 # 0011 0.8.0 피드백의 수정을 배포하고 서버에서 확인해요
 
-- 상태: 진행 중 (2026-10-23, 마이그레이션 확인을 마쳤어요. 아래 "결과")
+- 상태: 진행 중 (2026-10-23, 0.9.0을 서버에 올렸고 사용자의 기기에서 볼 것이 남았어요. 아래 "결과")
 - 출처: [0.8.0을 써 보고 고칠 것](spec.md), [readme의 Releasing](../../../readme.md#releasing)
 - 막는 티켓: [0001](0001-unconnected-subscription.md), [0002](0002-archive-a-work-from-its-detail.md), [0003](0003-archive-deletes-the-rule.md), [0004](0004-library-folder-choice.md), [0005](0005-library-list-remembers.md), [0006](0006-schedule-search-every-weekday.md), [0007](0007-rule-anissia-link.md), [0008](0008-subscription-cover.md), [0009](0009-reread-when-the-app-returns.md), [0010](0010-every-screen-listens.md)
 
@@ -46,3 +46,26 @@
 | `season_anissia` | 18 | 18 | 지운 규칙의 작품에 걸린 것은 전에도 0 |
 
 지운 구독은 [0001](0001-unconnected-subscription.md)이 진단한 `정반대의 너와 나 2기`(규칙 `d45f0159-b9c2-40e7-b510-73b92c2ef8e7`)이고, 그 규칙이 받은 수집 이력 1개도 남았어요. 0001의 진단은 2026-10-22의 서버 DB 사본으로 이미 마쳤어요. 그 밖의 표는 행 수가 같고, 새 표 `subscription_artwork`는 비어 있어요. `PRAGMA integrity_check`는 `ok`, `PRAGMA foreign_key_check`는 0행이었어요. 원본 기록과 비교 스크립트는 이 PC의 `dev/local/measure/feedback-0.8.0-0011/`에 있어요.
+
+### 배포
+
+2026-10-23에 사용자 승인을 받아 master와 태그 `0.9.0`(`65c7e99e`)을 push했어요. 버전은 제가 정했어요. [0003](0003-archive-deletes-the-rule.md)이 규칙의 `보관됨` 상태를 없애 규칙 API가 바뀌므로 minor를 올렸어요. readme의 `.env` 예시와 compose 파일의 안내 문구도 `0.9.0`으로 고쳤어요. Deploy 워크플로가 6분 11초 만에 `ghcr.io/syrflover/transmission-rss`와 `ghcr.io/syrflover/trss-browser`의 `0.9.0`과 `latest`를 게시했어요. 태그를 단 커밋과 musl 테스트를 돌린 1c77bc14의 차이는 문서뿐이에요.
+
+서버 명령은 사용자가 j4105에서 실행했어요. 확인, 준비, 전환, 관찰의 네 블록이고, 실행하기 전에 0.8.0 상태의 clone과 가짜 `docker`·`sudo`·`python3`로 이 PC에서 대화형 bash로 돌려 봤어요. 준비 블록은 trss를 멈추지 않고 0.8.0 파일을 남긴 뒤 `git pull`, `TRSS_VERSION=0.9.0`, 이미지 받기를 했어요. 전환 블록은 토렌트 목록을 저장하고 `trss`와 `trss-browser`를 멈춘 뒤, 데이터 폴더를 복사하고 `docker compose -f docker-compose.trss.yml up -d --remove-orphans`로 올렸어요. 사용자가 붙여 준 것은 관찰 블록의 출력이에요.
+
+되돌림 사본은 서버의 `~/trss-rollback-0.8.0`에 있어요. 앱 데이터 폴더의 사본 `data/`, 0.8.0의 `.env`, `docker-compose.yml`, `docker-compose.trss.yml`, 그때 서버 clone의 커밋을 적은 `commit.txt`예요. 전환 블록은 데이터 폴더를 복사해야 새 컨테이너를 올리도록 이어 놓았고, 새 컨테이너가 떴으므로 복사는 끝났어요. 되돌릴 때는 이 사본과 0.8.0 이미지를 써요.
+
+### 서버에서 본 것
+
+2026-10-23, 0.9.0에서 본 것이에요. 서버 web은 이 PC의 내장 브라우저로 열어 읽기만 했고, API는 GET으로 읽었어요. 내장 브라우저가 보낸 요청은 하나 말고 모두 GET이었어요. 그 하나는 규칙 상세가 열릴 때 보낸 `POST /api/rules/preview`이고, 미리보기는 아무것도 저장하지 않아요(`a_preview_changes_nothing_that_is_stored`).
+
+- 첫 수집 주기: 250개를 보고 새로 더한 것 0개, 실패 0개로 끝났어요. 시작 로그 앞 20줄에 오류가 없었고, 두 감시 폴더의 첫 읽기에서 빠진 파일이 0개였어요.
+- 토렌트 목록: 올리기 전과 첫 주기 뒤 모두 5개이고, `diff`가 같았어요.
+- 컨테이너: `trss`와 `trss-browser`만 있었고 둘 다 `0.9.0`이었어요.
+- 메모리: 시작하고 2분쯤 뒤 `trss` 39.77MiB(한도 384MiB), `trss-browser` 13.81MiB(한도 768MiB)였어요. 0.8.0의 1분쯤 뒤 값 14.26MiB보다 높은데, 까닭은 보지 않았어요.
+- 규칙: 규칙 API가 규칙 7개를 모두 `active`로 돌려줬고, 구독은 5개예요.
+- 라이브러리: `전체` 92편 가운데 `수집`이 10편, `보관`이 82편이었고, `전체`의 격자에서 보관 폴더의 작품에 `보관` 배지가 붙었어요. `수집`·`목록`·`방영 중`·`제목순`을 고른 뒤 새로고침하자 넷 모두 그대로 `작품 5편`이었어요.
+- 구독 화면의 `작품 찾기`: `마녀`로 5편이 `수요일 22:00`·`월요일 21:30`·`기타`·`신작`과 함께 떴어요. 글자를 백스페이스로 모두 지워도 Chromium에서는 입력칸이 포커스를 잃지 않았어요.
+- 일반 규칙의 `Anissia 연결`: `Mushoku Tensei/Season 03`에서 `전체 목록`을 `무직`으로 찾자 5편 가운데 `종영` 4편이 요일·종영일과 함께 떴어요. 붙여 쓴 `무직전생`으로는 아무것도 찾지 못했어요. 잇지 않고 `취소`했어요.
+- 이번 주 편성: 카드 5개의 표지가 모두 떴어요(Chromium).
+- 첫 화 전의 구독 카드의 표지: 지금 구독 5개가 모두 시즌에 붙어 있어서 볼 카드가 없었어요. 다음 분기 구독 때 봐요.
