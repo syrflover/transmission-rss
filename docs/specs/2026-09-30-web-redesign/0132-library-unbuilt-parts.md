@@ -19,6 +19,7 @@
   기록할 활동의 종류와 어디에서 읽을지는 이 티켓에서 정해요.
 - **표지 자동 판정의 힌트와 시즌마다의 관찰**: 명세는 연결이 확인된 Anissia의 `subject`, `originalSubject`, `startDate`를 힌트로 쓰고, 시즌마다 확인된 제목 관찰이 서로 다른 후보를 가리키면 자동으로 고르지 않는다고 해요.
   trss-library `artwork/queue.rs`는 작품 폴더 이름 하나만 AniList 제목과 견줘 `decide`에 넘겨요. 같은 제목의 후보가 여럿이면 비워 두는 것은 만들어져 있어요. 시즌 정보의 첫 시즌 자동 연결도 폴더 이름만 쓰고, [2-work-discovery-and-subscriptions/0017](../../archive/tickets/2-work-discovery-and-subscriptions/0017-season-info.md)이 그 판정에 Anissia 힌트를 더하는 일을 남은 일로 적었어요.
+  2026-10-23 [feedback-0.8.0/0008](../../archive/specs/2026-10-23-feedback-0.8.0/0008-subscription-cover.md)부터 같은 큐가 구독의 표지를 Anissia의 원제와 시작일로 찾아요(`trss_anilist::title::decide_original`, AniList 요청의 `startDate`). 작품의 자기 검색은 그대로 폴더 이름만 써요.
 - **`자막 확인 필요`의 원인**: 명세는 파일 누락·검증 실패·회차를 확인하지 못한 기록이 있으면 `자막 확인 필요`를 표시하고 상세에서 원인을 보여준다고 해요.
   trss-library `store/library/overview.rs`의 `subtitle_check_needed`는 회차에 붙이지 못한 자막 파일만 봐요. 파일 누락과 검증 실패로는 이 표시가 뜨지 않아요.
 
