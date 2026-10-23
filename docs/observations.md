@@ -33,7 +33,8 @@
 - 드러나는 모습: 일괄 보관이 끝까지 가지 않고 멈추거나, 다시 보인 탭이 끝난 규칙 수를 틀리게 보여요.
 - 결과가 바꿀 것: `trss` 크레이트의 `archive_batch` 실행을 고쳐요.
 - 출처: [0163의 개발 환경에서 확인](archive/tickets/lighter-structure/0163-batch-archive-on-server.md#개발-환경에서-확인). 2026-10-21에 개발 환경의 Transmission에서만 봤어요.
-- 2026-10-23 일괄 보관이 규칙마다 규칙을 지우고 작품 폴더의 이동이 끝나기를 기다리게 바뀌었어요. [feedback-0.8.0/0003의 개발 환경 확인](specs/2026-10-23-feedback-0.8.0/0003-archive-deletes-the-rule.md#개발-환경-확인)에서 개발 환경의 Transmission으로 제안 하나만 보관해, 규칙이 지워지고 폴더가 옮겨진 것을 봤어요. 여러 규칙과 탭 숨기기는 다시 보지 않았어요.
+- 2026-10-23 일괄 보관이 규칙마다 규칙을 지우고 작품 폴더의 이동이 끝나기를 기다리게 바뀌었어요. [feedback-0.8.0/0003의 개발 환경 확인](archive/specs/2026-10-23-feedback-0.8.0/0003-archive-deletes-the-rule.md#개발-환경-확인)에서 개발 환경의 Transmission으로 제안 하나만 보관해, 규칙이 지워지고 폴더가 옮겨진 것을 봤어요. 여러 규칙과 탭 숨기기는 다시 보지 않았어요.
+- 2026-10-23 서버(0.9.0)에는 보관 제안이 없어 일괄 보관을 하지 않았어요. 규칙 상세의 `보관` 하나가 규칙을 지우고, 토렌트가 없는 작품 폴더를 0.76초 만에 보관 폴더로 옮겼어요([feedback-0.8.0/0011](archive/specs/2026-10-23-feedback-0.8.0/0011-deploy-and-check-on-server.md#서버에서-본-것)).
 
 ## reverse proxy를 거친 이벤트
 
@@ -66,3 +67,28 @@
 - 출처: [server-resource-limits/0058](archive/specs/2026-10-04-server-resource-limits/0058-server-oom-and-resource-limits.md)과 [lighter-structure/0146](archive/tickets/lighter-structure/0146-one-trss-process-and-container.md)
 - 2026-10-02 서버에서 worker는 7.4MiB, web은 3.9MiB를 썼어요.
 - 2026-10-22 0.8.0을 올리고 1분쯤 뒤 `trss`는 14.26MiB, `trss-browser`는 13.86MiB였어요([lighter-structure/0162](archive/tickets/lighter-structure/0162-deploy-lighter-structure.md)).
+- 2026-10-23 0.9.0을 올리고 2분쯤 뒤 `trss`는 39.77MiB, `trss-browser`는 13.81MiB였어요([feedback-0.8.0/0011](archive/specs/2026-10-23-feedback-0.8.0/0011-deploy-and-check-on-server.md#서버에서-본-것)). 0.8.0보다 높은 까닭은 보지 않았어요.
+
+## iOS 홈 화면 앱의 할 일 갱신
+
+- 지켜볼 것: iOS 홈 화면 앱으로 할 일이나 다른 화면을 열어 둔 채 다른 앱에 갔다가 돌아왔을 때, 그 사이 서버에서 바뀐 것이 새로고침 없이 보이는지예요. 사용자가 0.8.0에서 알린 문제(1번)이고, 원인은 재현하지 못했어요. 0.9.0은 화면이 다시 보이거나 포커스를 받거나 네트워크가 돌아올 때 바뀜 스트림을 다시 맺고 다시 읽어요.
+- 드러나는 모습: 돌아온 화면이 수집 주기의 새 제안이나 끝난 자막 작업을 보이지 않다가, 새로고침하면 보여요.
+- 결과가 바꿀 것: 다시 생기면 iOS에서 돌아올 때 오는 이벤트와 스트림의 상태를 기록해 원인을 다시 찾아요. 생기지 않으면 1번을 고쳤다고 결론 내요.
+- 출처: [feedback-0.8.0/0009](archive/specs/2026-10-23-feedback-0.8.0/0009-reread-when-the-app-returns.md)와 [feedback-0.8.0/0011의 1번 대역 확인](archive/specs/2026-10-23-feedback-0.8.0/0011-deploy-and-check-on-server.md#1번의-대역-확인)
+- 2026-10-23 개발 환경의 headless Chromium에서 화면을 숨기고 네트워크를 끊고 얼린 사이 처리한 할 일이, 30초 뒤 되돌리자 곧바로 목록에서 빠졌어요. iOS에서는 보지 않았어요.
+
+## 첫 화 전 구독의 표지
+
+- 지켜볼 것: 다음에 첫 화 전의 작품을 구독할 때, 서버가 AniList에서 찾은 표지가 이번 주 편성 카드와 규칙 상세 포스터에 보이는지예요. 그 구독이 첫 화를 받아 시즌에 붙을 때 표지가 작품으로 넘어가는지도 봐요.
+- 드러나는 모습: 구독 API의 `cover_url`, 첫 화 전의 카드와 포스터, 시즌에 붙은 뒤 작품 상세의 표지예요. 표지를 찾지 못하면 카드가 빈 칸이에요.
+- 결과가 바꿀 것: 원제와 시작일이 맞는데도 표지가 없으면 원제의 정규화나 시작일 비교를 고쳐요. 표지가 작품으로 넘어가지 않으면 시즌에 붙을 때의 넘기기를 고쳐요.
+- 출처: [feedback-0.8.0/0008](archive/specs/2026-10-23-feedback-0.8.0/0008-subscription-cover.md). 개발 환경에서 `반딧불이의 혼례` 하나로 구독할 때의 표지만 봤어요(2026-10-23).
+- 2026-10-23 서버(0.9.0)의 구독 5개는 모두 시즌에 붙어 있어서 볼 카드가 없었어요([feedback-0.8.0/0011](archive/specs/2026-10-23-feedback-0.8.0/0011-deploy-and-check-on-server.md#서버에서-본-것)).
+
+## 작품 상세의 보관 폴더로 옮기기
+
+- 지켜볼 것: 서버에서 처음 작품 상세의 `보관 폴더로 옮기기`를 쓸 때, 그 작품 폴더에 받는 규칙을 보여 주고 지운 뒤 작품 폴더를 보관 폴더로 옮기는지예요. 토렌트가 있는 작품이면 Transmission이 새 위치를 가리키는지도 봐요.
+- 드러나는 모습: 작품 상세의 확인과 이동 상태 문장, `work_archive` 명령의 결과, Transmission의 토렌트 위치예요.
+- 결과가 바꿀 것: 옮기지 못하거나 토렌트가 옛 위치를 가리키면 `work_archive` 실행을 고쳐요.
+- 출처: [feedback-0.8.0/0002](archive/specs/2026-10-23-feedback-0.8.0/0002-archive-a-work-from-its-detail.md). 개발 환경에서 규칙이 하나인 작품만 옮겨 봤어요(2026-10-23).
+- 2026-10-23 서버(0.9.0)에서는 보관할 작품이 없어 쓰지 않았어요. 같은 `work_archive` 명령을 쓰는 규칙 상세의 `보관`이 토렌트가 없는 `Mushoku Tensei`를 옮겼어요([feedback-0.8.0/0011](archive/specs/2026-10-23-feedback-0.8.0/0011-deploy-and-check-on-server.md#서버에서-본-것)).

@@ -1,7 +1,7 @@
 # 0003 규칙을 보관하면 규칙을 지우고, `보관됨` 상태를 없애요
 
 - 상태: 완료
-- 출처: [명세의 보관](spec.md#보관), [보관 ADR](../../adr/0022-archiving-deletes-rules-and-follows-the-folder.md), 사용자 피드백 9·10·11번(2026-10-23)
+- 출처: [명세의 보관](spec.md#보관), [보관 ADR](../../../adr/0022-archiving-deletes-rules-and-follows-the-folder.md), 사용자 피드백 9·10·11번(2026-10-23)
 - 막는 티켓: [0002](0002-archive-a-work-from-its-detail.md)(작품 폴더를 대상으로 하는 이동 명령과, 작품 상세의 이동 상태·`다시 옮기기`)
 
 ## 작업
@@ -44,10 +44,10 @@
 - [x] 보관 폴더에 있는 작품의 다음 시즌을 구독하면 지금처럼 작품 폴더를 수집 폴더로 옮긴 뒤 받아요(10번). 이 동작의 기존 테스트가 통과해요.
 - [x] 개발 환경(서버 DB 사본)에서 보관 제안 하나를 `보관`하고, 규칙이 지워진 것, 작품 폴더가 옮겨진 것, 결과 문장을 결과에 적어요.
 - [x] 바뀐 요구를 문서에 고치고 검증 표의 행을 고쳐요. 고칠 곳은 다음과 같아요.
-  - [RSS 수집 명세](../../requirements/collection.md)의 방영작 구독(`영상 받기`·`자막 받기`와 보관의 구분), 규칙 보관, 보관과 복원의 폴더 이동, 수집 화면의 배지와 배너
-  - [작업과 인증 명세](../../requirements/jobs.md)의 `보관 제안`
-  - [설정과 이전 명세](../../requirements/settings.md)의 `rules[].state`
-  - [웹 앱 공통 명세](../../requirements/web-app.md)의 이번 주 편성에서 보관한 구독을 말하는 문장
+  - [RSS 수집 명세](../../../requirements/collection.md)의 방영작 구독(`영상 받기`·`자막 받기`와 보관의 구분), 규칙 보관, 보관과 복원의 폴더 이동, 수집 화면의 배지와 배너
+  - [작업과 인증 명세](../../../requirements/jobs.md)의 `보관 제안`
+  - [설정과 이전 명세](../../../requirements/settings.md)의 `rules[].state`
+  - [웹 앱 공통 명세](../../../requirements/web-app.md)의 이번 주 편성에서 보관한 구독을 말하는 문장
 - [x] `cargo test --workspace`, `npm test`, `npm run typecheck`가 통과해요.
 
 ## 결과
