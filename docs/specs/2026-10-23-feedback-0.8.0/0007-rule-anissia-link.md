@@ -45,7 +45,7 @@
 
 ### 테스트
 
-2026-10-23에 8c76f425 위의 작업 트리에서 `cargo test --workspace`가 모두 통과했어요(3,227개 통과, 12개 무시, 테스트 바이너리 27개의 합 37.93초, `dev/measure/when-quiet.sh`로 다른 빌드가 없을 때 측정했어요). `cargo clippy --workspace --all-targets`에 경고가 없고, `npm test`(318개)와 `npm run typecheck`도 통과했어요. 원본 로그는 이 PC의 `dev/local/measure/feedback-0.8.0-0007/`에 있어요.
+2026-10-23에 3bfaac8a 위의 작업 트리에서 `cargo test --workspace`가 모두 통과했어요(3,227개 통과, 12개 무시, 테스트 바이너리 27개의 합 37.93초, `dev/measure/when-quiet.sh`로 다른 빌드가 없을 때 측정했어요). `cargo clippy --workspace --all-targets`에 경고가 없고, `npm test`(318개)와 `npm run typecheck`도 통과했어요. 원본 로그는 이 PC의 `dev/local/measure/feedback-0.8.0-0007/`에 있어요.
 
 - `trss` `src/web/subscriptions_api/tests.rs` `a_search_with_the_ended_ones_keeps_the_anime_that_have_ended`는 `ended=true` 검색이 Anissia가 끝낸 작품과 종영일이 지난 작품을 `end`로 남기는 것을 겨눠요. `ended`를 무시하는 코드에서는 `[3320, 3005]`가 나와 실패해요.
 - 같은 파일 `rule_detail::a_rule_linked_to_an_anime_the_schedule_does_not_list_reads_as_ended`는 검색 쪽에서 고른 두 작품에 규칙을 이은 뒤 구독 목록의 `run`, 이번 주 편성의 카드, 보관 제안을 겨눠요. 종영일이 지난 작품은 바로 `end`, 카드 없음, `ended` 제안이에요. 종영일이 없는 `결방` 작품은 처음에 `off`이고 목요일 카드가 있다가, 갱신이 찾지 못했다고 기록하면 `end`, 카드 없음, `unlisted` 제안이 돼요.

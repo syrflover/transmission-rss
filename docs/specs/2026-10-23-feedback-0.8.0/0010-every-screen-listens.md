@@ -64,7 +64,7 @@
 
 ### 테스트
 
-2026-10-23에 2d60f3fc 위의 작업 트리에서 아래 리뷰에서 고친 뒤 `npm test`(327개), `npm run typecheck`, `npm run build`가 통과했어요. 서버 코드는 바꾸지 않아서 `cargo test`는 돌리지 않았어요.
+2026-10-23에 9ad6f656 위의 작업 트리에서 아래 리뷰에서 고친 뒤 `npm test`(327개), `npm run typecheck`, `npm run build`가 통과했어요. 서버 코드는 바꾸지 않아서 `cargo test`는 돌리지 않았어요.
 
 - `web` `src/lib/rereads.test.ts`의 `the library list reads again for its works, their titles, covers and badges, not for a remote screen or a command`, `a work's page reads again for its own work and for what names no work, and its movie link for its link and anime`, `the collection tabs read again for what their lists are made of, the history only where it is shown`, `the settings read again for what each shows, the folders for the library, the policy and the storage for the titles`는 화면마다 다시 읽는 바뀜과 읽지 않는 바뀜을 겨눠요. 바뀜을 모으고 실패 뒤에 다시 읽는 동작은 0.8.0의 같은 파일 테스트가 겨눠요.
 - 할 일 배지만 고치던 `withKinds`와 그 테스트는 쓰는 곳이 없어져 지웠어요.

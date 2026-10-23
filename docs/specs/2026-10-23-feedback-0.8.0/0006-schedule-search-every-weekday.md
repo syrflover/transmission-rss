@@ -61,7 +61,7 @@
 
 ### 테스트
 
-2026-10-23에 d3a1fb5c 위의 작업 트리(0005 커밋 1b9d588f 포함)에서 `cargo test --workspace`가 모두 통과했어요(3,225개 통과, 12개 무시, 테스트 바이너리 27개의 합 37.73초, `dev/measure/when-quiet.sh`로 다른 빌드가 없을 때 측정했어요). `cargo clippy --workspace --all-targets`에 경고가 없고, `npm test`(318개)와 `npm run typecheck`도 통과했어요. 원본 로그는 이 PC의 `dev/local/measure/feedback-0.8.0-0006/`에 있어요.
+2026-10-23에 c61bcfd1 위의 작업 트리(0005 커밋 fa584db9 포함)에서 `cargo test --workspace`가 모두 통과했어요(3,225개 통과, 12개 무시, 테스트 바이너리 27개의 합 37.73초, `dev/measure/when-quiet.sh`로 다른 빌드가 없을 때 측정했어요). `cargo clippy --workspace --all-targets`에 경고가 없고, `npm test`(318개)와 `npm run typecheck`도 통과했어요. 원본 로그는 이 PC의 `dev/local/measure/feedback-0.8.0-0006/`에 있어요.
 
 - `trss` `src/web/subscriptions_api/tests.rs` `a_search_lists_the_anime_of_every_week_that_have_not_ended_with_their_week`는 가짜 Anissia의 전체 목록에서 요일과 방영 상태가 붙는 것, Anissia가 끝낸 작품과 종영일이 지난 작품이 빠지는 것, 쪽 번호와 다음 쪽을 겨눠요. 종영을 빼는 줄을 지운 코드에서는 `[3320, 2969, 3002, 3005]`가 나와 실패했어요.
 - 같은 파일 `a_search_needs_its_text_and_a_page_in_range_and_its_failure_leaves_the_weeks`는 검색어와 쪽 번호의 거절, Anissia 실패의 502와 문장, 그 뒤에도 편성표가 답하는 것을 겨눠요.

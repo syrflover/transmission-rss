@@ -42,7 +42,7 @@
 
 ### 테스트
 
-2026-10-23에 21779a4d 위의 작업 트리에서 `cargo test --workspace`가 모두 통과했어요(3,221개 통과, 12개 무시, 테스트 바이너리 27개의 합 36.6초, `dev/measure/when-quiet.sh`로 다른 빌드가 없을 때 측정했어요). `cargo clippy --workspace --all-targets`에 경고가 없고, `npm test`(313개)와 `npm run typecheck`도 통과했어요. 원본 로그는 이 PC의 `dev/local/measure/feedback-0.8.0-0004/`에 있어요.
+2026-10-23에 2470d33d 위의 작업 트리에서 `cargo test --workspace`가 모두 통과했어요(3,221개 통과, 12개 무시, 테스트 바이너리 27개의 합 36.6초, `dev/measure/when-quiet.sh`로 다른 빌드가 없을 때 측정했어요). `cargo clippy --workspace --all-targets`에 경고가 없고, `npm test`(313개)와 `npm run typecheck`도 통과했어요. 원본 로그는 이 PC의 `dev/local/measure/feedback-0.8.0-0004/`에 있어요.
 
 - `trss-library` `src/store/library/page.rs` `the_folder_keeps_one_watch_folders_works_and_applies_with_the_filter_and_the_search`는 끝의 `/`가 있는 경로로 한 감시 폴더만 거르는 것, 경로가 같은 글자로 시작하는 다른 폴더를 빼는 것, 필터·검색과 함께 거르는 것, 정하지 않은 폴더가 아무것도 내지 않는 것을 겨눠요.
 - `trss` `src/web/library_api/tests.rs` `the_place_keeps_the_collect_or_the_archive_folders_works_and_marks_the_archived`는 `place`의 세 값, 다른 감시 폴더가 `전체`에만 나오는 것, `archived`와 `has_archive_folder`, 보관 폴더를 지운 뒤의 답을 겨눠요. 같은 파일의 `a_bad_parameter_is_a_400_with_a_sentence`에 모르는 `place`를 더했어요.

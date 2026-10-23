@@ -38,7 +38,7 @@
 
 ### 테스트
 
-2026-10-23에 318e7f0d 위의 작업 트리에서 아래 리뷰에서 고친 뒤 `npm test`(324개)와 `npm run typecheck`가 통과했어요. 서버 코드는 바꾸지 않아서 `cargo test`는 돌리지 않았어요.
+2026-10-23에 b1b0cf3d 위의 작업 트리에서 아래 리뷰에서 고친 뒤 `npm test`(324개)와 `npm run typecheck`가 통과했어요. 서버 코드는 바꾸지 않아서 `cargo test`는 돌리지 않았어요.
 
 - `web` `src/lib/events.test.ts`의 `a page that comes back after a quiet while replaces its stream, and the new stream's ready reads everything again`, `a return keeps a stream that spoke lately or just opened, so it never makes a second connection`, `the network coming back opens at once the stream the browser gave up on`, `a return opens nothing while the page is hidden or nobody listens, and is not heard after the last listener left`는 돌아올 때의 동작을 가짜 시계와 가짜 스트림으로 겨눠요.
 - `web` `src/lib/rereads.test.ts`의 `a read that takes longer than its time counts as failed: it is aborted, and the retry reads again`, `a change that comes during a read that runs out of time reads again at once`는 끝나지 않는 읽기를 겨눠요.

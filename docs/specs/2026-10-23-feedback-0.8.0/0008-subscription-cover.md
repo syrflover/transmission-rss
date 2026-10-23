@@ -53,7 +53,7 @@
 
 ### 테스트
 
-2026-10-23에 355042ad 위의 작업 트리에서 아래 리뷰에서 고친 뒤 `cargo test --workspace`가 모두 통과했어요(3,238개 통과, 12개 무시, 테스트 바이너리 27개의 합 38.61초, `dev/measure/when-quiet.sh`로 다른 빌드가 없을 때 측정했어요). `cargo clippy --workspace --all-targets`에 경고가 없고, `npm test`(318개)와 `npm run typecheck`도 통과했어요. 원본 로그는 이 PC의 `dev/local/measure/feedback-0.8.0-0008/`에 있어요.
+2026-10-23에 1f61eeb0 위의 작업 트리에서 아래 리뷰에서 고친 뒤 `cargo test --workspace`가 모두 통과했어요(3,238개 통과, 12개 무시, 테스트 바이너리 27개의 합 38.61초, `dev/measure/when-quiet.sh`로 다른 빌드가 없을 때 측정했어요). `cargo clippy --workspace --all-targets`에 경고가 없고, `npm test`(318개)와 `npm run typecheck`도 통과했어요. 원본 로그는 이 PC의 `dev/local/measure/feedback-0.8.0-0008/`에 있어요.
 
 - `trss-anilist` `src/title.rs`의 `an_anissia_anime_takes_the_one_entry_of_its_native_title_that_starts_with_it`, `a_remake_of_the_same_title_is_told_by_its_start_and_a_doubt_leaves_no_cover`, `a_text_date_keeps_the_parts_it_can_read`는 원제와 시작일의 판정을 겨눠요. 로마자 제목만 같은 항목, 7일을 넘는 시작일, 같은 원제와 시작일의 두 항목, 읽다 만 검색은 고르지 않아요.
 - `trss-library` `src/artwork/tests.rs`의 `a_subscription_takes_the_one_entry_of_its_original_title_that_starts_with_it`, `a_subscription_without_one_clear_match_of_its_whole_search_gets_no_cover`, `a_subscription_cover_that_anilist_keeps_failing_is_tried_three_times_and_left`는 가짜 AniList로 찾기와 받기를 겨눠요. 원제가 없거나, 리메이크만 있거나, 후보가 둘이거나, 페이지가 남았거나, 시작일이 없으면 표지가 없고, 실패는 세 번 다시 해 본 뒤 그만둬요.
